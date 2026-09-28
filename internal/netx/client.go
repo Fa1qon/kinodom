@@ -120,6 +120,10 @@ type GetOption func(*getOpts)
 
 type getOpts struct{ noLimit bool }
 
+// WithoutLimit — запрос мимо ограничителя «1 в секунду». Только для параллельного поиска
+// Rutor (спека, разделы 5 и 7): там одновременно идут не больше трёх запросов.
+func WithoutLimit() GetOption { return func(g *getOpts) { g.noLimit = true } }
+
 // target — куда слать запрос; mirror = -1 для полного адреса (без перебора зеркал).
 type target struct {
 	url    string
@@ -225,11 +229,17 @@ func isChallenge(p *Page) bool {
 		bytes.Contains(p.Body, []byte("window._cf_chl_opt"))
 }
 
-// load — запрос к одному адресу. Таймаут и обрыв пока означают «зеркало недоступно»;
-// повтор появится в задаче 3.
+// load — запрос с одним повтором, если ответ не пришёл за Timeout или оборвался:
+// Rutor через VPN отвечает до 30 с и однажды оборвал ответ на 60 с (спека, раздел 5).
+// Не вышло и со второго раза — зеркало недоступно.
 func (c *Client) load(ctx context.Context, rawURL string, g getOpts) (*Page, error) {
 	p, err := c.once(ctx, rawURL, g)
 	var re *retryError
+	if !errors.As(err, &re) {
+		return p, err
+	}
+	c.o.Log.Info(c.o.Name+": повторяю запрос", "url", rawURL, "reason", re.reason)
+	p, err = c.once(ctx, rawURL, g)
 	if errors.As(err, &re) {
 		return nil, &downError{re.reason}
 	}
@@ -239,6 +249,11 @@ func (c *Client) load(ctx context.Context, rawURL string, g getOpts) (*Page, err
 // once — одна попытка. Ошибки: *retryError — стоит повторить на этом же зеркале;
 // *downError — зеркало недоступно; остальные (прокси, отмена, размер) — сразу наверх.
 func (c *Client) once(ctx context.Context, rawURL string, g getOpts) (*Page, error) {
+	if !g.noLimit {
+		if err := c.lim.Wait(ctx); err != nil {
+			return nil, err
+		}
+	}
 	actx, cancel := context.WithTimeout(ctx, c.o.Timeout)
 	defer cancel()
 	req, err := http.NewRequestWithContext(actx, http.MethodGet, rawURL, nil)

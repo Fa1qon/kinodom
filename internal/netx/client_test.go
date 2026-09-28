@@ -233,3 +233,126 @@ func TestNewClientRejectsBadOptions(t *testing.T) {
 		}
 	}
 }
+
+// hang — зеркало, которое молчит, пока клиент не бросит запрос.
+func hang(w http.ResponseWriter, r *http.Request) {
+	select {
+	case <-r.Context().Done():
+	case <-time.After(10 * time.Second):
+	}
+}
+
+// cut — ответ обрывается посередине: обещано 1000 байт, пришло меньше, соединение закрыто.
+func cut(w http.ResponseWriter) {
+	w.Header().Set("Content-Length", "1000")
+	w.WriteHeader(http.StatusOK)
+	io.WriteString(w, `<html><div id="logo">обрыв`)
+	if conn, _, err := w.(http.Hijacker).Hijack(); err == nil {
+		conn.Close()
+	}
+}
+
+func TestTimeoutIsRetriedOnceThenNextMirror(t *testing.T) {
+	slow, good := newSite(t, hang), newSite(t, page(trackerPage))
+	c, err := NewClient(Options{Name: "Трекер", Mirrors: []string{slow.URL, good.URL}, Classify: testClassify, Rate: 1000, Timeout: 200 * time.Millisecond})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := c.Get(context.Background(), "/browse"); err != nil {
+		t.Fatal(err)
+	}
+	if slow.hits.Load() != 2 || good.hits.Load() != 1 {
+		t.Fatalf("медленное зеркало: %d попыток (нужно 2), рабочее: %d", slow.hits.Load(), good.hits.Load())
+	}
+}
+
+func TestCutBodyIsRetriedOnSameMirror(t *testing.T) {
+	var calls atomic.Int32
+	m := newSite(t, func(w http.ResponseWriter, r *http.Request) {
+		if calls.Add(1) == 1 {
+			cut(w)
+			return
+		}
+		page(trackerPage)(w, r)
+	})
+	next := newSite(t, page(trackerPage))
+	c := newTestClient(t, m.URL, next.URL)
+	p, err := c.Get(context.Background(), "/browse")
+	if err != nil || string(p.Body) != trackerPage {
+		t.Fatalf("после обрыва: %v", err)
+	}
+	if m.hits.Load() != 2 || next.hits.Load() != 0 || c.Mirror() != m.URL {
+		t.Fatalf("попыток %d, на следующее зеркало %d — обрыв не должен менять зеркало", m.hits.Load(), next.hits.Load())
+	}
+}
+
+func TestCutBodyTwiceMovesOn(t *testing.T) {
+	m := newSite(t, func(w http.ResponseWriter, r *http.Request) { cut(w) })
+	next := newSite(t, page(trackerPage))
+	if _, err := newTestClient(t, m.URL, next.URL).Get(context.Background(), "/browse"); err != nil {
+		t.Fatal(err)
+	}
+	if m.hits.Load() != 2 || next.hits.Load() != 1 {
+		t.Fatalf("попыток %d/%d", m.hits.Load(), next.hits.Load())
+	}
+}
+
+func TestCancelledContextStopsAtOnce(t *testing.T) {
+	slow, next := newSite(t, hang), newSite(t, page(trackerPage))
+	c := newTestClient(t, slow.URL, next.URL)
+	ctx, cancel := context.WithTimeout(context.Background(), 150*time.Millisecond)
+	defer cancel()
+	start := time.Now()
+	_, err := c.Get(ctx, "/browse")
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("ожидалась отмена, получено %v", err)
+	}
+	if time.Since(start) > time.Second || slow.hits.Load() != 1 || next.hits.Load() != 0 {
+		t.Fatalf("после отмены: %v, попыток %d/%d", time.Since(start), slow.hits.Load(), next.hits.Load())
+	}
+}
+
+func TestLimiterSpacesRequests(t *testing.T) {
+	m := newSite(t, page(trackerPage))
+	c, err := NewClient(Options{Name: "Трекер", Mirrors: []string{m.URL}, Rate: 10})
+	if err != nil {
+		t.Fatal(err)
+	}
+	start := time.Now()
+	for range 4 {
+		if _, err := c.Get(context.Background(), "/browse"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// Первый запрос — сразу, следующие три — через 100 мс каждый.
+	if d := time.Since(start); d < 250*time.Millisecond {
+		t.Fatalf("4 запроса при 10/с прошли за %v", d)
+	}
+}
+
+func TestWithoutLimitSkipsLimiter(t *testing.T) {
+	m := newSite(t, page(trackerPage))
+	c, err := NewClient(Options{Name: "Трекер", Mirrors: []string{m.URL}, Rate: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	start := time.Now()
+	for range 4 {
+		if _, err := c.Get(context.Background(), "/search", WithoutLimit()); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if d := time.Since(start); d > 900*time.Millisecond {
+		t.Fatalf("4 запроса вне ограничителя шли %v", d)
+	}
+}
+
+func TestDefaultsFollowSpec(t *testing.T) {
+	c, err := NewClient(Options{Name: "Трекер", Mirrors: []string{"https://rutor.info"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.lim.Limit() != 1 || c.o.Timeout != 90*time.Second {
+		t.Fatalf("по умолчанию %v запросов/с и таймаут %v; спека: 1/с и 90 с", c.lim.Limit(), c.o.Timeout)
+	}
+}
