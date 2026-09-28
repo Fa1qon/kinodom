@@ -2,7 +2,10 @@ module kinodom
 
 go 1.26
 
-require modernc.org/sqlite v1.59.0
+require (
+	gopkg.in/natefinch/lumberjack.v2 v2.2.1
+	modernc.org/sqlite v1.59.0
+)
 
 require (
 	github.com/dustin/go-humanize v1.0.1 // indirect
