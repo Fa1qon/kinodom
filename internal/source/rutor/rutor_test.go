@@ -9,6 +9,8 @@ import (
 	"net/http/httptest"
 	"slices"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -114,6 +116,9 @@ func TestSearchQuery(t *testing.T) {
 		`C:\Фильмы`:              "C: Фильмы",
 		" / ":                    "",
 		strings.Repeat("я", 150): strings.Repeat("я", 100),
+		".":                      "",
+		"..":                     "",
+		" ... ":                  "",
 	}
 	for in, want := range cases {
 		if got := searchQuery(in); got != want {
@@ -334,5 +339,50 @@ func TestNewCopiesDefaultMirrors(t *testing.T) {
 	defer func() { DefaultMirrors[0] = saved }()
 	if r.Mirror() != saved {
 		t.Fatalf("зеркало источника изменилось: %s", r.Mirror())
+	}
+}
+
+// Страница с div#logo и div#menu, но без «rutor» в заголовке — чужой сайт на похожем шаблоне:
+// зеркало меняется, а не «сломался парсер» (ревью этапа 3).
+func TestLookalikeMirrorIsSkipped(t *testing.T) {
+	s, fake := rutortest.NewServer(t), rutortest.NewServer(t)
+	fake.Override = func(w http.ResponseWriter, r *http.Request) bool {
+		w.Header().Set("Content-Type", "text/html; charset=UTF-8")
+		io.WriteString(w, `<html><head><title>Казино</title></head><body><div id="logo"></div><div id="menu"></div></body></html>`)
+		return true
+	}
+	r := newRutor(t, s, fake.Mirror.URL, s.Mirror.URL)
+	if _, err := r.Top(ctx, "12", 10); err != nil {
+		t.Fatal(err)
+	}
+	if r.Mirror() != s.Mirror.URL {
+		t.Fatalf("текущее зеркало %s", r.Mirror())
+	}
+}
+
+// «Не больше трёх запросов поиска одновременно» — на весь Rutor, а не на один вызов Search:
+// поиск из пульта и поиск каталога идут вместе (ревью этапа 3).
+func TestSearchLimitIsSharedAcrossCalls(t *testing.T) {
+	s := rutortest.NewServer(t)
+	var inFlight, peak atomic.Int32
+	s.Override = func(w http.ResponseWriter, r *http.Request) bool {
+		if !strings.HasPrefix(r.URL.Path, "/search/") {
+			return false
+		}
+		n := inFlight.Add(1)
+		defer inFlight.Add(-1)
+		for p := peak.Load(); n > p && !peak.CompareAndSwap(p, n); p = peak.Load() {
+		}
+		time.Sleep(100 * time.Millisecond)
+		return false // дальше — обычный ответ образцом
+	}
+	r := newRutor(t, s)
+	var wg sync.WaitGroup
+	for range 2 {
+		wg.Go(func() { r.Search(ctx, "Матрица") })
+	}
+	wg.Wait()
+	if peak.Load() > 3 {
+		t.Fatalf("одновременно шло %d запросов поиска, предел — 3 на весь Rutor", peak.Load())
 	}
 }

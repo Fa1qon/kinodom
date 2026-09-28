@@ -55,6 +55,7 @@ type Options struct {
 type Rutor struct {
 	c        *netx.Client
 	download string
+	searches chan struct{} // не больше трёх запросов поиска одновременно на весь Rutor (спека, раздел 7)
 }
 
 var _ source.Source = (*Rutor)(nil)
@@ -83,7 +84,7 @@ func New(o Options) (*Rutor, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &Rutor{c: c, download: strings.TrimRight(o.DownloadBase, "/")}, nil
+	return &Rutor{c: c, download: strings.TrimRight(o.DownloadBase, "/"), searches: make(chan struct{}, 3)}, nil
 }
 
 func (r *Rutor) Name() string { return Name }
@@ -130,12 +131,16 @@ func (r *Rutor) Search(ctx context.Context, query string) ([]source.Release, err
 	}
 	found := make([][]source.Release, len(searchCategories))
 	errs := make([]error, len(searchCategories))
-	sem := make(chan struct{}, 3)
 	var wg sync.WaitGroup
 	for i, cat := range searchCategories {
 		wg.Go(func() {
-			sem <- struct{}{}
-			defer func() { <-sem }()
+			select {
+			case r.searches <- struct{}{}:
+			case <-ctx.Done():
+				errs[i] = ctx.Err()
+				return
+			}
+			defer func() { <-r.searches }()
 			found[i], errs[i] = r.searchIn(ctx, cat, q)
 		})
 	}
@@ -191,6 +196,9 @@ func (r *Rutor) searchIn(ctx context.Context, cat, q string) ([]source.Release, 
 func searchQuery(q string) string {
 	q = strings.NewReplacer("/", " ", `\`, " ").Replace(q)
 	q = htmltext.Clean(q)
+	if strings.Trim(q, ".") == "" {
+		return "" // «.» и «..» в пути — не запрос, а переход по папкам
+	}
 	if rs := []rune(q); len(rs) > 100 {
 		q = strings.TrimSpace(string(rs[:100]))
 	}
@@ -251,16 +259,22 @@ func (r *Rutor) page(ctx context.Context, path string, opts ...netx.GetOption) (
 }
 
 // classify — признаки Rutor поверх общих (спека, раздел 5): редирект на /d.php — раздача
-// удалена; страница 200 без каркаса сайта (div#logo и div#menu) — заглушка вместо зеркала.
+// удалена; страница 200 без каркаса Rutor — заглушка или чужой сайт вместо зеркала.
 func classify(p *netx.Page) netx.Verdict {
 	if p.URL.Path == "/d.php" {
 		return netx.Removed
 	}
-	if p.Status == http.StatusOK && strings.Contains(p.Header.Get("Content-Type"), "text/html") &&
-		!(bytes.Contains(p.Body, []byte(`id="logo"`)) && bytes.Contains(p.Body, []byte(`id="menu"`))) {
+	if p.Status == http.StatusOK && strings.Contains(p.Header.Get("Content-Type"), "text/html") && !isRutorPage(p.Body) {
 		return netx.MirrorDown
 	}
 	return netx.OK
+}
+
+// isRutorPage — каркас сайта: div#logo, div#menu и «rutor» в заголовке. У всех зеркал он
+// «rutor.info :: …»; похожий шаблон без него — чужой сайт (ревью этапа 3).
+func isRutorPage(b []byte) bool {
+	return bytes.Contains(b, []byte(`id="logo"`)) && bytes.Contains(b, []byte(`id="menu"`)) &&
+		bytes.Contains(bytes.ToLower(b), []byte("<title>rutor"))
 }
 
 func sortBySeeders(rs []source.Release) {

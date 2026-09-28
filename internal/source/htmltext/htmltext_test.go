@@ -42,3 +42,29 @@ func TestFirstIntAndMatch(t *testing.T) {
 		t.Fatalf("FirstMatch: %q", got)
 	}
 }
+
+// Ячейки таблиц — через пробел, <center> и прочие блоки — с новой строки (ревью этапа 3:
+// «Год:1999»).
+func TestTextSeparatesCellsAndBlocks(t *testing.T) {
+	s := sel(t, `<div id="x"><table><tr><td>Год:</td><td>1999</td></tr><tr><th>Жанр:</th><td>драма</td></tr></table><center>Описание</center>текст</div>`)
+	if got, want := Text(s, ""), "Год: 1999\nЖанр: драма\nОписание\nтекст"; got != want {
+		t.Fatalf("Text:\n%q\nнужно\n%q", got, want)
+	}
+}
+
+// Выброшенный блок (спойлер) оставляет перевод строки: иначе соседние строки склеиваются
+// («Русские субтитры: нет Релиз от:» у Rutracker).
+func TestDroppedBlockKeepsLineBreak(t *testing.T) {
+	s := sel(t, `<div id="x">Субтитры: нет<div class="sp">спойлер</div>Качество: WEB-DL</div>`)
+	if got, want := Text(s, "div.sp"), "Субтитры: нет\nКачество: WEB-DL"; got != want {
+		t.Fatalf("Text:\n%q\nнужно\n%q", got, want)
+	}
+}
+
+// Подписи без значения в конце («Релиз от:» перед картинкой, «Скриншоты:») не нужны.
+func TestTextDropsTrailingLabels(t *testing.T) {
+	s := sel(t, `<div id="x">Описание: фильм<br>Скриншоты:<br><img src="a.jpg"><br><br>Релиз от: <var>лого</var></div>`)
+	if got, want := Text(s, "var"), "Описание: фильм"; got != want {
+		t.Fatalf("Text:\n%q\nнужно\n%q", got, want)
+	}
+}
