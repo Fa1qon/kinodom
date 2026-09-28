@@ -97,18 +97,15 @@ func New(ctx context.Context, o Options) (*App, error) {
 	}
 	a.Sup.Add(a.API, true) // API выключать нельзя: без него нет ни пульта, ни телевизоров
 
-	if err := a.initTorrents(ctx, o); err != nil {
-		// Сервер работает и без торрентов: проблема видна в пульте, остальные модули живут.
-		log.Error("торрент-движок не запустился", "err", err)
-		a.setProblem(ctx, "torrents.engine", "Торренты не работают: "+err.Error())
-	} else {
-		a.clearProblem(ctx, "torrents.engine")
-	}
+	a.initTorrents(ctx, o)
 	// Следующие этапы добавляют сюда свои модули так же: a.Sup.Add(m, a.ModuleEnabled(ctx, m.Name())).
 	return a, nil
 }
 
-func (a *App) initTorrents(ctx context.Context, o Options) error {
+// initTorrents добавляет модуль торрентов. Движок создаётся внутри модуля: если папка
+// загрузок недоступна, сервер работает без торрентов (проблема в «Состоянии», маршруты — 503),
+// а сторож повторяет попытки, пока папка не появится.
+func (a *App) initTorrents(ctx context.Context, o Options) {
 	downloads := o.DownloadsDir
 	if downloads == "" {
 		downloads = a.setting(ctx, "downloads.dir", DefaultDownloadsDir)
@@ -129,7 +126,7 @@ func (a *App) initTorrents(ctx context.Context, o Options) error {
 		port = 0
 	}
 	log := a.Log.With("module", "torrents")
-	eng, err := torrents.NewEngine(torrents.Config{
+	cfg := torrents.Config{
 		DownloadsDir: downloads,
 		StateDir:     a.Paths.Torrent,
 		ListenPort:   port,
@@ -137,15 +134,26 @@ func (a *App) initTorrents(ctx context.Context, o Options) error {
 		TrackerProxy: proxy,
 		Offline:      o.Offline,
 		Log:          log,
-	})
-	if err != nil {
-		return err
 	}
-	a.closers = append(a.closers, closerFunc(eng.Close))
-	a.Torrents = torrents.NewService(eng, torrents.NewRegistry(a.DB), log)
+	a.Torrents = torrents.NewLazyService(
+		func() (*torrents.Engine, error) { return torrents.NewEngine(cfg) },
+		torrents.NewRegistry(a.DB), log,
+		func(err error) {
+			if err != nil {
+				log.Error("торрент-движок не запустился", "err", err)
+				a.setProblem(context.Background(), "torrents.engine", "Торренты не работают: "+err.Error())
+				return
+			}
+			a.clearProblem(context.Background(), "torrents.engine")
+		})
+	a.closers = append(a.closers, closerFunc(func() error {
+		if e := a.Torrents.Engine(); e != nil {
+			return e.Close()
+		}
+		return nil
+	}))
 	a.Torrents.Register(a.API)
 	a.Sup.Add(a.Torrents, a.ModuleEnabled(ctx, a.Torrents.Name()))
-	return nil
 }
 
 // ModuleEnabled — модуль включён, если в настройках нет modules.<имя>.enabled = "false".
