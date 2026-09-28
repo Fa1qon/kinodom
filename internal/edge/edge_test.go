@@ -217,6 +217,10 @@ func TestPassReportsBusyProfile(t *testing.T) {
 	if !errors.Is(err, ErrProfileBusy) || time.Since(start) > 5*time.Second {
 		t.Fatalf("ожидалась ErrProfileBusy сразу, получено %v за %v", err, time.Since(start))
 	}
+	// Совет — перезапуск службы (не «снять msedge.exe»: у пользователя свой Edge), и какая папка занята.
+	if !strings.Contains(err.Error(), "перезапустите службу") || !strings.Contains(err.Error(), dir) {
+		t.Fatalf("текст %q", err)
+	}
 }
 
 // Сообщения chromedp уходят в журнал Kinodom (Debug), а не в стандартный log — мимо файлов
@@ -227,5 +231,25 @@ func TestChromedpMessagesGoToJournal(t *testing.T) {
 	f.chromedpLogf("could not unmarshal event: %v", "Page.newEvent")
 	if !strings.Contains(buf.String(), "level=DEBUG") || !strings.Contains(buf.String(), "could not unmarshal event: Page.newEvent") {
 		t.Fatalf("журнал:\n%s", buf.String())
+	}
+}
+
+// Модуль edge: привязывает дочерние процессы при старте, работает до отмены (спека, раздел 3).
+func TestModuleRunsUntilCancelled(t *testing.T) {
+	m := NewModule(nil)
+	if m.Name() != "edge" {
+		t.Fatal(m.Name())
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- m.Run(ctx) }()
+	select {
+	case err := <-done:
+		t.Fatalf("модуль завершился сам: %v", err)
+	case <-time.After(100 * time.Millisecond):
+	}
+	cancel()
+	if err := <-done; err != nil {
+		t.Fatal(err)
 	}
 }
