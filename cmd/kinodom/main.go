@@ -20,6 +20,7 @@ type command struct {
 // commands — все подкоманды. Новые команды добавляются сюда.
 func commands() []command {
 	return []command{
+		{"run", "запустить сервер в консоли (для разработки)", cmdRun},
 		{"version", "показать версию", cmdVersion},
 	}
 }
