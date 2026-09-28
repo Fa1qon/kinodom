@@ -6,9 +6,12 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"image"
+	"image/png"
 	"io"
 	"net"
 	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
@@ -21,6 +24,7 @@ import (
 
 	"kinodom/internal/api"
 	"kinodom/internal/config"
+	"kinodom/internal/meta"
 	"kinodom/internal/store"
 	"kinodom/internal/supervisor"
 	"kinodom/internal/torrents"
@@ -363,5 +367,71 @@ func TestUnusableDownloadsDirRecoversWhenFolderAppears(t *testing.T) {
 	waitUntil(t, "торренты заработали сами", func() bool { return a.Sup.IsRunning("torrents") })
 	if p := problemsOf(t, a); strings.Contains(p, "Торренты не работают") {
 		t.Fatalf("проблема не снята: %q", p)
+	}
+}
+
+// Рейтинги и картинки вместе с остальными модулями: ключ Кинопоиска из настроек, очередь даёт
+// рейтинг; скачанная картинка отдаётся по /img/{key} (спека, раздел 8).
+func TestRatingsAndImagesTogether(t *testing.T) {
+	kp := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("X-API-KEY") != "k" {
+			w.WriteHeader(http.StatusUnauthorized)
+			return
+		}
+		switch r.URL.Path {
+		case "/api/v1/api_keys/k":
+			io.WriteString(w, `{"totalQuota":{"value":-1,"used":0},"dailyQuota":{"value":500,"used":0},"accountType":"FREE"}`)
+		case "/api/v2.2/films/301":
+			io.WriteString(w, `{"kinopoiskId":301,"imdbId":"tt0133093","nameRu":"Матрица","nameOriginal":"The Matrix","year":1999,"type":"FILM","ratingKinopoisk":8.5,"ratingImdb":8.7}`)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	t.Cleanup(kp.Close)
+	var pic bytes.Buffer
+	png.Encode(&pic, image.NewRGBA(image.Rect(0, 0, 1, 1)))
+	img := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { w.Write(pic.Bytes()) }))
+	t.Cleanup(img.Close)
+
+	home := t.TempDir()
+	db, err := store.Open(context.Background(), config.NewPaths(home).DB)
+	if err != nil {
+		t.Fatal(err)
+	}
+	db.SetSetting(context.Background(), "kinopoisk.key", "k")
+	db.Close()
+	a := startAppWith(t, Options{Home: home, ListenAddr: "127.0.0.1:0", Offline: true, DownloadsDir: t.TempDir(), KinopoiskAPI: kp.URL})
+
+	ctx := context.Background()
+	if err := a.Ratings.Enqueue(ctx, 1, meta.Item{Release: "rutor:1", KinopoiskID: 301}); err != nil {
+		t.Fatal(err)
+	}
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		m, err := a.Ratings.For(ctx, []string{"rutor:1"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if m["rutor:1"].Kinopoisk == 8.5 {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("рейтинга нет за 5 с: %+v", m)
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+
+	key, err := a.Images.Fetch(ctx, img.URL+"/poster.png", meta.Direct)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp, err := http.Get("http://" + a.API.Addr() + "/img/" + key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	body, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode != 200 || resp.Header.Get("Content-Type") != "image/png" || !bytes.Equal(body, pic.Bytes()) {
+		t.Fatalf("/img: код %d, тип %q", resp.StatusCode, resp.Header.Get("Content-Type"))
 	}
 }
