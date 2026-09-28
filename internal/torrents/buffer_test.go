@@ -132,3 +132,31 @@ func TestPrepareAfterRestartKeepsDownloadingStoredEpisode(t *testing.T) {
 		t.Fatalf("выбор серии 2 остановил докачку серии 1: приоритет %v", p)
 	}
 }
+
+// Раздача из .torrent сразу знает список файлов, но если раздающих нет — буфер не наберётся
+// никогда. Вместо вечного «Буферизация 0 %» человек должен увидеть «Нет раздающих».
+func TestDeadTorrentFileReportsNoSeeders(t *testing.T) {
+	ctx := context.Background()
+	s := newTestService(t)
+	s.noPeersAfter = 200 * time.Millisecond
+	mi, _ := torrenttest.MakeTorrent(t, t.TempDir(), "film.mkv", 64<<10, torrenttest.File{Path: "film.mkv", Size: 1 << 20})
+	ih, err := s.Open(ctx, Source{Torrent: torrentBytes(t, mi)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	must(t, s.Prepare(ctx, ih, 0))
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		fs, _ := s.FileStatus(ih, 0)
+		if fs.State == FileError {
+			if !strings.Contains(fs.Error, "Нет раздающих") {
+				t.Fatalf("текст ошибки: %q", fs.Error)
+			}
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("мёртвая раздача так и висит в буферизации: %+v", fs)
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+}
