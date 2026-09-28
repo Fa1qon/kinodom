@@ -112,6 +112,16 @@ func TestOpenRejectsBadSources(t *testing.T) {
 	}
 }
 
+func TestBadMagnetErrorIsReadable(t *testing.T) {
+	s := newTestService(t)
+	for _, m := range []string{"magnet:?xt=bad", "magnet:?xt=urn:btih:" + strings.Repeat("0", 40)} {
+		_, err := s.Open(context.Background(), Source{Magnet: m})
+		if err == nil || strings.Contains(err.Error(), "<nil>") || !strings.Contains(err.Error(), "infohash") {
+			t.Errorf("%s: непонятный текст ошибки %v", m, err)
+		}
+	}
+}
+
 func TestRestoreOpensStoredTorrentWithoutPeers(t *testing.T) {
 	ctx := context.Background()
 	db := newTestDB(t)

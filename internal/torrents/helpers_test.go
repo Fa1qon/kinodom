@@ -10,6 +10,8 @@ import (
 	"github.com/anacrolix/torrent"
 	"github.com/anacrolix/torrent/bencode"
 	"github.com/anacrolix/torrent/metainfo"
+
+	"kinodom/internal/torrents/torrenttest"
 )
 
 func quiet() *slog.Logger { return slog.New(slog.NewTextHandler(io.Discard, nil)) }
@@ -61,7 +63,7 @@ func connect(t *testing.T, s *Service, ih metainfo.Hash, seeder *torrent.Client)
 	if !ok {
 		t.Fatal("раздачи нет в движке")
 	}
-	tt.AddClientPeer(seeder)
+	torrenttest.Connect(t, tt, seeder)
 }
 
 func torrentBytes(t *testing.T, mi metainfo.MetaInfo) []byte {
