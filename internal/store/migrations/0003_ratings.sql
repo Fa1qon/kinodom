@@ -12,6 +12,15 @@ CREATE TABLE kp_films (
     rating_imdb REAL NOT NULL DEFAULT 0,
     rating_at   INTEGER NOT NULL DEFAULT 0   -- когда обновлён рейтинг
 );
+CREATE INDEX kp_films_imdb ON kp_films(imdb_id);
+
+-- IMDb → фильм: рипы одного фильма без ссылки на Кинопоиск не тратят запросы. kp_id NULL —
+-- Кинопоиск этот IMDb не знает, до retry_at не спрашивать.
+CREATE TABLE kp_imdb (
+    imdb_id  TEXT PRIMARY KEY,
+    kp_id    INTEGER,
+    retry_at INTEGER NOT NULL DEFAULT 0
+);
 
 -- Поиск по названию: (нормализованное название, год) → фильм. Разные рипы одного фильма не
 -- тратят запросы. kp_id NULL — не найдено, до retry_at не искать.
@@ -37,6 +46,7 @@ CREATE TABLE kp_queue (
     kinopoisk_id INTEGER NOT NULL DEFAULT 0,
     imdb_id      TEXT NOT NULL DEFAULT '',
     title        TEXT NOT NULL DEFAULT '',
-    not_before   INTEGER NOT NULL DEFAULT 0  -- после временной ошибки — не раньше
+    not_before   INTEGER NOT NULL DEFAULT 0, -- после временной ошибки — не раньше
+    attempts     INTEGER NOT NULL DEFAULT 0  -- неудач подряд: пауза растёт (каждый ответ 5xx платный)
 );
 CREATE INDEX kp_queue_prio ON kp_queue(prio);

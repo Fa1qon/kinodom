@@ -33,6 +33,7 @@ type fakeKP struct {
 	quota  [2]int         // дневной лимит и израсходовано для ответа лимитов; 0,0 — образец
 	last   string         // последний запрос API (путь и параметры)
 	keys   string         // образец ответа лимитов
+	onFilm func(id int)   // если задан — вызывается посреди запроса /films/{id} (тесты гонок)
 }
 
 func newFakeKP(t *testing.T) *fakeKP {
@@ -114,14 +115,26 @@ func (f *fakeKP) serve(w http.ResponseWriter, r *http.Request) {
 		fmt.Fprint(w, f.keys)
 		return
 	}
+	q := r.URL.Query()
+	// Сначала учёт запроса (каждый — платный), потом подменный ответ.
+	switch {
+	case strings.HasPrefix(p, "/api/v2.2/films/"):
+		f.hits["film"]++
+	case p == "/api/v2.2/films" && q.Get("imdbId") != "":
+		f.hits["imdb"]++
+	case p == "/api/v2.2/films" && q.Get("keyword") != "":
+		f.hits["search"]++
+	}
 	if f.status != 0 {
 		w.WriteHeader(f.status)
 		return
 	}
-	switch q := r.URL.Query(); {
+	switch {
 	case strings.HasPrefix(p, "/api/v2.2/films/"):
-		f.hits["film"]++
 		id, _ := strconv.Atoi(strings.TrimPrefix(p, "/api/v2.2/films/"))
+		if f.onFilm != nil {
+			f.onFilm(id)
+		}
 		body, ok := f.films[id]
 		if !ok {
 			w.WriteHeader(http.StatusNotFound)
@@ -129,14 +142,12 @@ func (f *fakeKP) serve(w http.ResponseWriter, r *http.Request) {
 		}
 		fmt.Fprint(w, body)
 	case p == "/api/v2.2/films" && q.Get("imdbId") != "":
-		f.hits["imdb"]++
 		if body, ok := f.imdb[q.Get("imdbId")]; ok {
 			fmt.Fprint(w, body)
 			return
 		}
 		fmt.Fprint(w, itemsJSON())
 	case p == "/api/v2.2/films" && q.Get("keyword") != "":
-		f.hits["search"]++
 		if hasCyrillic(q.Get("keyword")) { // так бывает вживую (исследование, разделы 12–13)
 			w.WriteHeader(http.StatusInternalServerError)
 			fmt.Fprint(w, `{"message":"something went wrong."}`)
