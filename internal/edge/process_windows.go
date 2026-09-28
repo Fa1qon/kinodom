@@ -10,8 +10,19 @@ import (
 	"golang.org/x/sys/windows"
 )
 
-// bindOnce — kinodom входит в объект задания один раз, при первом проходе Edge.
-var bindOnce sync.Once
+// bindOnce — kinodom входит в объект задания один раз: при старте модуля edge или при первом
+// проходе Edge — что раньше.
+var (
+	bindOnce sync.Once
+	bindErr  error
+)
+
+// BindChildren привязывает дочерние процессы kinodom к нему самому (объект задания Windows): Edge
+// не переживёт аварию kinodom. Повторный вызов ничего не делает и возвращает первый итог.
+func BindChildren() error {
+	bindOnce.Do(func() { bindErr = bindChildren() })
+	return bindErr
+}
 
 // bindChildren — дочерние процессы (Edge и его помощники) умирают вместе с kinodom. Процесс
 // входит в объект задания Windows с флагом «убить всех при закрытии»; дети наследуют задание.

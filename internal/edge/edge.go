@@ -25,7 +25,9 @@ var (
 	ErrNotPassed = errors.New("Edge не прошёл проверку Cloudflare")
 	ErrProxyAuth = errors.New("Edge не умеет прокси с логином и паролем — пропуск Cloudflare добыть нельзя")
 	// ErrProfileBusy — папку профиля держит другой Edge: второй на том же профиле не запустится.
-	ErrProfileBusy = errors.New("профиль Edge занят другим процессом Edge — закройте его (Диспетчер задач, msedge.exe) или перезагрузите компьютер")
+	// Совет — перезапуск, а не «снять msedge.exe»: под службой у пользователя свой Edge с тем же
+	// именем процесса (ревью этапа 5a).
+	ErrProfileBusy = errors.New("профиль Edge занят другим процессом Edge — перезапустите службу Kinodom или компьютер")
 )
 
 type Options struct {
@@ -70,13 +72,11 @@ func (f *Fetcher) Pass(ctx context.Context, pageURL string) ([]*http.Cookie, str
 	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	bindOnce.Do(func() {
-		if err := bindChildren(); err != nil {
-			f.o.Log.Warn("Edge: не удалось привязать к процессу kinodom — после аварии Edge может остаться", "err", err)
-		}
-	})
+	if err := BindChildren(); err != nil {
+		f.o.Log.Warn("Edge: не удалось привязать к процессу kinodom — после аварии Edge может остаться", "err", err)
+	}
 	if profileBusy(f.o.ProfileDir) {
-		return nil, "", ErrProfileBusy
+		return nil, "", fmt.Errorf("%w (папка профиля %s)", ErrProfileBusy, f.o.ProfileDir)
 	}
 	start := time.Now()
 	ctx, cancel := context.WithTimeout(ctx, f.o.Timeout+30*time.Second) // запуск и закрытие — сверх ожидания прохода
