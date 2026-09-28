@@ -14,7 +14,9 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -23,8 +25,11 @@ import (
 	"github.com/anacrolix/torrent/metainfo"
 
 	"kinodom/internal/api"
+	"kinodom/internal/catalog"
 	"kinodom/internal/config"
 	"kinodom/internal/meta"
+	"kinodom/internal/source/rutor/rutortest"
+	"kinodom/internal/source/rutracker/rutrackertest"
 	"kinodom/internal/store"
 	"kinodom/internal/supervisor"
 	"kinodom/internal/torrents"
@@ -34,6 +39,9 @@ import (
 // startAppRaw поднимает сервер и ждёт только HTTP; модули могут ещё стартовать.
 func startAppRaw(t *testing.T, o Options) *App {
 	t.Helper()
+	if o.Trackers.RutorMirrors == nil && o.Trackers.RutrackerMirrors == nil {
+		o.Trackers = offlineTrackers(t)
+	}
 	ctx, cancel := context.WithCancel(context.Background())
 	a, err := New(ctx, o)
 	if err != nil {
@@ -53,6 +61,17 @@ func startAppRaw(t *testing.T, o Options) *App {
 		t.Fatal("API не поднялся за 5 с")
 	}
 	return a
+}
+
+// offlineTrackers — трекеры по адресу закрытого локального сервера: каталог работает вместе с
+// остальными модулями, но тесты не ходят в интернет.
+func offlineTrackers(t *testing.T) Trackers {
+	t.Helper()
+	dead := httptest.NewServer(http.NotFoundHandler())
+	u := dead.URL
+	dead.Close()
+	return Trackers{RutorMirrors: []string{u}, RutorDownload: u, RutrackerMirrors: []string{u}, RutrackerAPI: u,
+		RutrackerFeed: u, NoEdge: true, Rate: 1000}
 }
 
 // startAppWith поднимает сервер и ждёт, пока все модули будут готовы (Ready).
@@ -433,5 +452,117 @@ func TestRatingsAndImagesTogether(t *testing.T) {
 	body, _ := io.ReadAll(resp.Body)
 	if resp.StatusCode != 200 || resp.Header.Get("Content-Type") != "image/png" || !bytes.Equal(body, pic.Bytes()) {
 		t.Fatalf("/img: код %d, тип %q", resp.StatusCode, resp.Header.Get("Content-Type"))
+	}
+}
+
+// Каталог вместе с остальными модулями на фейковых трекерах: трекеры и картинки раздач — через
+// прокси из настроек, логин Rutracker — из Options.Settings (не в базу); топ Rutor с названиями,
+// догрузка страницы, постера и .torrent; поиск по обоим трекерам (спека, разделы 5, 7).
+func TestCatalogTogether(t *testing.T) {
+	rutor := rutortest.NewServer(t)
+	// Постер раздачи — по http: фейковый прокси не умеет CONNECT для https, а запасной постер
+	// Кинопоиска тест ловит отдельно (иначе тест тихо ходил бы в интернет).
+	topic := bytes.ReplaceAll(rutortest.Page(t, "torrent_1077013.html"), []byte("https://"), []byte("http://"))
+	rutor.Override = func(w http.ResponseWriter, r *http.Request) bool {
+		if r.URL.Path != "/torrent/1077013" {
+			return false
+		}
+		w.Header().Set("Content-Type", "text/html; charset=UTF-8")
+		w.Write(topic)
+		return true
+	}
+	rt := rutrackertest.NewServer(t)
+	rt.Login, rt.Password = "user", "pass"
+	var pic bytes.Buffer
+	png.Encode(&pic, image.NewRGBA(image.Rect(0, 0, 1, 1)))
+	var viaProxy atomic.Int32
+	proxy := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		viaProxy.Add(1)
+		if !strings.HasPrefix(r.URL.Host, "127.0.0.1") { // картинка с внешнего хостинга
+			w.Write(pic.Bytes())
+			return
+		}
+		out, err := http.NewRequest(r.Method, r.URL.String(), r.Body)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadGateway)
+			return
+		}
+		out.Header = r.Header.Clone()
+		resp, err := http.DefaultTransport.RoundTrip(out)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadGateway)
+			return
+		}
+		defer resp.Body.Close()
+		for k, v := range resp.Header {
+			w.Header()[k] = v
+		}
+		w.WriteHeader(resp.StatusCode)
+		io.Copy(w, resp.Body)
+	}))
+	t.Cleanup(proxy.Close)
+
+	home := t.TempDir()
+	db, err := store.Open(context.Background(), config.NewPaths(home).DB)
+	if err != nil {
+		t.Fatal(err)
+	}
+	db.SetSetting(context.Background(), "proxy.trackers", proxy.URL)
+	db.SetSetting(context.Background(), "catalog.categories", "rutor:12,rutracker:2076")
+	db.Close()
+	var kpPosters atomic.Int32
+	kp := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasPrefix(r.URL.Path, "/images/posters/") { // рейтинги без ключа и постеры — не в настоящий Кинопоиск
+			kpPosters.Add(1)
+		}
+		http.NotFound(w, r)
+	}))
+	t.Cleanup(kp.Close)
+	a := startAppWith(t, Options{Home: home, ListenAddr: "127.0.0.1:0", Offline: true, DownloadsDir: t.TempDir(),
+		KinopoiskAPI: kp.URL, Settings: map[string]string{"rutracker.login": "user", "rutracker.password": "pass"},
+		Trackers: Trackers{RutorMirrors: []string{rutor.Mirror.URL}, RutorDownload: rutor.Download.URL,
+			RutrackerMirrors: []string{rt.Forum.URL}, RutrackerAPI: rt.API.URL, RutrackerFeed: rt.Feed.URL, NoEdge: true, Rate: 1000}})
+
+	ctx := context.Background()
+	deadline := time.Now().Add(10 * time.Second)
+	for {
+		es, _, err := a.Catalog.List(ctx, catalog.ListOptions{Tracker: "rutor", Limit: 200})
+		if err != nil {
+			t.Fatal(err)
+		}
+		i := slices.IndexFunc(es, func(e catalog.Entry) bool { return e.TopicID == "1077013" })
+		poster := meta.ImageKey("http://i8.imageban.ru/out/2026/03/14/8e3986dbaaf516b0a8fbc3d6928911f6.jpg")
+		if i >= 0 && strings.HasPrefix(es[i].Title, "Динозавры") && es[i].ImageKey == poster {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("раздача 1077013 не догрузилась за 10 с (карточек %d, 1077013 — №%d): %+v", len(es), i, es)
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	if viaProxy.Load() == 0 {
+		t.Fatal("трекеры и картинки ходили мимо прокси")
+	}
+	if kpPosters.Load() != 0 {
+		t.Fatal("постер со страницы скачался, а запасной постер Кинопоиска всё равно запрошен")
+	}
+	var st catalog.SearchState
+	for deadline := time.Now().Add(10 * time.Second); !st.Complete; time.Sleep(50 * time.Millisecond) {
+		if st, err = a.Catalog.Search(ctx, "космос"); err != nil {
+			t.Fatal(err)
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("поиск не закончился: %+v", st.Trackers)
+		}
+	}
+	if st.Trackers["rutor"] != catalog.SearchOK || st.Trackers["rutracker"] != catalog.SearchOK || len(st.Results) == 0 {
+		t.Fatalf("поиск: %+v, найдено %d", st.Trackers, len(st.Results))
+	}
+	var withLogin string
+	if v, _, _ := a.DB.Setting(ctx, "rutracker.login"); v != "" {
+		withLogin = v
+	}
+	if withLogin != "" {
+		t.Fatal("логин из Options.Settings попал в базу")
 	}
 }
