@@ -45,7 +45,8 @@ func profileDir(t *testing.T) string {
 }
 
 // site — локальный сайт: /page ставит cookie и отдаёт обычную страницу; /challenge — страница
-// «Just a moment...», через секунду сама переходит на /page; /endless — проверка без конца.
+// «Just a moment...», через секунду сама переходит на /page; /plain — обычная страница без
+// cookie; остальное — проверка без конца.
 func site(t *testing.T, pageHits *atomic.Int32) *httptest.Server {
 	t.Helper()
 	s := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -55,6 +56,8 @@ func site(t *testing.T, pageHits *atomic.Int32) *httptest.Server {
 			pageHits.Add(1)
 			http.SetCookie(w, &http.Cookie{Name: "cf_clearance", Value: "secret-value", Path: "/"})
 			fmt.Fprint(w, `<html><head><title>Раздача / Release</title></head><body>ok</body></html>`)
+		case "/plain":
+			fmt.Fprint(w, `<html><head><title>Главная</title></head><body>ok</body></html>`)
 		case "/challenge":
 			fmt.Fprint(w, `<html><head><title>Just a moment...</title><meta http-equiv="refresh" content="1;url=/page"></head><body>…</body></html>`)
 		default:
@@ -110,6 +113,18 @@ func TestPassTimesOut(t *testing.T) {
 	}
 	if d := time.Since(start); d > 30*time.Second {
 		t.Fatalf("ожидание затянулось: %v", d)
+	}
+}
+
+// Страница открылась, а пропуска нет: без cf_clearance форум снова ответит проверкой, поэтому
+// это неудача (её запомнят и не будут гонять Edge на каждый запрос), а не успех.
+func TestPassWithoutClearanceIsNotPassed(t *testing.T) {
+	needEdge(t)
+	var hits atomic.Int32
+	s := site(t, &hits)
+	_, err := New(Options{ProfileDir: profileDir(t)}).Pass(context.Background(), s.URL+"/plain")
+	if !errors.Is(err, ErrNotPassed) || !strings.Contains(err.Error(), "Главная") {
+		t.Fatalf("ожидалась ErrNotPassed с заголовком страницы, получено %v", err)
 	}
 }
 
