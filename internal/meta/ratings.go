@@ -254,7 +254,7 @@ func (r *Ratings) findFilm(ctx context.Context, it queued) (int, time.Time, erro
 	if it.IMDbID != "" {
 		f, err := r.kp.ByIMDb(ctx, it.IMDbID)
 		if err == nil {
-			return f.ID, time.Time{}, r.st.saveFilm(ctx, f, now)
+			return f.ID, time.Time{}, r.keepFilm(ctx, f, now)
 		}
 		if !errors.Is(err, ErrNotFound) {
 			return 0, time.Time{}, err
@@ -287,7 +287,7 @@ func (r *Ratings) findFilm(ctx context.Context, it queued) (int, time.Time, erro
 			return 0, time.Time{}, err
 		}
 		if f, ok := match(fs, t); ok {
-			if err := r.st.saveFilm(ctx, f, now); err != nil {
+			if err := r.keepFilm(ctx, f, now); err != nil {
 				return 0, time.Time{}, err
 			}
 			return f.ID, time.Time{}, r.st.setTitle(ctx, key, t.Year, f.ID, time.Time{})
@@ -300,20 +300,45 @@ func (r *Ratings) findFilm(ctx context.Context, it queued) (int, time.Time, erro
 	return 0, retry, r.st.setTitle(ctx, key, t.Year, 0, retry)
 }
 
+// keepFilm сохраняет фильм из выдачи поиска, только если в ней есть год и рейтинг. Выдача отстаёт
+// от карточки фильма: у новинок там null (вживую — «Бегущая» 6549627). Тогда рейтинг возьмёт
+// шаг «по номеру» в resolve — один запрос, а не 0 на 30 дней.
+func (r *Ratings) keepFilm(ctx context.Context, f Film, now time.Time) error {
+	if f.Year == 0 || f.Rating == 0 {
+		return nil
+	}
+	return r.st.saveFilm(ctx, f, now)
+}
+
 // match — фильм, у которого русское или оригинальное название совпадает с одним из названий
 // раздачи, а год — с точностью до года. Иначе не найдено: без рейтинга лучше, чем с чужим.
-// Есть год у раздачи — нужен и у фильма: записи Кинопоиска без года (заглушки) иначе совпали бы
-// с любым годом (вживую «Бегущая / The Runner (2026)» получила бы 589920 вместо 6549627).
+// У записей Кинопоиска бывает не указан год (заглушки и новинки): такая запись засчитывается,
+// только если у раздачи есть год, совпали оба названия — русское и оригинальное — и записи с
+// подходящим годом нет. Вживую «Бегущая / The Runner (2026)» иначе получила бы 589920
+// «The Runner» без года вместо 6549627 (исследование, раздел 13).
 func match(fs []Film, t Title) (Film, bool) {
 	names := map[string]bool{}
 	for _, n := range t.Names {
 		names[NormTitle(n)] = true
 	}
-	for _, f := range fs {
-		sameName := (f.NameRu != "" && names[NormTitle(f.NameRu)]) || (f.NameOrig != "" && names[NormTitle(f.NameOrig)])
-		if sameName && (t.Year == 0 || (f.Year != 0 && abs(f.Year-t.Year) <= 1)) {
+	var yearless *Film
+	for i, f := range fs {
+		ru := f.NameRu != "" && names[NormTitle(f.NameRu)]
+		orig := f.NameOrig != "" && names[NormTitle(f.NameOrig)]
+		switch {
+		case !ru && !orig:
+		case t.Year == 0:
 			return f, true
+		case f.Year != 0:
+			if abs(f.Year-t.Year) <= 1 {
+				return f, true
+			}
+		case ru && orig && yearless == nil:
+			yearless = &fs[i]
 		}
+	}
+	if yearless != nil {
+		return *yearless, true
 	}
 	return Film{}, false
 }
