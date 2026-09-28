@@ -16,7 +16,7 @@ const (
 	ratingMaxAge      = 30 * 24 * time.Hour // рейтинг найденного фильма обновляется раз в 30 дней
 	notFoundRetry     = 30 * 24 * time.Hour // не найдено — повтор через 30 дней
 	brokenSearchRetry = 7 * 24 * time.Hour  // поиск ответил 5xx (бывает на кириллице) — повтор через неделю: каждая попытка тратит квоту
-	errorRetry        = 5 * time.Minute     // сеть, 5xx у фильма — повтор задачи
+	serviceFailLimit  = 3                   // ответов 5xx подряд — и платный путь встаёт на час
 	rateLimitRetry    = 2 * time.Second     // 429 — короткая пауза
 	quotaRecheck      = time.Hour           // квота кончилась — проверять раз в час, пока не восстановится
 	idlePoll          = 30 * time.Second    // очередь пуста или всё отложено — заглядывать снова
@@ -75,6 +75,7 @@ type Ratings struct {
 	quota       Quota
 	pausedUntil time.Time
 	badKey      bool
+	fails       int // ответов 5xx подряд (каждый платный)
 }
 
 func NewRatings(o RatingsOptions) *Ratings {
@@ -95,16 +96,22 @@ func (r *Ratings) Enqueue(ctx context.Context, prio int, it Item) error {
 	if err != nil {
 		return err
 	}
-	if found && id == 0 && now.Before(retryAt) {
-		return nil // недавно не нашли
-	}
-	if found && id != 0 {
-		at, ok, err := r.st.ratingAt(ctx, id)
-		if err != nil {
-			return err
+	// Номер Кинопоиска из описания главнее найденного поиском, а новый номер после «не найдено» —
+	// повод искать снова: описание раздачи из поиска приходит позже, при открытии карточки
+	// (спека, раздел 7).
+	newInfo := (it.KinopoiskID != 0 && it.KinopoiskID != id) || (id == 0 && it.IMDbID != "")
+	if found && !newInfo {
+		if id == 0 && now.Before(retryAt) {
+			return nil // недавно не нашли
 		}
-		if ok && now.Sub(at) < ratingMaxAge {
-			return nil // рейтинг свежий
+		if id != 0 {
+			at, ok, err := r.st.ratingAt(ctx, id)
+			if err != nil {
+				return err
+			}
+			if ok && now.Sub(at) < ratingMaxAge {
+				return nil // рейтинг свежий
+			}
 		}
 	}
 	if err := r.st.enqueue(ctx, prio, it); err != nil {
@@ -169,7 +176,7 @@ func (r *Ratings) Step(ctx context.Context) (did bool, err error) {
 	err = r.resolve(ctx, it, keyless)
 	switch {
 	case err == nil:
-		return true, r.st.done(ctx, it.Release)
+		return true, r.st.done(ctx, it)
 	case ctx.Err() != nil:
 		return false, nil
 	case errors.Is(err, ErrQuota):
@@ -186,9 +193,52 @@ func (r *Ratings) Step(ctx context.Context) (did bool, err error) {
 	case errors.Is(err, ErrRateLimited):
 		return true, r.st.postpone(ctx, it.Release, now.Add(rateLimitRetry))
 	default:
-		r.log.Warn("Кинопоиск: не вышло, повтор позже", "release", it.Release, "err", err)
-		return true, r.st.postpone(ctx, it.Release, now.Add(errorRetry))
+		var se *ServiceError
+		if errors.As(err, &se) && !keyless {
+			r.serviceTrouble(now)
+		}
+		delay := retryDelay(it.Attempts + 1)
+		r.log.Warn("Кинопоиск: не вышло, повтор позже", "release", it.Release, "delay", delay, "err", err)
+		return true, r.st.failed(ctx, it.Release, now.Add(delay))
 	}
+}
+
+// retryDelay — пауза после n-й неудачи подряд: 5 минут, час, сутки, дальше неделя. Сбой, который
+// повторяется (битая запись у Кинопоиска), иначе тратил бы квоту каждые 5 минут: ответ 5xx тоже
+// платный (исследование, раздел 12; ревью этапа 5b — 288 запросов в сутки на одну раздачу).
+func retryDelay(n int) time.Duration {
+	switch {
+	case n <= 1:
+		return 5 * time.Minute
+	case n == 2:
+		return time.Hour
+	case n == 3:
+		return 24 * time.Hour
+	}
+	return 7 * 24 * time.Hour
+}
+
+// serviceTrouble — Кинопоиск ответил 5xx. Три таких ответа подряд — сбой сервиса: платный путь
+// встаёт на час (рейтинги по номеру без ключа идут дальше), иначе очередь за минуты прошла бы по
+// сотне раздач и потратила суточную квоту.
+func (r *Ratings) serviceTrouble(now time.Time) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.fails++
+	if r.fails >= serviceFailLimit {
+		r.fails = 0
+		if until := now.Add(quotaRecheck); until.After(r.pausedUntil) {
+			r.pausedUntil = until
+		}
+		r.log.Warn("Кинопоиск: сбой сервиса — платные запросы на час остановлены")
+	}
+}
+
+// serviceOK — платный запрос прошёл: счёт ответов 5xx подряд — заново.
+func (r *Ratings) serviceOK() {
+	r.mu.Lock()
+	r.fails = 0
+	r.mu.Unlock()
 }
 
 // keyless — сейчас только пути без ключа: ключа нет, он не подходит или кончилась квота.
@@ -237,6 +287,9 @@ func (r *Ratings) resolve(ctx context.Context, it queued, keyless bool) error {
 		return r.st.setRating(ctx, kpID, kp, imdb, now) // нет в rating.kinopoisk.ru — рейтинга нет
 	}
 	f, err := r.kp.Film(ctx, kpID)
+	if err == nil || errors.Is(err, ErrNotFound) {
+		r.serviceOK()
+	}
 	if errors.Is(err, ErrNotFound) {
 		return r.st.link(ctx, it.Release, 0, now.Add(notFoundRetry)) // номер из описания устарел
 	}
@@ -252,12 +305,33 @@ func (r *Ratings) resolve(ctx context.Context, it queued, keyless bool) error {
 func (r *Ratings) findFilm(ctx context.Context, it queued) (int, time.Time, error) {
 	now := r.now()
 	if it.IMDbID != "" {
-		f, err := r.kp.ByIMDb(ctx, it.IMDbID)
-		if err == nil {
-			return f.ID, time.Time{}, r.keepFilm(ctx, f, now)
-		}
-		if !errors.Is(err, ErrNotFound) {
+		// Рипы одного фильма со ссылкой на IMDb — один запрос: сначала то, что уже известно.
+		id, retryAt, found, err := r.st.imdbLink(ctx, it.IMDbID)
+		if err != nil {
 			return 0, time.Time{}, err
+		}
+		switch {
+		case found && id != 0:
+			return id, time.Time{}, nil
+		case found && now.Before(retryAt):
+			// Кинопоиск этот IMDb не знает — сразу к поиску по названию.
+		default:
+			f, err := r.kp.ByIMDb(ctx, it.IMDbID)
+			switch {
+			case err == nil:
+				r.serviceOK()
+				if err := r.st.setIMDb(ctx, it.IMDbID, f.ID, time.Time{}); err != nil {
+					return 0, time.Time{}, err
+				}
+				return f.ID, time.Time{}, r.keepFilm(ctx, f, now)
+			case errors.Is(err, ErrNotFound):
+				r.serviceOK()
+				if err := r.st.setIMDb(ctx, it.IMDbID, 0, now.Add(notFoundRetry)); err != nil {
+					return 0, time.Time{}, err
+				}
+			default:
+				return 0, time.Time{}, err
+			}
 		}
 	}
 	t := ParseTitle(it.Title)
@@ -281,11 +355,13 @@ func (r *Ratings) findFilm(ctx context.Context, it queued) (int, time.Time, erro
 		var se *ServiceError
 		if errors.As(err, &se) {
 			broken = true // бывает на кириллице (исследование, разделы 12–13)
+			r.serviceTrouble(now)
 			continue
 		}
 		if err != nil {
 			return 0, time.Time{}, err
 		}
+		r.serviceOK()
 		if f, ok := match(fs, t); ok {
 			if err := r.keepFilm(ctx, f, now); err != nil {
 				return 0, time.Time{}, err

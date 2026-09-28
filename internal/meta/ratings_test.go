@@ -2,8 +2,10 @@ package meta
 
 import (
 	"context"
+	"fmt"
 	"net/http"
 	"path/filepath"
+	"sync"
 	"testing"
 	"time"
 
@@ -353,5 +355,101 @@ func TestYearlessSearchResultNeedsBothNamesAndFullFilm(t *testing.T) {
 	}
 	if f.Hits("search") != 1 || f.Hits("film") != 1 {
 		t.Fatalf("поисков %d, фильмов %d — нужен один поиск и один запрос фильма", f.Hits("search"), f.Hits("film"))
+	}
+}
+
+// Сбой, который повторяется (битая запись у Кинопоиска отвечает 500 каждый раз), не тратит квоту
+// каждые 5 минут: пауза растёт — 5 минут, час, сутки, неделя. Каждый ответ 5xx платный
+// (исследование, раздел 12); без роста пауз вышло 288 запросов в сутки (ревью этапа 5b).
+func TestRepeatingServerErrorBacksOff(t *testing.T) {
+	f := newFakeKP(t)
+	r, c, _ := newRatings(t, f, testKey)
+	enqueue(t, r, 1, Item{Release: "rutor:1", IMDbID: "tt0133093"})
+	f.SetStatus(http.StatusInternalServerError)
+	for range 24 * 12 { // сутки по 5 минут
+		drain(t, r)
+		c.add(5 * time.Minute)
+	}
+	if n := f.Hits("imdb"); n > 3 {
+		t.Fatalf("за сутки %d запросов к сбойной записи — нужно не больше 3", n)
+	}
+	if queueLen(t, r) != 1 {
+		t.Fatal("задача должна остаться в очереди")
+	}
+}
+
+// Кинопоиск лёг (5xx на всё): после трёх таких ответов подряд платный путь встаёт на час —
+// иначе очередь за минуты прошла бы по сотне раздач и потратила суточную квоту.
+func TestServiceOutagePausesPaidRequests(t *testing.T) {
+	f := newFakeKP(t)
+	r, _, _ := newRatings(t, f, testKey)
+	for i := range 10 {
+		enqueue(t, r, i, Item{Release: fmt.Sprintf("rutor:%d", i), IMDbID: fmt.Sprintf("tt%07d", i+1)})
+	}
+	f.SetStatus(http.StatusBadGateway)
+	drain(t, r)
+	if n := f.Hits("imdb"); n != 3 {
+		t.Fatalf("запросов при лежащем сервисе %d — нужно 3, затем пауза", n)
+	}
+}
+
+// Один фильм по IMDb — один запрос на все рипы; «Кинопоиск не знает этот IMDb» помнится месяц.
+func TestSameIMDbDifferentRipsCostsOneRequest(t *testing.T) {
+	f := newFakeKP(t)
+	r, _, _ := newRatings(t, f, testKey)
+	for i := range 3 {
+		enqueue(t, r, i, Item{Release: fmt.Sprintf("rutor:%d", i), IMDbID: "tt0133093"})
+	}
+	for i := range 2 {
+		enqueue(t, r, 10+i, Item{Release: fmt.Sprintf("rutor:1%d", i), IMDbID: "tt0000001", Title: "Неизвестно / Unknown Thing (2020) WEB-DL"})
+	}
+	drain(t, r)
+	for i := range 3 {
+		if got, ok := ratingOf(t, r, fmt.Sprintf("rutor:%d", i)); !ok || got.KinopoiskID != 301 {
+			t.Fatalf("rutor:%d: %+v, %v", i, got, ok)
+		}
+	}
+	if f.Hits("imdb") != 2 {
+		t.Fatalf("запросов по IMDb %d — нужно 2: один на фильм и один на неизвестный IMDb", f.Hits("imdb"))
+	}
+}
+
+// Номер Кинопоиска из описания пришёл позже (раздача из поиска, описание — при открытии карточки,
+// спека, раздел 7) — он главнее: и после «не найдено», и после чужого совпадения по названию.
+func TestLaterKinopoiskIDWins(t *testing.T) {
+	f := newFakeKP(t)
+	f.films[555] = filmJSON(555, "Другой", "Other", 1999, 7.7)
+	r, _, _ := newRatings(t, f, testKey)
+	enqueue(t, r, 1, Item{Release: "rutor:a", Title: "Неизвестно / Unknown Thing (2020) WEB-DL"})
+	enqueue(t, r, 2, Item{Release: "rutor:b", Title: "Матрица / The Matrix (1999) BDRip"})
+	drain(t, r)
+	enqueue(t, r, 1, Item{Release: "rutor:a", KinopoiskID: 301, Title: "Неизвестно / Unknown Thing (2020) WEB-DL"})
+	enqueue(t, r, 2, Item{Release: "rutor:b", KinopoiskID: 555, Title: "Матрица / The Matrix (1999) BDRip"})
+	drain(t, r)
+	if got, ok := ratingOf(t, r, "rutor:a"); !ok || got.KinopoiskID != 301 {
+		t.Fatalf("после «не найдено»: %+v, %v", got, ok)
+	}
+	if got, ok := ratingOf(t, r, "rutor:b"); !ok || got.KinopoiskID != 555 {
+		t.Fatalf("после совпадения по названию: %+v, %v", got, ok)
+	}
+}
+
+// Каталог обновил задачу, пока она решалась: обновление не теряется.
+func TestEnqueueDuringResolveIsKept(t *testing.T) {
+	f := newFakeKP(t)
+	f.films[555] = filmJSON(555, "Другой", "Other", 1999, 7.7)
+	r, _, _ := newRatings(t, f, testKey)
+	var once sync.Once
+	f.onFilm = func(id int) {
+		once.Do(func() {
+			if err := r.Enqueue(ctx, 1, Item{Release: "rutor:1", KinopoiskID: 555}); err != nil {
+				t.Error(err)
+			}
+		})
+	}
+	enqueue(t, r, 1, Item{Release: "rutor:1", KinopoiskID: 301})
+	drain(t, r)
+	if got, ok := ratingOf(t, r, "rutor:1"); !ok || got.KinopoiskID != 555 {
+		t.Fatalf("обновление задачи потерялось: %+v, %v", got, ok)
 	}
 }

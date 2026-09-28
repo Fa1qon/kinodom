@@ -17,7 +17,8 @@ type ratingStore struct{ db *store.DB }
 // queued — строка очереди.
 type queued struct {
 	Item
-	Prio int
+	Prio     int
+	Attempts int // неудач подряд
 }
 
 func ms(t time.Time) int64 {
@@ -45,8 +46,12 @@ func nullID(id int) any {
 func (s ratingStore) enqueue(ctx context.Context, prio int, it Item) error {
 	_, err := s.db.W.ExecContext(ctx,
 		`INSERT INTO kp_queue(release_id, prio, kinopoisk_id, imdb_id, title) VALUES(?, ?, ?, ?, ?)
-		 ON CONFLICT(release_id) DO UPDATE SET prio = excluded.prio, kinopoisk_id = excluded.kinopoisk_id,
-		   imdb_id = excluded.imdb_id, title = excluded.title`,
+		 ON CONFLICT(release_id) DO UPDATE SET prio = excluded.prio,
+		   -- Новые номера — новая информация: пробовать сразу. Иначе паузы после неудач остаются:
+		   -- каталог ставит всё заново каждые 6 часов.
+		   not_before = CASE WHEN kinopoisk_id != excluded.kinopoisk_id OR imdb_id != excluded.imdb_id THEN 0 ELSE not_before END,
+		   attempts = CASE WHEN kinopoisk_id != excluded.kinopoisk_id OR imdb_id != excluded.imdb_id THEN 0 ELSE attempts END,
+		   kinopoisk_id = excluded.kinopoisk_id, imdb_id = excluded.imdb_id, title = excluded.title`,
 		it.Release, prio, it.KinopoiskID, it.IMDbID, it.Title)
 	return err
 }
@@ -56,12 +61,12 @@ func (s ratingStore) enqueue(ctx context.Context, prio int, it Item) error {
 func (s ratingStore) next(ctx context.Context, now time.Time, keylessOnly bool) (queued, bool, error) {
 	var q queued
 	err := s.db.R.QueryRowContext(ctx,
-		`SELECT q.release_id, q.prio, q.kinopoisk_id, q.imdb_id, q.title FROM kp_queue q
+		`SELECT q.release_id, q.prio, q.kinopoisk_id, q.imdb_id, q.title, q.attempts FROM kp_queue q
 		 WHERE q.not_before <= ?
 		   AND (? = 0 OR q.kinopoisk_id != 0 OR EXISTS (
 		        SELECT 1 FROM kp_releases r WHERE r.release_id = q.release_id AND r.kp_id IS NOT NULL))
 		 ORDER BY q.prio, q.release_id LIMIT 1`, ms(now), keylessOnly).
-		Scan(&q.Release, &q.Prio, &q.KinopoiskID, &q.IMDbID, &q.Title)
+		Scan(&q.Release, &q.Prio, &q.KinopoiskID, &q.IMDbID, &q.Title, &q.Attempts)
 	if errors.Is(err, sql.ErrNoRows) {
 		return queued{}, false, nil
 	}
@@ -73,8 +78,18 @@ func (s ratingStore) postpone(ctx context.Context, release string, until time.Ti
 	return err
 }
 
-func (s ratingStore) done(ctx context.Context, release string) error {
-	_, err := s.db.W.ExecContext(ctx, `DELETE FROM kp_queue WHERE release_id = ?`, release)
+// failed — ещё одна неудача подряд: не раньше until.
+func (s ratingStore) failed(ctx context.Context, release string, until time.Time) error {
+	_, err := s.db.W.ExecContext(ctx, `UPDATE kp_queue SET not_before = ?, attempts = attempts + 1 WHERE release_id = ?`, ms(until), release)
+	return err
+}
+
+// done убирает сделанную задачу — только если её не обновили, пока она решалась: новые номера
+// из описания, пришедшие в это время, не должны теряться.
+func (s ratingStore) done(ctx context.Context, q queued) error {
+	_, err := s.db.W.ExecContext(ctx,
+		`DELETE FROM kp_queue WHERE release_id = ? AND kinopoisk_id = ? AND imdb_id = ? AND title = ?`,
+		q.Release, q.KinopoiskID, q.IMDbID, q.Title)
 	return err
 }
 
@@ -139,6 +154,32 @@ func (s ratingStore) setRating(ctx context.Context, kpID int, kp, imdb float64, 
 		`INSERT INTO kp_films(kp_id, rating, rating_imdb, rating_at) VALUES(?, ?, ?, ?)
 		 ON CONFLICT(kp_id) DO UPDATE SET rating = excluded.rating, rating_imdb = excluded.rating_imdb,
 		   rating_at = excluded.rating_at`, kpID, kp, imdb, ms(at))
+	return err
+}
+
+// imdbLink — что известно об IMDb: сначала кэш запросов, затем фильмы, у которых он указан.
+func (s ratingStore) imdbLink(ctx context.Context, imdbID string) (kpID int, retryAt time.Time, found bool, err error) {
+	var id sql.NullInt64
+	var at int64
+	err = s.db.R.QueryRowContext(ctx, `SELECT kp_id, retry_at FROM kp_imdb WHERE imdb_id = ?`, imdbID).Scan(&id, &at)
+	if err == nil {
+		return int(id.Int64), fromMS(at), true, nil
+	}
+	if !errors.Is(err, sql.ErrNoRows) {
+		return 0, time.Time{}, false, err
+	}
+	err = s.db.R.QueryRowContext(ctx, `SELECT kp_id FROM kp_films WHERE imdb_id = ? LIMIT 1`, imdbID).Scan(&kpID)
+	if errors.Is(err, sql.ErrNoRows) {
+		return 0, time.Time{}, false, nil
+	}
+	return kpID, time.Time{}, err == nil, err
+}
+
+func (s ratingStore) setIMDb(ctx context.Context, imdbID string, kpID int, retryAt time.Time) error {
+	_, err := s.db.W.ExecContext(ctx,
+		`INSERT INTO kp_imdb(imdb_id, kp_id, retry_at) VALUES(?, ?, ?)
+		 ON CONFLICT(imdb_id) DO UPDATE SET kp_id = excluded.kp_id, retry_at = excluded.retry_at`,
+		imdbID, nullID(kpID), ms(retryAt))
 	return err
 }
 
