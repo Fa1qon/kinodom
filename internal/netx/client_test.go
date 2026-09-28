@@ -3,6 +3,7 @@ package netx
 import (
 	"bytes"
 	"context"
+	"crypto/tls"
 	"errors"
 	"io"
 	"log"
@@ -10,9 +11,11 @@ import (
 	"net/http"
 	"net/http/cookiejar"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"strings"
 	"sync/atomic"
+	"syscall"
 	"testing"
 	"time"
 
@@ -526,5 +529,89 @@ func TestPostIsNotRepeated(t *testing.T) {
 	}
 	if posts.Load() != 1 || other.hits.Load() != 0 {
 		t.Fatalf("форма ушла %d раз, на другое зеркало — %d", posts.Load(), other.hits.Load())
+	}
+}
+
+// Очередь ограничителя не успевает до срока запроса — для вызывающего это «вышло время», а не
+// «трекер недоступен»: каталог (этап 5b) отличает одно от другого через errors.Is.
+func TestLimiterWaitPastDeadlineIsDeadline(t *testing.T) {
+	s := newSite(t, page(trackerPage))
+	c, err := NewClient(Options{Name: "Трекер", Mirrors: []string{s.URL}, Classify: testClassify, Rate: 0.2}) // 1 запрос в 5 с
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := c.Get(context.Background(), "/a"); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
+	defer cancel()
+	_, err = c.Get(ctx, "/b")
+	if !errors.Is(err, context.DeadlineExceeded) || errors.Is(err, ErrTrackerDown) {
+		t.Fatalf("ожидалось «вышло время», получено %v", err)
+	}
+}
+
+// Причины «зеркало недоступно» — короткие и по-русски: они уходят в «Проблемы» (этап 5b).
+func TestNetReasonIsShortRussian(t *testing.T) {
+	wrap := func(err error) error { return &url.Error{Op: "Get", URL: "https://rutor.info/browse", Err: err} }
+	cases := []struct {
+		err  error
+		want string
+	}{
+		{wrap(&net.OpError{Op: "read", Net: "tcp", Err: os.NewSyscallError("wsarecv", syscall.WSAECONNRESET)}), "соединение сброшено"},
+		{wrap(&net.OpError{Op: "read", Net: "tcp", Err: syscall.ECONNRESET}), "соединение сброшено"},
+		{wrap(io.EOF), "соединение закрылось без ответа"},
+		{wrap(io.ErrUnexpectedEOF), "соединение закрылось без ответа"},
+		{wrap(tls.AlertError(40)), "ошибка TLS"},
+		{wrap(errors.New("tls: first record does not look like a TLS handshake")), "ошибка TLS"},
+		{wrap(errors.New("stopped after 10 redirects")), "слишком много перенаправлений"},
+		{wrap(&net.DNSError{Err: "no such host", Name: "rutor.info"}), "адрес не найден (DNS)"},
+		{wrap(errors.New("что-то невиданное")), "сетевая ошибка"},
+	}
+	for _, c := range cases {
+		if got := netReason(c.err); got != c.want {
+			t.Errorf("netReason(%v) = %q, нужно %q", c.err, got, c.want)
+		}
+	}
+}
+
+// Зеркало из настроек со «/» на конце: адрес зеркала — без него, иначе cookie сессии ищутся
+// по «https://…//forum/», а Edge открывает «//forum/…» (ревью этапа 4).
+func TestMirrorTrailingSlashIsTrimmed(t *testing.T) {
+	s := newSite(t, page(trackerPage))
+	mirrors := []string{s.URL + "/"}
+	c, err := NewClient(Options{Name: "Трекер", Mirrors: mirrors, Classify: testClassify, Rate: 1000})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.Mirror() != s.URL {
+		t.Fatalf("зеркало %q", c.Mirror())
+	}
+	if mirrors[0] != s.URL+"/" {
+		t.Fatal("NewClient изменил список вызывающего")
+	}
+}
+
+// Edge обновился — пропуск привязан к новому UA, и клиент переключается на него.
+func TestSetUserAgent(t *testing.T) {
+	var got atomic.Value
+	s := newSite(t, func(w http.ResponseWriter, r *http.Request) {
+		got.Store(r.UserAgent())
+		page(trackerPage)(w, r)
+	})
+	c, err := NewClient(Options{Name: "Трекер", Mirrors: []string{s.URL}, Classify: testClassify, Rate: 1000, UserAgent: "Edg/100"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, ua := range []string{"Edg/100", "Edg/200"} {
+		if ua == "Edg/200" {
+			c.SetUserAgent(ua)
+		}
+		if _, err := c.Get(context.Background(), "/x"); err != nil {
+			t.Fatal(err)
+		}
+		if got.Load() != ua {
+			t.Fatalf("UA %v, нужно %s", got.Load(), ua)
+		}
 	}
 }

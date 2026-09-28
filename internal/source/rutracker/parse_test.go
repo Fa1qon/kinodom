@@ -137,3 +137,16 @@ func TestBuildMagnet(t *testing.T) {
 		t.Fatalf("magnet:\n%s\nнужно\n%s", got, want)
 	}
 }
+
+// Конец описания — последняя строка раздачи, без подписи к картинке «Релиз от:» и баннера
+// сайта «Набор в группу «Хранители»» (ссылка /go/36).
+func TestParseTopicDescriptionHasNoSiteTail(t *testing.T) {
+	d, err := parseTopic(utf8Page(t, "topic.src.html"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.HasSuffix(d.Description, "Русские субтитры: нет") {
+		lines := strings.Split(d.Description, "\n")
+		t.Fatalf("конец описания:\n%s", strings.Join(lines[max(0, len(lines)-3):], "\n"))
+	}
+}

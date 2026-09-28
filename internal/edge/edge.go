@@ -24,6 +24,8 @@ import (
 var (
 	ErrNotPassed = errors.New("Edge не прошёл проверку Cloudflare")
 	ErrProxyAuth = errors.New("Edge не умеет прокси с логином и паролем — пропуск Cloudflare добыть нельзя")
+	// ErrProfileBusy — папку профиля держит другой Edge: второй на том же профиле не запустится.
+	ErrProfileBusy = errors.New("профиль Edge занят другим процессом Edge — закройте его (Диспетчер задач, msedge.exe) или перезагрузите компьютер")
 )
 
 type Options struct {
@@ -53,26 +55,35 @@ func New(o Options) *Fetcher {
 }
 
 // Pass открывает pageURL в скрытом Edge, ждёт ухода со страницы проверки Cloudflare и
-// возвращает cookie сайта. Без cf_clearance среди них — ErrNotPassed: форум снова ответил бы
-// проверкой. Второй одновременный вызов ждёт первого и, скорее всего, пройдёт за ~1 с:
-// профиль уже с пропуском.
-func (f *Fetcher) Pass(ctx context.Context, pageURL string) ([]*http.Cookie, error) {
+// возвращает cookie сайта и User-Agent, с которым Edge прошёл проверку: пропуск привязан к нему,
+// и HTTP-клиент должен слать ровно его. Без cf_clearance среди cookie — ErrNotPassed: форум снова
+// ответил бы проверкой. Второй одновременный вызов ждёт первого и, скорее всего, пройдёт за
+// ~1 с: профиль уже с пропуском.
+func (f *Fetcher) Pass(ctx context.Context, pageURL string) ([]*http.Cookie, string, error) {
 	u, err := url.Parse(pageURL)
 	if err != nil || u.Host == "" {
-		return nil, fmt.Errorf("Edge: %q — не адрес страницы", pageURL)
+		return nil, "", fmt.Errorf("Edge: %q — не адрес страницы", pageURL)
 	}
-	opts, err := f.options()
+	opts, ua, err := f.options()
 	if err != nil {
-		return nil, err
+		return nil, "", err
 	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	bindOnce.Do(func() {
+		if err := bindChildren(); err != nil {
+			f.o.Log.Warn("Edge: не удалось привязать к процессу kinodom — после аварии Edge может остаться", "err", err)
+		}
+	})
+	if profileBusy(f.o.ProfileDir) {
+		return nil, "", ErrProfileBusy
+	}
 	start := time.Now()
 	ctx, cancel := context.WithTimeout(ctx, f.o.Timeout+30*time.Second) // запуск и закрытие — сверх ожидания прохода
 	defer cancel()
 	alloc, cancelAlloc := chromedp.NewExecAllocator(ctx, opts...)
 	defer cancelAlloc() // ждёт выхода процесса Edge
-	tab, cancelTab := chromedp.NewContext(alloc)
+	tab, cancelTab := chromedp.NewContext(alloc, chromedp.WithLogf(f.chromedpLogf), chromedp.WithErrorf(f.chromedpLogf))
 	defer cancelTab()
 	err = chromedp.Run(tab, chromedp.ActionFunc(func(c context.Context) error {
 		_, _, errText, _, err := page.Navigate(pageURL).Do(c)
@@ -82,11 +93,11 @@ func (f *Fetcher) Pass(ctx context.Context, pageURL string) ([]*http.Cookie, err
 		return err
 	}))
 	if err != nil {
-		return nil, fmt.Errorf("Edge: страница %s не открылась: %w", u.Host, err)
+		return nil, "", fmt.Errorf("Edge: страница %s не открылась: %w", u.Host, err)
 	}
 	title, err := f.waitPassed(tab)
 	if err != nil {
-		return nil, err
+		return nil, "", err
 	}
 	var all []*network.Cookie
 	err = chromedp.Run(tab, chromedp.ActionFunc(func(c context.Context) error {
@@ -95,7 +106,7 @@ func (f *Fetcher) Pass(ctx context.Context, pageURL string) ([]*http.Cookie, err
 		return err
 	}))
 	if err != nil {
-		return nil, fmt.Errorf("Edge: cookie не прочитались: %w", err)
+		return nil, "", fmt.Errorf("Edge: cookie не прочитались: %w", err)
 	}
 	// Штатное закрытие: cookie должны успеть записаться в профиль, тогда следующий проход ~1 с.
 	if err := chromedp.Cancel(tab); err != nil {
@@ -103,31 +114,38 @@ func (f *Fetcher) Pass(ctx context.Context, pageURL string) ([]*http.Cookie, err
 	}
 	cookies := siteCookies(all, u.Hostname())
 	if !slices.ContainsFunc(cookies, func(c *http.Cookie) bool { return c.Name == "cf_clearance" }) {
-		return nil, fmt.Errorf("%w: страница открылась, но пропуска (cookie cf_clearance) нет (заголовок страницы: %q)", ErrNotPassed, title)
+		return nil, "", fmt.Errorf("%w: страница открылась, но пропуска (cookie cf_clearance) нет (заголовок страницы: %q)", ErrNotPassed, title)
 	}
 	f.o.Log.Info("Edge: пропуск Cloudflare получен", "host", u.Host, "sec", time.Since(start).Round(100*time.Millisecond).Seconds(), "cookies", len(cookies))
-	return cookies, nil
+	return cookies, ua, nil
+}
+
+// chromedpLogf — сообщения chromedp (неизвестные события протокола и т. п.) в журнал Kinodom:
+// по умолчанию chromedp пишет их в стандартный log, мимо файлов журнала службы.
+func (f *Fetcher) chromedpLogf(format string, args ...any) {
+	f.o.Log.Debug("chromedp: " + fmt.Sprintf(format, args...))
 }
 
 // options — флаги варианта «a» из исследования (раздел 1). Флаги chromedp по умолчанию не берём:
 // с ними (--enable-automation, HeadlessChrome в UA) Cloudflare показывает галочку
 // «Подтвердите, что вы человек».
-func (f *Fetcher) options() ([]chromedp.ExecAllocatorOption, error) {
+func (f *Fetcher) options() ([]chromedp.ExecAllocatorOption, string, error) {
 	if f.o.ProfileDir == "" {
-		return nil, errors.New("Edge: не задана папка профиля")
+		return nil, "", errors.New("Edge: не задана папка профиля")
 	}
 	exec := f.o.ExecPath
 	if exec == "" {
 		exec = ExecPath()
 	}
 	if exec == "" {
-		return nil, ErrNoEdge
+		return nil, "", ErrNoEdge
 	}
 	ua := f.o.UserAgent
 	if ua == "" {
+		// Заново на каждый проход: Edge мог обновиться, пока служба работает.
 		var err error
-		if ua, err = UserAgent(); err != nil {
-			return nil, err
+		if ua, err = userAgentOf(exec); err != nil {
+			return nil, "", err
 		}
 	}
 	opts := []chromedp.ExecAllocatorOption{
@@ -147,14 +165,14 @@ func (f *Fetcher) options() ([]chromedp.ExecAllocatorOption, error) {
 	if f.o.Proxy != "" {
 		p, err := netx.ParseProxy(f.o.Proxy)
 		if err != nil {
-			return nil, err
+			return nil, "", err
 		}
 		if p.User != nil {
-			return nil, ErrProxyAuth
+			return nil, "", ErrProxyAuth
 		}
 		opts = append(opts, chromedp.ProxyServer(p.Scheme+"://"+p.Host))
 	}
-	return opts, nil
+	return opts, ua, nil
 }
 
 // waitPassed ждёт, пока вкладка уйдёт со страницы проверки, и возвращает заголовок открывшейся

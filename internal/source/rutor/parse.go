@@ -124,10 +124,9 @@ var categoryBySlug = map[string]string{
 }
 
 var (
-	reBytes         = regexp.MustCompile(`\((\d+) Bytes\)`)
-	reKinopoiskLink = regexp.MustCompile(`kinopoisk\.ru/(?:film|series)/(\d+)`)
-	reKinopoiskImg  = regexp.MustCompile(`kinopoisk\.ru/(?:rating/)?(\d+)\.gif`)
-	reIMDb          = regexp.MustCompile(`imdb\.com/title/(tt\d+)`)
+	reBytes        = regexp.MustCompile(`\((\d+) Bytes\)`)
+	reKinopoiskImg = regexp.MustCompile(`kinopoisk\.ru/(?:rating/)?(\d+)\.gif`)
+	reIMDb         = regexp.MustCompile(`imdb\.com/title/(tt\d+)`)
 )
 
 // parseTopic разбирает страницу раздачи /torrent/{id}. TopicID и TorrentURL заполняет источник.
@@ -187,7 +186,7 @@ func parseTopic(body []byte, pageURL *url.URL) (source.Details, error) {
 	return d, nil
 }
 
-// poster — первая картинка описания, кроме картинок-рейтингов (s.rutor.info/imdb/pic/…,
+// poster — первая картинка описания по http(s), кроме картинок-рейтингов (s.rutor.info/imdb/pic/…,
 // rating.kinopoisk.ru/…, kinopoisk.ru/rating/…). Так постер находится в 9 раздачах из 9.
 func poster(desc *goquery.Selection, pageURL *url.URL) string {
 	var out string
@@ -197,9 +196,11 @@ func poster(desc *goquery.Selection, pageURL *url.URL) string {
 		if strings.Contains(low, "rutor.info/imdb/") || strings.Contains(low, "kinopoisk.ru") {
 			return true
 		}
-		if u, err := pageURL.Parse(src); err == nil {
-			out = u.String()
+		u, err := pageURL.Parse(src)
+		if err != nil || (u.Scheme != "http" && u.Scheme != "https") {
+			return true // картинку потом качает сервер: javascript:, data: и прочее ему не нужны
 		}
+		out = u.String()
 		return false
 	})
 	return out
@@ -208,7 +209,7 @@ func poster(desc *goquery.Selection, pageURL *url.URL) string {
 // kinopoiskID — номер фильма на Кинопоиске: из ссылки на фильм или сериал, иначе из картинки
 // рейтинга. С ним каталогу не нужен поиск по названию — это экономит квоту (спека, раздел 8).
 func kinopoiskID(desc *goquery.Selection) string {
-	if id := htmltext.FirstMatch(reKinopoiskLink, desc.Find("a[href]"), "href"); id != "" {
+	if id := htmltext.FirstMatch(source.KinopoiskLink, desc.Find("a[href]"), "href"); id != "" {
 		return id
 	}
 	return htmltext.FirstMatch(reKinopoiskImg, desc.Find("img[src]"), "src")

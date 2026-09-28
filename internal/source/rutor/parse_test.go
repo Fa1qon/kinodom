@@ -207,3 +207,26 @@ func TestParseTopicMissingBlocks(t *testing.T) {
 		}
 	}
 }
+
+// Ссылка старого вида kinopoisk.ru/level/1/film/{id}/ — тоже номер фильма: без него каталог
+// тратил бы квоту Кинопоиска на поиск по названию (ревью этапа 3).
+func TestParseTopicOldKinopoiskLink(t *testing.T) {
+	body := `<h1>Фильм</h1><div id="download"><a href="magnet:?xt=urn:btih:` + strings.Repeat("ab", 20) + `">m</a></div>` +
+		`<table id="details"><tr><td></td><td><a href="http://www.kinopoisk.ru/level/1/film/326/">Кинопоиск</a></td></tr></table>`
+	u, _ := url.Parse("https://rutor.info/torrent/1")
+	d, err := parseTopic([]byte(body), u)
+	if err != nil || d.KinopoiskID != "326" {
+		t.Fatalf("Кинопоиск %q, %v", d.KinopoiskID, err)
+	}
+}
+
+// Постер — только http(s): картинку потом качает сервер, а javascript: и data: ему не нужны.
+func TestParseTopicSkipsNonHTTPPoster(t *testing.T) {
+	body := `<h1>Фильм</h1><div id="download"><a href="magnet:?xt=urn:btih:` + strings.Repeat("ab", 20) + `">m</a></div>` +
+		`<table id="details"><tr><td></td><td><img src="javascript:alert(1)"><img src="data:image/png;base64,AAAA"><img src="https://cdn.example/p.jpg"></td></tr></table>`
+	u, _ := url.Parse("https://rutor.info/torrent/1")
+	d, err := parseTopic([]byte(body), u)
+	if err != nil || d.PosterURL != "https://cdn.example/p.jpg" {
+		t.Fatalf("постер %q, %v", d.PosterURL, err)
+	}
+}

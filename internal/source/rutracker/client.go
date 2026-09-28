@@ -38,9 +38,10 @@ var (
 	DefaultFeedBase = "https://feed.rutracker.cc"
 )
 
-// Passer добывает пропуск Cloudflare — cookie сайта после прохода проверки (edge.Fetcher).
+// Passer добывает пропуск Cloudflare (edge.Fetcher): cookie сайта после прохода проверки и
+// User-Agent, с которым браузер её прошёл. Пропуск привязан к UA; после обновления Edge UA новый.
 type Passer interface {
-	Pass(ctx context.Context, pageURL string) ([]*http.Cookie, error)
+	Pass(ctx context.Context, pageURL string) (cookies []*http.Cookie, userAgent string, err error)
 }
 
 type Options struct {
@@ -75,6 +76,10 @@ type Rutracker struct {
 	passFail        map[string]passFailure // зеркало → последняя неудачная добыча пропуска
 	tree            *forumTree
 	treeAt          time.Time
+	loginRetryAt    time.Time // до этого времени страница раздачи не входит сама (после временной неудачи)
+	loginRetryErr   error     // временная неудача входа, из-за которой стоит пауза
+	loginWarned     string    // неудача входа, о которой журнал уже знает
+	treeRetryAt     time.Time // до этого времени не пробовать снова обновить дерево разделов
 }
 
 func New(o Options) (*Rutracker, error) {
@@ -170,7 +175,7 @@ func (r *Rutracker) renewPass(ctx context.Context, path string) error {
 	// сорвать её остальным. Сам Edge ограничен своим таймаутом (45 с + 30 с).
 	passCtx := context.WithoutCancel(ctx)
 	ch := r.passes.DoChan(mirror, func() (any, error) {
-		cookies, err := r.passer.Pass(passCtx, mirror+path)
+		cookies, ua, err := r.passer.Pass(passCtx, mirror+path)
 		r.mu.Lock()
 		if err != nil {
 			if r.passFail == nil {
@@ -183,6 +188,9 @@ func (r *Rutracker) renewPass(ctx context.Context, path string) error {
 		r.mu.Unlock()
 		if err != nil {
 			return nil, err
+		}
+		if ua != "" {
+			r.forum.SetUserAgent(ua) // пропуск привязан к UA браузера; после обновления Edge он новый
 		}
 		u, _ := url.Parse(mirror + "/")
 		r.jar.SetCookies(u, cookies)
@@ -219,8 +227,9 @@ func (e *passError) Is(target error) bool { return target == netx.ErrChallenge }
 func decode(b []byte) ([]byte, error) { return charmap.Windows1251.NewDecoder().Bytes(b) }
 
 // cp1251 — строка для запроса к форуму: поиск nm и поля входа форум читает в windows-1251.
+// Символы, которых в windows-1251 нет, уходят как у браузера — «&#233;».
 func cp1251(s string) string {
-	out, _ := encoding.ReplaceUnsupported(charmap.Windows1251.NewEncoder()).String(s)
+	out, _ := encoding.HTMLEscapeUnsupported(charmap.Windows1251.NewEncoder()).String(s)
 	return out
 }
 
@@ -233,7 +242,8 @@ func classify(p *netx.Page) netx.Verdict {
 	switch {
 	case strings.HasSuffix(p.URL.Path, "/login.php") && bytes.Contains(b, []byte(`id="login-form-full"`)):
 		return netx.LoginRequired
-	case bytes.Contains(b, topicNotFound) && !bytes.Contains(b, []byte(`id="topic-title"`)):
+	case strings.HasSuffix(p.URL.Path, "/viewtopic.php") && bytes.Contains(b, topicNotFound) &&
+		!bytes.Contains(b, []byte(`id="topic-title"`)):
 		return netx.Removed
 	case p.Status == http.StatusOK && strings.Contains(p.Header.Get("Content-Type"), "text/html") &&
 		!bytes.Contains(b, []byte(`id="page_container"`)):

@@ -9,6 +9,8 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"os/exec"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -81,7 +83,7 @@ func TestPassReturnsSiteCookies(t *testing.T) {
 	needEdge(t)
 	var hits atomic.Int32
 	s := site(t, &hits)
-	cs, err := New(Options{ProfileDir: profileDir(t)}).Pass(context.Background(), s.URL+"/page")
+	cs, _, err := New(Options{ProfileDir: profileDir(t)}).Pass(context.Background(), s.URL+"/page")
 	if err != nil || !hasCookie(cs, "cf_clearance", "secret-value") {
 		t.Fatalf("cookie %v, %v", cs, err)
 	}
@@ -93,7 +95,7 @@ func TestPassWaitsOutChallenge(t *testing.T) {
 	var hits atomic.Int32
 	s := site(t, &hits)
 	start := time.Now()
-	cs, err := New(Options{ProfileDir: profileDir(t)}).Pass(context.Background(), s.URL+"/challenge")
+	cs, _, err := New(Options{ProfileDir: profileDir(t)}).Pass(context.Background(), s.URL+"/challenge")
 	if err != nil || !hasCookie(cs, "cf_clearance", "secret-value") || hits.Load() == 0 {
 		t.Fatalf("после проверки: cookie %v, %v, заходов на страницу %d", cs, err, hits.Load())
 	}
@@ -107,7 +109,7 @@ func TestPassTimesOut(t *testing.T) {
 	var hits atomic.Int32
 	s := site(t, &hits)
 	start := time.Now()
-	_, err := New(Options{ProfileDir: profileDir(t), Timeout: 2 * time.Second}).Pass(context.Background(), s.URL+"/endless")
+	_, _, err := New(Options{ProfileDir: profileDir(t), Timeout: 2 * time.Second}).Pass(context.Background(), s.URL+"/endless")
 	if !errors.Is(err, ErrNotPassed) || !strings.Contains(err.Error(), "Один момент") {
 		t.Fatalf("ожидалась ErrNotPassed с заголовком страницы, получено %v", err)
 	}
@@ -122,7 +124,7 @@ func TestPassWithoutClearanceIsNotPassed(t *testing.T) {
 	needEdge(t)
 	var hits atomic.Int32
 	s := site(t, &hits)
-	_, err := New(Options{ProfileDir: profileDir(t)}).Pass(context.Background(), s.URL+"/plain")
+	_, _, err := New(Options{ProfileDir: profileDir(t)}).Pass(context.Background(), s.URL+"/plain")
 	if !errors.Is(err, ErrNotPassed) || !strings.Contains(err.Error(), "Главная") {
 		t.Fatalf("ожидалась ErrNotPassed с заголовком страницы, получено %v", err)
 	}
@@ -137,7 +139,7 @@ func TestPassCallsAreSerialized(t *testing.T) {
 	var wg sync.WaitGroup
 	errs := make([]error, 2)
 	for i := range 2 {
-		wg.Go(func() { _, errs[i] = f.Pass(context.Background(), s.URL+"/page") })
+		wg.Go(func() { _, _, errs[i] = f.Pass(context.Background(), s.URL+"/page") })
 	}
 	wg.Wait()
 	if errs[0] != nil || errs[1] != nil {
@@ -152,7 +154,7 @@ func TestPassLogsNoCookieValues(t *testing.T) {
 	s := site(t, &hits)
 	var buf bytes.Buffer
 	log := slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug}))
-	if _, err := New(Options{ProfileDir: profileDir(t), Log: log}).Pass(context.Background(), s.URL+"/page"); err != nil {
+	if _, _, err := New(Options{ProfileDir: profileDir(t), Log: log}).Pass(context.Background(), s.URL+"/page"); err != nil {
 		t.Fatal(err)
 	}
 	if strings.Contains(buf.String(), "secret-value") {
@@ -162,14 +164,14 @@ func TestPassLogsNoCookieValues(t *testing.T) {
 
 func TestPassRejectsProxyWithPassword(t *testing.T) {
 	f := New(Options{ProfileDir: t.TempDir(), ExecPath: "msedge.exe", UserAgent: "UA", Proxy: "socks5://user:secret@127.0.0.1:1080"})
-	_, err := f.Pass(context.Background(), "https://rutracker.org/forum/index.php")
+	_, _, err := f.Pass(context.Background(), "https://rutracker.org/forum/index.php")
 	if !errors.Is(err, ErrProxyAuth) || strings.Contains(err.Error(), "secret") {
 		t.Fatalf("ожидалась ErrProxyAuth без пароля в тексте, получено %v", err)
 	}
 }
 
 func TestPassNeedsProfileDir(t *testing.T) {
-	if _, err := New(Options{ExecPath: "msedge.exe", UserAgent: "UA"}).Pass(context.Background(), "https://rutracker.org/"); err == nil {
+	if _, _, err := New(Options{ExecPath: "msedge.exe", UserAgent: "UA"}).Pass(context.Background(), "https://rutracker.org/"); err == nil {
 		t.Fatal("ошибки нет")
 	}
 }
@@ -187,5 +189,43 @@ func TestSiteCookies(t *testing.T) {
 	}
 	if len(siteCookies(all, "forum.rutracker.org")) != 2 {
 		t.Fatal("поддомен получает cookie домена .rutracker.org, но не cookie только хоста rutracker.org")
+	}
+}
+
+// Профиль держит другой Edge (остался от прошлого запуска или открыт командой source с тем же
+// --profile) — понятная ошибка сразу, а не «chrome failed to start:» (ревью этапа 4).
+func TestPassReportsBusyProfile(t *testing.T) {
+	needEdge(t)
+	dir := profileDir(t)
+	other := exec.Command(ExecPath(), "--headless=new", "--user-data-dir="+dir, "--no-first-run", "about:blank")
+	if err := other.Start(); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		exec.Command("taskkill", "/F", "/T", "/PID", strconv.Itoa(other.Process.Pid)).Run()
+		other.Wait()
+	})
+	for deadline := time.Now().Add(15 * time.Second); !profileBusy(dir); time.Sleep(100 * time.Millisecond) {
+		if time.Now().After(deadline) {
+			t.Fatal("чужой Edge не занял профиль за 15 с")
+		}
+	}
+	var hits atomic.Int32
+	s := site(t, &hits)
+	start := time.Now()
+	_, _, err := New(Options{ProfileDir: dir}).Pass(context.Background(), s.URL+"/page")
+	if !errors.Is(err, ErrProfileBusy) || time.Since(start) > 5*time.Second {
+		t.Fatalf("ожидалась ErrProfileBusy сразу, получено %v за %v", err, time.Since(start))
+	}
+}
+
+// Сообщения chromedp уходят в журнал Kinodom (Debug), а не в стандартный log — мимо файлов
+// журнала службы. В обычном проходе chromedp молчит, поэтому проверяется сам переходник.
+func TestChromedpMessagesGoToJournal(t *testing.T) {
+	var buf bytes.Buffer
+	f := New(Options{Log: slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug}))})
+	f.chromedpLogf("could not unmarshal event: %v", "Page.newEvent")
+	if !strings.Contains(buf.String(), "level=DEBUG") || !strings.Contains(buf.String(), "could not unmarshal event: Page.newEvent") {
+		t.Fatalf("журнал:\n%s", buf.String())
 	}
 }

@@ -34,7 +34,6 @@ func (e *CaptchaError) Error() string {
 var (
 	reForumHref   = regexp.MustCompile(`viewforum\.php\?f=(\d+)`)
 	reTrackerHref = regexp.MustCompile(`tracker\.php\?f=(\d+)`)
-	reKinopoisk   = regexp.MustCompile(`kinopoisk\.ru/(?:level/\d+/)?(?:film|series)/(\d+)`)
 	reIMDb        = regexp.MustCompile(`imdb\.com/title/(tt\d+)`)
 )
 
@@ -111,9 +110,10 @@ func parseTopic(body []byte) (source.Details, error) {
 		d.PosterURL = p
 	}
 	links := post.Find("a[href]")
-	d.KinopoiskID = htmltext.FirstMatch(reKinopoisk, links, "href")
+	d.KinopoiskID = htmltext.FirstMatch(source.KinopoiskLink, links, "href")
 	d.IMDbID = htmltext.FirstMatch(reIMDb, links, "href")
-	d.Description = htmltext.Text(post, "div.sp-wrap, script, style, var")
+	// Ссылки /go/… — служебные ссылки и баннеры сайта («Набор в группу «Хранители»»), не текст раздачи.
+	d.Description = htmltext.Text(post, `div.sp-wrap, script, style, var, a[href^="/go/"]`)
 	href, _ := doc.Find("a.magnet-link[href]").First().Attr("href")
 	if m := reBtih.FindStringSubmatch(href); m != nil {
 		d.InfoHash = strings.ToLower(m[1])

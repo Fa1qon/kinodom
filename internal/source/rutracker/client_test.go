@@ -5,6 +5,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -17,24 +18,25 @@ import (
 
 var ctx = context.Background()
 
-// fakePasser — «Edge»: считает вызовы и выдаёт пропуск (или ошибку).
+// fakePasser — «Edge»: считает вызовы и выдаёт пропуск (или ошибку) и UA, с которым «прошёл».
 type fakePasser struct {
 	calls atomic.Int32
 	delay time.Duration
 	err   error
+	ua    string
 }
 
-func (f *fakePasser) Pass(ctx context.Context, _ string) ([]*http.Cookie, error) {
+func (f *fakePasser) Pass(ctx context.Context, _ string) ([]*http.Cookie, string, error) {
 	f.calls.Add(1)
 	select {
 	case <-time.After(f.delay):
 	case <-ctx.Done(): // как настоящий Edge: отмена прерывает добычу
-		return nil, ctx.Err()
+		return nil, "", ctx.Err()
 	}
 	if f.err != nil {
-		return nil, f.err
+		return nil, "", f.err
 	}
-	return []*http.Cookie{rutrackertest.PassCookie()}, nil
+	return []*http.Cookie{rutrackertest.PassCookie()}, f.ua, nil
 }
 
 func newRutracker(t *testing.T, s *rutrackertest.Server, mod func(*Options)) *Rutracker {
@@ -198,5 +200,44 @@ func TestFailedPassIsRememberedForAWhile(t *testing.T) {
 	r.Details(ctx, "6914565")
 	if p.calls.Load() != 2 {
 		t.Fatalf("через 11 минут Edge запускали %d раз, нужна новая попытка", p.calls.Load())
+	}
+}
+
+// Символов, которых нет в windows-1251, форум ждёт как от браузера — «&#233;», а не байт 0x1A:
+// иначе пароль с такими символами блокировал бы вход (ревью этапа 4).
+func TestCP1251EscapesUnsupportedLikeBrowser(t *testing.T) {
+	if got := cp1251("Amélie"); got != "Am&#233;lie" {
+		t.Fatalf("cp1251: %q", got)
+	}
+}
+
+// «Тема не найдена» в названии раздачи на странице поиска — не повод считать ответ «раздача
+// удалена» (ревью этапа 4).
+func TestTopicNotFoundOnlyOnTopicPage(t *testing.T) {
+	body := []byte(`<div id="page_container">` + cp1251("Тема не найдена") + `</div>`)
+	for path, want := range map[string]netx.Verdict{
+		"/forum/viewtopic.php": netx.Removed,
+		"/forum/tracker.php":   netx.OK,
+	} {
+		p := &netx.Page{URL: &url.URL{Scheme: "https", Host: "rutracker.org", Path: path}, Status: http.StatusOK,
+			Header: http.Header{"Content-Type": {"text/html; charset=Windows-1251"}}, Body: body}
+		if got := classify(p); got != want {
+			t.Errorf("%s: вывод %d, нужно %d", path, got, want)
+		}
+	}
+}
+
+// Edge обновился, пока служба работала: пропуск выдан новому UA — форум дальше ходит с ним.
+// Иначе Cloudflare снова ответил бы проверкой, и Edge запускался бы на каждый запрос.
+func TestPassSwitchesUserAgent(t *testing.T) {
+	s := rutrackertest.NewServer(t)
+	s.NeedPass = true
+	p := &fakePasser{ua: "Edg/200"}
+	r := newRutracker(t, s, func(o *Options) { o.Passer = p; o.UserAgent = "Edg/100" })
+	if _, err := r.Details(ctx, "6914565"); err != nil {
+		t.Fatal(err)
+	}
+	if got := s.LastUserAgent(); got != "Edg/200" {
+		t.Fatalf("форум получил UA %q, нужно Edg/200", got)
 	}
 }

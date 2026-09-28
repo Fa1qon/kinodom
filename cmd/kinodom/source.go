@@ -7,9 +7,12 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"maps"
+	"net/url"
 	"os"
 	"os/signal"
 	"path/filepath"
+	"slices"
 	"strings"
 	"time"
 
@@ -23,8 +26,9 @@ const sourceUsage = `Использование:
   kinodom source rutor top|search|details|torrent [флаги] …
       top <категория> · search <запрос> · details <номер> · torrent <номер> <файл>
       флаги: --proxy URL | --limit N | --mirror URL (можно несколько) | --download URL
-  kinodom source rutracker categories|top|recent|details|search [флаги] …
+  kinodom source rutracker categories|top|recent|details|search|search-raw [флаги] …
       top <раздел> · recent <раздел> · details <номер> · search <запрос>
+      search-raw <параметры tracker.php>… — например "f=313&nm=космос"; без фильтра по категориям
       флаги: --proxy URL | --limit N | --mirror URL | --api URL | --feed URL | --no-edge | --profile ПАПКА
       логин и пароль — переменные окружения KINODOM_RUTRACKER_LOGIN и KINODOM_RUTRACKER_PASSWORD
 `
@@ -128,7 +132,7 @@ func cmdSourceRutracker(action string, rest []string, stdout, stderr io.Writer) 
 	if err := fs.Parse(rest); err != nil {
 		return 2
 	}
-	want := map[string]int{"categories": 0, "top": 1, "recent": 1, "details": 1, "search": -1}
+	want := map[string]int{"categories": 0, "top": 1, "recent": 1, "details": 1, "search": -1, "search-raw": -1}
 	n, known := want[action]
 	if !known || (n >= 0 && fs.NArg() != n) || (n < 0 && fs.NArg() == 0) {
 		fmt.Fprint(stderr, sourceUsage)
@@ -185,15 +189,32 @@ func cmdSourceRutracker(action string, rest []string, stdout, stderr io.Writer) 
 			return fail(stderr, err)
 		}
 		printDetails(stdout, d)
-	case "search":
+	case "search", "search-raw":
 		if o.Login == "" || o.Password == "" {
 			return fail(stderr, errors.New("для поиска задайте логин и пароль Rutracker: переменные окружения KINODOM_RUTRACKER_LOGIN и KINODOM_RUTRACKER_PASSWORD"))
 		}
-		rs, err := src.Search(ctx, strings.Join(fs.Args(), " "))
-		if err != nil {
-			return fail(stderr, err)
+		if action == "search" {
+			rs, err := src.Search(ctx, strings.Join(fs.Args(), " "))
+			if err != nil {
+				return fail(stderr, err)
+			}
+			printReleases(stdout, rs, *limit)
+			break
 		}
-		printReleases(stdout, rs, *limit)
+		// Каждый набор параметров — отдельный запрос в одном процессе: вход один.
+		for _, arg := range fs.Args() {
+			params, err := url.ParseQuery(arg)
+			if err != nil {
+				return fail(stderr, fmt.Errorf("параметры поиска %q не разбираются: %w", arg, err))
+			}
+			rs, err := src.SearchRaw(ctx, params)
+			if err != nil {
+				return fail(stderr, err)
+			}
+			fmt.Fprintf(stdout, "== %s\n", arg)
+			printReleases(stdout, rs, *limit)
+			printForums(stdout, rs)
+		}
 	}
 	fmt.Fprintf(stdout, "\nГотово за %.1f с, зеркало форума %s\n", time.Since(start).Seconds(), src.Mirror())
 	return 0
@@ -223,6 +244,19 @@ func printReleases(w io.Writer, rs []source.Release, limit int) {
 		}
 		fmt.Fprintf(w, "%6d %6d %9s  %-9s %s [%s]\n", r.Seeders, r.Leechers, humanSize(r.Size), r.Added.Format("02.01.06"), name, r.TopicID)
 	}
+}
+
+// printForums — сколько найденных раздач в каком разделе: видно, сработал ли фильтр f=.
+func printForums(w io.Writer, rs []source.Release) {
+	count := map[string]int{}
+	for _, r := range rs {
+		count[r.CategoryID]++
+	}
+	var parts []string
+	for _, id := range slices.Sorted(maps.Keys(count)) {
+		parts = append(parts, fmt.Sprintf("%s×%d", id, count[id]))
+	}
+	fmt.Fprintf(w, "Разделы: %s\n\n", strings.Join(parts, ", "))
 }
 
 func printDetails(w io.Writer, d source.Details) {

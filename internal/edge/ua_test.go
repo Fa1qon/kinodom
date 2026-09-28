@@ -1,26 +1,61 @@
 package edge
 
 import (
+	"io"
 	"os"
 	"path/filepath"
+	"regexp"
 	"testing"
 )
 
-func TestUserAgentFromNewestVersionDir(t *testing.T) {
-	dir := t.TempDir()
-	for _, d := range []string{"153.0.3000.1", "154.0.4258.37", "Installer"} {
-		os.Mkdir(filepath.Join(dir, d), 0o755)
+// Обновление Edge ждёт перезапуска: рядом с msedge.exe уже лежит папка новой версии, а
+// запускается старый exe. UA — по версии самого exe (ревью этапа 4).
+func TestUserAgentFollowsExeNotNewestDir(t *testing.T) {
+	exe := ExecPath()
+	if exe == "" {
+		t.Skip("Edge не установлен")
 	}
-	os.WriteFile(filepath.Join(dir, "155.0.0.0"), nil, 0o644) // файл, а не папка версии
-	got, err := userAgentFrom(dir)
-	want := "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/154.0.0.0 Safari/537.36 Edg/154.0.0.0"
-	if err != nil || got != want {
-		t.Fatalf("UA %q, %v", got, err)
+	dir := t.TempDir()
+	copyFile(t, exe, filepath.Join(dir, "msedge.exe"))
+	if err := os.Mkdir(filepath.Join(dir, "999.0.0.0"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	ua, err := userAgentOf(filepath.Join(dir, "msedge.exe"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	m := regexp.MustCompile(`Chrome/(\d+)\.0\.0\.0 Safari/537\.36 Edg/(\d+)\.0\.0\.0$`).FindStringSubmatch(ua)
+	if m == nil || m[1] != m[2] || m[1] == "999" || len(m[1]) < 3 {
+		t.Fatalf("UA %q — нужна версия самого msedge.exe", ua)
 	}
 }
 
-func TestUserAgentWithoutVersionDir(t *testing.T) {
-	if _, err := userAgentFrom(t.TempDir()); err == nil {
+func TestUserAgentOfFileWithoutVersion(t *testing.T) {
+	p := filepath.Join(t.TempDir(), "msedge.exe")
+	if err := os.WriteFile(p, []byte("не exe"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := userAgentOf(p); err == nil {
 		t.Fatal("ошибки нет")
+	}
+}
+
+func copyFile(t *testing.T, from, to string) {
+	t.Helper()
+	src, err := os.Open(from)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer src.Close()
+	dst, err := os.Create(to)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := io.Copy(dst, src); err != nil {
+		dst.Close()
+		t.Fatal(err)
+	}
+	if err := dst.Close(); err != nil {
+		t.Fatal(err)
 	}
 }
