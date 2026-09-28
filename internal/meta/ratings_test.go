@@ -321,3 +321,17 @@ func TestRunChecksQuotaThenWorksQueue(t *testing.T) {
 		t.Fatalf("состояние %+v, %v, запросов лимитов %d", st, err, f.Hits("key"))
 	}
 }
+
+// У раздачи есть год — у фильма тоже должен быть и совпадать с точностью до года. Записи
+// Кинопоиска без года (заглушки) иначе совпадают с любым годом: вживую «Бегущая / The Runner
+// (2026)» получила 589920 «The Runner» без года вместо 6549627 (исследование, раздел 13).
+func TestSearchNeedsYearWhenReleaseHasOne(t *testing.T) {
+	f := newFakeKP(t)
+	f.search["The Runner"] = itemsJSON(filmJSON(589920, "", "The Runner", 0, nil), filmJSON(6549627, "Бегущая", "The Runner", 2026, 6.1))
+	r, _, _ := newRatings(t, f, testKey)
+	enqueue(t, r, 1, Item{Release: "rutor:1104968", Title: "Бегущая / The Runner (2026) WEB-DL 1080p | P"})
+	drain(t, r)
+	if got, ok := ratingOf(t, r, "rutor:1104968"); !ok || got.KinopoiskID != 6549627 {
+		t.Fatalf("фильм %+v, %v — нужен 6549627 (2026), а не запись без года", got, ok)
+	}
+}
