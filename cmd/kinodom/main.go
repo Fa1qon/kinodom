@@ -22,6 +22,7 @@ func commands() []command {
 	return []command{
 		{"run", "запустить сервер в консоли (для разработки)", cmdRun},
 		{"play", "открыть раздачу на запущенном сервере и получить ссылку для VLC", cmdPlay},
+		{"source", "проверить источник раздач вживую: kinodom source rutor top 12", cmdSource},
 		{"version", "показать версию", cmdVersion},
 	}
 }
