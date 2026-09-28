@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/anacrolix/torrent/metainfo"
 
@@ -20,7 +21,14 @@ import (
 // streamFixture — раздача с одним файлом, раздающий и HTTP-сервер с маршрутом потока.
 func streamFixture(t *testing.T, name string, size int) (srv *httptest.Server, ih metainfo.Hash, want []byte) {
 	t.Helper()
-	s := newTestService(t)
+	_, srv, ih, want = streamFixtureService(t, name, size)
+	return srv, ih, want
+}
+
+// streamFixtureService — то же, что streamFixture, плюс сам сервис (чтобы дотянуться до движка).
+func streamFixtureService(t *testing.T, name string, size int) (s *Service, srv *httptest.Server, ih metainfo.Hash, want []byte) {
+	t.Helper()
+	s = newTestService(t)
 	runService(t, s)
 	src := t.TempDir()
 	mi, root := torrenttest.MakeTorrent(t, src, "Космос", 64<<10, torrenttest.File{Path: name, Size: size})
@@ -38,7 +46,7 @@ func streamFixture(t *testing.T, name string, size int) (srv *httptest.Server, i
 	mux.Handle("GET /stream/{hash}/{index}/{name}", s.StreamHandler())
 	srv = httptest.NewServer(mux)
 	t.Cleanup(srv.Close)
-	return srv, ih, want
+	return s, srv, ih, want
 }
 
 func get(t *testing.T, url, rng string) (int, string, []byte) {
@@ -47,7 +55,8 @@ func get(t *testing.T, url, rng string) (int, string, []byte) {
 	if rng != "" {
 		req.Header.Set("Range", rng)
 	}
-	resp, err := http.DefaultClient.Do(req)
+	// Без предела замерший поток повесил бы весь прогон на 10 минут (таймаут go test).
+	resp, err := (&http.Client{Timeout: 30 * time.Second}).Do(req)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -117,5 +126,23 @@ func TestStreamErrors(t *testing.T) {
 		if code, _, _ := get(t, srv.URL+path, ""); code != want {
 			t.Errorf("%s: код %d, ожидался %d", path, code, want)
 		}
+	}
+}
+
+// Соединение с единственным раздающим оборвалось. anacrolix сам к нему не переподключается:
+// адрес вернут DHT, трекеры или PEX (в тестах — connect). Поток ждёт и продолжается.
+func TestStreamResumesAfterOnlyPeerReconnects(t *testing.T) {
+	s, srv, ih, want := streamFixtureService(t, "film.mkv", 2<<20)
+	u := srv.URL + streamPath(ih, 0, "film.mkv")
+	if code, _, body := get(t, u, "bytes=0-99999"); code != http.StatusPartialContent || !bytes.Equal(body, want[:100_000]) {
+		t.Fatalf("начало: код %d", code)
+	}
+	tt, _ := s.Engine().Client().Torrent(ih)
+	tt.SetMaxEstablishedConns(0) // рвёт все соединения — как если бы раздающий ушёл
+	tt.SetMaxEstablishedConns(20)
+	from := 1 << 20
+	code, _, body := get(t, u, fmt.Sprintf("bytes=%d-%d", from, from+99_999))
+	if code != http.StatusPartialContent || !bytes.Equal(body, want[from:from+100_000]) {
+		t.Fatalf("после обрыва: код %d, байты совпадают %v", code, bytes.Equal(body, want[from:from+100_000]))
 	}
 }
