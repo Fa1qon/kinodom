@@ -66,8 +66,11 @@ type Rutracker struct {
 	log      *slog.Logger
 	now      func() time.Time // часы (тесты подменяют)
 
+	loginMu sync.Mutex // один вход за раз: одновременные запросы ждут его, а не входят сами
+
 	mu              sync.Mutex
 	login, password string
+	credGen         int                    // растёт при SetCredentials: неудача старого входа не блокирует новый пароль
 	loginBlock      error                  // неверный пароль или капча: автоматический вход не повторяется
 	passFail        map[string]passFailure // зеркало → последняя неудачная добыча пропуска
 	tree            *forumTree

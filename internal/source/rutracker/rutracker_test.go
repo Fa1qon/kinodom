@@ -4,7 +4,9 @@ import (
 	"errors"
 	"slices"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 
 	"kinodom/internal/netx"
 	"kinodom/internal/source"
@@ -173,5 +175,47 @@ func TestAPIWorksWhileForumIsClosed(t *testing.T) {
 	}
 	if _, err := r.Recent(ctx, "313"); err != nil {
 		t.Fatalf("лента: %v", err)
+	}
+}
+
+// Одновременные поиски входят один раз — и с верным паролем, и с неверным (вторая неудачная
+// попытка — лишний шаг к капче).
+func TestConcurrentSearchesLogInOnce(t *testing.T) {
+	for name, pass := range map[string]string{"верный пароль": "right", "неверный пароль": "wrong"} {
+		t.Run(name, func(t *testing.T) {
+			s := rutrackertest.NewServer(t)
+			s.Login, s.Password = "user", "right"
+			s.BeforeLogin = func() { time.Sleep(100 * time.Millisecond) } // вход длится — остальные успевают подойти
+			r := newRutracker(t, s, withCreds("user", pass))
+			var wg sync.WaitGroup
+			for range 3 {
+				wg.Go(func() { r.Search(ctx, "космос") })
+			}
+			wg.Wait()
+			if s.Logins() != 1 {
+				t.Fatalf("попыток входа %d", s.Logins())
+			}
+		})
+	}
+}
+
+// Пароль сменили, пока шёл вход со старым: неудача старого входа не блокирует новый пароль.
+func TestPasswordChangeDuringLoginIsKept(t *testing.T) {
+	s := rutrackertest.NewServer(t)
+	s.Login, s.Password = "user", "right"
+	entered, release := make(chan struct{}), make(chan struct{})
+	var once sync.Once
+	s.BeforeLogin = func() { once.Do(func() { close(entered); <-release }) }
+	r := newRutracker(t, s, withCreds("user", "wrong"))
+	done := make(chan error, 1)
+	go func() { done <- r.Login(ctx) }()
+	<-entered
+	r.SetCredentials("user", "right")
+	close(release)
+	if err := <-done; !errors.Is(err, ErrWrongPassword) {
+		t.Fatalf("старый вход: %v", err)
+	}
+	if err := r.Login(ctx); err != nil {
+		t.Fatalf("новый пароль заблокирован неудачей старого входа: %v", err)
 	}
 }

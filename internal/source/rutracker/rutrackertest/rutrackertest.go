@@ -63,6 +63,7 @@ type Server struct {
 	Forum, API, Feed *httptest.Server
 	Login, Password  string // верные логин и пароль; пусто — вход всегда неудачен
 	NeedPass         bool   // форум отвечает проверкой Cloudflare, пока нет cookie cf_clearance=ok
+	BeforeLogin      func() // если задан — вызывается на каждый POST входа до ответа (тесты гонок)
 
 	pages     map[string][]byte
 	mu        sync.Mutex
@@ -140,6 +141,9 @@ func (s *Server) forum(w http.ResponseWriter, r *http.Request) {
 		s.mu.Lock()
 		s.logins++
 		s.mu.Unlock()
+		if s.BeforeLogin != nil {
+			s.BeforeLogin()
+		}
 		r.ParseForm()
 		user, _ := dec.String(r.PostForm.Get("login_username"))
 		pass, _ := dec.String(r.PostForm.Get("login_password"))

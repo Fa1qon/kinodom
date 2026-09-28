@@ -26,6 +26,7 @@ func (r *Rutracker) SetCredentials(login, password string) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.login, r.password, r.loginBlock = login, password, nil
+	r.credGen++
 }
 
 func (r *Rutracker) hasCredentials() bool {
@@ -34,26 +35,47 @@ func (r *Rutracker) hasCredentials() bool {
 	return r.login != "" && r.password != ""
 }
 
-// loggedIn — есть cookie сессии на текущем зеркале (у каждого зеркала своя сессия).
-func (r *Rutracker) loggedIn() bool {
+// session — значение cookie сессии на текущем зеркале (у каждого зеркала своя); "" — не вошли.
+func (r *Rutracker) session() string {
 	u, err := url.Parse(r.forum.Mirror() + "/forum/")
 	if err != nil {
-		return false
+		return ""
 	}
 	for _, c := range r.jar.Cookies(u) {
-		if c.Name == "bb_session" && c.Value != "" {
-			return true
+		if c.Name == "bb_session" {
+			return c.Value
 		}
 	}
-	return false
+	return ""
 }
+
+func (r *Rutracker) loggedIn() bool { return r.session() != "" }
 
 // Login входит на текущее зеркало. Попытка — одна: уже после первой неудачи Rutracker требует
 // код с картинки, поэтому неверный пароль и капча блокируют вход до SetCredentials. Пароль не
 // попадает ни в текст ошибки, ни в журнал: netx пишет только путь запроса.
 func (r *Rutracker) Login(ctx context.Context) error {
+	r.loginMu.Lock()
+	defer r.loginMu.Unlock()
+	return r.doLogin(ctx)
+}
+
+// ensureLogin входит, если сессии нет (stale == "") или форум отверг именно её (stale — её
+// значение). Одновременные вызовы ждут одного входа: следующий увидит новую сессию и входить
+// не станет, а после неудачи получит запрет без новой попытки.
+func (r *Rutracker) ensureLogin(ctx context.Context, stale string) error {
+	r.loginMu.Lock()
+	defer r.loginMu.Unlock()
+	if s := r.session(); s != "" && s != stale {
+		return nil
+	}
+	return r.doLogin(ctx)
+}
+
+// doLogin — сам вход; вызывается под loginMu.
+func (r *Rutracker) doLogin(ctx context.Context) error {
 	r.mu.Lock()
-	login, password, block := r.login, r.password, r.loginBlock
+	login, password, block, gen := r.login, r.password, r.loginBlock, r.credGen
 	r.mu.Unlock()
 	if login == "" || password == "" {
 		return ErrNoCredentials
@@ -73,7 +95,9 @@ func (r *Rutracker) Login(ctx context.Context) error {
 	var ce *CaptchaError
 	if errors.Is(err, ErrWrongPassword) || errors.As(err, &ce) {
 		r.mu.Lock()
-		r.loginBlock = err
+		if r.credGen == gen { // пароль не меняли, пока шёл вход
+			r.loginBlock = err
+		}
 		r.mu.Unlock()
 	}
 	return err
@@ -96,15 +120,14 @@ func (r *Rutracker) Search(ctx context.Context, query string) ([]source.Release,
 	if err != nil {
 		return nil, err
 	}
-	if !r.loggedIn() {
-		if err := r.Login(ctx); err != nil {
-			return nil, err
-		}
+	if err := r.ensureLogin(ctx, ""); err != nil {
+		return nil, err
 	}
 	path := "/forum/tracker.php?nm=" + url.QueryEscape(cp1251(q)) + "&o=10&s=2"
+	stale := r.session()
 	p, err := r.forumPage(ctx, path, "")
 	if errors.Is(err, netx.ErrLoginRequired) {
-		if err = r.Login(ctx); err == nil {
+		if err = r.ensureLogin(ctx, stale); err == nil {
 			p, err = r.forumPage(ctx, path, "")
 		}
 	}
@@ -134,7 +157,7 @@ func (r *Rutracker) Details(ctx context.Context, topicID string) (source.Details
 		return source.Details{}, fmt.Errorf("Rutracker: номер раздачи %q — не число", topicID)
 	}
 	if r.hasCredentials() && !r.loggedIn() {
-		if err := r.Login(ctx); err != nil {
+		if err := r.ensureLogin(ctx, ""); err != nil {
 			r.log.Warn("Rutracker: вход не удался, раздача — как для гостя", "err", err)
 		}
 	}
