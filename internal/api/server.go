@@ -31,6 +31,9 @@ type Server struct {
 	ready     chan struct{}
 	readyOnce sync.Once
 	bound     atomic.Value // string: фактический адрес после Listen
+
+	lnMu sync.Mutex
+	ln   net.Listener // занятый заранее порт; Run забирает его
 }
 
 func New(addr string, d Deps) *Server {
@@ -65,14 +68,44 @@ func (s *Server) Handler() http.Handler {
 	return recoverer(s.deps.Log, s.hosts.guard(jsonGuard(s.mux)))
 }
 
-// Run слушает адрес и работает до отмены ctx.
-func (s *Server) Run(ctx context.Context) error {
-	ln, err := net.Listen("tcp", s.addr)
+// Listen занимает порт API заранее — чтобы запуск сразу узнал, что порт занят,
+// а не писал «работает». Порт берётся эксклюзивно (см. listenExclusive).
+func (s *Server) Listen() error {
+	s.lnMu.Lock()
+	defer s.lnMu.Unlock()
+	if s.ln != nil {
+		return nil
+	}
+	ln, err := listenExclusive(s.addr)
 	if err != nil {
 		return err
 	}
+	s.ln = ln
 	s.bound.Store(ln.Addr().String())
+	return nil
+}
+
+// takeListener отдаёт занятый порт (или занимает его); следующий Run после остановки
+// сервера откроет порт заново.
+func (s *Server) takeListener() (net.Listener, error) {
+	if err := s.Listen(); err != nil {
+		return nil, err
+	}
+	s.lnMu.Lock()
+	defer s.lnMu.Unlock()
+	ln := s.ln
+	s.ln = nil
+	return ln, nil
+}
+
+// Run обслуживает порт до отмены ctx.
+func (s *Server) Run(ctx context.Context) error {
+	ln, err := s.takeListener()
+	if err != nil {
+		return err
+	}
 	s.readyOnce.Do(func() { close(s.ready) })
+	supervisor.Ready(ctx)
 	// Без WriteTimeout: поток фильма идёт часами (спека, раздел 9).
 	srv := &http.Server{Handler: s.Handler(), ReadHeaderTimeout: 10 * time.Second}
 	errc := make(chan error, 1)

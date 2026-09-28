@@ -72,6 +72,11 @@ func New(ctx context.Context, o Options) (*App, error) {
 		addr = fmt.Sprintf(":%d", boot.APIPort)
 	}
 	a.API = api.New(addr, api.Deps{Log: log, DB: db, Sup: a.Sup, Web: web.Static})
+	// Порт занимаем сразу: занятый порт — отказ запуска, а не сервер «наполовину».
+	if err := a.API.Listen(); err != nil {
+		a.Close()
+		return nil, err
+	}
 	a.Sup.Add(a.API, true) // API выключать нельзя: без него нет ни пульта, ни телевизоров
 	// Следующие этапы добавляют сюда свои модули: a.Sup.Add(m, a.ModuleEnabled(ctx, m.Name())).
 	return a, nil
