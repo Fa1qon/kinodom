@@ -21,6 +21,7 @@ type command struct {
 func commands() []command {
 	return []command{
 		{"run", "запустить сервер в консоли (для разработки)", cmdRun},
+		{"play", "открыть раздачу на запущенном сервере и получить ссылку для VLC", cmdPlay},
 		{"version", "показать версию", cmdVersion},
 	}
 }
