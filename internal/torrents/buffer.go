@@ -25,7 +25,7 @@ type FileStatus struct {
 	BufferPercent int       `json:"bufferPercent"`
 	Peers         int       `json:"peers"`
 	Speed         int64     `json:"speed"` // байт/с
-	SmoothInSec   int       `json:"smoothInSec"`
+	SmoothInSec   int       `json:"smoothInSec"` // −1 — скорость нулевая, оценить нельзя
 	StreamPath    string    `json:"streamPath"` // адрес сервера подставляет API
 	Error         string    `json:"error,omitempty"`
 }
@@ -120,7 +120,7 @@ func (s *Service) FileStatus(ih metainfo.Hash, index int) (FileStatus, bool) {
 		BufferPercent: bufferPercent(done, total),
 		Peers:         t.Stats().ActivePeers,
 		Speed:         int64(ss.speed),
-		SmoothInSec:   smoothInSec(f.Length()-f.BytesCompleted(), p.bitrate, ss.speed),
+		SmoothInSec:   smoothInSec(f.Length()-f.BytesCompleted(), f.Length(), p.bitrate, ss.speed),
 		StreamPath:    streamPath(ih, index, f.DisplayPath()),
 	}
 	if done == total {
