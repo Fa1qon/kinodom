@@ -1,0 +1,133 @@
+package torrents
+
+import (
+	"context"
+	"fmt"
+	"net/url"
+
+	"github.com/anacrolix/torrent"
+	"github.com/anacrolix/torrent/metainfo"
+)
+
+// FileState — готовность файла к просмотру.
+type FileState string
+
+const (
+	FileBuffering FileState = "buffering"
+	FileReady     FileState = "ready"
+	FileError     FileState = "error" // например, «мало места» (этап 6)
+)
+
+// FileStatus — то, что клиент показывает во время буферизации:
+// «Буферизация 40 % · 12 пиров · 3 МБ/с» и «Без остановок через ~12 мин».
+type FileStatus struct {
+	State         FileState `json:"state"`
+	BufferPercent int       `json:"bufferPercent"`
+	Peers         int       `json:"peers"`
+	Speed         int64     `json:"speed"` // байт/с
+	SmoothInSec   int       `json:"smoothInSec"`
+	StreamPath    string    `json:"streamPath"` // адрес сервера подставляет API
+	Error         string    `json:"error,omitempty"`
+}
+
+// Prepare выбирает файл для просмотра: он качается целиком и хранится, а начало и конец —
+// в первую очередь. Повторный вызов (второй телевизор) ничего не меняет.
+func (s *Service) Prepare(ctx context.Context, ih metainfo.Hash, index int) error {
+	s.mu.Lock()
+	ss, ok := s.sessions[ih]
+	if !ok {
+		s.mu.Unlock()
+		return ErrNotOpen
+	}
+	t := ss.t
+	info := t.Info()
+	if info == nil {
+		s.mu.Unlock()
+		return ErrNoInfo
+	}
+	files := t.Files()
+	if index < 0 || index >= len(files) {
+		s.mu.Unlock()
+		return ErrNoSuchFile
+	}
+	if _, done := ss.prepared[index]; done {
+		s.mu.Unlock()
+		return nil
+	}
+	f := files[index]
+	episode := len(playableFiles(allFiles(t))) > 1
+	bitrate := estimateBitrate(f.Length(), episode)
+	head, tail := headTailBytes(f.Length(), bitrate)
+	p := &prepared{
+		bitrate: bitrate,
+		head:    spanFor(info.PieceLength, f.Offset(), head),
+		tail:    spanFor(info.PieceLength, f.Offset()+f.Length()-tail, tail),
+	}
+	ss.prepared[index] = p
+	ss.stored = true
+	keep := map[int]bool{}
+	for i := range ss.prepared {
+		keep[i] = true
+	}
+	s.mu.Unlock()
+
+	// Остальные серии — только когда их откроют.
+	for i, other := range files {
+		if !keep[i] {
+			other.SetPriority(torrent.PiecePriorityNone)
+		}
+	}
+	f.SetPriority(torrent.PiecePriorityNormal)
+	// Начало и конец — первыми: без конца файла MKV/AVI/MP4 плеер не может перематывать.
+	for _, sp := range []pieceSpan{p.head, p.tail} {
+		for i := sp.begin; i < sp.end; i++ {
+			t.Piece(i).SetPriority(torrent.PiecePriorityHigh)
+		}
+	}
+	path := enginePath(s.eng.DownloadsDir(), info, ih, info.UpvertedFiles()[index])
+	return s.reg.MarkStored(ctx, ih, index, path, f.Length(), s.now())
+}
+
+// FileStatus — готовность выбранного файла; false, если для него не вызывали Prepare.
+func (s *Service) FileStatus(ih metainfo.Hash, index int) (FileStatus, bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	ss, ok := s.sessions[ih]
+	if !ok {
+		return FileStatus{}, false
+	}
+	p, ok := ss.prepared[index]
+	if !ok {
+		return FileStatus{}, false
+	}
+	t := ss.t
+	info := t.Info()
+	f := t.Files()[index]
+	var done, total int64
+	for _, sp := range []pieceSpan{p.head, p.tail} {
+		for i := sp.begin; i < sp.end; i++ {
+			n := info.Piece(i).Length()
+			total += n
+			if t.PieceState(i).Complete {
+				done += n
+			}
+		}
+	}
+	st := FileStatus{
+		State:         FileBuffering,
+		BufferPercent: bufferPercent(done, total),
+		Peers:         t.Stats().ActivePeers,
+		Speed:         int64(ss.speed),
+		SmoothInSec:   smoothInSec(f.Length()-f.BytesCompleted(), p.bitrate, ss.speed),
+		StreamPath:    streamPath(ih, index, f.DisplayPath()),
+	}
+	if done == total {
+		st.State = FileReady
+	}
+	return st, true
+}
+
+// streamPath — путь потока. Имя в конце — для плееров, которые узнают формат по расширению.
+func streamPath(ih metainfo.Hash, index int, name string) string {
+	return fmt.Sprintf("/stream/%s/%d/%s", ih.HexString(), index, url.PathEscape(baseName(name)))
+}
