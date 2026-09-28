@@ -3,24 +3,27 @@ package netx
 import (
 	"errors"
 	"fmt"
+	"math/rand/v2"
 	"net"
 )
 
 // FreeTCPUDPPort находит порт, свободный на host и для TCP, и для UDP (торрент-движок слушает
-// оба на одном номере). Начинаем с UDP: эфемерный UDP-порт Windows не выдаёт из диапазонов,
-// которые она зарезервировала под Hyper-V и WSL, а вот случайный TCP-порт туда попадает —
-// и тогда UDP на том же номере не открывается («access forbidden»).
+// оба на одном номере). Номер берётся случайно из 20000–48999, ниже динамического диапазона
+// Windows (49152–65535): эфемерные порты Windows выдаёт подряд, а Hyper-V и WSL резервируют
+// в этом диапазоне целые блоки по сотне портов отдельно для TCP и для UDP
+// (netsh int ipv4 show excludedportrange) — «следующий свободный» раз за разом попадал в блок.
 func FreeTCPUDPPort(host string) (int, error) {
-	for i := 0; i < 50; i++ {
-		pc, err := net.ListenPacket("udp4", net.JoinHostPort(host, "0"))
+	for i := 0; i < 200; i++ {
+		port := 20000 + rand.IntN(29000)
+		addr := net.JoinHostPort(host, fmt.Sprint(port))
+		pc, err := net.ListenPacket("udp4", addr)
 		if err != nil {
-			return 0, err
+			continue // занят или зарезервирован для UDP
 		}
-		port := pc.LocalAddr().(*net.UDPAddr).Port
-		ln, err := net.Listen("tcp4", net.JoinHostPort(host, fmt.Sprint(port)))
+		ln, err := net.Listen("tcp4", addr)
 		pc.Close()
 		if err != nil {
-			continue // этот номер занят по TCP — берём следующий
+			continue // занят или зарезервирован для TCP
 		}
 		ln.Close()
 		return port, nil

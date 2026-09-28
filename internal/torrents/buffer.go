@@ -102,6 +102,8 @@ func (s *Service) FileStatus(ih metainfo.Hash, index int) (FileStatus, bool) {
 	if !ok {
 		return FileStatus{}, false
 	}
+	now := s.now()
+	s.observe(ss, now) // обновить «с какого момента нет пиров»
 	t := ss.t
 	info := t.Info()
 	f := t.Files()[index]
@@ -123,8 +125,14 @@ func (s *Service) FileStatus(ih metainfo.Hash, index int) (FileStatus, bool) {
 		SmoothInSec:   smoothInSec(f.Length()-f.BytesCompleted(), f.Length(), p.bitrate, ss.speed),
 		StreamPath:    streamPath(ih, index, f.DisplayPath()),
 	}
-	if done == total {
+	switch {
+	case done == total:
 		st.State = FileReady
+	case st.Peers == 0 && !ss.noPeersSince.IsZero() && now.Sub(ss.noPeersSince) >= s.noPeersAfter:
+		// Список файлов есть (раздача из .torrent или восстановлена), а буфер не набирается:
+		// раздающих нет. Раздачу не убираем — появятся пиры, буфер доберётся.
+		st.State = FileError
+		st.Error = errNoPeers
 	}
 	return st, true
 }
