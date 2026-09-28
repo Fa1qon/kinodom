@@ -453,3 +453,23 @@ func TestEnqueueDuringResolveIsKept(t *testing.T) {
 		t.Fatalf("обновление задачи потерялось: %+v, %v", got, ok)
 	}
 }
+
+// Каталог обновился: выпавшие из него раздачи уходят в конец очереди, квота — на нынешний топ
+// (ревью этапа 5b).
+func TestEnqueueCatalogDemotesDropped(t *testing.T) {
+	f := newFakeKP(t)
+	r, _, _ := newRatings(t, f, testKey)
+	enqueue(t, r, 0, Item{Release: "rutor:old", KinopoiskID: 301})
+	if err := r.EnqueueCatalog(ctx, []Item{{Release: "rutor:new", IMDbID: "tt0133093"}}); err != nil {
+		t.Fatal(err)
+	}
+	if did, err := r.Step(ctx); !did || err != nil {
+		t.Fatal(did, err)
+	}
+	if f.Hits("imdb") != 1 || f.Hits("film") != 0 {
+		t.Fatalf("первой сделана выпавшая раздача: IMDb %d, фильм %d", f.Hits("imdb"), f.Hits("film"))
+	}
+	if queueLen(t, r) != 1 {
+		t.Fatal("выпавшая раздача не удаляется — её мог поставить и поиск")
+	}
+}

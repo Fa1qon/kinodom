@@ -405,3 +405,17 @@ func TestSearchDoesNotWaitForHangingAPI(t *testing.T) {
 		t.Fatalf("обновлений дерева %d за два поиска — после неудачи повтор через 10 минут", got)
 	}
 }
+
+// Поиск просит форум искать только в разделах видеокатегорий (f=…): без фильтра 15 из 50 строк
+// страницы уходили на не-видео (исследование, раздел 11).
+func TestSearchFiltersForumsOnServer(t *testing.T) {
+	s := rutrackertest.NewServer(t)
+	s.Login, s.Password = "user", "pass"
+	if _, err := newRutracker(t, s, withCreds("user", "pass")).Search(ctx, "космос"); err != nil {
+		t.Fatal(err)
+	}
+	ids := strings.Split(s.LastForums(), ",")
+	if len(ids) < 300 || !slices.Contains(ids, "2076") || slices.Contains(ids, "") {
+		t.Fatalf("f=%.80q… (%d разделов)", s.LastForums(), len(ids))
+	}
+}

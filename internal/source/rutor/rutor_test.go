@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"slices"
 	"strings"
 	"sync"
@@ -384,5 +385,14 @@ func TestSearchLimitIsSharedAcrossCalls(t *testing.T) {
 	wg.Wait()
 	if peak.Load() > 3 {
 		t.Fatalf("одновременно шло %d запросов поиска, предел — 3 на весь Rutor", peak.Load())
+	}
+}
+
+// Перевод строки или пробелы после <title> — всё ещё Rutor, а не «чужой сайт» (ревью этапа 5a).
+func TestTitleWithSpacesIsRutor(t *testing.T) {
+	body := []byte("<html><head><title>\n  rutor.info :: Поиск</title></head><body><div id=\"logo\"></div><div id=\"menu\"></div></body></html>")
+	p := &netx.Page{URL: &url.URL{Path: "/search/0/1/100/2/x"}, Status: http.StatusOK, Header: http.Header{"Content-Type": {"text/html"}}, Body: body}
+	if v := classify(p); v != netx.OK {
+		t.Fatalf("вывод %d", v)
 	}
 }

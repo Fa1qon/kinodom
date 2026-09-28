@@ -10,11 +10,18 @@ import (
 	"log/slog"
 	"strconv"
 
+	"golang.org/x/time/rate"
+
 	"kinodom/internal/api"
+	"kinodom/internal/catalog"
 	"kinodom/internal/config"
+	"kinodom/internal/edge"
 	"kinodom/internal/logx"
 	"kinodom/internal/meta"
 	"kinodom/internal/netx"
+	"kinodom/internal/source"
+	"kinodom/internal/source/rutor"
+	"kinodom/internal/source/rutracker"
 	"kinodom/internal/store"
 	"kinodom/internal/supervisor"
 	"kinodom/internal/torrents"
@@ -31,6 +38,21 @@ type Options struct {
 	Offline      bool   // торрент-движок без сети, на случайном порту (тесты)
 	DownloadsDir string // папка загрузок; пусто — настройка downloads.dir
 	KinopoiskAPI string // адрес API и рейтингов Кинопоиска вместо настоящих (тесты)
+	// Settings — поверх настроек из базы и не сохраняются: тесты и kinodom catalog (логин, пароль
+	// Rutracker и ключ Кинопоиска — из переменных окружения, не в базу).
+	Settings map[string]string
+	Trackers Trackers // адреса трекеров вместо настоящих (тесты, kinodom catalog)
+}
+
+// Trackers — адреса трекеров вместо встроенных. Пусто — встроенные.
+type Trackers struct {
+	RutorMirrors     []string
+	RutorDownload    string
+	RutrackerMirrors []string
+	RutrackerAPI     string
+	RutrackerFeed    string
+	NoEdge           bool       // без Edge: пропуск Cloudflare не добывается, форум Rutracker — только если открыт
+	Rate             rate.Limit // запросов в секунду на трекер; 0 — 1 (тесты ускоряют)
 }
 
 type App struct {
@@ -43,7 +65,10 @@ type App struct {
 	Torrents *torrents.Service // nil, если движок не запустился (см. проблему torrents.engine)
 	Ratings  *meta.Ratings     // рейтинги Кинопоиска (модуль ratings)
 	Images   *meta.Images      // картинки, которые сервер отдаёт по /img/{key}
+	Catalog  *catalog.Catalog  // каталог и поиск (модуль catalog)
 
+	opts    Options
+	kp      *meta.Kinopoisk
 	closers []io.Closer // закрываются в обратном порядке
 }
 
@@ -52,7 +77,7 @@ func New(ctx context.Context, o Options) (*App, error) {
 	if home == "" {
 		home = config.DefaultHome()
 	}
-	a := &App{Paths: config.NewPaths(home)}
+	a := &App{Paths: config.NewPaths(home), opts: o}
 	if err := a.Paths.Ensure(); err != nil {
 		return nil, fmt.Errorf("папки Kinodom: %w", err)
 	}
@@ -103,6 +128,9 @@ func New(ctx context.Context, o Options) (*App, error) {
 
 	a.initTorrents(ctx, o)
 	if err := a.initMeta(ctx, o); err != nil {
+		return fail(err)
+	}
+	if err := a.initCatalog(ctx, o); err != nil {
 		return fail(err)
 	}
 	// Следующие этапы добавляют сюда свои модули так же: a.Sup.Add(m, a.ModuleEnabled(ctx, m.Name())).
@@ -167,20 +195,70 @@ func (a *App) initTorrents(ctx context.Context, o Options) {
 // настроек kinopoisk.key (спека, разделы 8 и 15). Без ключа модуль работает: рейтинги по номеру —
 // без ключа (rating.kinopoisk.ru), поиск ждёт ключа.
 func (a *App) initMeta(ctx context.Context, o Options) error {
-	proxy := a.setting(ctx, "proxy.trackers", "")
-	if _, err := netx.ParseProxy(proxy); err != nil {
-		proxy = "" // проблему proxy.invalid уже записал initTorrents
-	}
-	images, err := meta.NewImages(meta.ImagesOptions{Dir: a.Paths.Images, Proxy: proxy, Log: a.Log.With("module", "images")})
+	images, err := meta.NewImages(meta.ImagesOptions{Dir: a.Paths.Images, Proxy: a.trackerProxy(ctx), Log: a.Log.With("module", "images")})
 	if err != nil {
 		return err
 	}
 	a.Images = images
 	a.API.Handle("GET /img/{key}", "", images.Handler())
-	kp := meta.NewKinopoisk(meta.KinopoiskOptions{Key: a.setting(ctx, "kinopoisk.key", ""), APIBase: o.KinopoiskAPI, RatingBase: o.KinopoiskAPI})
-	a.Ratings = meta.NewRatings(meta.RatingsOptions{KP: kp, DB: a.DB, Log: a.Log.With("module", "ratings")})
+	a.kp = meta.NewKinopoisk(meta.KinopoiskOptions{Key: a.setting(ctx, "kinopoisk.key", ""), APIBase: o.KinopoiskAPI, RatingBase: o.KinopoiskAPI})
+	a.Ratings = meta.NewRatings(meta.RatingsOptions{KP: a.kp, DB: a.DB, Log: a.Log.With("module", "ratings")})
 	a.Sup.Add(a.Ratings, a.ModuleEnabled(ctx, a.Ratings.Name()))
 	return nil
+}
+
+// initCatalog — источники, модуль edge и модуль catalog (спека, разделы 3, 6, 7). Настройки:
+// proxy.trackers, rutracker.login, rutracker.password, catalog.categories («rutracker:2110,
+// rutor:12»; пусто — разделы по умолчанию). Источник каждого трекера — один на процесс: предел
+// «три поиска Rutor одновременно» и один ограничитель на трекер — на экземпляр.
+func (a *App) initCatalog(ctx context.Context, o Options) error {
+	proxy := a.trackerProxy(ctx)
+	log := a.Log.With("module", "catalog")
+	cats, err := catalog.ParseCategories(a.setting(ctx, "catalog.categories", ""))
+	if err != nil {
+		a.setProblem(ctx, "catalog.categories", "Разделы каталога в настройках не читаются — взяты разделы по умолчанию: "+err.Error())
+		cats = catalog.DefaultCategories
+	} else {
+		a.clearProblem(ctx, "catalog.categories")
+	}
+	rutorSrc, err := rutor.New(rutor.Options{Proxy: proxy, Mirrors: o.Trackers.RutorMirrors,
+		DownloadBase: o.Trackers.RutorDownload, Rate: o.Trackers.Rate, Log: log})
+	if err != nil {
+		return err
+	}
+	rto := rutracker.Options{Proxy: proxy, Mirrors: o.Trackers.RutrackerMirrors, APIBase: o.Trackers.RutrackerAPI,
+		FeedBase: o.Trackers.RutrackerFeed, Rate: o.Trackers.Rate, Log: log,
+		Login: a.setting(ctx, "rutracker.login", ""), Password: a.setting(ctx, "rutracker.password", "")}
+	edgeOn := !o.Trackers.NoEdge && a.ModuleEnabled(ctx, "edge")
+	if edgeOn {
+		// UA — только начальный: Edge пересчитывает его на каждый проход, и источник переключается
+		// на UA пропуска (Edge мог обновиться, пока служба работает, — этап 5a).
+		if ua, err := edge.UserAgent(); err == nil {
+			rto.UserAgent = ua
+			rto.Passer = edge.New(edge.Options{ProfileDir: a.Paths.EdgeProfile, Proxy: proxy, Log: a.Log.With("module", "edge")})
+		} else {
+			log.Warn("Edge не найден — Rutracker только по API", "err", err)
+		}
+	}
+	rtSrc, err := rutracker.New(rto)
+	if err != nil {
+		return err
+	}
+	a.Sup.Add(edge.NewModule(a.Log.With("module", "edge")), edgeOn)
+	a.Catalog = catalog.New(catalog.Options{DB: a.DB, Sources: []source.Source{rutorSrc, rtSrc}, Categories: cats,
+		Ratings: a.Ratings, Images: a.Images, KinopoiskPoster: a.kp.PosterURL, Log: log})
+	a.Sup.Add(a.Catalog, a.ModuleEnabled(ctx, a.Catalog.Name()))
+	return nil
+}
+
+// trackerProxy — прокси для трекеров из настроек; неверный — пусто (проблему proxy.invalid
+// записывает initTorrents).
+func (a *App) trackerProxy(ctx context.Context) string {
+	proxy := a.setting(ctx, "proxy.trackers", "")
+	if _, err := netx.ParseProxy(proxy); err != nil {
+		return ""
+	}
+	return proxy
 }
 
 // ModuleEnabled — модуль включён, если в настройках нет modules.<имя>.enabled = "false".
@@ -194,6 +272,9 @@ func (a *App) ModuleEnabled(ctx context.Context, name string) bool {
 
 // setting — значение настройки или def, если её нет.
 func (a *App) setting(ctx context.Context, key, def string) string {
+	if v, ok := a.opts.Settings[key]; ok && v != "" {
+		return v
+	}
 	v, ok, err := a.DB.Setting(ctx, key)
 	if err != nil || !ok || v == "" {
 		return def

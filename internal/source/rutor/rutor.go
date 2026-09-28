@@ -10,6 +10,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/url"
+	"regexp"
 	"slices"
 	"strings"
 	"sync"
@@ -270,11 +271,14 @@ func classify(p *netx.Page) netx.Verdict {
 	return netx.OK
 }
 
-// isRutorPage — каркас сайта: div#logo, div#menu и «rutor» в заголовке. У всех зеркал он
-// «rutor.info :: …»; похожий шаблон без него — чужой сайт (ревью этапа 3).
+// reRutorTitle — заголовок Rutor: у всех зеркал «rutor.info :: …», пробелы после <title> — не повод.
+var reRutorTitle = regexp.MustCompile(`(?i)<title>\s*rutor`)
+
+// isRutorPage — каркас сайта: div#logo, div#menu и «rutor» в заголовке; похожий шаблон без него —
+// чужой сайт (ревью этапа 3). Заголовок — в начале страницы: вся страница не копируется.
 func isRutorPage(b []byte) bool {
 	return bytes.Contains(b, []byte(`id="logo"`)) && bytes.Contains(b, []byte(`id="menu"`)) &&
-		bytes.Contains(bytes.ToLower(b), []byte("<title>rutor"))
+		reRutorTitle.Match(b[:min(len(b), 4096)])
 }
 
 func sortBySeeders(rs []source.Release) {

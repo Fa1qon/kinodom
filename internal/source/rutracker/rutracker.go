@@ -174,11 +174,14 @@ func (r *Rutracker) Search(ctx context.Context, query string) ([]source.Release,
 	if err != nil {
 		return nil, err
 	}
-	rs, err := r.trackerPage(ctx, url.Values{"nm": {q}, "o": {"10"}, "s": {"2"}})
+	allowed := tree.forumsUnder(searchCats...)
+	// Разделы видеокатегорий — фильтром форума: без него 50 строк страницы тратятся и на не-видео
+	// (вживую 15 из 50; tracker.php понимает f=<номер,номер,…>, исследование, раздел 11). Номеров —
+	// около 380, это 2,5 КБ адреса. Свой фильтр ниже остаётся: форум может параметр не учесть.
+	rs, err := r.trackerPage(ctx, url.Values{"nm": {q}, "o": {"10"}, "s": {"2"}, "f": {strings.Join(sortedIDs(allowed), ",")}})
 	if err != nil {
 		return nil, err
 	}
-	allowed := tree.forumsUnder(searchCats...)
 	out := rs[:0]
 	for _, x := range rs {
 		if allowed[x.CategoryID] {

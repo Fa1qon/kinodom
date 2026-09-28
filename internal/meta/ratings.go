@@ -124,6 +124,21 @@ func (r *Ratings) Enqueue(ctx context.Context, prio int, it Item) error {
 	return nil
 }
 
+// EnqueueCatalog ставит раздачи основного каталога в его порядке: место в списке — приоритет.
+// Стоявшие в очереди, но выпавшие из каталога, уходят в конец очереди (не удаляются: их мог
+// поставить и поиск), — квота в дни первичного наполнения тратится на нынешний топ (ревью 5b).
+func (r *Ratings) EnqueueCatalog(ctx context.Context, items []Item) error {
+	if err := r.st.demoteAll(ctx); err != nil {
+		return err
+	}
+	for i, it := range items {
+		if err := r.Enqueue(ctx, i, it); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 // For — рейтинги раздач, для которых найден фильм.
 func (r *Ratings) For(ctx context.Context, releases []string) (map[string]Rating, error) {
 	return r.st.ratings(ctx, releases)
