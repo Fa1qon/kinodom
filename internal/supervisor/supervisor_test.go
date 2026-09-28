@@ -47,7 +47,12 @@ func TestPanicRestartsOnlyThatModule(t *testing.T) {
 	var panics, calmExits atomic.Int32
 	s := New(quiet(), WithBackoff(10*time.Millisecond))
 	s.Add(fakeModule{"bad", func(ctx context.Context) error { panics.Add(1); panic("бум") }}, true)
-	s.Add(fakeModule{"calm", func(ctx context.Context) error { <-ctx.Done(); calmExits.Add(1); return nil }}, true)
+	s.Add(fakeModule{"calm", func(ctx context.Context) error {
+		Ready(ctx)
+		<-ctx.Done()
+		calmExits.Add(1)
+		return nil
+	}}, true)
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan struct{})
 	go func() { s.Run(ctx); close(done) }()
@@ -129,4 +134,80 @@ func TestIsRunningUnknownModule(t *testing.T) {
 	if New(quiet()).IsRunning("nope") {
 		t.Fatal("незарегистрированный модуль не может работать")
 	}
+}
+
+// Всё, что модуль запустил на ctx своего запуска, должно остановиться до перезапуска —
+// иначе после каждого сбоя копятся вторые экземпляры его работы.
+func TestRunContextIsCancelledAfterFailure(t *testing.T) {
+	var runs, alive atomic.Int32
+	s := New(quiet(), WithBackoff(10*time.Millisecond))
+	s.Add(fakeModule{"leaky", func(ctx context.Context) error {
+		runs.Add(1)
+		alive.Add(1)
+		go func() { <-ctx.Done(); alive.Add(-1) }()
+		return errors.New("сбой")
+	}}, true)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go s.Run(ctx)
+	waitFor(t, "пять запусков", func() bool { return runs.Load() >= 5 })
+	waitFor(t, "горутины прошлых запусков остановились", func() bool { return alive.Load() <= 1 })
+}
+
+func TestPanicInChildGoroutineRestartsOnlyThatModule(t *testing.T) {
+	var starts atomic.Int32
+	s := New(quiet(), WithBackoff(10*time.Millisecond))
+	s.Add(fakeModule{"bad", func(ctx context.Context) error {
+		starts.Add(1)
+		Ready(ctx)
+		Go(ctx, func(ctx context.Context) error { panic("бум в горутине") })
+		<-ctx.Done()
+		return nil
+	}}, true)
+	s.Add(fakeModule{"calm", func(ctx context.Context) error { Ready(ctx); <-ctx.Done(); return nil }}, true)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go s.Run(ctx)
+	waitFor(t, "перезапуски упавшего модуля", func() bool { return starts.Load() >= 3 })
+	if bad := statusOf(s, "bad"); !strings.Contains(bad.LastError, "паника: бум в горутине") {
+		t.Fatalf("состояние: %+v", bad)
+	}
+	if calm := statusOf(s, "calm"); calm.State != StateRunning || calm.Restarts != 0 {
+		t.Fatalf("соседний модуль задело: %+v", calm)
+	}
+}
+
+func TestChildErrorIsModuleFailure(t *testing.T) {
+	s := New(quiet(), WithBackoff(time.Hour))
+	s.Add(fakeModule{"m", func(ctx context.Context) error {
+		Go(ctx, func(ctx context.Context) error { return errors.New("проверка каналов сломалась") })
+		<-ctx.Done()
+		return nil
+	}}, true)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go s.Run(ctx)
+	waitFor(t, "сбой из рабочей горутины", func() bool {
+		return statusOf(s, "m").LastError == "проверка каналов сломалась"
+	})
+}
+
+func TestModuleIsRunningOnlyAfterReady(t *testing.T) {
+	ready := make(chan struct{})
+	s := New(quiet())
+	s.Add(fakeModule{"slow", func(ctx context.Context) error {
+		<-ready // долгая инициализация
+		Ready(ctx)
+		<-ctx.Done()
+		return nil
+	}}, true)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go s.Run(ctx)
+	waitFor(t, "модуль стартует", func() bool { return statusOf(s, "slow").State == StateStarting })
+	if s.IsRunning("slow") {
+		t.Fatal("модуль ещё не готов, а сторож считает его работающим")
+	}
+	close(ready)
+	waitFor(t, "модуль готов", func() bool { return s.IsRunning("slow") })
 }

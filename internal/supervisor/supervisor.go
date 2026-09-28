@@ -13,8 +13,17 @@ import (
 	"time"
 )
 
-// Module — часть сервера с фоновой работой. Run работает, пока не отменят ctx;
-// вернувшаяся ошибка, паника или ранний выход без ошибки считаются сбоем.
+// Module — часть сервера с фоновой работой.
+//
+// Контракт:
+//   - Run работает, пока не отменят ctx; вернувшаяся ошибка, паника или ранний выход
+//     без ошибки считаются сбоем, после паузы сторож запускает Run заново.
+//   - ctx свой на каждый запуск: после сбоя сторож отменяет его, поэтому всё, что модуль
+//     запустил на этом ctx, останавливается до перезапуска.
+//   - Рабочие горутины модуль запускает через Go(ctx, …): их паника или ошибка — сбой
+//     модуля (а не всего процесса), и сторож дожидается их перед перезапуском.
+//   - Закончив подготовку, модуль вызывает Ready(ctx). До этого он в состоянии «starting»,
+//     и его маршруты в API отвечают 503.
 type Module interface {
 	Name() string
 	Run(ctx context.Context) error
@@ -24,6 +33,7 @@ type Module interface {
 type State string
 
 const (
+	StateStarting   State = "starting"
 	StateRunning    State = "running"
 	StateRestarting State = "restarting"
 	StateDisabled   State = "disabled"
@@ -112,12 +122,26 @@ func (s *Supervisor) Run(ctx context.Context) {
 func (s *Supervisor) loop(ctx context.Context, e *entry) {
 	attempt := 0
 	for {
-		s.setState(e, StateRunning)
+		runCtx, cancel := context.WithCancel(ctx)
+		g := &group{cancel: cancel}
+		runCtx = context.WithValue(runCtx, runKey{}, &run{group: g, ready: func() {
+			s.mu.Lock()
+			if e.st.State == StateStarting {
+				e.st.State = StateRunning
+			}
+			s.mu.Unlock()
+		}})
+		s.setState(e, StateStarting)
 		started := time.Now()
-		err := runSafely(ctx, e.m)
+		err := runSafely(runCtx, e.m)
+		cancel()    // всё, что модуль запустил на ctx этого запуска, должно остановиться
+		g.wg.Wait() // и сторож дожидается его рабочих горутин до перезапуска
 		if ctx.Err() != nil {
 			s.setState(e, StateStopped)
 			return
+		}
+		if g.err != nil && (err == nil || errors.Is(err, context.Canceled)) {
+			err = g.err // Run вышел потому, что упала рабочая горутина
 		}
 		if err == nil {
 			err = errors.New("модуль завершился, хотя его не останавливали")
@@ -138,13 +162,66 @@ func (s *Supervisor) loop(ctx context.Context, e *entry) {
 }
 
 // runSafely превращает панику модуля в ошибку — иначе она уронила бы весь процесс.
-func runSafely(ctx context.Context, m Module) (err error) {
+func runSafely(ctx context.Context, m Module) error {
+	return callSafely(ctx, m.Run)
+}
+
+func callSafely(ctx context.Context, fn func(context.Context) error) (err error) {
 	defer func() {
 		if r := recover(); r != nil {
 			err = fmt.Errorf("паника: %v\n%s", r, debug.Stack())
 		}
 	}()
-	return m.Run(ctx)
+	return fn(ctx)
+}
+
+// run — то, что сторож кладёт в ctx каждого запуска модуля.
+type run struct {
+	group *group
+	ready func()
+}
+
+type runKey struct{}
+
+// group — рабочие горутины одного запуска модуля.
+type group struct {
+	wg     sync.WaitGroup
+	cancel context.CancelFunc
+	once   sync.Once
+	err    error // читается только после wg.Wait
+}
+
+func (g *group) fail(err error) {
+	g.once.Do(func() {
+		g.err = err
+		g.cancel() // остальные горутины и Run модуля получают отмену
+	})
+}
+
+// Go запускает рабочую горутину модуля. Её паника или ошибка — сбой модуля: сторож
+// отменит ctx этого запуска, дождётся всех горутин и перезапустит модуль. Вызывать
+// с ctx, который модуль получил в Run (или производным от него).
+func Go(ctx context.Context, fn func(ctx context.Context) error) {
+	r, ok := ctx.Value(runKey{}).(*run)
+	if !ok {
+		panic("supervisor.Go: ctx получен не от сторожа")
+	}
+	g := r.group
+	g.wg.Add(1)
+	go func() {
+		defer g.wg.Done()
+		if err := callSafely(ctx, fn); err != nil && ctx.Err() == nil {
+			g.fail(err)
+		}
+	}()
+}
+
+// Ready — модуль закончил подготовку: с этого момента он «running», и его маршруты
+// в API обслуживаются. Повторный вызов ничего не делает.
+func Ready(ctx context.Context) {
+	if r, ok := ctx.Value(runKey{}).(*run); ok {
+		r.ready()
+	}
 }
 
 func (s *Supervisor) fail(e *entry, err error, delay time.Duration) {
