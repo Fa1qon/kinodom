@@ -1,6 +1,7 @@
 package config
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -31,8 +32,10 @@ func LoadBootstrap(path string) (Bootstrap, error) {
 	if err != nil {
 		return Bootstrap{}, err
 	}
+	// PowerShell 5.1 (Set-Content -Encoding UTF8) и старый Блокнот пишут UTF-8 с BOM.
+	data = bytes.TrimPrefix(data, []byte("\xEF\xBB\xBF"))
 	if err := json.Unmarshal(data, &b); err != nil {
-		return Bootstrap{}, fmt.Errorf("%s: %w", path, err)
+		return Bootstrap{}, fmt.Errorf("%s: файл повреждён или это не JSON (%v)", path, err)
 	}
 	if !validPort(b.APIPort) || !validPort(b.TorrentPort) {
 		return Bootstrap{}, fmt.Errorf("%s: порты должны быть от 1 до 65535", path)

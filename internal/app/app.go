@@ -43,21 +43,31 @@ func New(ctx context.Context, o Options) (*App, error) {
 	if err := a.Paths.Ensure(); err != nil {
 		return nil, fmt.Errorf("папки Kinodom: %w", err)
 	}
-	boot, err := config.LoadBootstrap(a.Paths.Bootstrap)
-	if err != nil {
-		return nil, err
-	}
-	a.Boot = boot
+	// Журнал — первым: служба работает без консоли, и причина любого отказа запуска
+	// должна остаться в kinodom.log (спека, раздел 4).
 	log, logCloser, err := logx.New(a.Paths.Logs, o.Console)
 	if err != nil {
 		return nil, fmt.Errorf("журнал: %w", err)
 	}
 	a.Log = log
 	a.closers = append(a.closers, logCloser)
-	db, err := store.Open(ctx, a.Paths.DB)
-	if err != nil {
+	fail := func(err error) (*App, error) {
+		log.Error("Kinodom не запустился", "err", err)
 		a.Close()
-		return nil, fmt.Errorf("база: %w", err)
+		return nil, err
+	}
+
+	boot, err := config.LoadBootstrap(a.Paths.Bootstrap)
+	if err != nil {
+		return fail(err)
+	}
+	a.Boot = boot
+	db, err := store.Open(ctx, a.Paths.DB)
+	if errors.Is(err, store.ErrSchemaNewer) {
+		return fail(fmt.Errorf("база %s: %w — установите версию Kinodom, которая её обновила, или восстановите копию базы (kinodom.db.bak-v*)", a.Paths.DB, err))
+	}
+	if err != nil {
+		return fail(fmt.Errorf("база: %w", err))
 	}
 	a.DB = db
 	a.closers = append(a.closers, db)
@@ -74,8 +84,7 @@ func New(ctx context.Context, o Options) (*App, error) {
 	a.API = api.New(addr, api.Deps{Log: log, DB: db, Sup: a.Sup, Web: web.Static})
 	// Порт занимаем сразу: занятый порт — отказ запуска, а не сервер «наполовину».
 	if err := a.API.Listen(); err != nil {
-		a.Close()
-		return nil, err
+		return fail(err)
 	}
 	a.Sup.Add(a.API, true) // API выключать нельзя: без него нет ни пульта, ни телевизоров
 	// Следующие этапы добавляют сюда свои модули: a.Sup.Add(m, a.ModuleEnabled(ctx, m.Name())).
