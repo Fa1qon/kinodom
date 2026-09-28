@@ -6,6 +6,7 @@ package source
 import (
 	"context"
 	"fmt"
+	"regexp"
 	"time"
 
 	"kinodom/internal/netx"
@@ -53,6 +54,11 @@ type Details struct {
 
 // ErrRemoved — раздачу удалили с трекера (проверять errors.Is). Та же ошибка, что у netx.
 var ErrRemoved = netx.ErrRemoved
+
+// KinopoiskLink — ссылка на фильм или сериал Кинопоиска, в том числе старого вида
+// kinopoisk.ru/level/1/film/{id}/; подгруппа 1 — номер. С ним каталогу не нужен поиск по
+// названию — это экономит квоту (спека, раздел 8).
+var KinopoiskLink = regexp.MustCompile(`kinopoisk\.ru/(?:level/\d+/)?(?:film|series)/(\d+)`)
 
 // ParseError — страница пришла, но нужного блока на ней нет: трекер, скорее всего, изменил
 // разметку. Зеркало при этом не меняется (спека, раздел 5).
