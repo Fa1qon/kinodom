@@ -14,6 +14,8 @@ import (
 	"github.com/anacrolix/torrent/bencode"
 	"github.com/anacrolix/torrent/metainfo"
 	"github.com/anacrolix/torrent/storage"
+
+	"kinodom/internal/netx"
 )
 
 // File — файл будущей раздачи: путь внутри раздачи (через «/») и размер.
@@ -75,6 +77,14 @@ func NewSeeder(t testing.TB, dataDir string, mi metainfo.MetaInfo) (*torrent.Cli
 	st := storage.NewFileOpts(storage.NewFileClientOpts{ClientBaseDir: dataDir, UsePartFiles: g.Some(false)})
 	cfg := OfflineConfig(dataDir)
 	cfg.DefaultStorage = st
+	// Порт выбираем сами: случайный TCP-порт может попасть в диапазон UDP, зарезервированный
+	// Windows (Hyper-V, WSL), и тогда движок не откроет UDP на том же номере.
+	port, err := netx.FreeTCPUDPPort("127.0.0.1")
+	if err != nil {
+		st.Close()
+		t.Fatal(err)
+	}
+	cfg.ListenPort = port
 	cl, err := torrent.NewClient(cfg)
 	if err != nil {
 		st.Close()

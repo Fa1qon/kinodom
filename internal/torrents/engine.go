@@ -68,6 +68,20 @@ func NewEngine(c Config) (*Engine, error) {
 		UsePartFiles: g.Some(false),
 		Logger:       c.Log,
 	})
+	if c.ListenPort == 0 {
+		// Случайный порт (тесты): движок открывает на одном номере TCP и UDP, а случайный
+		// TCP-порт может попасть в диапазон UDP, зарезервированный Windows (Hyper-V, WSL).
+		host := ""
+		if c.Offline {
+			host = "127.0.0.1"
+		}
+		port, err := netx.FreeTCPUDPPort(host)
+		if err != nil {
+			fc.Close()
+			return nil, err
+		}
+		c.ListenPort = port
+	}
 	up := rate.NewLimiter(limitOf(c.UploadLimit), 0) // burst 0 — клиент подставит свой
 	cfg, err := buildClientConfig(c, prepStorage{inner: fc, pc: pc, base: c.DownloadsDir}, up)
 	if err != nil {

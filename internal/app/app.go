@@ -8,28 +8,37 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"strconv"
 
 	"kinodom/internal/api"
 	"kinodom/internal/config"
 	"kinodom/internal/logx"
+	"kinodom/internal/netx"
 	"kinodom/internal/store"
 	"kinodom/internal/supervisor"
+	"kinodom/internal/torrents"
 	"kinodom/web"
 )
 
+// DefaultDownloadsDir — папка загрузок, пока её не выбрали в инсталляторе или настройках.
+const DefaultDownloadsDir = `C:\Kinodom`
+
 type Options struct {
-	Home       string // корневая папка; пусто — config.DefaultHome()
-	Console    bool   // дублировать журнал в консоль
-	ListenAddr string // адрес API; пусто — ":<apiPort>" из kinodom.json
+	Home         string // корневая папка; пусто — config.DefaultHome()
+	Console      bool   // дублировать журнал в консоль
+	ListenAddr   string // адрес API; пусто — ":<apiPort>" из kinodom.json
+	Offline      bool   // торрент-движок без сети, на случайном порту (тесты)
+	DownloadsDir string // папка загрузок; пусто — настройка downloads.dir
 }
 
 type App struct {
-	Paths config.Paths
-	Boot  config.Bootstrap
-	Log   *slog.Logger
-	DB    *store.DB
-	Sup   *supervisor.Supervisor
-	API   *api.Server
+	Paths    config.Paths
+	Boot     config.Bootstrap
+	Log      *slog.Logger
+	DB       *store.DB
+	Sup      *supervisor.Supervisor
+	API      *api.Server
+	Torrents *torrents.Service // nil, если движок не запустился (см. проблему torrents.engine)
 
 	closers []io.Closer // закрываются в обратном порядке
 }
@@ -87,8 +96,56 @@ func New(ctx context.Context, o Options) (*App, error) {
 		return fail(err)
 	}
 	a.Sup.Add(a.API, true) // API выключать нельзя: без него нет ни пульта, ни телевизоров
-	// Следующие этапы добавляют сюда свои модули: a.Sup.Add(m, a.ModuleEnabled(ctx, m.Name())).
+
+	if err := a.initTorrents(ctx, o); err != nil {
+		// Сервер работает и без торрентов: проблема видна в пульте, остальные модули живут.
+		log.Error("торрент-движок не запустился", "err", err)
+		a.setProblem(ctx, "torrents.engine", "Торренты не работают: "+err.Error())
+	} else {
+		a.clearProblem(ctx, "torrents.engine")
+	}
+	// Следующие этапы добавляют сюда свои модули так же: a.Sup.Add(m, a.ModuleEnabled(ctx, m.Name())).
 	return a, nil
+}
+
+func (a *App) initTorrents(ctx context.Context, o Options) error {
+	downloads := o.DownloadsDir
+	if downloads == "" {
+		downloads = a.setting(ctx, "downloads.dir", DefaultDownloadsDir)
+	}
+	proxy := a.setting(ctx, "proxy.trackers", "")
+	if _, err := netx.ParseProxy(proxy); err != nil {
+		a.setProblem(ctx, "proxy.invalid", "Прокси в настройках не работает: "+err.Error())
+		proxy = "" // без прокси торренты работают, только анонсы Rutracker могут не пройти
+	} else {
+		a.clearProblem(ctx, "proxy.invalid")
+	}
+	upMBps, err := strconv.ParseFloat(a.setting(ctx, "torrents.uploadLimitMBps", "2"), 64)
+	if err != nil || upMBps < 0 {
+		upMBps = 2
+	}
+	port := a.Boot.TorrentPort
+	if o.Offline {
+		port = 0
+	}
+	log := a.Log.With("module", "torrents")
+	eng, err := torrents.NewEngine(torrents.Config{
+		DownloadsDir: downloads,
+		StateDir:     a.Paths.Torrent,
+		ListenPort:   port,
+		UploadLimit:  upMBps * 1024 * 1024,
+		TrackerProxy: proxy,
+		Offline:      o.Offline,
+		Log:          log,
+	})
+	if err != nil {
+		return err
+	}
+	a.closers = append(a.closers, closerFunc(eng.Close))
+	a.Torrents = torrents.NewService(eng, torrents.NewRegistry(a.DB), log)
+	a.Torrents.Register(a.API)
+	a.Sup.Add(a.Torrents, a.ModuleEnabled(ctx, a.Torrents.Name()))
+	return nil
 }
 
 // ModuleEnabled — модуль включён, если в настройках нет modules.<имя>.enabled = "false".
@@ -98,6 +155,27 @@ func (a *App) ModuleEnabled(ctx context.Context, name string) bool {
 		return true
 	}
 	return v != "false"
+}
+
+// setting — значение настройки или def, если её нет.
+func (a *App) setting(ctx context.Context, key, def string) string {
+	v, ok, err := a.DB.Setting(ctx, key)
+	if err != nil || !ok || v == "" {
+		return def
+	}
+	return v
+}
+
+func (a *App) setProblem(ctx context.Context, id, text string) {
+	if err := a.DB.SetProblem(ctx, id, text); err != nil {
+		a.Log.Error("не удалось записать проблему", "id", id, "err", err)
+	}
+}
+
+func (a *App) clearProblem(ctx context.Context, id string) {
+	if err := a.DB.ClearProblem(ctx, id); err != nil {
+		a.Log.Error("не удалось снять проблему", "id", id, "err", err)
+	}
 }
 
 // Run работает до отмены ctx.
@@ -115,3 +193,7 @@ func (a *App) Close() error {
 	a.closers = nil
 	return errors.Join(errs...)
 }
+
+type closerFunc func() error
+
+func (f closerFunc) Close() error { return f() }
