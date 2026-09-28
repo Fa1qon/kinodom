@@ -219,3 +219,21 @@ func TestPasswordChangeDuringLoginIsKept(t *testing.T) {
 		t.Fatalf("новый пароль заблокирован неудачей старого входа: %v", err)
 	}
 }
+
+// Зеркало со «/» на конце — сессия находится, вход один на все поиски (ревью этапа 4).
+func TestMirrorWithTrailingSlashKeepsSession(t *testing.T) {
+	s := rutrackertest.NewServer(t)
+	s.Login, s.Password = "user", "pass"
+	r := newRutracker(t, s, func(o *Options) {
+		o.Login, o.Password = "user", "pass"
+		o.Mirrors = []string{s.Forum.URL + "/"}
+	})
+	for range 3 {
+		if _, err := r.Search(ctx, "космос"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if s.Logins() != 1 {
+		t.Fatalf("входов %d — сессия на зеркале со «/» не находится", s.Logins())
+	}
+}

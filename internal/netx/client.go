@@ -13,6 +13,7 @@ import (
 	"net/url"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 
 	"golang.org/x/time/rate"
@@ -76,7 +77,8 @@ type Client struct {
 	own  map[string]bool // свои хосты в нижнем регистре: зеркала и ExtraHosts
 
 	mu      sync.Mutex
-	current int // номер зеркала, ответившего последним
+	current int    // номер зеркала, ответившего последним
+	ua      string // User-Agent запросов; меняет SetUserAgent
 }
 
 // maxBody — предел ответа: страницы трекеров — сотни КБ, .torrent — единицы МБ.
@@ -86,6 +88,12 @@ func NewClient(o Options) (*Client, error) {
 	if len(o.Mirrors) == 0 {
 		return nil, fmt.Errorf("netx: у трекера %q нет зеркал", o.Name)
 	}
+	// Своя копия без «/» на конце: адрес зеркала склеивается с путём и служит ключом cookie.
+	mirrors := make([]string, len(o.Mirrors))
+	for i, m := range o.Mirrors {
+		mirrors[i] = strings.TrimRight(m, "/")
+	}
+	o.Mirrors = mirrors
 	if o.Rate == 0 {
 		o.Rate = 1
 	}
@@ -103,7 +111,7 @@ func NewClient(o Options) (*Client, error) {
 	if lim == nil {
 		lim = rate.NewLimiter(o.Rate, 1)
 	}
-	c := &Client{o: o, http: &http.Client{Transport: tr, Jar: o.Jar}, lim: lim, own: map[string]bool{}}
+	c := &Client{o: o, http: &http.Client{Transport: tr, Jar: o.Jar}, lim: lim, own: map[string]bool{}, ua: o.UserAgent}
 	for _, m := range o.Mirrors {
 		u, err := url.Parse(m)
 		if err != nil || u.Host == "" {
@@ -172,7 +180,11 @@ func (c *Client) Get(ctx context.Context, path string, opts ...GetOption) (*Page
 		var de *downError
 		if errors.As(err, &de) {
 			down = append(down, host+" — "+de.reason)
-			c.o.Log.Warn(c.o.Name+": зеркало не отвечает", "mirror", host, "reason", de.reason)
+			args := []any{"mirror", host, "reason", de.reason}
+			if de.raw != nil {
+				args = append(args, "err", de.raw)
+			}
+			c.o.Log.Warn(c.o.Name+": зеркало не отвечает", args...)
 			continue
 		}
 		if err != nil {
@@ -214,7 +226,7 @@ func (c *Client) targets(path string) []target {
 	out := make([]target, 0, n)
 	for i := range n {
 		m := (start + i) % n
-		out = append(out, target{strings.TrimRight(c.o.Mirrors[m], "/") + path, m})
+		out = append(out, target{c.o.Mirrors[m] + path, m})
 	}
 	return out
 }
@@ -269,12 +281,12 @@ func (c *Client) load(ctx context.Context, rawURL string, g getOpts) (*Page, err
 	}
 	// Форму не повторяем: сервер мог её уже принять (у Rutracker лишний вход приближает капчу).
 	if g.method == http.MethodPost {
-		return nil, &downError{re.reason}
+		return nil, &downError{reason: re.reason}
 	}
 	c.o.Log.Info(c.o.Name+": повторяю запрос", "url", rawURL, "reason", re.reason)
 	p, err = c.once(ctx, rawURL, g)
 	if errors.As(err, &re) {
-		return nil, &downError{re.reason}
+		return nil, &downError{reason: re.reason}
 	}
 	return p, err
 }
@@ -284,7 +296,12 @@ func (c *Client) load(ctx context.Context, rawURL string, g getOpts) (*Page, err
 func (c *Client) once(ctx context.Context, rawURL string, g getOpts) (*Page, error) {
 	if !g.noLimit {
 		if err := c.lim.Wait(ctx); err != nil {
-			return nil, err
+			if ctx.Err() != nil {
+				return nil, ctx.Err()
+			}
+			// rate отказывает сразу, если очередь не успевает до срока ctx. Для вызывающего это то
+			// же, что «время вышло», а не сбой трекера.
+			return nil, fmt.Errorf("очередь запросов не успевает до срока: %w", context.DeadlineExceeded)
 		}
 	}
 	actx, cancel := context.WithTimeout(ctx, c.o.Timeout)
@@ -300,8 +317,11 @@ func (c *Client) once(ctx context.Context, rawURL string, g getOpts) (*Page, err
 	if method == http.MethodPost {
 		req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	}
-	if c.o.UserAgent != "" {
-		req.Header.Set("User-Agent", c.o.UserAgent)
+	c.mu.Lock()
+	ua := c.ua
+	c.mu.Unlock()
+	if ua != "" {
+		req.Header.Set("User-Agent", ua)
 	}
 	req.Header.Set("Accept-Language", "ru-RU,ru;q=0.9")
 	resp, err := c.http.Do(req)
@@ -316,7 +336,7 @@ func (c *Client) once(ctx context.Context, rawURL string, g getOpts) (*Page, err
 		case actx.Err() != nil:
 			return nil, &retryError{"нет ответа за " + seconds(c.o.Timeout)}
 		}
-		return nil, &downError{netReason(err)}
+		return nil, &downError{netReason(err), err}
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode == http.StatusProxyAuthRequired { // обычный http:// через HTTP-прокси
@@ -342,7 +362,10 @@ type retryError struct{ reason string }
 
 func (e *retryError) Error() string { return e.reason }
 
-type downError struct{ reason string }
+type downError struct {
+	reason string
+	raw    error // исходная ошибка — только для журнала; nil, если причина и так понятна
+}
 
 func (e *downError) Error() string { return e.reason }
 
@@ -358,10 +381,12 @@ func (e *trackerDownError) Error() string {
 
 func (e *trackerDownError) Is(target error) bool { return target == ErrTrackerDown }
 
-// netReason — причина сетевой ошибки человеческими словами.
+// netReason — причина сетевой ошибки коротко и по-русски: текст уходит в «Проблемы».
+// Сырой текст Go («read tcp …: wsarecv: …») остаётся только в журнале.
 func netReason(err error) string {
 	var dnsErr *net.DNSError
 	var certErr *tls.CertificateVerificationError
+	var alert tls.AlertError
 	var opErr *net.OpError
 	switch {
 	case errors.As(err, &dnsErr):
@@ -370,8 +395,16 @@ func netReason(err error) string {
 		return "ошибка сертификата TLS"
 	case errors.As(err, &opErr) && opErr.Op == "dial":
 		return "не удаётся подключиться"
+	case errors.Is(err, syscall.WSAECONNRESET) || errors.Is(err, syscall.ECONNRESET):
+		return "соединение сброшено"
+	case errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF):
+		return "соединение закрылось без ответа"
+	case errors.As(err, &alert) || strings.Contains(err.Error(), "tls: "):
+		return "ошибка TLS"
+	case strings.Contains(err.Error(), "stopped after"):
+		return "слишком много перенаправлений"
 	}
-	return err.Error()
+	return "сетевая ошибка"
 }
 
 func hostOf(raw string) string {
@@ -382,3 +415,11 @@ func hostOf(raw string) string {
 }
 
 func seconds(d time.Duration) string { return fmt.Sprintf("%g с", d.Seconds()) }
+
+// SetUserAgent меняет User-Agent следующих запросов: пропуск Cloudflare привязан к UA браузера,
+// а Edge мог обновиться, пока служба работает (ревью этапа 4).
+func (c *Client) SetUserAgent(ua string) {
+	c.mu.Lock()
+	c.ua = ua
+	c.mu.Unlock()
+}
