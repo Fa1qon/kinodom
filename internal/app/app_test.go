@@ -7,11 +7,15 @@ import (
 	"fmt"
 	"net"
 	"net/http"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 
 	"kinodom/internal/api"
+	"kinodom/internal/config"
+	"kinodom/internal/store"
 	"kinodom/internal/supervisor"
 )
 
@@ -136,6 +140,36 @@ func TestBusyPortIsDetectedInEveryForm(t *testing.T) {
 		}
 		if !errors.Is(err, api.ErrPortBusy) || !strings.Contains(err.Error(), "занят") {
 			t.Errorf("%s %s: ожидалась ошибка «порт занят», получено %v", f.network, f.addr, err)
+		}
+	}
+}
+
+// Служба работает без консоли: причина отказа запуска должна попасть в журнал.
+func TestStartupFailureIsWrittenToLog(t *testing.T) {
+	ctx := context.Background()
+	cases := map[string]func(t *testing.T, home string){
+		"новее": func(t *testing.T, home string) { // база от более новой версии Kinodom
+			db, err := store.Open(ctx, config.NewPaths(home).DB)
+			if err != nil {
+				t.Fatal(err)
+			}
+			db.W.Exec("PRAGMA user_version = 999")
+			db.Close()
+		},
+		"kinodom.json": func(t *testing.T, home string) {
+			os.WriteFile(filepath.Join(home, "kinodom.json"), []byte("{"), 0o644)
+		},
+	}
+	for want, prepare := range cases {
+		home := t.TempDir()
+		prepare(t, home)
+		if a, err := New(ctx, Options{Home: home, ListenAddr: "127.0.0.1:0"}); err == nil {
+			a.Close()
+			t.Fatalf("%s: запуск должен был отказать", want)
+		}
+		data, err := os.ReadFile(filepath.Join(config.NewPaths(home).Logs, "kinodom.log"))
+		if err != nil || !strings.Contains(string(data), "Kinodom не запустился") || !strings.Contains(string(data), want) {
+			t.Fatalf("%s: в журнале нет причины отказа (%v): %s", want, err, data)
 		}
 	}
 }

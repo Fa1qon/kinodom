@@ -97,3 +97,13 @@ func TestLoadBootstrapBadPort(t *testing.T) {
 		t.Fatalf("ожидалась ошибка про порты, получено %v", err)
 	}
 }
+
+// PowerShell 5.1 (Set-Content -Encoding UTF8) и старый Блокнот пишут UTF-8 с BOM.
+func TestLoadBootstrapAcceptsBOM(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "kinodom.json")
+	os.WriteFile(path, append([]byte("\xEF\xBB\xBF"), []byte(`{"apiPort": 9001}`)...), 0o644)
+	b, err := LoadBootstrap(path)
+	if err != nil || b.APIPort != 9001 {
+		t.Fatalf("файл с BOM: %+v, %v", b, err)
+	}
+}
