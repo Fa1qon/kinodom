@@ -6,12 +6,14 @@ import (
 	"fmt"
 	"net"
 	"net/http"
+	"net/url"
 	"strings"
 	"time"
 )
 
-// ErrProxyDown — не удалось подключиться к самому прокси. Это отдельная проблема от
-// «трекер недоступен» (спека, раздел 16): перебирать зеркала бесполезно, чинить надо прокси.
+// ErrProxyDown — проблема самого прокси: к нему не подключиться или он отказал во входе.
+// Это отдельная проблема от «трекер недоступен» (спека, раздел 16): перебирать зеркала
+// бесполезно, чинить надо прокси.
 var ErrProxyDown = errors.New("прокси не отвечает")
 
 // NewTransport — транспорт для внешних сайтов. proxy — строка из настроек
@@ -36,6 +38,13 @@ func NewTransport(proxy string) (*http.Transport, error) {
 		return t, nil
 	}
 	t.Proxy = http.ProxyURL(u)
+	// HTTPS идёт через прокси командой CONNECT; 407 на неё — прокси отклонил логин или пароль.
+	t.OnProxyConnectResponse = func(_ context.Context, _ *url.URL, _ *http.Request, res *http.Response) error {
+		if res.StatusCode == http.StatusProxyAuthRequired {
+			return errProxyAuth
+		}
+		return nil
+	}
 	// К прокси (и HTTP, и SOCKS5) net/http подключается через этот же DialContext —
 	// так «не отвечает прокси» отличается от «не отвечает сайт за прокси».
 	proxyAddr := u.Host
@@ -47,4 +56,25 @@ func NewTransport(proxy string) (*http.Transport, error) {
 		return conn, err
 	}
 	return t, nil
+}
+
+// proxyError — прокси ответил, но отказал. Для errors.Is это тоже ErrProxyDown: чинить надо
+// настройки прокси, а не ждать трекер, и перебирать зеркала бесполезно.
+type proxyError struct{ text string }
+
+func (e *proxyError) Error() string        { return e.text }
+func (e *proxyError) Is(target error) bool { return target == ErrProxyDown }
+
+var errProxyAuth = &proxyError{"прокси отклонил логин или пароль — проверьте адрес прокси в настройках"}
+
+// proxyRefusal — отказ прокси при входе, если err — он; иначе nil. HTTP-прокси отказывает
+// ответом 407 (см. OnProxyConnectResponse и once), SOCKS5 — ошибкой рукопожатия.
+func proxyRefusal(err error) error {
+	var op *net.OpError
+	if errors.As(err, &op) && op.Op == "socks connect" && op.Err != nil {
+		if msg := op.Err.Error(); strings.Contains(msg, "authentication") || strings.Contains(msg, "username/password") {
+			return errProxyAuth
+		}
+	}
+	return nil
 }
