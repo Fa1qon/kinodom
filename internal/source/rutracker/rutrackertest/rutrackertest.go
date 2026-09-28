@@ -71,6 +71,7 @@ type Server struct {
 	hits       map[string]int
 	logins     int
 	lastQuery  string
+	lastUA     string
 	sessionGen int
 }
 
@@ -99,6 +100,9 @@ func (s *Server) Logins() int { s.mu.Lock(); defer s.mu.Unlock(); return s.login
 // LastQuery — последний поисковый запрос nm, раскодированный из windows-1251.
 func (s *Server) LastQuery() string { s.mu.Lock(); defer s.mu.Unlock(); return s.lastQuery }
 
+// LastUserAgent — User-Agent последнего запроса к форуму.
+func (s *Server) LastUserAgent() string { s.mu.Lock(); defer s.mu.Unlock(); return s.lastUA }
+
 // session — значение cookie сессии, которое форум сейчас принимает.
 func (s *Server) session() string {
 	s.mu.Lock()
@@ -118,6 +122,9 @@ func (s *Server) html(w http.ResponseWriter, name string) {
 
 func (s *Server) forum(w http.ResponseWriter, r *http.Request) {
 	s.count(r.URL.Path)
+	s.mu.Lock()
+	s.lastUA = r.UserAgent()
+	s.mu.Unlock()
 	if c, err := r.Cookie("cf_clearance"); s.NeedPass && (err != nil || c.Value != "ok") {
 		w.Header().Set("Cf-Mitigated", "challenge")
 		w.Header().Set("Content-Type", "text/html; charset=UTF-8")

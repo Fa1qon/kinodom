@@ -18,24 +18,25 @@ import (
 
 var ctx = context.Background()
 
-// fakePasser — «Edge»: считает вызовы и выдаёт пропуск (или ошибку).
+// fakePasser — «Edge»: считает вызовы и выдаёт пропуск (или ошибку) и UA, с которым «прошёл».
 type fakePasser struct {
 	calls atomic.Int32
 	delay time.Duration
 	err   error
+	ua    string
 }
 
-func (f *fakePasser) Pass(ctx context.Context, _ string) ([]*http.Cookie, error) {
+func (f *fakePasser) Pass(ctx context.Context, _ string) ([]*http.Cookie, string, error) {
 	f.calls.Add(1)
 	select {
 	case <-time.After(f.delay):
 	case <-ctx.Done(): // как настоящий Edge: отмена прерывает добычу
-		return nil, ctx.Err()
+		return nil, "", ctx.Err()
 	}
 	if f.err != nil {
-		return nil, f.err
+		return nil, "", f.err
 	}
-	return []*http.Cookie{rutrackertest.PassCookie()}, nil
+	return []*http.Cookie{rutrackertest.PassCookie()}, f.ua, nil
 }
 
 func newRutracker(t *testing.T, s *rutrackertest.Server, mod func(*Options)) *Rutracker {
@@ -223,5 +224,20 @@ func TestTopicNotFoundOnlyOnTopicPage(t *testing.T) {
 		if got := classify(p); got != want {
 			t.Errorf("%s: вывод %d, нужно %d", path, got, want)
 		}
+	}
+}
+
+// Edge обновился, пока служба работала: пропуск выдан новому UA — форум дальше ходит с ним.
+// Иначе Cloudflare снова ответил бы проверкой, и Edge запускался бы на каждый запрос.
+func TestPassSwitchesUserAgent(t *testing.T) {
+	s := rutrackertest.NewServer(t)
+	s.NeedPass = true
+	p := &fakePasser{ua: "Edg/200"}
+	r := newRutracker(t, s, func(o *Options) { o.Passer = p; o.UserAgent = "Edg/100" })
+	if _, err := r.Details(ctx, "6914565"); err != nil {
+		t.Fatal(err)
+	}
+	if got := s.LastUserAgent(); got != "Edg/200" {
+		t.Fatalf("форум получил UA %q, нужно Edg/200", got)
 	}
 }

@@ -7,15 +7,13 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"path/filepath"
-	"regexp"
-	"strconv"
+	"unsafe"
+
+	"golang.org/x/sys/windows"
 )
 
 // ErrNoEdge — Edge не установлен: пропуск Cloudflare не добыть, Rutracker работает по API.
 var ErrNoEdge = errors.New("Microsoft Edge не установлен — пропуск Cloudflare добыть нельзя")
-
-var reVersionDir = regexp.MustCompile(`^(\d+)\.\d+\.\d+\.\d+$`)
 
 // ExecPath — путь к msedge.exe; "" — Edge не установлен.
 func ExecPath() string {
@@ -32,32 +30,44 @@ func ExecPath() string {
 
 // UserAgent — User-Agent установленного Edge. Пропуск Cloudflare привязан к UA (с другим —
 // снова проверка), поэтому HTTP-клиент Rutracker шлёт ровно его, и Edge запускается с ним же.
-// После обновления Edge — одна новая добыча пропуска.
 func UserAgent() (string, error) {
 	p := ExecPath()
 	if p == "" {
 		return "", ErrNoEdge
 	}
-	return userAgentFrom(filepath.Dir(p))
+	return userAgentOf(p)
 }
 
-// userAgentFrom — UA по старшей версии из имён папок версий рядом с msedge.exe
-// («154.0.4258.37» → 154), в том же сокращённом виде, в каком его шлёт браузер с окном.
-func userAgentFrom(appDir string) (string, error) {
-	entries, err := os.ReadDir(appDir)
+// userAgentOf — UA по старшей части версии самого exe, в том же сокращённом виде, в каком его
+// шлёт браузер с окном. Не по папкам версий: пока обновление ждёт перезапуска, рядом уже лежит
+// папка новой версии, а запускается старый exe.
+func userAgentOf(exe string) (string, error) {
+	major, err := exeMajorVersion(exe)
 	if err != nil {
-		return "", err
+		return "", fmt.Errorf("версия Edge (%s): %w", exe, err)
 	}
-	best := 0
-	for _, e := range entries {
-		if m := reVersionDir.FindStringSubmatch(e.Name()); m != nil && e.IsDir() {
-			if n, _ := strconv.Atoi(m[1]); n > best {
-				best = n
-			}
-		}
+	return fmt.Sprintf("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/%d.0.0.0 Safari/537.36 Edg/%d.0.0.0", major, major), nil
+}
+
+// exeMajorVersion — старшая часть версии файла из его ресурсов (VS_FIXEDFILEINFO): 154 у
+// 154.0.4258.37.
+func exeMajorVersion(path string) (int, error) {
+	size, err := windows.GetFileVersionInfoSize(path, nil)
+	if err != nil {
+		return 0, err
 	}
-	if best == 0 {
-		return "", fmt.Errorf("в %s нет папки с версией Edge", appDir)
+	buf := make([]byte, size)
+	if err := windows.GetFileVersionInfo(path, 0, size, unsafe.Pointer(&buf[0])); err != nil {
+		return 0, err
 	}
-	return fmt.Sprintf("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/%d.0.0.0 Safari/537.36 Edg/%d.0.0.0", best, best), nil
+	var fixed *windows.VS_FIXEDFILEINFO
+	var n uint32
+	if err := windows.VerQueryValue(unsafe.Pointer(&buf[0]), `\`, unsafe.Pointer(&fixed), &n); err != nil {
+		return 0, err
+	}
+	major := int(fixed.FileVersionMS >> 16)
+	if major == 0 {
+		return 0, errors.New("в файле нет номера версии")
+	}
+	return major, nil
 }

@@ -38,9 +38,10 @@ var (
 	DefaultFeedBase = "https://feed.rutracker.cc"
 )
 
-// Passer добывает пропуск Cloudflare — cookie сайта после прохода проверки (edge.Fetcher).
+// Passer добывает пропуск Cloudflare (edge.Fetcher): cookie сайта после прохода проверки и
+// User-Agent, с которым браузер её прошёл. Пропуск привязан к UA; после обновления Edge UA новый.
 type Passer interface {
-	Pass(ctx context.Context, pageURL string) ([]*http.Cookie, error)
+	Pass(ctx context.Context, pageURL string) (cookies []*http.Cookie, userAgent string, err error)
 }
 
 type Options struct {
@@ -173,7 +174,7 @@ func (r *Rutracker) renewPass(ctx context.Context, path string) error {
 	// сорвать её остальным. Сам Edge ограничен своим таймаутом (45 с + 30 с).
 	passCtx := context.WithoutCancel(ctx)
 	ch := r.passes.DoChan(mirror, func() (any, error) {
-		cookies, err := r.passer.Pass(passCtx, mirror+path)
+		cookies, ua, err := r.passer.Pass(passCtx, mirror+path)
 		r.mu.Lock()
 		if err != nil {
 			if r.passFail == nil {
@@ -186,6 +187,9 @@ func (r *Rutracker) renewPass(ctx context.Context, path string) error {
 		r.mu.Unlock()
 		if err != nil {
 			return nil, err
+		}
+		if ua != "" {
+			r.forum.SetUserAgent(ua) // пропуск привязан к UA браузера; после обновления Edge он новый
 		}
 		u, _ := url.Parse(mirror + "/")
 		r.jar.SetCookies(u, cookies)
