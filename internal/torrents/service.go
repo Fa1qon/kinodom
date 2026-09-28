@@ -51,6 +51,7 @@ type session struct {
 	lastSample   time.Time
 	speed        float64 // байт/с, сглаженная
 	prepared     map[int]*prepared
+	storedFiles  map[int]bool // файлы, которые хранятся и докачиваются (в том числе до перезапуска)
 }
 
 // prepared — файл, выбранный для просмотра.
@@ -129,15 +130,17 @@ func (s *Service) restore(ctx context.Context) error {
 			return err
 		}
 		s.mu.Lock()
-		s.sessionFor(t).stored = true
-		s.mu.Unlock()
+		ss := s.sessionFor(t)
+		ss.stored = true
 		// Хранимые файлы докачиваются дальше (и раздаются), остальные не нужны.
 		files := t.Files()
 		for _, i := range idxs {
 			if i >= 0 && i < len(files) {
+				ss.storedFiles[i] = true
 				files[i].SetPriority(torrent.PiecePriorityNormal)
 			}
 		}
+		s.mu.Unlock()
 	}
 	return nil
 }
@@ -192,7 +195,7 @@ func (s *Service) sessionFor(t *torrent.Torrent) *session {
 	if ss, ok := s.sessions[ih]; ok && ss.t == t {
 		return ss
 	}
-	ss := &session{t: t, prepared: map[int]*prepared{}}
+	ss := &session{t: t, prepared: map[int]*prepared{}, storedFiles: map[int]bool{}}
 	s.sessions[ih] = ss
 	return ss
 }

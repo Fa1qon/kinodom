@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/anacrolix/torrent"
 	"github.com/anacrolix/torrent/metainfo"
 
 	"kinodom/internal/torrents/torrenttest"
@@ -102,5 +103,32 @@ func TestPrepareTwiceFromTwoTVs(t *testing.T) {
 	}
 	if _, ok := s.FileStatus(ih, 0); !ok {
 		t.Fatal("нет состояния файла")
+	}
+}
+
+// Серия 1 хранилась до перезапуска и докачивается дальше; выбор серии 2 не должен это остановить.
+func TestPrepareAfterRestartKeepsDownloadingStoredEpisode(t *testing.T) {
+	ctx := context.Background()
+	db := newTestDB(t)
+	reg := NewRegistry(db)
+	mi, _ := torrenttest.MakeTorrent(t, t.TempDir(), "Сериал", 64<<10,
+		torrenttest.File{Path: "Серия 1.mkv", Size: 300_000},
+		torrenttest.File{Path: "Серия 2.mkv", Size: 300_000})
+	ih := mi.HashInfoBytes()
+	must(t, reg.SaveMetainfo(ctx, ih, "Сериал", torrentBytes(t, mi)))
+	must(t, reg.MarkStored(ctx, ih, 0, `D:\K\1.mkv`, 300_000, time.Now()))
+
+	s := NewService(newOfflineEngine(t), reg, quiet())
+	runService(t, s)
+	waitStatus(t, s, ih, StateReady)
+	tt, _ := s.Engine().Client().Torrent(ih)
+	if p := tt.Files()[0].Priority(); p != torrent.PiecePriorityNormal {
+		t.Fatalf("после восстановления серия 1 не докачивается: приоритет %v", p)
+	}
+	if err := s.Prepare(ctx, ih, 1); err != nil {
+		t.Fatal(err)
+	}
+	if p := tt.Files()[0].Priority(); p != torrent.PiecePriorityNormal {
+		t.Fatalf("выбор серии 2 остановил докачку серии 1: приоритет %v", p)
 	}
 }

@@ -32,29 +32,35 @@ type FileStatus struct {
 
 // Prepare выбирает файл для просмотра: он качается целиком и хранится, а начало и конец —
 // в первую очередь. Повторный вызов (второй телевизор) ничего не меняет.
+//
+// Всё делается под s.mu: иначе два телевизора, готовящие разные серии одновременно, могли бы
+// сбросить друг другу докачку. Порядок блокировок тот же, что везде: s.mu, затем движок.
 func (s *Service) Prepare(ctx context.Context, ih metainfo.Hash, index int) error {
 	s.mu.Lock()
+	defer s.mu.Unlock()
 	ss, ok := s.sessions[ih]
 	if !ok {
-		s.mu.Unlock()
 		return ErrNotOpen
 	}
 	t := ss.t
 	info := t.Info()
 	if info == nil {
-		s.mu.Unlock()
 		return ErrNoInfo
 	}
 	files := t.Files()
 	if index < 0 || index >= len(files) {
-		s.mu.Unlock()
 		return ErrNoSuchFile
 	}
 	if _, done := ss.prepared[index]; done {
-		s.mu.Unlock()
 		return nil
 	}
 	f := files[index]
+	// Сначала — запись в базу: без неё файл не восстановится после перезапуска и не попадёт
+	// в очистку. Запрос телевизора могут отменить, а запись должна дойти.
+	path := enginePath(s.eng.DownloadsDir(), info, ih, info.UpvertedFiles()[index])
+	if err := s.reg.MarkStored(context.WithoutCancel(ctx), ih, index, path, f.Length(), s.now()); err != nil {
+		return err
+	}
 	episode := len(playableFiles(allFiles(t))) > 1
 	bitrate := estimateBitrate(f.Length(), episode)
 	head, tail := headTailBytes(f.Length(), bitrate)
@@ -65,15 +71,12 @@ func (s *Service) Prepare(ctx context.Context, ih metainfo.Hash, index int) erro
 	}
 	ss.prepared[index] = p
 	ss.stored = true
-	keep := map[int]bool{}
-	for i := range ss.prepared {
-		keep[i] = true
-	}
-	s.mu.Unlock()
+	ss.storedFiles[index] = true
 
-	// Остальные серии — только когда их откроют.
+	// Хранимые файлы (и выбранные раньше, и восстановленные после перезапуска) докачиваются,
+	// остальные серии — только когда их откроют.
 	for i, other := range files {
-		if !keep[i] {
+		if !ss.storedFiles[i] {
 			other.SetPriority(torrent.PiecePriorityNone)
 		}
 	}
@@ -84,8 +87,7 @@ func (s *Service) Prepare(ctx context.Context, ih metainfo.Hash, index int) erro
 			t.Piece(i).SetPriority(torrent.PiecePriorityHigh)
 		}
 	}
-	path := enginePath(s.eng.DownloadsDir(), info, ih, info.UpvertedFiles()[index])
-	return s.reg.MarkStored(ctx, ih, index, path, f.Length(), s.now())
+	return nil
 }
 
 // FileStatus — готовность выбранного файла; false, если для него не вызывали Prepare.
