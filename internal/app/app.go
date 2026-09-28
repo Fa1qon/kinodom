@@ -13,6 +13,7 @@ import (
 	"kinodom/internal/api"
 	"kinodom/internal/config"
 	"kinodom/internal/logx"
+	"kinodom/internal/meta"
 	"kinodom/internal/netx"
 	"kinodom/internal/store"
 	"kinodom/internal/supervisor"
@@ -29,6 +30,7 @@ type Options struct {
 	ListenAddr   string // адрес API; пусто — ":<apiPort>" из kinodom.json
 	Offline      bool   // торрент-движок без сети, на случайном порту (тесты)
 	DownloadsDir string // папка загрузок; пусто — настройка downloads.dir
+	KinopoiskAPI string // адрес API и рейтингов Кинопоиска вместо настоящих (тесты)
 }
 
 type App struct {
@@ -39,6 +41,8 @@ type App struct {
 	Sup      *supervisor.Supervisor
 	API      *api.Server
 	Torrents *torrents.Service // nil, если движок не запустился (см. проблему torrents.engine)
+	Ratings  *meta.Ratings     // рейтинги Кинопоиска (модуль ratings)
+	Images   *meta.Images      // картинки, которые сервер отдаёт по /img/{key}
 
 	closers []io.Closer // закрываются в обратном порядке
 }
@@ -98,6 +102,9 @@ func New(ctx context.Context, o Options) (*App, error) {
 	a.Sup.Add(a.API, true) // API выключать нельзя: без него нет ни пульта, ни телевизоров
 
 	a.initTorrents(ctx, o)
+	if err := a.initMeta(ctx, o); err != nil {
+		return fail(err)
+	}
 	// Следующие этапы добавляют сюда свои модули так же: a.Sup.Add(m, a.ModuleEnabled(ctx, m.Name())).
 	return a, nil
 }
@@ -154,6 +161,26 @@ func (a *App) initTorrents(ctx context.Context, o Options) {
 	}))
 	a.Torrents.Register(a.API)
 	a.Sup.Add(a.Torrents, a.ModuleEnabled(ctx, a.Torrents.Name()))
+}
+
+// initMeta — кэш картинок (маршрут /img/{key}) и модуль ratings: рейтинги Кинопоиска по ключу из
+// настроек kinopoisk.key (спека, разделы 8 и 15). Без ключа модуль работает: рейтинги по номеру —
+// без ключа (rating.kinopoisk.ru), поиск ждёт ключа.
+func (a *App) initMeta(ctx context.Context, o Options) error {
+	proxy := a.setting(ctx, "proxy.trackers", "")
+	if _, err := netx.ParseProxy(proxy); err != nil {
+		proxy = "" // проблему proxy.invalid уже записал initTorrents
+	}
+	images, err := meta.NewImages(meta.ImagesOptions{Dir: a.Paths.Images, Proxy: proxy, Log: a.Log.With("module", "images")})
+	if err != nil {
+		return err
+	}
+	a.Images = images
+	a.API.Handle("GET /img/{key}", "", images.Handler())
+	kp := meta.NewKinopoisk(meta.KinopoiskOptions{Key: a.setting(ctx, "kinopoisk.key", ""), APIBase: o.KinopoiskAPI, RatingBase: o.KinopoiskAPI})
+	a.Ratings = meta.NewRatings(meta.RatingsOptions{KP: kp, DB: a.DB, Log: a.Log.With("module", "ratings")})
+	a.Sup.Add(a.Ratings, a.ModuleEnabled(ctx, a.Ratings.Name()))
+	return nil
 }
 
 // ModuleEnabled — модуль включён, если в настройках нет modules.<имя>.enabled = "false".
