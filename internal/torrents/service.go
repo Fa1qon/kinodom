@@ -198,8 +198,11 @@ func (s *Service) Open(ctx context.Context, src Source) (metainfo.Hash, error) {
 	case src.Magnet != "":
 		// Движок паникует на ссылке без infohash, а не возвращает ошибку — проверяем сами.
 		m, perr := metainfo.ParseMagnetUri(src.Magnet)
-		if perr != nil || m.InfoHash == (metainfo.Hash{}) {
+		if perr != nil {
 			return metainfo.Hash{}, fmt.Errorf("magnet-ссылка не читается: в ней нет infohash раздачи (%v)", perr)
+		}
+		if m.InfoHash == (metainfo.Hash{}) {
+			return metainfo.Hash{}, errors.New("magnet-ссылка не читается: infohash раздачи — одни нули")
 		}
 		if t, err = s.eng.cl.AddMagnet(src.Magnet); err != nil {
 			return metainfo.Hash{}, fmt.Errorf("magnet-ссылка не читается: %w", err)

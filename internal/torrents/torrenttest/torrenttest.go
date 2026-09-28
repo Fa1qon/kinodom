@@ -6,7 +6,9 @@ import (
 	"crypto/rand"
 	"os"
 	"path/filepath"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	_ "envfirst.local" // тот же ввод-вывод, что и у сервера
 	g "github.com/anacrolix/generics"
@@ -100,4 +102,43 @@ func NewSeeder(t testing.TB, dataDir string, mi metainfo.MetaInfo) (*torrent.Cli
 		t.Fatal(err)
 	}
 	return cl, tt
+}
+
+// Connect подключает раздающего к раздаче и, пока у неё нет живых пиров, предлагает его снова.
+// anacrolix не переподключается к пиру после обрыва: в жизни адрес снова приносят DHT, трекеры
+// и PEX, а в тестах сети нет — без повторов редкий обрыв соединения на Windows превращал
+// загрузку в вечное ожидание. Горутина останавливается при завершении теста.
+func Connect(t testing.TB, tt *torrent.Torrent, seeder *torrent.Client) {
+	t.Helper()
+	tt.AddClientPeer(seeder)
+	done := make(chan struct{})
+	stopped := make(chan struct{})
+	var reoffers atomic.Int32
+	go func() {
+		defer close(stopped)
+		tick := time.NewTicker(200 * time.Millisecond)
+		defer tick.Stop()
+		for {
+			select {
+			case <-done:
+				return
+			case <-tick.C:
+				if tt.Stats().ActivePeers == 0 {
+					reoffers.Add(1)
+					tt.AddClientPeer(seeder)
+				}
+			}
+		}
+	}()
+	t.Cleanup(func() {
+		close(done)
+		<-stopped
+		// Редкое зависание потока в тестах ещё не объяснено до конца: при сбое печатаем, было ли
+		// живое соединение (застрявшее) или его не было вовсе (раздающего предлагали заново).
+		if t.Failed() {
+			g := tt.Stats().TorrentGauges
+			t.Logf("раздача при сбое: пиров %d, ожидают %d, активных %d, раздающих %d, полуоткрытых %d, готово кусков %d; раздающего предлагали заново %d раз",
+				g.TotalPeers, g.PendingPeers, g.ActivePeers, g.ConnectedSeeders, g.HalfOpenPeers, g.PiecesComplete, reoffers.Load())
+		}
+	})
 }

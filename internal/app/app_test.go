@@ -232,7 +232,7 @@ func openAndBuffer(t *testing.T, a *App, mi metainfo.MetaInfo, seeder *torrent.C
 	postJSON(t, base+"/api/v1/torrents", map[string]any{"torrent": raw}, &opened)
 	if seeder != nil {
 		tt, _ := a.Torrents.Engine().Client().Torrent(mi.HashInfoBytes())
-		tt.AddClientPeer(seeder)
+		torrenttest.Connect(t, tt, seeder)
 	}
 	var st torrents.TorrentStatus
 	waitUntil(t, "список файлов", func() bool {
