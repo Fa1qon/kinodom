@@ -1,10 +1,14 @@
 package rutracker
 
 import (
+	"bytes"
 	"errors"
+	"log/slog"
+	"net/http"
 	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -235,5 +239,101 @@ func TestMirrorWithTrailingSlashKeepsSession(t *testing.T) {
 	}
 	if s.Logins() != 1 {
 		t.Fatalf("входов %d — сессия на зеркале со «/» не находится", s.Logins())
+	}
+}
+
+// Суточное обновление дерева разделов не удалось (API недоступен) — поиск работает по старому
+// дереву, а следующая попытка обновления — не раньше чем через 10 минут (ревью этапа 4).
+func TestSearchUsesStaleTreeWhenAPIFails(t *testing.T) {
+	s := rutrackertest.NewServer(t)
+	s.Login, s.Password = "user", "pass"
+	r := newRutracker(t, s, withCreds("user", "pass"))
+	if _, err := r.Search(ctx, "космос"); err != nil {
+		t.Fatal(err)
+	}
+	r.mu.Lock()
+	r.treeAt = r.treeAt.Add(-25 * time.Hour) // дерево устарело
+	r.mu.Unlock()
+	s.APIDown.Store(true)
+	before := s.Hits("/v1/static/cat_forum_tree")
+	for range 2 {
+		if _, err := r.Search(ctx, "космос"); err != nil {
+			t.Fatalf("поиск при недоступном API: %v", err)
+		}
+	}
+	if got := s.Hits("/v1/static/cat_forum_tree") - before; got != 1 {
+		t.Fatalf("обновлений дерева %d за два поиска — после неудачи повтор через 10 минут", got)
+	}
+}
+
+// Сессия истекла на стороне форума, а раздача видна только вошедшим — тихий повторный вход
+// (спека, раздел 16), как у поиска.
+func TestDetailsLogsInAgainWhenSessionExpired(t *testing.T) {
+	s := rutrackertest.NewServer(t)
+	s.Login, s.Password = "user", "pass"
+	s.TopicNeedsLogin = true
+	r := newRutracker(t, s, withCreds("user", "pass"))
+	if _, err := r.Details(ctx, "6914565"); err != nil {
+		t.Fatal(err)
+	}
+	s.ExpireSessions()
+	if _, err := r.Details(ctx, "6914565"); err != nil {
+		t.Fatalf("после истечения сессии: %v", err)
+	}
+	if s.Logins() != 2 {
+		t.Fatalf("входов %d, нужно 2", s.Logins())
+	}
+}
+
+// Вход заблокирован (неверный пароль) — каталог открывает сотни раздач, а предупреждение в
+// журнале одно.
+func TestDetailsWarnsOnceWhileLoginBlocked(t *testing.T) {
+	s := rutrackertest.NewServer(t)
+	s.Login, s.Password = "user", "right"
+	var buf bytes.Buffer
+	r := newRutracker(t, s, func(o *Options) {
+		o.Login, o.Password = "user", "wrong"
+		o.Log = slog.New(slog.NewTextHandler(&buf, nil))
+	})
+	for range 3 {
+		if _, err := r.Details(ctx, "6914565"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if n := strings.Count(buf.String(), "вход не удался"); n != 1 {
+		t.Fatalf("предупреждений %d:\n%s", n, buf.String())
+	}
+}
+
+// Вход сорвался из-за сети — страница раздачи минуту не пробует войти снова: иначе каждая из
+// сотен раздач каталога отправляла бы форму входа (ревью этапа 4).
+func TestDetailsPausesLoginAfterTransientFailure(t *testing.T) {
+	s := rutrackertest.NewServer(t)
+	s.Login, s.Password = "user", "pass"
+	var broken atomic.Bool
+	broken.Store(true)
+	s.BeforeLogin = func() {
+		if broken.Load() {
+			panic(http.ErrAbortHandler) // ответ на вход обрывается
+		}
+	}
+	now := time.Now()
+	r := newRutracker(t, s, withCreds("user", "pass"))
+	r.now = func() time.Time { return now }
+	for range 3 {
+		if _, err := r.Details(ctx, "6914565"); err != nil {
+			t.Fatal(err) // раздача открывается как для гостя
+		}
+	}
+	if s.Logins() != 1 {
+		t.Fatalf("попыток входа %d за минуту", s.Logins())
+	}
+	broken.Store(false)
+	now = now.Add(2 * time.Minute)
+	if _, err := r.Details(ctx, "6914565"); err != nil {
+		t.Fatal(err)
+	}
+	if s.Logins() != 2 || !r.loggedIn() {
+		t.Fatalf("через минуту: входов %d, вошли %v", s.Logins(), r.loggedIn())
 	}
 }

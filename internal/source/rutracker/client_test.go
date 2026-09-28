@@ -5,6 +5,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -198,5 +199,29 @@ func TestFailedPassIsRememberedForAWhile(t *testing.T) {
 	r.Details(ctx, "6914565")
 	if p.calls.Load() != 2 {
 		t.Fatalf("через 11 минут Edge запускали %d раз, нужна новая попытка", p.calls.Load())
+	}
+}
+
+// Символов, которых нет в windows-1251, форум ждёт как от браузера — «&#233;», а не байт 0x1A:
+// иначе пароль с такими символами блокировал бы вход (ревью этапа 4).
+func TestCP1251EscapesUnsupportedLikeBrowser(t *testing.T) {
+	if got := cp1251("Amélie"); got != "Am&#233;lie" {
+		t.Fatalf("cp1251: %q", got)
+	}
+}
+
+// «Тема не найдена» в названии раздачи на странице поиска — не повод считать ответ «раздача
+// удалена» (ревью этапа 4).
+func TestTopicNotFoundOnlyOnTopicPage(t *testing.T) {
+	body := []byte(`<div id="page_container">` + cp1251("Тема не найдена") + `</div>`)
+	for path, want := range map[string]netx.Verdict{
+		"/forum/viewtopic.php": netx.Removed,
+		"/forum/tracker.php":   netx.OK,
+	} {
+		p := &netx.Page{URL: &url.URL{Scheme: "https", Host: "rutracker.org", Path: path}, Status: http.StatusOK,
+			Header: http.Header{"Content-Type": {"text/html; charset=Windows-1251"}}, Body: body}
+		if got := classify(p); got != want {
+			t.Errorf("%s: вывод %d, нужно %d", path, got, want)
+		}
 	}
 }

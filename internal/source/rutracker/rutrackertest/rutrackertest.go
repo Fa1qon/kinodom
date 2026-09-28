@@ -7,8 +7,10 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 
 	"golang.org/x/text/encoding"
@@ -43,10 +45,7 @@ func CP1251(t testing.TB, name string) []byte {
 	return out
 }
 
-const (
-	SessionCookie = "bb_session"
-	sessionValue  = "fake-session"
-)
+const SessionCookie = "bb_session"
 
 // PassCookie — cookie, которую выдаёт пройденная проверка Cloudflare.
 func PassCookie() *http.Cookie { return &http.Cookie{Name: "cf_clearance", Value: "ok"} }
@@ -61,15 +60,18 @@ func PassCookie() *http.Cookie { return &http.Cookie{Name: "cf_clearance", Value
 //	Feed:  /atom/f/{id}.atom (313 — образец, иначе пустая лента)
 type Server struct {
 	Forum, API, Feed *httptest.Server
-	Login, Password  string // верные логин и пароль; пусто — вход всегда неудачен
-	NeedPass         bool   // форум отвечает проверкой Cloudflare, пока нет cookie cf_clearance=ok
-	BeforeLogin      func() // если задан — вызывается на каждый POST входа до ответа (тесты гонок)
+	Login, Password  string      // верные логин и пароль; пусто — вход всегда неудачен
+	NeedPass         bool        // форум отвечает проверкой Cloudflare, пока нет cookie cf_clearance=ok
+	BeforeLogin      func()      // если задан — вызывается на каждый POST входа до ответа (тесты гонок)
+	TopicNeedsLogin  bool        // viewtopic без действующей сессии — редирект на вход (раздача «только для вошедших»)
+	APIDown          atomic.Bool // API отвечает 502 (обновление дерева разделов не удаётся)
 
-	pages     map[string][]byte
-	mu        sync.Mutex
-	hits      map[string]int
-	logins    int
-	lastQuery string
+	pages      map[string][]byte
+	mu         sync.Mutex
+	hits       map[string]int
+	logins     int
+	lastQuery  string
+	sessionGen int
 }
 
 func NewServer(t testing.TB) *Server {
@@ -97,6 +99,16 @@ func (s *Server) Logins() int { s.mu.Lock(); defer s.mu.Unlock(); return s.login
 // LastQuery — последний поисковый запрос nm, раскодированный из windows-1251.
 func (s *Server) LastQuery() string { s.mu.Lock(); defer s.mu.Unlock(); return s.lastQuery }
 
+// session — значение cookie сессии, которое форум сейчас принимает.
+func (s *Server) session() string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return "fake-session-" + strconv.Itoa(s.sessionGen)
+}
+
+// ExpireSessions — выданные сессии больше не действуют (истекли на стороне форума).
+func (s *Server) ExpireSessions() { s.mu.Lock(); s.sessionGen++; s.mu.Unlock() }
+
 func (s *Server) count(path string) { s.mu.Lock(); s.hits[path]++; s.mu.Unlock() }
 
 func (s *Server) html(w http.ResponseWriter, name string) {
@@ -114,10 +126,14 @@ func (s *Server) forum(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	c, err := r.Cookie(SessionCookie)
-	session := err == nil && c.Value == sessionValue
+	session := err == nil && c.Value == s.session()
 	dec := charmap.Windows1251.NewDecoder()
 	switch r.URL.Path {
 	case "/forum/viewtopic.php":
+		if s.TopicNeedsLogin && !session {
+			http.Redirect(w, r, "/forum/login.php?redirect=viewtopic.php", http.StatusFound)
+			return
+		}
 		if r.URL.Query().Get("t") == "6914565" {
 			s.html(w, "topic.src.html")
 			return
@@ -148,7 +164,7 @@ func (s *Server) forum(w http.ResponseWriter, r *http.Request) {
 		user, _ := dec.String(r.PostForm.Get("login_username"))
 		pass, _ := dec.String(r.PostForm.Get("login_password"))
 		if s.Login != "" && user == s.Login && pass == s.Password {
-			http.SetCookie(w, &http.Cookie{Name: SessionCookie, Value: sessionValue, Path: "/forum/"})
+			http.SetCookie(w, &http.Cookie{Name: SessionCookie, Value: s.session(), Path: "/forum/"})
 			http.Redirect(w, r, "/forum/index.php", http.StatusFound)
 			return
 		}
@@ -162,6 +178,10 @@ func (s *Server) forum(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) api(w http.ResponseWriter, r *http.Request) {
 	s.count(r.URL.Path)
+	if s.APIDown.Load() {
+		w.WriteHeader(http.StatusBadGateway)
+		return
+	}
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
 	switch {
 	case r.URL.Path == "/v1/static/cat_forum_tree":

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/url"
 	"strings"
+	"time"
 
 	"kinodom/internal/netx"
 	"kinodom/internal/source"
@@ -26,6 +27,7 @@ func (r *Rutracker) SetCredentials(login, password string) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.login, r.password, r.loginBlock = login, password, nil
+	r.loginRetryAt, r.loginWarned = time.Time{}, ""
 	r.credGen++
 }
 
@@ -88,19 +90,51 @@ func (r *Rutracker) doLogin(ctx context.Context) error {
 		"&login_password=" + url.QueryEscape(cp1251(password)) +
 		"&login=" + url.QueryEscape(cp1251("Вход"))
 	p, err := r.forumPage(ctx, "/forum/login.php", form, netx.WithoutClassify())
-	if err != nil {
-		return err
+	if err == nil {
+		err = parseLogin(p.Body)
 	}
-	err = parseLogin(p.Body)
 	var ce *CaptchaError
-	if errors.Is(err, ErrWrongPassword) || errors.As(err, &ce) {
-		r.mu.Lock()
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	switch {
+	case err == nil:
+		r.loginRetryAt = time.Time{}
+	case errors.Is(err, ErrWrongPassword) || errors.As(err, &ce):
 		if r.credGen == gen { // пароль не меняли, пока шёл вход
 			r.loginBlock = err
 		}
-		r.mu.Unlock()
+	case ctx.Err() == nil:
+		// Сеть, форум, непонятный ответ — временно: страница раздачи минуту не входит сама.
+		r.loginRetryAt = r.now().Add(loginRetryAfter)
 	}
 	return err
+}
+
+// loginRetryAfter — пауза автоматического входа страницы раздачи после временной неудачи.
+const loginRetryAfter = time.Minute
+
+// mayAutoLogin — странице раздачи можно войти самой: логин задан, и после временной неудачи
+// входа прошла минута. Поиск входит всегда: там ответа ждёт человек.
+func (r *Rutracker) mayAutoLogin() bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.login != "" && r.password != "" && !r.now().Before(r.loginRetryAt)
+}
+
+// noteLogin пишет в журнал неудачу входа страницы раздачи — один раз на каждую новую причину,
+// а не на каждую из сотен раздач каталога. nil — вход удался, о причине можно забыть.
+func (r *Rutracker) noteLogin(err error) {
+	text := ""
+	if err != nil {
+		text = err.Error()
+	}
+	r.mu.Lock()
+	same := text == r.loginWarned
+	r.loginWarned = text
+	r.mu.Unlock()
+	if err != nil && !same {
+		r.log.Warn("Rutracker: вход не удался, раздача — как для гостя", "err", err)
+	}
 }
 
 // Search ищет по видеокатегориям одним запросом, по раздающим (спека, разделы 6 и 7). Нужен вход:
@@ -150,18 +184,24 @@ func (r *Rutracker) Search(ctx context.Context, query string) ([]source.Release,
 }
 
 // Details — страница раздачи: название, описание, постер, id Кинопоиска, magnet. Если логин
-// задан — сначала вход: вошедшему видны размер и раздающие; вход не удался — страница как для
-// гостя (она открывается и так).
+// задан — сначала вход: вошедшему видны размер и раздающие. Вход не удался — страница как для
+// гостя (она открывается и так); после временной неудачи вход минуту не повторяется. Истёкшая
+// сессия — тихий повторный вход (спека, раздел 16).
 func (r *Rutracker) Details(ctx context.Context, topicID string) (source.Details, error) {
 	if !isNumber(topicID) {
 		return source.Details{}, fmt.Errorf("Rutracker: номер раздачи %q — не число", topicID)
 	}
-	if r.hasCredentials() && !r.loggedIn() {
-		if err := r.ensureLogin(ctx, ""); err != nil {
-			r.log.Warn("Rutracker: вход не удался, раздача — как для гостя", "err", err)
+	if r.mayAutoLogin() && !r.loggedIn() {
+		r.noteLogin(r.ensureLogin(ctx, ""))
+	}
+	path := "/forum/viewtopic.php?t=" + topicID
+	stale := r.session()
+	p, err := r.forumPage(ctx, path, "")
+	if errors.Is(err, netx.ErrLoginRequired) && r.mayAutoLogin() {
+		if err = r.ensureLogin(ctx, stale); err == nil {
+			p, err = r.forumPage(ctx, path, "")
 		}
 	}
-	p, err := r.forumPage(ctx, "/forum/viewtopic.php?t="+topicID, "")
 	if err != nil {
 		return source.Details{}, err
 	}

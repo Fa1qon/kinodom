@@ -83,25 +83,38 @@ func sortedIDs[V any](m map[string]V) []string {
 	return keys
 }
 
-// forumTree — дерево из кэша; раз в сутки — заново.
+// treeRetryAfter — через сколько повторить неудачное обновление дерева разделов.
+const treeRetryAfter = 10 * time.Minute
+
+// forumTree — дерево из кэша; раз в сутки — заново. Не обновилось (API недоступен) — старое
+// дерево: разделы меняются редко, а поиску оно нужно, пока форум работает (ревью этапа 4).
 func (r *Rutracker) forumTree(ctx context.Context) (*forumTree, error) {
+	now := r.now()
 	r.mu.Lock()
-	t, at := r.tree, r.treeAt
+	t, at, retryAt := r.tree, r.treeAt, r.treeRetryAt
 	r.mu.Unlock()
-	if t != nil && time.Since(at) < 24*time.Hour {
+	if t != nil && (now.Sub(at) < 24*time.Hour || now.Before(retryAt)) {
 		return t, nil
 	}
 	b, err := r.apiBody(ctx, "/v1/static/cat_forum_tree")
-	if err != nil {
-		return nil, err
+	var fresh *forumTree
+	if err == nil {
+		fresh, err = parseForumTree(b)
 	}
-	if t, err = parseForumTree(b); err != nil {
-		return nil, err
+	if err != nil {
+		if t == nil || ctx.Err() != nil {
+			return nil, err
+		}
+		r.log.Warn("Rutracker: дерево разделов не обновилось, работаю по старому", "err", err)
+		r.mu.Lock()
+		r.treeRetryAt = now.Add(treeRetryAfter)
+		r.mu.Unlock()
+		return t, nil
 	}
 	r.mu.Lock()
-	r.tree, r.treeAt = t, time.Now()
+	r.tree, r.treeAt = fresh, now
 	r.mu.Unlock()
-	return t, nil
+	return fresh, nil
 }
 
 // Categories — дерево разделов для настроек: категории — «c<номер>», разделы и подразделы — номер.
