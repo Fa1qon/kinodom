@@ -153,8 +153,11 @@ func (r *Rutracker) renewPass(ctx context.Context, path string) error {
 		return fmt.Errorf("Rutracker: форум закрыт проверкой Cloudflare, а Edge не подключён: %w", netx.ErrChallenge)
 	}
 	mirror := r.forum.Mirror()
-	_, err, _ := r.passes.Do(mirror, func() (any, error) {
-		cookies, err := r.passer.Pass(ctx, mirror+path)
+	// Добыча идёт на своём контексте: отмена одного из ждущих (закрыли вкладку поиска) не должна
+	// сорвать её остальным. Сам Edge ограничен своим таймаутом (45 с + 30 с).
+	passCtx := context.WithoutCancel(ctx)
+	ch := r.passes.DoChan(mirror, func() (any, error) {
+		cookies, err := r.passer.Pass(passCtx, mirror+path)
 		if err != nil {
 			return nil, err
 		}
@@ -162,10 +165,15 @@ func (r *Rutracker) renewPass(ctx context.Context, path string) error {
 		r.jar.SetCookies(u, cookies)
 		return nil, nil
 	})
-	if err != nil {
-		return fmt.Errorf("Rutracker: не удаётся пройти защиту Cloudflare: %w", &passError{err})
+	select {
+	case res := <-ch:
+		if res.Err != nil {
+			return fmt.Errorf("Rutracker: не удаётся пройти защиту Cloudflare: %w", &passError{res.Err})
+		}
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
 	}
-	return nil
 }
 
 // passError — пропуск не добыт. Для errors.Is это netx.ErrChallenge: форум закрыт проверкой.

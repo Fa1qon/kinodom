@@ -24,9 +24,13 @@ type fakePasser struct {
 	err   error
 }
 
-func (f *fakePasser) Pass(context.Context, string) ([]*http.Cookie, error) {
+func (f *fakePasser) Pass(ctx context.Context, _ string) ([]*http.Cookie, error) {
 	f.calls.Add(1)
-	time.Sleep(f.delay)
+	select {
+	case <-time.After(f.delay):
+	case <-ctx.Done(): // как настоящий Edge: отмена прерывает добычу
+		return nil, ctx.Err()
+	}
 	if f.err != nil {
 		return nil, f.err
 	}
@@ -139,4 +143,35 @@ func httptestServer(t *testing.T, h http.HandlerFunc) string {
 	s := httptest.NewServer(h)
 	t.Cleanup(s.Close)
 	return s.URL
+}
+
+// Отмена одного из ждущих не срывает общую добычу остальным.
+func TestCancelledCallerDoesNotSpoilSharedPass(t *testing.T) {
+	s := rutrackertest.NewServer(t)
+	s.NeedPass = true
+	p := &fakePasser{delay: 300 * time.Millisecond}
+	r := newRutracker(t, s, func(o *Options) { o.Passer = p })
+	actx, cancel := context.WithCancel(ctx)
+	errA := make(chan error, 1)
+	go func() {
+		_, err := r.forumPage(actx, "/forum/viewtopic.php?t=6914565", "")
+		errA <- err
+	}()
+	time.Sleep(50 * time.Millisecond) // A — первый: добыча запущена его вызовом
+	errB := make(chan error, 1)
+	go func() {
+		_, err := r.forumPage(ctx, "/forum/viewtopic.php?t=6914565", "")
+		errB <- err
+	}()
+	time.Sleep(50 * time.Millisecond)
+	cancel()
+	if err := <-errA; !errors.Is(err, context.Canceled) {
+		t.Errorf("A: ожидалась отмена, получено %v", err)
+	}
+	if err := <-errB; err != nil {
+		t.Fatalf("B: добыча сорвана чужой отменой: %v", err)
+	}
+	if p.calls.Load() != 1 {
+		t.Fatalf("добыч %d", p.calls.Load())
+	}
 }
