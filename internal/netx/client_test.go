@@ -8,12 +8,15 @@ import (
 	"log"
 	"net"
 	"net/http"
+	"net/http/cookiejar"
 	"net/http/httptest"
 	"os"
 	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"golang.org/x/time/rate"
 )
 
 // site — фейковое зеркало, считает запросы.
@@ -428,5 +431,76 @@ func TestChallengeCanMeanMirrorDown(t *testing.T) {
 	}
 	if c.Mirror() != good.URL {
 		t.Fatalf("текущее зеркало %s", c.Mirror())
+	}
+}
+
+func TestJarKeepsCookies(t *testing.T) {
+	m := newSite(t, func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/set" {
+			http.SetCookie(w, &http.Cookie{Name: "session", Value: "42", Path: "/"})
+		} else if c, err := r.Cookie("session"); err != nil || c.Value != "42" {
+			w.WriteHeader(http.StatusForbidden)
+			return
+		}
+		page(trackerPage)(w, r)
+	})
+	jar, _ := cookiejar.New(nil)
+	c, err := NewClient(Options{Name: "Трекер", Mirrors: []string{m.URL}, Jar: jar, Rate: 1000})
+	if err != nil {
+		t.Fatal(err)
+	}
+	c.Get(context.Background(), "/set")
+	if p, err := c.Get(context.Background(), "/check"); err != nil || p.Status != 200 {
+		t.Fatalf("cookie не отправлена: %v %v", p, err)
+	}
+}
+
+func TestPostSendsFormAndFollowsRedirect(t *testing.T) {
+	var got string
+	m := newSite(t, func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/login":
+			b, _ := io.ReadAll(r.Body)
+			got = r.Method + " " + r.Header.Get("Content-Type") + " " + string(b)
+			http.Redirect(w, r, "/index", http.StatusFound)
+		default:
+			page(trackerPage)(w, r)
+		}
+	})
+	c := newTestClient(t, m.URL)
+	p, err := c.Post(context.Background(), "/login", "a=1&b=%C2%F5", WithoutClassify())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != "POST application/x-www-form-urlencoded a=1&b=%C2%F5" || p.URL.Path != "/index" {
+		t.Fatalf("запрос %q, итоговая страница %s", got, p.URL.Path)
+	}
+}
+
+// Ответ разбирает сам вызывающий: признаки трекера (здесь «нужен вход») не применяются.
+func TestWithoutClassifyReturnsPage(t *testing.T) {
+	m := newSite(t, page(trackerPage))
+	c := newTestClient(t, m.URL)
+	if _, err := c.Get(context.Background(), "/login"); !errors.Is(err, ErrLoginRequired) {
+		t.Fatalf("без опции: %v", err)
+	}
+	if p, err := c.Get(context.Background(), "/login", WithoutClassify()); err != nil || p.URL.Path != "/login" {
+		t.Fatalf("с опцией: %v", err)
+	}
+}
+
+// Два клиента одного трекера (форум и API) делят ограничитель «1 в секунду».
+func TestSharedLimiter(t *testing.T) {
+	a, b := newSite(t, page(trackerPage)), newSite(t, page(trackerPage))
+	lim := rate.NewLimiter(10, 1)
+	ca, _ := NewClient(Options{Name: "Форум", Mirrors: []string{a.URL}, Limiter: lim})
+	cb, _ := NewClient(Options{Name: "API", Mirrors: []string{b.URL}, Limiter: lim})
+	start := time.Now()
+	for range 2 {
+		ca.Get(context.Background(), "/x")
+		cb.Get(context.Background(), "/x")
+	}
+	if d := time.Since(start); d < 250*time.Millisecond {
+		t.Fatalf("4 запроса через общий ограничитель 10/с прошли за %v", d)
 	}
 }
