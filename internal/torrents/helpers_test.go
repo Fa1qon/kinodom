@@ -10,6 +10,8 @@ import (
 	"github.com/anacrolix/torrent"
 	"github.com/anacrolix/torrent/bencode"
 	"github.com/anacrolix/torrent/metainfo"
+
+	"kinodom/internal/torrents/torrenttest"
 )
 
 func quiet() *slog.Logger { return slog.New(slog.NewTextHandler(io.Discard, nil)) }
@@ -61,28 +63,7 @@ func connect(t *testing.T, s *Service, ih metainfo.Hash, seeder *torrent.Client)
 	if !ok {
 		t.Fatal("раздачи нет в движке")
 	}
-	tt.AddClientPeer(seeder)
-	// anacrolix не переподключается к пиру после обрыва: в жизни адрес снова приносят DHT,
-	// трекеры и PEX. Здесь их роль играет эта горутина — иначе редкий обрыв соединения
-	// на Windows превращал поток в тесте в вечное ожидание.
-	done := make(chan struct{})
-	stopped := make(chan struct{})
-	go func() {
-		defer close(stopped)
-		tick := time.NewTicker(200 * time.Millisecond)
-		defer tick.Stop()
-		for {
-			select {
-			case <-done:
-				return
-			case <-tick.C:
-				if tt.Stats().ActivePeers == 0 {
-					tt.AddClientPeer(seeder)
-				}
-			}
-		}
-	}()
-	t.Cleanup(func() { close(done); <-stopped })
+	torrenttest.Connect(t, tt, seeder)
 }
 
 func torrentBytes(t *testing.T, mi metainfo.MetaInfo) []byte {
