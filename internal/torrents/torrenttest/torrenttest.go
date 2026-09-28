@@ -6,6 +6,7 @@ import (
 	"crypto/rand"
 	"os"
 	"path/filepath"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -112,6 +113,7 @@ func Connect(t testing.TB, tt *torrent.Torrent, seeder *torrent.Client) {
 	tt.AddClientPeer(seeder)
 	done := make(chan struct{})
 	stopped := make(chan struct{})
+	var reoffers atomic.Int32
 	go func() {
 		defer close(stopped)
 		tick := time.NewTicker(200 * time.Millisecond)
@@ -122,10 +124,21 @@ func Connect(t testing.TB, tt *torrent.Torrent, seeder *torrent.Client) {
 				return
 			case <-tick.C:
 				if tt.Stats().ActivePeers == 0 {
+					reoffers.Add(1)
 					tt.AddClientPeer(seeder)
 				}
 			}
 		}
 	}()
-	t.Cleanup(func() { close(done); <-stopped })
+	t.Cleanup(func() {
+		close(done)
+		<-stopped
+		// Редкое зависание потока в тестах ещё не объяснено до конца: при сбое печатаем, было ли
+		// живое соединение (застрявшее) или его не было вовсе (раздающего предлагали заново).
+		if t.Failed() {
+			g := tt.Stats().TorrentGauges
+			t.Logf("раздача при сбое: пиров %d, ожидают %d, активных %d, раздающих %d, полуоткрытых %d, готово кусков %d; раздающего предлагали заново %d раз",
+				g.TotalPeers, g.PendingPeers, g.ActivePeers, g.ConnectedSeeders, g.HalfOpenPeers, g.PiecesComplete, reoffers.Load())
+		}
+	})
 }
