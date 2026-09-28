@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/url"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -52,8 +53,9 @@ func New(o Options) *Fetcher {
 }
 
 // Pass открывает pageURL в скрытом Edge, ждёт ухода со страницы проверки Cloudflare и
-// возвращает cookie сайта (среди них cf_clearance). Второй одновременный вызов ждёт первого
-// и, скорее всего, пройдёт за ~1 с: профиль уже с пропуском.
+// возвращает cookie сайта. Без cf_clearance среди них — ErrNotPassed: форум снова ответил бы
+// проверкой. Второй одновременный вызов ждёт первого и, скорее всего, пройдёт за ~1 с:
+// профиль уже с пропуском.
 func (f *Fetcher) Pass(ctx context.Context, pageURL string) ([]*http.Cookie, error) {
 	u, err := url.Parse(pageURL)
 	if err != nil || u.Host == "" {
@@ -82,7 +84,8 @@ func (f *Fetcher) Pass(ctx context.Context, pageURL string) ([]*http.Cookie, err
 	if err != nil {
 		return nil, fmt.Errorf("Edge: страница %s не открылась: %w", u.Host, err)
 	}
-	if err := f.waitPassed(tab); err != nil {
+	title, err := f.waitPassed(tab)
+	if err != nil {
 		return nil, err
 	}
 	var all []*network.Cookie
@@ -99,6 +102,9 @@ func (f *Fetcher) Pass(ctx context.Context, pageURL string) ([]*http.Cookie, err
 		f.o.Log.Warn("Edge закрылся не штатно", "err", err)
 	}
 	cookies := siteCookies(all, u.Hostname())
+	if !slices.ContainsFunc(cookies, func(c *http.Cookie) bool { return c.Name == "cf_clearance" }) {
+		return nil, fmt.Errorf("%w: страница открылась, но пропуска (cookie cf_clearance) нет (заголовок страницы: %q)", ErrNotPassed, title)
+	}
 	f.o.Log.Info("Edge: пропуск Cloudflare получен", "host", u.Host, "sec", time.Since(start).Round(100*time.Millisecond).Seconds(), "cookies", len(cookies))
 	return cookies, nil
 }
@@ -151,15 +157,16 @@ func (f *Fetcher) options() ([]chromedp.ExecAllocatorOption, error) {
 	return opts, nil
 }
 
-// waitPassed ждёт, пока вкладка уйдёт со страницы проверки. Заголовок читается из списка
-// вкладок, без выполнения JS на странице: проверка может заметить управление через CDP.
-func (f *Fetcher) waitPassed(tab context.Context) error {
+// waitPassed ждёт, пока вкладка уйдёт со страницы проверки, и возвращает заголовок открывшейся
+// страницы. Заголовок читается из списка вкладок, без выполнения JS на странице: проверка может
+// заметить управление через CDP.
+func (f *Fetcher) waitPassed(tab context.Context) (string, error) {
 	deadline := time.Now().Add(f.o.Timeout)
 	var title string
 	for time.Now().Before(deadline) {
 		t, addr, err := tabInfo(tab)
 		if err != nil {
-			return fmt.Errorf("Edge: %w", err)
+			return "", fmt.Errorf("Edge: %w", err)
 		}
 		title = t
 		// Пока страница грузится, заголовок вкладки — её адрес без схемы; about:… — ещё пусто.
@@ -167,15 +174,15 @@ func (f *Fetcher) waitPassed(tab context.Context) error {
 			title == strings.TrimPrefix(strings.TrimPrefix(addr, "https://"), "http://")
 		if !loading && !isChallengeTitle(title) {
 			time.Sleep(time.Second) // скрипт страницы дописывает cookie
-			return nil
+			return title, nil
 		}
 		select {
 		case <-tab.Done():
-			return fmt.Errorf("Edge: %w", tab.Err())
+			return "", fmt.Errorf("Edge: %w", tab.Err())
 		case <-time.After(250 * time.Millisecond):
 		}
 	}
-	return fmt.Errorf("%w за %s (заголовок страницы: %q)", ErrNotPassed, f.o.Timeout, title)
+	return "", fmt.Errorf("%w за %s (заголовок страницы: %q)", ErrNotPassed, f.o.Timeout, title)
 }
 
 func tabInfo(tab context.Context) (title, addr string, err error) {
