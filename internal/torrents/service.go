@@ -1,0 +1,332 @@
+package torrents
+
+import (
+	"bytes"
+	"context"
+	"errors"
+	"fmt"
+	"log/slog"
+	"sync"
+	"sync/atomic"
+	"time"
+
+	"github.com/anacrolix/torrent"
+	"github.com/anacrolix/torrent/bencode"
+	"github.com/anacrolix/torrent/metainfo"
+
+	"kinodom/internal/supervisor"
+)
+
+var (
+	ErrNotOpen    = errors.New("раздача не открыта")
+	ErrNoInfo     = errors.New("список файлов раздачи ещё не получен")
+	ErrNoSuchFile = errors.New("такого файла в раздаче нет")
+)
+
+// Source — откуда открыть раздачу: magnet-ссылка или содержимое файла .torrent.
+type Source struct {
+	Magnet  string
+	Torrent []byte
+}
+
+// TorrentStatus — состояние открытой раздачи для клиента.
+type TorrentStatus struct {
+	Hash  string       `json:"hash"`
+	Name  string       `json:"name"`
+	State TorrentState `json:"state"`
+	Peers int          `json:"peers"`
+	Files []FileInfo   `json:"files"`
+	Error string       `json:"error,omitempty"`
+}
+
+// session — всё, что сервис знает об открытой раздаче.
+type session struct {
+	t            *torrent.Torrent
+	stored       bool // есть хранимые файлы: правила «нет пиров» не применяются
+	noPeersSince time.Time
+	peersSince   time.Time
+	state        TorrentState
+	errText      string
+	lastBytes    int64
+	lastSample   time.Time
+	speed        float64 // байт/с, сглаженная
+	prepared     map[int]*prepared
+	storedFiles  map[int]bool // файлы, которые хранятся и докачиваются (в том числе до перезапуска)
+}
+
+// prepared — файл, выбранный для просмотра.
+type prepared struct {
+	bitrate    float64 // оценка, байт/с
+	head, tail pieceSpan
+}
+
+// Service — модуль «torrents».
+type Service struct {
+	eng       *Engine                  // nil, пока движок не создан (NewLazyService)
+	newEngine func() (*Engine, error)  // создаёт движок в Run; ошибка — сбой модуля, сторож повторит
+	onEngine  func(err error)          // сообщает, удалось ли создать движок (проблема в «Состоянии»)
+	reg       *Registry
+	log       *slog.Logger
+	now       func() time.Time
+
+	noPeersAfter, noMetaAfter time.Duration
+
+	mu       sync.Mutex
+	sessions map[metainfo.Hash]*session
+
+	activeStreams atomic.Int32
+}
+
+func NewService(eng *Engine, reg *Registry, log *slog.Logger) *Service {
+	return &Service{
+		eng:          eng,
+		reg:          reg,
+		log:          log,
+		now:          time.Now,
+		noPeersAfter: noPeersAfter,
+		noMetaAfter:  noMetadataAfter,
+		sessions:     map[metainfo.Hash]*session{},
+	}
+}
+
+// NewLazyService — сервис, который создаёт движок сам, в Run. Если папка загрузок ещё
+// недоступна (USB-диск не подключился), Run возвращает ошибку, сторож повторяет с паузами,
+// а маршруты модуля до тех пор отвечают 503 — и торренты оживают без перезапуска службы.
+func NewLazyService(newEngine func() (*Engine, error), reg *Registry, log *slog.Logger, onEngine func(err error)) *Service {
+	s := NewService(nil, reg, log)
+	s.newEngine = newEngine
+	s.onEngine = onEngine
+	return s
+}
+
+func (s *Service) Name() string { return "torrents" }
+
+// Engine — движок или nil, если он ещё не создан.
+func (s *Service) Engine() *Engine {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.eng
+}
+
+// Run создаёт движок (если его ещё нет), восстанавливает хранимые раздачи и раз в секунду
+// обновляет скорость и состояния. Движок переживает перезапуски Run: идущие потоки не рвутся.
+func (s *Service) Run(ctx context.Context) error {
+	if s.Engine() == nil {
+		e, err := s.newEngine()
+		if s.onEngine != nil {
+			s.onEngine(err)
+		}
+		if err != nil {
+			return fmt.Errorf("торрент-движок: %w", err)
+		}
+		s.mu.Lock()
+		s.eng = e
+		s.mu.Unlock()
+	}
+	if err := s.restore(ctx); err != nil {
+		return fmt.Errorf("восстановление раздач: %w", err)
+	}
+	supervisor.Ready(ctx) // хранимые раздачи на месте — маршруты модуля можно обслуживать
+	tick := time.NewTicker(time.Second)
+	defer tick.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return nil
+		case <-tick.C:
+			s.sample()
+		}
+	}
+}
+
+// restore добавляет в движок раздачи с хранимыми файлами — из метаинфо в базе, без пиров.
+func (s *Service) restore(ctx context.Context) error {
+	recs, err := s.reg.Restorable(ctx)
+	if err != nil {
+		return err
+	}
+	for _, rec := range recs {
+		mi, err := metainfo.Load(bytes.NewReader(rec.Metainfo))
+		if err != nil {
+			s.log.Warn("метаинфо раздачи не читается, пропускаю", "hash", rec.InfoHash.HexString(), "err", err)
+			continue
+		}
+		t, err := s.eng.cl.AddTorrent(mi)
+		if err != nil {
+			s.log.Warn("раздача не восстановилась", "hash", rec.InfoHash.HexString(), "err", err)
+			continue
+		}
+		idxs, err := s.reg.StoredFiles(ctx, rec.InfoHash)
+		if err != nil {
+			return err
+		}
+		s.mu.Lock()
+		ss := s.sessionFor(t)
+		ss.stored = true
+		// Хранимые файлы докачиваются дальше (и раздаются), остальные не нужны.
+		files := t.Files()
+		for _, i := range idxs {
+			if i >= 0 && i < len(files) {
+				ss.storedFiles[i] = true
+				files[i].SetPriority(torrent.PiecePriorityNormal)
+			}
+		}
+		s.mu.Unlock()
+	}
+	return nil
+}
+
+// Open добавляет раздачу в движок. Повторный вызов для той же раздачи (второй телевизор)
+// возвращает её же; после ошибки «нет раздающих» — начинает заново.
+func (s *Service) Open(ctx context.Context, src Source) (metainfo.Hash, error) {
+	var (
+		t      *torrent.Torrent
+		raw    []byte
+		source string
+		err    error
+	)
+	switch {
+	case len(src.Torrent) > 0:
+		mi, lerr := metainfo.Load(bytes.NewReader(src.Torrent))
+		if lerr != nil {
+			return metainfo.Hash{}, fmt.Errorf("файл .torrent не читается: %w", lerr)
+		}
+		if t, err = s.eng.cl.AddTorrent(mi); err != nil {
+			return metainfo.Hash{}, fmt.Errorf("файл .torrent не принят: %w", err)
+		}
+		raw, source = src.Torrent, "torrent-file"
+	case src.Magnet != "":
+		// Движок паникует на ссылке без infohash, а не возвращает ошибку — проверяем сами.
+		m, perr := metainfo.ParseMagnetUri(src.Magnet)
+		if perr != nil || m.InfoHash == (metainfo.Hash{}) {
+			return metainfo.Hash{}, fmt.Errorf("magnet-ссылка не читается: в ней нет infohash раздачи (%v)", perr)
+		}
+		if t, err = s.eng.cl.AddMagnet(src.Magnet); err != nil {
+			return metainfo.Hash{}, fmt.Errorf("magnet-ссылка не читается: %w", err)
+		}
+		source = src.Magnet
+	default:
+		return metainfo.Hash{}, errors.New("не указан источник раздачи: нужна magnet-ссылка или .torrent")
+	}
+	ih := t.InfoHash()
+	if err := s.reg.Remember(ctx, ih, source); err != nil {
+		return ih, err
+	}
+	s.mu.Lock()
+	s.observe(s.sessionFor(t), s.now())
+	s.mu.Unlock()
+	go s.saveMetainfoWhenReady(t, raw)
+	return ih, nil
+}
+
+// sessionFor — сессия раздачи; новая, если раздачу добавили заново (после ошибки).
+// Вызывать под s.mu.
+func (s *Service) sessionFor(t *torrent.Torrent) *session {
+	ih := t.InfoHash()
+	if ss, ok := s.sessions[ih]; ok && ss.t == t {
+		return ss
+	}
+	ss := &session{t: t, prepared: map[int]*prepared{}, storedFiles: map[int]bool{}}
+	s.sessions[ih] = ss
+	return ss
+}
+
+// saveMetainfoWhenReady сохраняет метаинфо, как только движок её получил.
+func (s *Service) saveMetainfoWhenReady(t *torrent.Torrent, raw []byte) {
+	select {
+	case <-t.GotInfo():
+	case <-t.Closed():
+		return
+	}
+	if raw == nil {
+		b, err := bencode.Marshal(t.Metainfo())
+		if err != nil {
+			s.log.Warn("метаинфо не сериализуется", "err", err)
+			return
+		}
+		raw = b
+	}
+	if err := s.reg.SaveMetainfo(context.Background(), t.InfoHash(), t.Name(), raw); err != nil {
+		s.log.Warn("метаинфо не сохранилась", "hash", t.InfoHash().HexString(), "err", err)
+	}
+}
+
+// Status — состояние раздачи; false, если её не открывали.
+func (s *Service) Status(ih metainfo.Hash) (TorrentStatus, bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	ss, ok := s.sessions[ih]
+	if !ok {
+		return TorrentStatus{}, false
+	}
+	s.observe(ss, s.now())
+	st := TorrentStatus{
+		Hash:  ih.HexString(),
+		Name:  ss.t.Name(),
+		State: ss.state,
+		Peers: ss.t.Stats().ActivePeers,
+		Files: []FileInfo{},
+		Error: ss.errText,
+	}
+	if ss.state == StateReady {
+		st.Files = playableFiles(allFiles(ss.t))
+	}
+	return st, true
+}
+
+// observe применяет правила открытия к текущим наблюдениям. Вызывать под s.mu.
+func (s *Service) observe(ss *session, now time.Time) {
+	if ss.state == StateError {
+		return
+	}
+	st := ss.t.Stats()
+	active := st.ActivePeers
+	if active > 0 {
+		ss.noPeersSince = time.Time{}
+		if ss.peersSince.IsZero() {
+			ss.peersSince = now
+		}
+	} else if ss.noPeersSince.IsZero() && (s.eng.NetworkReady() || st.TotalPeers > 0) {
+		// Сеть готова (DHT нашёл узлы или трекер вернул адреса) — пошёл отсчёт 30 с.
+		ss.noPeersSince = now
+	}
+	ss.state, ss.errText = evalOpenState(openObs{
+		now:          now,
+		haveInfo:     ss.t.Info() != nil,
+		activePeers:  active,
+		noPeersSince: ss.noPeersSince,
+		peersSince:   ss.peersSince,
+		stored:       ss.stored,
+	}, s.noPeersAfter, s.noMetaAfter)
+	if ss.state == StateError {
+		ss.t.Drop() // без хранимых файлов раздача больше не нужна
+	}
+}
+
+// sample раз в секунду обновляет сглаженную скорость и состояния всех раздач.
+func (s *Service) sample() {
+	now := s.now()
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for _, ss := range s.sessions {
+		st := ss.t.Stats()
+		b := st.BytesReadData.Int64()
+		if !ss.lastSample.IsZero() {
+			if dt := now.Sub(ss.lastSample).Seconds(); dt > 0 {
+				ss.speed = 0.5*ss.speed + 0.5*float64(b-ss.lastBytes)/dt
+			}
+		}
+		ss.lastBytes, ss.lastSample = b, now
+		s.observe(ss, now)
+	}
+}
+
+// allFiles — все файлы раздачи (нужна метаинфо).
+func allFiles(t *torrent.Torrent) []FileInfo {
+	fs := t.Files()
+	out := make([]FileInfo, len(fs))
+	for i, f := range fs {
+		out[i] = FileInfo{Index: i, Name: f.DisplayPath(), Size: f.Length()}
+	}
+	return out
+}

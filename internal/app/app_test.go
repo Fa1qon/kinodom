@@ -1,10 +1,12 @@
 package app
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net"
 	"net/http"
 	"os"
@@ -13,17 +15,23 @@ import (
 	"testing"
 	"time"
 
+	"github.com/anacrolix/torrent"
+	"github.com/anacrolix/torrent/bencode"
+	"github.com/anacrolix/torrent/metainfo"
+
 	"kinodom/internal/api"
 	"kinodom/internal/config"
 	"kinodom/internal/store"
 	"kinodom/internal/supervisor"
+	"kinodom/internal/torrents"
+	"kinodom/internal/torrents/torrenttest"
 )
 
-// startApp поднимает сервер целиком во временной папке на случайном порту.
-func startApp(t *testing.T) *App {
+// startAppRaw поднимает сервер и ждёт только HTTP; модули могут ещё стартовать.
+func startAppRaw(t *testing.T, o Options) *App {
 	t.Helper()
 	ctx, cancel := context.WithCancel(context.Background())
-	a, err := New(ctx, Options{Home: t.TempDir(), ListenAddr: "127.0.0.1:0"})
+	a, err := New(ctx, o)
 	if err != nil {
 		cancel()
 		t.Fatal(err)
@@ -41,6 +49,19 @@ func startApp(t *testing.T) *App {
 		t.Fatal("API не поднялся за 5 с")
 	}
 	return a
+}
+
+// startAppWith поднимает сервер и ждёт, пока все модули будут готовы (Ready).
+func startAppWith(t *testing.T, o Options) *App {
+	t.Helper()
+	a := startAppRaw(t, o)
+	waitAllRunning(t, a) // модули готовы — их маршруты уже не отвечают 503
+	return a
+}
+
+// startApp — сервер во временной папке, на случайном порту, с офлайн-движком торрентов.
+func startApp(t *testing.T) *App {
+	return startAppWith(t, Options{Home: t.TempDir(), ListenAddr: "127.0.0.1:0", Offline: true, DownloadsDir: t.TempDir()})
 }
 
 func getJSON(t *testing.T, url string, v any) {
@@ -99,7 +120,7 @@ func TestAllModulesTogether(t *testing.T) {
 
 func TestModuleCanBeDisabledBySetting(t *testing.T) {
 	ctx := context.Background()
-	a, err := New(ctx, Options{Home: t.TempDir(), ListenAddr: "127.0.0.1:0"})
+	a, err := New(ctx, Options{Home: t.TempDir(), ListenAddr: "127.0.0.1:0", Offline: true, DownloadsDir: t.TempDir()})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -171,5 +192,176 @@ func TestStartupFailureIsWrittenToLog(t *testing.T) {
 		if err != nil || !strings.Contains(string(data), "Kinodom не запустился") || !strings.Contains(string(data), want) {
 			t.Fatalf("%s: в журнале нет причины отказа (%v): %s", want, err, data)
 		}
+	}
+}
+
+func postJSON(t *testing.T, url string, in, out any) {
+	t.Helper()
+	b, _ := json.Marshal(in)
+	resp, err := http.Post(url, "application/json", bytes.NewReader(b))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode >= 300 {
+		body, _ := io.ReadAll(resp.Body)
+		t.Fatalf("POST %s: код %d: %s", url, resp.StatusCode, body)
+	}
+	if out != nil {
+		json.NewDecoder(resp.Body).Decode(out)
+	}
+}
+
+func waitUntil(t *testing.T, what string, cond func() bool) {
+	t.Helper()
+	deadline := time.Now().Add(20 * time.Second)
+	for !cond() {
+		if time.Now().After(deadline) {
+			t.Fatalf("не дождались: %s", what)
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+}
+
+// openAndBuffer открывает раздачу через API, подключает раздающего и ждёт буфер.
+func openAndBuffer(t *testing.T, a *App, mi metainfo.MetaInfo, seeder *torrent.Client) string {
+	t.Helper()
+	base := "http://" + a.API.Addr()
+	raw, _ := bencode.Marshal(mi)
+	var opened struct{ Hash string }
+	postJSON(t, base+"/api/v1/torrents", map[string]any{"torrent": raw}, &opened)
+	if seeder != nil {
+		tt, _ := a.Torrents.Engine().Client().Torrent(mi.HashInfoBytes())
+		tt.AddClientPeer(seeder)
+	}
+	var st torrents.TorrentStatus
+	waitUntil(t, "список файлов", func() bool {
+		getJSON(t, base+"/api/v1/torrents/"+opened.Hash, &st)
+		return st.State == torrents.StateReady
+	})
+	fileURL := fmt.Sprintf("%s/api/v1/torrents/%s/files/%d", base, opened.Hash, st.Files[0].Index)
+	postJSON(t, fileURL+"/prepare", struct{}{}, nil)
+	var fs struct {
+		State     string
+		StreamURL string `json:"streamUrl"`
+	}
+	waitUntil(t, "буфер готов", func() bool { getJSON(t, fileURL, &fs); return fs.State == "ready" })
+	return fs.StreamURL
+}
+
+func readAll(t *testing.T, url string) []byte {
+	t.Helper()
+	resp, err := http.Get(url)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	b, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return b
+}
+
+func TestTorrentFromOpenToStreamThroughAPI(t *testing.T) {
+	a := startApp(t)
+	src := t.TempDir()
+	mi, root := torrenttest.MakeTorrent(t, src, "Фильм про космос.mkv", 64<<10, torrenttest.File{Path: "Фильм про космос.mkv", Size: 3 << 20})
+	want, _ := os.ReadFile(root)
+	seeder, _ := torrenttest.NewSeeder(t, src, mi)
+	streamURL := openAndBuffer(t, a, mi, seeder)
+	if got := readAll(t, streamURL); !bytes.Equal(got, want) {
+		t.Fatalf("поток отдал %d байт, не совпадает с исходным файлом", len(got))
+	}
+	waitAllRunning(t, a) // остальные модули не задело
+}
+
+func TestRestartKeepsDownloadedFileWithoutPeers(t *testing.T) {
+	home, downloads := t.TempDir(), t.TempDir()
+	opts := Options{Home: home, ListenAddr: "127.0.0.1:0", Offline: true, DownloadsDir: downloads}
+	src := t.TempDir()
+	mi, root := torrenttest.MakeTorrent(t, src, "film.mkv", 64<<10, torrenttest.File{Path: "film.mkv", Size: 2 << 20})
+	want, _ := os.ReadFile(root)
+	seeder, _ := torrenttest.NewSeeder(t, src, mi)
+
+	// Первый запуск: скачать файл целиком.
+	ctx1, cancel1 := context.WithCancel(context.Background())
+	a1, err := New(ctx1, opts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	done1 := make(chan struct{})
+	go func() { a1.Run(ctx1); close(done1) }()
+	<-a1.API.Ready()
+	waitAllRunning(t, a1)
+	openAndBuffer(t, a1, mi, seeder)
+	tt, _ := a1.Torrents.Engine().Client().Torrent(mi.HashInfoBytes())
+	waitUntil(t, "файл скачан целиком", func() bool { return tt.Files()[0].BytesCompleted() == int64(len(want)) })
+	cancel1()
+	<-done1
+	a1.Close()
+
+	// Второй запуск: та же папка, раздающего не подключаем — файл открывается из скачанного.
+	a2 := startAppWith(t, opts)
+	streamURL := openAndBuffer(t, a2, mi, nil)
+	if got := readAll(t, streamURL); !bytes.Equal(got, want) {
+		t.Fatal("после перезапуска поток отдал не тот файл")
+	}
+}
+
+func problemsOf(t *testing.T, a *App) string {
+	t.Helper()
+	var st struct{ Problems []store.Problem }
+	getJSON(t, "http://"+a.API.Addr()+"/api/v1/status", &st)
+	var texts []string
+	for _, p := range st.Problems {
+		texts = append(texts, p.Text)
+	}
+	return strings.Join(texts, " | ")
+}
+
+func TestBadProxySettingDoesNotStopServer(t *testing.T) {
+	home := t.TempDir()
+	db, err := store.Open(context.Background(), config.NewPaths(home).DB)
+	if err != nil {
+		t.Fatal(err)
+	}
+	db.SetSetting(context.Background(), "proxy.trackers", "127.0.0.1:1080")
+	db.Close()
+	a := startAppWith(t, Options{Home: home, ListenAddr: "127.0.0.1:0", Offline: true, DownloadsDir: t.TempDir()})
+	if a.Torrents == nil {
+		t.Fatal("торренты должны работать и без прокси")
+	}
+	if p := problemsOf(t, a); !strings.Contains(p, "socks5://") {
+		t.Fatalf("нет понятной проблемы про прокси: %q", p)
+	}
+	waitAllRunning(t, a)
+}
+
+// Папка загрузок недоступна при старте (например, USB-диск ещё не подключился): сервер жив,
+// маршруты торрентов отвечают 503 в JSON, в «Состоянии» — проблема. Когда папка появляется,
+// сторож перезапускает модуль и торренты оживают сами, без перезапуска службы.
+func TestUnusableDownloadsDirRecoversWhenFolderAppears(t *testing.T) {
+	blocker := filepath.Join(t.TempDir(), "file")
+	os.WriteFile(blocker, nil, 0o644)
+	a := startAppRaw(t, Options{Home: t.TempDir(), ListenAddr: "127.0.0.1:0", Offline: true, DownloadsDir: filepath.Join(blocker, "sub")})
+	waitUntil(t, "проблема про торренты", func() bool { return strings.Contains(problemsOf(t, a), "Торренты не работают") })
+
+	resp, err := http.Get("http://" + a.API.Addr() + "/api/v1/torrents/" + strings.Repeat("0", 40))
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, _ := io.ReadAll(resp.Body)
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusServiceUnavailable || !strings.Contains(string(body), "временно недоступен") {
+		t.Fatalf("пока движка нет, маршрут должен отвечать 503 в JSON: %d %s", resp.StatusCode, body)
+	}
+
+	if err := os.Remove(blocker); err != nil { // «диск подключили»
+		t.Fatal(err)
+	}
+	waitUntil(t, "торренты заработали сами", func() bool { return a.Sup.IsRunning("torrents") })
+	if p := problemsOf(t, a); strings.Contains(p, "Торренты не работают") {
+		t.Fatalf("проблема не снята: %q", p)
 	}
 }
