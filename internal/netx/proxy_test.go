@@ -36,3 +36,13 @@ func TestParseProxyRejectsWithHint(t *testing.T) {
 		}
 	}
 }
+
+// Текст ошибки уходит в журнал и в «Состояние» — пароля прокси в нём быть не должно.
+func TestParseProxyErrorHidesPassword(t *testing.T) {
+	for _, in := range []string{"socks5://user:s3cret@127.0.0.1", "user:s3cret@127.0.0.1:1080", "ftp://user:s3cret@x:21"} {
+		_, err := ParseProxy(in)
+		if err == nil || strings.Contains(err.Error(), "s3cret") {
+			t.Errorf("ParseProxy(%q): ошибка %v показывает пароль", in, err)
+		}
+	}
+}
