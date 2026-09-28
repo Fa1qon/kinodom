@@ -301,7 +301,7 @@ func TestTorrentFromOpenToStreamThroughAPI(t *testing.T) {
 
 func TestRestartKeepsDownloadedFileWithoutPeers(t *testing.T) {
 	home, downloads := t.TempDir(), t.TempDir()
-	opts := Options{Home: home, ListenAddr: "127.0.0.1:0", Offline: true, DownloadsDir: downloads}
+	opts := Options{Home: home, ListenAddr: "127.0.0.1:0", Offline: true, DownloadsDir: downloads, Trackers: offlineTrackers(t)}
 	src := t.TempDir()
 	mi, root := torrenttest.MakeTorrent(t, src, "film.mkv", 64<<10, torrenttest.File{Path: "film.mkv", Size: 2 << 20})
 	want, _ := os.ReadFile(root)
@@ -460,8 +460,8 @@ func TestRatingsAndImagesTogether(t *testing.T) {
 // догрузка страницы, постера и .torrent; поиск по обоим трекерам (спека, разделы 5, 7).
 func TestCatalogTogether(t *testing.T) {
 	rutor := rutortest.NewServer(t)
-	// Постер раздачи — по http: фейковый прокси не умеет CONNECT для https, а запасной постер
-	// Кинопоиска тест ловит отдельно (иначе тест тихо ходил бы в интернет).
+	// Постер раздачи — по http: фейковый прокси не умеет CONNECT для https. Что взят он, а не
+	// запасной постер Кинопоиска, показывает ключ картинки у карточки.
 	topic := bytes.ReplaceAll(rutortest.Page(t, "torrent_1077013.html"), []byte("https://"), []byte("http://"))
 	rutor.Override = func(w http.ResponseWriter, r *http.Request) bool {
 		if r.URL.Path != "/torrent/1077013" {
@@ -510,13 +510,7 @@ func TestCatalogTogether(t *testing.T) {
 	db.SetSetting(context.Background(), "proxy.trackers", proxy.URL)
 	db.SetSetting(context.Background(), "catalog.categories", "rutor:12,rutracker:2076")
 	db.Close()
-	var kpPosters atomic.Int32
-	kp := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if strings.HasPrefix(r.URL.Path, "/images/posters/") { // рейтинги без ключа и постеры — не в настоящий Кинопоиск
-			kpPosters.Add(1)
-		}
-		http.NotFound(w, r)
-	}))
+	kp := httptest.NewServer(http.NotFoundHandler()) // рейтинги без ключа и постеры — не в настоящий Кинопоиск
 	t.Cleanup(kp.Close)
 	a := startAppWith(t, Options{Home: home, ListenAddr: "127.0.0.1:0", Offline: true, DownloadsDir: t.TempDir(),
 		KinopoiskAPI: kp.URL, Settings: map[string]string{"rutracker.login": "user", "rutracker.password": "pass"},
@@ -542,9 +536,6 @@ func TestCatalogTogether(t *testing.T) {
 	}
 	if viaProxy.Load() == 0 {
 		t.Fatal("трекеры и картинки ходили мимо прокси")
-	}
-	if kpPosters.Load() != 0 {
-		t.Fatal("постер со страницы скачался, а запасной постер Кинопоиска всё равно запрошен")
 	}
 	var st catalog.SearchState
 	for deadline := time.Now().Add(10 * time.Second); !st.Complete; time.Sleep(50 * time.Millisecond) {
