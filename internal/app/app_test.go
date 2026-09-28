@@ -27,8 +27,8 @@ import (
 	"kinodom/internal/torrents/torrenttest"
 )
 
-// startAppWith поднимает сервер целиком с заданными опциями.
-func startAppWith(t *testing.T, o Options) *App {
+// startAppRaw поднимает сервер и ждёт только HTTP; модули могут ещё стартовать.
+func startAppRaw(t *testing.T, o Options) *App {
 	t.Helper()
 	ctx, cancel := context.WithCancel(context.Background())
 	a, err := New(ctx, o)
@@ -48,7 +48,14 @@ func startAppWith(t *testing.T, o Options) *App {
 	case <-time.After(5 * time.Second):
 		t.Fatal("API не поднялся за 5 с")
 	}
-	waitAllRunning(t, a) // модули готовы (Ready) — их маршруты уже не отвечают 503
+	return a
+}
+
+// startAppWith поднимает сервер и ждёт, пока все модули будут готовы (Ready).
+func startAppWith(t *testing.T, o Options) *App {
+	t.Helper()
+	a := startAppRaw(t, o)
+	waitAllRunning(t, a) // модули готовы — их маршруты уже не отвечают 503
 	return a
 }
 
@@ -331,15 +338,30 @@ func TestBadProxySettingDoesNotStopServer(t *testing.T) {
 	waitAllRunning(t, a)
 }
 
-func TestUnusableDownloadsDirKeepsServerUp(t *testing.T) {
+// Папка загрузок недоступна при старте (например, USB-диск ещё не подключился): сервер жив,
+// маршруты торрентов отвечают 503 в JSON, в «Состоянии» — проблема. Когда папка появляется,
+// сторож перезапускает модуль и торренты оживают сами, без перезапуска службы.
+func TestUnusableDownloadsDirRecoversWhenFolderAppears(t *testing.T) {
 	blocker := filepath.Join(t.TempDir(), "file")
 	os.WriteFile(blocker, nil, 0o644)
-	a := startAppWith(t, Options{Home: t.TempDir(), ListenAddr: "127.0.0.1:0", Offline: true, DownloadsDir: filepath.Join(blocker, "sub")})
-	if a.Torrents != nil {
-		t.Fatal("движок не мог запуститься в недоступной папке")
+	a := startAppRaw(t, Options{Home: t.TempDir(), ListenAddr: "127.0.0.1:0", Offline: true, DownloadsDir: filepath.Join(blocker, "sub")})
+	waitUntil(t, "проблема про торренты", func() bool { return strings.Contains(problemsOf(t, a), "Торренты не работают") })
+
+	resp, err := http.Get("http://" + a.API.Addr() + "/api/v1/torrents/" + strings.Repeat("0", 40))
+	if err != nil {
+		t.Fatal(err)
 	}
-	if p := problemsOf(t, a); !strings.Contains(p, "Торренты не работают") {
-		t.Fatalf("нет проблемы про торренты: %q", p)
+	body, _ := io.ReadAll(resp.Body)
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusServiceUnavailable || !strings.Contains(string(body), "временно недоступен") {
+		t.Fatalf("пока движка нет, маршрут должен отвечать 503 в JSON: %d %s", resp.StatusCode, body)
 	}
-	waitAllRunning(t, a)
+
+	if err := os.Remove(blocker); err != nil { // «диск подключили»
+		t.Fatal(err)
+	}
+	waitUntil(t, "торренты заработали сами", func() bool { return a.Sup.IsRunning("torrents") })
+	if p := problemsOf(t, a); strings.Contains(p, "Торренты не работают") {
+		t.Fatalf("проблема не снята: %q", p)
+	}
 }

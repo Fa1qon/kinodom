@@ -62,10 +62,12 @@ type prepared struct {
 
 // Service — модуль «torrents».
 type Service struct {
-	eng *Engine
-	reg *Registry
-	log *slog.Logger
-	now func() time.Time
+	eng       *Engine                  // nil, пока движок не создан (NewLazyService)
+	newEngine func() (*Engine, error)  // создаёт движок в Run; ошибка — сбой модуля, сторож повторит
+	onEngine  func(err error)          // сообщает, удалось ли создать движок (проблема в «Состоянии»)
+	reg       *Registry
+	log       *slog.Logger
+	now       func() time.Time
 
 	noPeersAfter, noMetaAfter time.Duration
 
@@ -87,11 +89,40 @@ func NewService(eng *Engine, reg *Registry, log *slog.Logger) *Service {
 	}
 }
 
-func (s *Service) Name() string    { return "torrents" }
-func (s *Service) Engine() *Engine { return s.eng }
+// NewLazyService — сервис, который создаёт движок сам, в Run. Если папка загрузок ещё
+// недоступна (USB-диск не подключился), Run возвращает ошибку, сторож повторяет с паузами,
+// а маршруты модуля до тех пор отвечают 503 — и торренты оживают без перезапуска службы.
+func NewLazyService(newEngine func() (*Engine, error), reg *Registry, log *slog.Logger, onEngine func(err error)) *Service {
+	s := NewService(nil, reg, log)
+	s.newEngine = newEngine
+	s.onEngine = onEngine
+	return s
+}
 
-// Run восстанавливает хранимые раздачи и раз в секунду обновляет скорость и состояния.
+func (s *Service) Name() string { return "torrents" }
+
+// Engine — движок или nil, если он ещё не создан.
+func (s *Service) Engine() *Engine {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.eng
+}
+
+// Run создаёт движок (если его ещё нет), восстанавливает хранимые раздачи и раз в секунду
+// обновляет скорость и состояния. Движок переживает перезапуски Run: идущие потоки не рвутся.
 func (s *Service) Run(ctx context.Context) error {
+	if s.Engine() == nil {
+		e, err := s.newEngine()
+		if s.onEngine != nil {
+			s.onEngine(err)
+		}
+		if err != nil {
+			return fmt.Errorf("торрент-движок: %w", err)
+		}
+		s.mu.Lock()
+		s.eng = e
+		s.mu.Unlock()
+	}
 	if err := s.restore(ctx); err != nil {
 		return fmt.Errorf("восстановление раздач: %w", err)
 	}
