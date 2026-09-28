@@ -2,12 +2,14 @@ package rutor
 
 import (
 	"bytes"
+	"net/url"
 	"regexp"
 	"strconv"
 	"strings"
 	"time"
 
 	"github.com/PuerkitoBio/goquery"
+	"golang.org/x/net/html"
 
 	"kinodom/internal/source"
 )
@@ -120,4 +122,179 @@ func parseSize(s string) int64 {
 		return 0
 	}
 	return int64(v * sizeUnits[strings.ToUpper(f[1])])
+}
+
+// categoryBySlug — на странице раздачи категория указана слагом (/nauchno_popularnoe).
+var categoryBySlug = map[string]string{
+	"kino": "1", "nashe_kino": "5", "nauchno_popularnoe": "12", "seriali": "4",
+	"nashi_seriali": "16", "tv": "6", "multiki": "7", "anime": "10", "jumor": "15",
+	"inostrannoe": "17", "audio": "2", "games": "8", "soft": "9", "sport": "13",
+	"byt": "14", "knigi": "11", "other": "3",
+}
+
+var (
+	reBytes         = regexp.MustCompile(`\((\d+) Bytes\)`)
+	reKinopoiskLink = regexp.MustCompile(`kinopoisk\.ru/(?:film|series)/(\d+)`)
+	reKinopoiskImg  = regexp.MustCompile(`kinopoisk\.ru/(?:rating/)?(\d+)\.gif`)
+	reIMDb          = regexp.MustCompile(`imdb\.com/title/(tt\d+)`)
+)
+
+// parseTopic разбирает страницу раздачи /torrent/{id}. TopicID и TorrentURL заполняет источник.
+func parseTopic(body []byte, pageURL *url.URL) (source.Details, error) {
+	doc, err := goquery.NewDocumentFromReader(bytes.NewReader(body))
+	if err != nil {
+		return source.Details{}, err
+	}
+	d := source.Details{Release: source.Release{Tracker: Name}}
+	table := doc.Find("table#details").First()
+	if table.Length() == 0 {
+		return d, parseErr("описание раздачи (table#details)")
+	}
+	if d.Title = clean(doc.Find("h1").First().Text()); d.Title == "" {
+		return d, parseErr("название раздачи (h1)")
+	}
+	doc.Find("div#download a").EachWithBreak(func(_ int, a *goquery.Selection) bool {
+		href, _ := a.Attr("href")
+		if strings.HasPrefix(href, "magnet:") {
+			d.Magnet, d.InfoHash = href, infoHash(href)
+			return false
+		}
+		return true
+	})
+	if d.InfoHash == "" {
+		return d, parseErr("magnet-ссылка (div#download)")
+	}
+	// Строки самой таблицы, без таблиц внутри описания (tbody парсер HTML вставляет сам).
+	rows := table.ChildrenFiltered("tbody").ChildrenFiltered("tr")
+	desc := rows.First().ChildrenFiltered("td").Eq(1)
+	d.PosterURL = poster(desc, pageURL)
+	d.KinopoiskID = kinopoiskID(desc)
+	d.IMDbID = firstMatch(reIMDb, desc.Find("a[href]"), "href")
+	d.Description = descriptionText(desc)
+	rows.Each(func(_ int, tr *goquery.Selection) {
+		h := tr.ChildrenFiltered("td.header")
+		if h.Length() == 0 {
+			return
+		}
+		v := h.Next()
+		switch clean(h.Text()) {
+		case "Категория":
+			href, _ := v.Find("a").Attr("href")
+			d.CategoryID = categoryBySlug[strings.Trim(href, "/")]
+		case "Раздают":
+			d.Seeders = firstInt(v.Text())
+		case "Качают":
+			d.Leechers = firstInt(v.Text())
+		case "Добавлен":
+			d.Added = parseTopicDate(v.Text())
+		case "Размер":
+			if m := reBytes.FindStringSubmatch(v.Text()); m != nil {
+				d.Size, _ = strconv.ParseInt(m[1], 10, 64)
+			}
+		}
+	})
+	return d, nil
+}
+
+// poster — первая картинка описания, кроме картинок-рейтингов (s.rutor.info/imdb/pic/…,
+// rating.kinopoisk.ru/…, kinopoisk.ru/rating/…). Так постер находится в 9 раздачах из 9.
+func poster(desc *goquery.Selection, pageURL *url.URL) string {
+	var out string
+	desc.Find("img[src]").EachWithBreak(func(_ int, img *goquery.Selection) bool {
+		src, _ := img.Attr("src")
+		low := strings.ToLower(src)
+		if strings.Contains(low, "rutor.info/imdb/") || strings.Contains(low, "kinopoisk.ru") {
+			return true
+		}
+		if u, err := pageURL.Parse(src); err == nil {
+			out = u.String()
+		}
+		return false
+	})
+	return out
+}
+
+// kinopoiskID — номер фильма на Кинопоиске: из ссылки на фильм или сериал, иначе из картинки
+// рейтинга. С ним каталогу не нужен поиск по названию — это экономит квоту (спека, раздел 8).
+func kinopoiskID(desc *goquery.Selection) string {
+	if id := firstMatch(reKinopoiskLink, desc.Find("a[href]"), "href"); id != "" {
+		return id
+	}
+	return firstMatch(reKinopoiskImg, desc.Find("img[src]"), "src")
+}
+
+// firstMatch — первая подгруппа re в атрибуте attr у элементов sel.
+func firstMatch(re *regexp.Regexp, sel *goquery.Selection, attr string) string {
+	var out string
+	sel.EachWithBreak(func(_ int, s *goquery.Selection) bool {
+		v, _ := s.Attr(attr)
+		if m := re.FindStringSubmatch(v); m != nil {
+			out = m[1]
+			return false
+		}
+		return true
+	})
+	return out
+}
+
+// descriptionText — описание без разметки: <br> и блоки — переводы строк; спойлеры
+// (div.hidewrap: скриншоты, MediaInfo — их HTML лежит текстом в textarea) выброшены.
+func descriptionText(desc *goquery.Selection) string {
+	c := desc.Clone()
+	c.Find("div.hidewrap, script, style, textarea").Remove()
+	var b strings.Builder
+	for _, n := range c.Nodes {
+		writeText(&b, n)
+	}
+	return tidy(b.String())
+}
+
+func writeText(b *strings.Builder, n *html.Node) {
+	switch n.Type {
+	case html.TextNode:
+		// Переводы строк внутри HTML — просто пробелы; строки задают <br> и блоки.
+		b.WriteString(strings.NewReplacer("\r", " ", "\n", " ", "\t", " ").Replace(n.Data))
+		return
+	case html.ElementNode:
+		switch n.Data {
+		case "br":
+			b.WriteString("\n")
+			return
+		case "div", "p", "tr", "li", "table", "h1", "h2", "h3":
+			b.WriteString("\n")
+			defer b.WriteString("\n")
+		}
+	}
+	for ch := n.FirstChild; ch != nil; ch = ch.NextSibling {
+		writeText(b, ch)
+	}
+}
+
+// tidy — пробелы внутри строк схлопнуты, больше одной пустой строки подряд не бывает.
+func tidy(s string) string {
+	var out []string
+	blank := true // пустые строки в начале не нужны
+	for _, line := range strings.Split(s, "\n") {
+		line = clean(line)
+		if line == "" {
+			if !blank {
+				out = append(out, "")
+			}
+			blank = true
+			continue
+		}
+		out = append(out, line)
+		blank = false
+	}
+	return strings.TrimSpace(strings.Join(out, "\n"))
+}
+
+// parseTopicDate — «15-03-2026 0:52:32 (7 месяцев назад)» → время по Москве.
+func parseTopicDate(s string) time.Time {
+	s, _, _ = strings.Cut(clean(s), " (")
+	t, err := time.ParseInLocation("02-01-2006 15:04:05", s, msk)
+	if err != nil {
+		return time.Time{}
+	}
+	return t
 }
