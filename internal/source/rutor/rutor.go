@@ -20,6 +20,7 @@ import (
 
 	"kinodom/internal/netx"
 	"kinodom/internal/source"
+	"kinodom/internal/source/htmltext"
 )
 
 // Встроенные зеркала и адрес .torrent (спека, раздел 5).
@@ -189,7 +190,7 @@ func (r *Rutor) searchIn(ctx context.Context, cat, q string) ([]source.Release, 
 // обрезается до 100 символов.
 func searchQuery(q string) string {
 	q = strings.NewReplacer("/", " ", `\`, " ").Replace(q)
-	q = clean(q)
+	q = htmltext.Clean(q)
 	if rs := []rune(q); len(rs) > 100 {
 		q = strings.TrimSpace(string(rs[:100]))
 	}
