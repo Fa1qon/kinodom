@@ -54,14 +54,14 @@ type Details struct {
 // ErrRemoved — раздачу удалили с трекера (проверять errors.Is). Та же ошибка, что у netx.
 var ErrRemoved = netx.ErrRemoved
 
-// ErrParse — страница пришла, но нужного блока на ней нет: трекер, скорее всего, изменил
+// ParseError — страница пришла, но нужного блока на ней нет: трекер, скорее всего, изменил
 // разметку. Зеркало при этом не меняется (спека, раздел 5).
-type ErrParse struct {
+type ParseError struct {
 	Tracker string // «Rutor»
 	Block   string // «таблица раздач»
 }
 
-func (e *ErrParse) Error() string {
+func (e *ParseError) Error() string {
 	return fmt.Sprintf("%s: на странице не найден блок «%s» — похоже, трекер изменил разметку", e.Tracker, e.Block)
 }
 

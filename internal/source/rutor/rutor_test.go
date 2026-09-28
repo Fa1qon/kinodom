@@ -272,9 +272,9 @@ func TestBrokenMarkupKeepsMirror(t *testing.T) {
 	}
 	r := newRutor(t, s, s.Mirror.URL, spare.Mirror.URL)
 	_, err := r.Top(ctx, "12", 10)
-	var pe *source.ErrParse
+	var pe *source.ParseError
 	if !errors.As(err, &pe) || pe.Block != "таблица раздач" {
-		t.Fatalf("ожидалась ErrParse, получено %v", err)
+		t.Fatalf("ожидалась ParseError, получено %v", err)
 	}
 	if len(spare.Paths()) != 0 || r.Mirror() != s.Mirror.URL {
 		t.Fatal("сломанная разметка сменила зеркало")
@@ -304,5 +304,35 @@ func TestCategories(t *testing.T) {
 	}
 	if len(s.Paths()) != 0 {
 		t.Fatal("за списком категорий не нужно ходить на трекер")
+	}
+}
+
+func TestChallengedMirrorIsSkipped(t *testing.T) {
+	s, cf := rutortest.NewServer(t), rutortest.NewServer(t)
+	cf.Override = func(w http.ResponseWriter, r *http.Request) bool {
+		w.Header().Set("Cf-Mitigated", "challenge")
+		w.WriteHeader(http.StatusForbidden)
+		return true
+	}
+	r := newRutor(t, s, cf.Mirror.URL, s.Mirror.URL)
+	if _, err := r.Top(ctx, "12", 10); err != nil {
+		t.Fatal(err)
+	}
+	if r.Mirror() != s.Mirror.URL {
+		t.Fatalf("текущее зеркало %s", r.Mirror())
+	}
+}
+
+// Список зеркал по умолчанию не делится с клиентами: его правка не меняет работающий источник.
+func TestNewCopiesDefaultMirrors(t *testing.T) {
+	r, err := New(Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	saved := DefaultMirrors[0]
+	DefaultMirrors[0] = "https://evil.example"
+	defer func() { DefaultMirrors[0] = saved }()
+	if r.Mirror() != saved {
+		t.Fatalf("зеркало источника изменилось: %s", r.Mirror())
 	}
 }

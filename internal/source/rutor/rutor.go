@@ -20,6 +20,7 @@ import (
 
 	"kinodom/internal/netx"
 	"kinodom/internal/source"
+	"kinodom/internal/source/htmltext"
 )
 
 // Встроенные зеркала и адрес .torrent (спека, раздел 5).
@@ -59,9 +60,11 @@ type Rutor struct {
 var _ source.Source = (*Rutor)(nil)
 
 func New(o Options) (*Rutor, error) {
+	// Копия: список по умолчанию — общий, его правка не должна менять работающий источник.
 	if len(o.Mirrors) == 0 {
 		o.Mirrors = DefaultMirrors
 	}
+	o.Mirrors = slices.Clone(o.Mirrors)
 	if o.DownloadBase == "" {
 		o.DownloadBase = DefaultDownloadBase
 	}
@@ -74,7 +77,7 @@ func New(o Options) (*Rutor, error) {
 	}
 	c, err := netx.NewClient(netx.Options{
 		Name: title, Mirrors: o.Mirrors, ExtraHosts: []string{dl.Host},
-		Proxy: o.Proxy, UserAgent: userAgent, Classify: classify,
+		Proxy: o.Proxy, UserAgent: userAgent, Classify: classify, ChallengeIsMirrorDown: true,
 		Rate: o.Rate, Timeout: o.Timeout, Log: o.Log,
 	})
 	if err != nil {
@@ -187,7 +190,7 @@ func (r *Rutor) searchIn(ctx context.Context, cat, q string) ([]source.Release, 
 // обрезается до 100 символов.
 func searchQuery(q string) string {
 	q = strings.NewReplacer("/", " ", `\`, " ").Replace(q)
-	q = clean(q)
+	q = htmltext.Clean(q)
 	if rs := []rune(q); len(rs) > 100 {
 		q = strings.TrimSpace(string(rs[:100]))
 	}

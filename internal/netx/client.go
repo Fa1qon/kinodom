@@ -20,7 +20,7 @@ import (
 
 // Verdict — вывод об ответе трекера (спека, раздел 5, «Классификация ответа трекера»).
 // «Каркас есть, нужного блока нет» сюда не входит: это ошибка разбора страницы
-// (source.ErrParse), её возвращает парсер трекера, и зеркало при ней не меняется.
+// (source.ParseError), её возвращает парсер трекера, и зеркало при ней не меняется.
 type Verdict int
 
 const (
@@ -51,15 +51,20 @@ type Page struct {
 }
 
 type Options struct {
-	Name       string        // «Rutor» — для текстов ошибок и журнала
-	Mirrors    []string      // базовые адреса зеркал по порядку предпочтения: "https://rutor.info"
-	ExtraHosts []string      // другие свои хосты (d.rutor.info): редирект туда — не «чужой сайт»
-	Proxy      string        // прокси из настроек; пусто — напрямую
-	UserAgent  string        // пусто — User-Agent Go по умолчанию
-	Classify   ClassifyFunc  // nil — всё, что прошло общие проверки, считается OK
-	Rate       rate.Limit    // запросов в секунду на трекер; 0 — 1 (спека, раздел 5)
-	Timeout    time.Duration // на одну попытку вместе с чтением ответа; 0 — 90 с
-	Log        *slog.Logger  // nil — без журнала
+	Name       string       // «Rutor» — для текстов ошибок и журнала
+	Mirrors    []string     // базовые адреса зеркал по порядку предпочтения: "https://rutor.info"
+	ExtraHosts []string     // другие свои хосты (d.rutor.info): редирект туда — не «чужой сайт»
+	Proxy      string       // прокси из настроек; пусто — напрямую
+	UserAgent  string       // пусто — User-Agent Go по умолчанию
+	Classify   ClassifyFunc // nil — всё, что прошло общие проверки, считается OK
+	// ChallengeIsMirrorDown — проверка Cloudflare значит «зеркало недоступно»: для трекеров,
+	// которым пропуск не добыть (у Rutor нет Edge), лучше перейти на другое зеркало.
+	ChallengeIsMirrorDown bool
+	Rate                  rate.Limit     // запросов в секунду на трекер; 0 — 1 (спека, раздел 5)
+	Timeout               time.Duration  // на одну попытку вместе с чтением ответа; 0 — 90 с
+	Log                   *slog.Logger   // nil — без журнала
+	Jar                   http.CookieJar // nil — без cookie
+	Limiter               *rate.Limiter  // общий ограничитель с другим клиентом того же трекера; nil — свой по Rate
 }
 
 // Client — HTTP-клиент одного трекера: перебор зеркал, классификация ответов, повтор,
@@ -94,7 +99,11 @@ func NewClient(o Options) (*Client, error) {
 	if err != nil {
 		return nil, err
 	}
-	c := &Client{o: o, http: &http.Client{Transport: tr}, lim: rate.NewLimiter(o.Rate, 1), own: map[string]bool{}}
+	lim := o.Limiter
+	if lim == nil {
+		lim = rate.NewLimiter(o.Rate, 1)
+	}
+	c := &Client{o: o, http: &http.Client{Transport: tr, Jar: o.Jar}, lim: lim, own: map[string]bool{}}
 	for _, m := range o.Mirrors {
 		u, err := url.Parse(m)
 		if err != nil || u.Host == "" {
@@ -118,7 +127,20 @@ func (c *Client) Mirror() string {
 // GetOption — необязательный параметр Get.
 type GetOption func(*getOpts)
 
-type getOpts struct{ noLimit bool }
+type getOpts struct {
+	noLimit, noClassify bool
+	method, form        string // "" — GET; POST — с телом формы
+}
+
+// WithoutClassify — вернуть страницу без признаков трекера (общие проверки остаются): ответ
+// разбирает сам вызывающий, например страницу после входа.
+func WithoutClassify() GetOption { return func(g *getOpts) { g.noClassify = true } }
+
+// Post — как Get, но POST формы (application/x-www-form-urlencoded). Тело — строкой: при
+// повторе и на другом зеркале запрос собирается заново.
+func (c *Client) Post(ctx context.Context, path, form string, opts ...GetOption) (*Page, error) {
+	return c.Get(ctx, path, append(opts, func(g *getOpts) { g.method, g.form = http.MethodPost, form })...)
+}
 
 // WithoutLimit — запрос мимо ограничителя «1 в секунду». Только для параллельного поиска
 // Rutor (спека, разделы 5 и 7): там одновременно идут не больше трёх запросов.
@@ -140,7 +162,11 @@ func (c *Client) Get(ctx context.Context, path string, opts ...GetOption) (*Page
 		o(&g)
 	}
 	var down []string // почему не ответило каждое зеркало — для текста ошибки
-	for _, t := range c.targets(path) {
+	targets := c.targets(path)
+	if g.method == http.MethodPost {
+		targets = targets[:1] // форму — только на текущее зеркало: вход на другом — уже другая попытка
+	}
+	for _, t := range targets {
 		host := hostOf(t.url)
 		p, err := c.load(ctx, t.url, g)
 		var de *downError
@@ -152,7 +178,7 @@ func (c *Client) Get(ctx context.Context, path string, opts ...GetOption) (*Page
 		if err != nil {
 			return nil, fmt.Errorf("%s: %w", c.o.Name, err)
 		}
-		v, reason := c.judge(p)
+		v, reason := c.judge(p, g)
 		if v == MirrorDown {
 			down = append(down, host+" — "+reason)
 			c.o.Log.Warn(c.o.Name+": зеркало не отвечает", "mirror", host, "reason", reason)
@@ -194,18 +220,21 @@ func (c *Client) targets(path string) []target {
 }
 
 // judge — сначала общие признаки из спеки, затем признаки трекера.
-func (c *Client) judge(p *Page) (Verdict, string) {
+func (c *Client) judge(p *Page, g getOpts) (Verdict, string) {
 	if !c.own[strings.ToLower(p.URL.Host)] {
 		return MirrorDown, "перенаправляет на чужой сайт " + p.URL.Host
 	}
 	// Проверка Cloudflare приходит с кодом 403 или 503 — её смотрим раньше, чем 5xx.
 	if isChallenge(p) {
+		if c.o.ChallengeIsMirrorDown {
+			return MirrorDown, "проверка Cloudflare"
+		}
 		return Challenge, ""
 	}
 	if p.Status >= 500 || p.Status == http.StatusUnavailableForLegalReasons {
 		return MirrorDown, fmt.Sprintf("ответ %d", p.Status)
 	}
-	if c.o.Classify == nil {
+	if c.o.Classify == nil || g.noClassify {
 		return OK, ""
 	}
 	v := c.o.Classify(p)
@@ -238,6 +267,10 @@ func (c *Client) load(ctx context.Context, rawURL string, g getOpts) (*Page, err
 	if !errors.As(err, &re) {
 		return p, err
 	}
+	// Форму не повторяем: сервер мог её уже принять (у Rutracker лишний вход приближает капчу).
+	if g.method == http.MethodPost {
+		return nil, &downError{re.reason}
+	}
 	c.o.Log.Info(c.o.Name+": повторяю запрос", "url", rawURL, "reason", re.reason)
 	p, err = c.once(ctx, rawURL, g)
 	if errors.As(err, &re) {
@@ -256,9 +289,16 @@ func (c *Client) once(ctx context.Context, rawURL string, g getOpts) (*Page, err
 	}
 	actx, cancel := context.WithTimeout(ctx, c.o.Timeout)
 	defer cancel()
-	req, err := http.NewRequestWithContext(actx, http.MethodGet, rawURL, nil)
+	method, reqBody := http.MethodGet, io.Reader(nil)
+	if g.method == http.MethodPost {
+		method, reqBody = http.MethodPost, strings.NewReader(g.form)
+	}
+	req, err := http.NewRequestWithContext(actx, method, rawURL, reqBody)
 	if err != nil {
 		return nil, err
+	}
+	if method == http.MethodPost {
+		req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	}
 	if c.o.UserAgent != "" {
 		req.Header.Set("User-Agent", c.o.UserAgent)

@@ -9,9 +9,9 @@ import (
 	"time"
 
 	"github.com/PuerkitoBio/goquery"
-	"golang.org/x/net/html"
 
 	"kinodom/internal/source"
+	"kinodom/internal/source/htmltext"
 )
 
 // Name — имя источника в каталоге; title — в текстах ошибок.
@@ -26,12 +26,11 @@ var msk = time.FixedZone("MSK", 3*60*60)
 var (
 	reTopicHref = regexp.MustCompile(`^/torrent/(\d+)(?:/|$)`)
 	reBtih      = regexp.MustCompile(`(?i)btih:([0-9a-f]{40})`)
-	reInt       = regexp.MustCompile(`\d+`)
 	months      = map[string]time.Month{"Янв": 1, "Фев": 2, "Мар": 3, "Апр": 4, "Май": 5, "Июн": 6, "Июл": 7, "Авг": 8, "Сен": 9, "Окт": 10, "Ноя": 11, "Дек": 12}
 	sizeUnits   = map[string]float64{"B": 1, "KB": 1 << 10, "MB": 1 << 20, "GB": 1 << 30, "TB": 1 << 40}
 )
 
-func parseErr(block string) error { return &source.ErrParse{Tracker: title, Block: block} }
+func parseErr(block string) error { return &source.ParseError{Tracker: title, Block: block} }
 
 // parseList разбирает таблицы раздач (div#index) страниц /browse и /search: строки tr.gai
 // и tr.tum. Таблица с заголовком (tr.backgr) без строк — «ничего не найдено», не ошибка.
@@ -64,35 +63,27 @@ func parseRow(tr *goquery.Selection) (source.Release, bool) {
 	if tds.Length() < 4 {
 		return source.Release{}, false
 	}
-	r := source.Release{Tracker: Name, Added: parseListDate(clean(tds.Eq(0).Text()))}
+	r := source.Release{Tracker: Name, Added: parseListDate(htmltext.Clean(tds.Eq(0).Text()))}
 	tds.Eq(1).Find("a").Each(func(_ int, a *goquery.Selection) {
 		href, _ := a.Attr("href")
 		if m := reTopicHref.FindStringSubmatch(href); m != nil {
-			r.TopicID, r.Title = m[1], clean(a.Text())
+			r.TopicID, r.Title = m[1], htmltext.Clean(a.Text())
 		} else if strings.HasPrefix(href, "magnet:") {
 			r.InfoHash = infoHash(href)
 		}
 	})
-	r.Size = parseSize(clean(tds.Eq(tds.Length() - 2).Text()))
+	r.Size = parseSize(htmltext.Clean(tds.Eq(tds.Length() - 2).Text()))
 	peers := tds.Last()
-	r.Seeders = firstInt(peers.Find("span.green").Text())
-	r.Leechers = firstInt(peers.Find("span.red").Text())
+	r.Seeders = htmltext.FirstInt(peers.Find("span.green").Text())
+	r.Leechers = htmltext.FirstInt(peers.Find("span.red").Text())
 	return r, r.TopicID != "" && r.Title != ""
 }
-
-// clean — текст с одиночными пробелами (strings.Fields режет и по неразрывному пробелу).
-func clean(s string) string { return strings.Join(strings.Fields(s), " ") }
 
 func infoHash(magnet string) string {
 	if m := reBtih.FindStringSubmatch(magnet); m != nil {
 		return strings.ToLower(m[1])
 	}
 	return ""
-}
-
-func firstInt(s string) int {
-	n, _ := strconv.Atoi(reInt.FindString(s))
-	return n
 }
 
 // parseListDate — «15 Мар 26» → 15.03.2026 по Москве; непонятная дата — пустая.
@@ -150,7 +141,7 @@ func parseTopic(body []byte, pageURL *url.URL) (source.Details, error) {
 	if table.Length() == 0 {
 		return d, parseErr("описание раздачи (table#details)")
 	}
-	if d.Title = clean(doc.Find("h1").First().Text()); d.Title == "" {
+	if d.Title = htmltext.Clean(doc.Find("h1").First().Text()); d.Title == "" {
 		return d, parseErr("название раздачи (h1)")
 	}
 	doc.Find("div#download a").EachWithBreak(func(_ int, a *goquery.Selection) bool {
@@ -169,22 +160,22 @@ func parseTopic(body []byte, pageURL *url.URL) (source.Details, error) {
 	desc := rows.First().ChildrenFiltered("td").Eq(1)
 	d.PosterURL = poster(desc, pageURL)
 	d.KinopoiskID = kinopoiskID(desc)
-	d.IMDbID = firstMatch(reIMDb, desc.Find("a[href]"), "href")
-	d.Description = descriptionText(desc)
+	d.IMDbID = htmltext.FirstMatch(reIMDb, desc.Find("a[href]"), "href")
+	d.Description = htmltext.Text(desc, "div.hidewrap, script, style, textarea")
 	rows.Each(func(_ int, tr *goquery.Selection) {
 		h := tr.ChildrenFiltered("td.header")
 		if h.Length() == 0 {
 			return
 		}
 		v := h.Next()
-		switch clean(h.Text()) {
+		switch htmltext.Clean(h.Text()) {
 		case "Категория":
 			href, _ := v.Find("a").Attr("href")
 			d.CategoryID = categoryBySlug[strings.Trim(href, "/")]
 		case "Раздают":
-			d.Seeders = firstInt(v.Text())
+			d.Seeders = htmltext.FirstInt(v.Text())
 		case "Качают":
-			d.Leechers = firstInt(v.Text())
+			d.Leechers = htmltext.FirstInt(v.Text())
 		case "Добавлен":
 			d.Added = parseTopicDate(v.Text())
 		case "Размер":
@@ -217,81 +208,15 @@ func poster(desc *goquery.Selection, pageURL *url.URL) string {
 // kinopoiskID — номер фильма на Кинопоиске: из ссылки на фильм или сериал, иначе из картинки
 // рейтинга. С ним каталогу не нужен поиск по названию — это экономит квоту (спека, раздел 8).
 func kinopoiskID(desc *goquery.Selection) string {
-	if id := firstMatch(reKinopoiskLink, desc.Find("a[href]"), "href"); id != "" {
+	if id := htmltext.FirstMatch(reKinopoiskLink, desc.Find("a[href]"), "href"); id != "" {
 		return id
 	}
-	return firstMatch(reKinopoiskImg, desc.Find("img[src]"), "src")
-}
-
-// firstMatch — первая подгруппа re в атрибуте attr у элементов sel.
-func firstMatch(re *regexp.Regexp, sel *goquery.Selection, attr string) string {
-	var out string
-	sel.EachWithBreak(func(_ int, s *goquery.Selection) bool {
-		v, _ := s.Attr(attr)
-		if m := re.FindStringSubmatch(v); m != nil {
-			out = m[1]
-			return false
-		}
-		return true
-	})
-	return out
-}
-
-// descriptionText — описание без разметки: <br> и блоки — переводы строк; спойлеры
-// (div.hidewrap: скриншоты, MediaInfo — их HTML лежит текстом в textarea) выброшены.
-func descriptionText(desc *goquery.Selection) string {
-	c := desc.Clone()
-	c.Find("div.hidewrap, script, style, textarea").Remove()
-	var b strings.Builder
-	for _, n := range c.Nodes {
-		writeText(&b, n)
-	}
-	return tidy(b.String())
-}
-
-func writeText(b *strings.Builder, n *html.Node) {
-	switch n.Type {
-	case html.TextNode:
-		// Переводы строк внутри HTML — просто пробелы; строки задают <br> и блоки.
-		b.WriteString(strings.NewReplacer("\r", " ", "\n", " ", "\t", " ").Replace(n.Data))
-		return
-	case html.ElementNode:
-		switch n.Data {
-		case "br":
-			b.WriteString("\n")
-			return
-		case "div", "p", "tr", "li", "table", "h1", "h2", "h3":
-			b.WriteString("\n")
-			defer b.WriteString("\n")
-		}
-	}
-	for ch := n.FirstChild; ch != nil; ch = ch.NextSibling {
-		writeText(b, ch)
-	}
-}
-
-// tidy — пробелы внутри строк схлопнуты, больше одной пустой строки подряд не бывает.
-func tidy(s string) string {
-	var out []string
-	blank := true // пустые строки в начале не нужны
-	for _, line := range strings.Split(s, "\n") {
-		line = clean(line)
-		if line == "" {
-			if !blank {
-				out = append(out, "")
-			}
-			blank = true
-			continue
-		}
-		out = append(out, line)
-		blank = false
-	}
-	return strings.TrimSpace(strings.Join(out, "\n"))
+	return htmltext.FirstMatch(reKinopoiskImg, desc.Find("img[src]"), "src")
 }
 
 // parseTopicDate — «15-03-2026 0:52:32 (7 месяцев назад)» → время по Москве.
 func parseTopicDate(s string) time.Time {
-	s, _, _ = strings.Cut(clean(s), " (")
+	s, _, _ = strings.Cut(htmltext.Clean(s), " (")
 	t, err := time.ParseInLocation("02-01-2006 15:04:05", s, msk)
 	if err != nil {
 		return time.Time{}

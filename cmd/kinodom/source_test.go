@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"kinodom/internal/source/rutor/rutortest"
+	"kinodom/internal/source/rutracker/rutrackertest"
 )
 
 func runSource(t *testing.T, args ...string) (code int, stdout, stderr string) {
@@ -61,7 +62,7 @@ func TestSourceRutorReportsRemoved(t *testing.T) {
 }
 
 func TestSourceUsage(t *testing.T) {
-	for _, args := range [][]string{{"source"}, {"source", "rutracker", "top", "1"}, {"source", "rutor", "top"}, {"source", "rutor", "dance"}} {
+	for _, args := range [][]string{{"source"}, {"source", "kinozal", "top", "1"}, {"source", "rutor", "top"}, {"source", "rutor", "dance"}} {
 		var out, errb bytes.Buffer
 		if code := runCLI(args, &out, &errb); code != 2 || !strings.Contains(errb.String(), "Использование") {
 			t.Errorf("%v: код %d, %q", args, code, errb.String())
@@ -82,5 +83,53 @@ func TestSourceRutorSearchPartial(t *testing.T) {
 	code, out, errOut := runSource(t, "search", "--mirror", s.Mirror.URL, "Матрица")
 	if code != 0 || !strings.Contains(out, "Найдено") || !strings.Contains(errOut, "поиск прошёл не везде") {
 		t.Fatalf("код %d\n%s\n%s", code, out, errOut)
+	}
+}
+
+func runRutracker(t *testing.T, s *rutrackertest.Server, args ...string) (int, string, string) {
+	t.Helper()
+	base := []string{"source", "rutracker", args[0], "--mirror", s.Forum.URL, "--api", s.API.URL, "--feed", s.Feed.URL, "--no-edge"}
+	var out, errb bytes.Buffer
+	code := runCLI(append(base, args[1:]...), &out, &errb)
+	return code, out.String(), errb.String()
+}
+
+func TestSourceRutrackerAPI(t *testing.T) {
+	s := rutrackertest.NewServer(t)
+	code, out, errOut := runRutracker(t, s, "categories")
+	if code != 0 || !strings.Contains(out, "[Док] Космос") {
+		t.Fatalf("categories: код %d\n%s\n%s", code, out, errOut)
+	}
+	code, out, errOut = runRutracker(t, s, "top", "--limit", "3", "2076")
+	if code != 0 || !strings.Contains(out, "Найдено 100 раздач") {
+		t.Fatalf("top: код %d\n%s\n%s", code, out, errOut)
+	}
+	code, out, errOut = runRutracker(t, s, "recent", "--limit", "2", "313")
+	if code != 0 || !strings.Contains(out, "Иностранец / The Foreigner") {
+		t.Fatalf("recent: код %d\n%s\n%s", code, out, errOut)
+	}
+}
+
+func TestSourceRutrackerDetailsAndSearch(t *testing.T) {
+	s := rutrackertest.NewServer(t)
+	s.Login, s.Password = "user", "pass"
+	code, out, errOut := runRutracker(t, s, "details", "6914565")
+	if code != 0 || !strings.Contains(out, "Экстрасенсы") {
+		t.Fatalf("details: код %d\n%s\n%s", code, out, errOut)
+	}
+	t.Setenv("KINODOM_RUTRACKER_LOGIN", "user")
+	t.Setenv("KINODOM_RUTRACKER_PASSWORD", "pass")
+	code, out, errOut = runRutracker(t, s, "search", "--limit", "3", "космос")
+	if code != 0 || !strings.Contains(out, "Космос") {
+		t.Fatalf("search: код %d\n%s\n%s", code, out, errOut)
+	}
+}
+
+func TestSourceRutrackerSearchNeedsCredentials(t *testing.T) {
+	s := rutrackertest.NewServer(t)
+	t.Setenv("KINODOM_RUTRACKER_LOGIN", "")
+	code, _, errOut := runRutracker(t, s, "search", "космос")
+	if code != 1 || !strings.Contains(errOut, "KINODOM_RUTRACKER_LOGIN") {
+		t.Fatalf("код %d: %s", code, errOut)
 	}
 }
