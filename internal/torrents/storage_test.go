@@ -2,7 +2,9 @@ package torrents
 
 import (
 	"os"
+	"path/filepath"
 	"testing"
+	"time"
 
 	g "github.com/anacrolix/generics"
 	"github.com/anacrolix/torrent"
@@ -71,5 +73,47 @@ func TestPrepStorageCreatesSparseFilesAndPremarks(t *testing.T) {
 		if err != nil || !c.Ok || c.Complete {
 			t.Fatalf("кусок %d: %+v, %v — ожидалось «известно, что не скачан»", i, c, err)
 		}
+	}
+}
+
+// Человек удалил папку с фильмом в Проводнике. После перезапуска движок не должен считать
+// файл скачанным (и раздавать нули): отметки его кусков сбрасываются, файл качается заново.
+func TestDeletedFileIsNotConsideredDownloadedAfterRestart(t *testing.T) {
+	src := t.TempDir()
+	mi, _ := torrenttest.MakeTorrent(t, src, "film.mkv", 64<<10, torrenttest.File{Path: "film.mkv", Size: 600_000})
+	seeder, _ := torrenttest.NewSeeder(t, src, mi)
+	info, _ := mi.UnmarshalInfo()
+	down, state := t.TempDir(), t.TempDir()
+
+	e1, err := NewEngine(Config{DownloadsDir: down, StateDir: state, Offline: true, Log: quiet()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t1, _ := e1.Client().AddTorrent(&mi)
+	<-t1.GotInfo()
+	t1.AddClientPeer(seeder)
+	t1.DownloadAll()
+	deadline := time.Now().Add(15 * time.Second)
+	for t1.BytesCompleted() < info.TotalLength() {
+		if time.Now().After(deadline) {
+			t.Fatal("файл не скачался")
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	path := enginePath(down, &info, mi.HashInfoBytes(), info.UpvertedFiles()[0])
+	e1.Close()
+	if err := os.RemoveAll(filepath.Dir(path)); err != nil {
+		t.Fatal(err)
+	}
+
+	e2, err := NewEngine(Config{DownloadsDir: down, StateDir: state, Offline: true, Log: quiet()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer e2.Close()
+	t2, _ := e2.Client().AddTorrent(&mi)
+	<-t2.GotInfo()
+	if got := t2.BytesCompleted(); got != 0 {
+		t.Fatalf("файла нет, а движок считает скачанными %d байт", got)
 	}
 }

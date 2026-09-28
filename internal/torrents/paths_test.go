@@ -54,3 +54,18 @@ func TestTorrentDirAndEnginePath(t *testing.T) {
 		t.Fatalf("enginePath = %q, ожидалось %q", p, want)
 	}
 }
+
+// Два длинных имени, отличающиеся только концом (номер серии), не должны склеиться в один файл.
+func TestLongNamesDifferingOnlyInTailStayDistinct(t *testing.T) {
+	prefix := strings.Repeat("Очень длинное название сериала ", 4)
+	a := sanitizeComponent(prefix + "- 01.mkv")
+	b := sanitizeComponent(prefix + "- 02.mkv")
+	if a == b {
+		t.Fatalf("серии склеились в одно имя: %q", a)
+	}
+	for _, s := range []string{a, b} {
+		if utf8.RuneCountInString(s) > maxComponentRunes || !strings.HasSuffix(s, ".mkv") {
+			t.Fatalf("неверное имя: %q", s)
+		}
+	}
+}
