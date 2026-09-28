@@ -504,3 +504,27 @@ func TestSharedLimiter(t *testing.T) {
 		t.Fatalf("4 запроса через общий ограничитель 10/с прошли за %v", d)
 	}
 }
+
+// Форму (вход на трекер) не отправляют второй раз: ни повтором после таймаута, ни на другое
+// зеркало — у Rutracker каждая лишняя попытка входа приближает капчу.
+func TestPostIsNotRepeated(t *testing.T) {
+	var posts atomic.Int32
+	slow := newSite(t, func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodPost {
+			posts.Add(1)
+			io.ReadAll(r.Body) // пока тело не прочитано, сервер не замечает ухода клиента
+		}
+		hang(w, r)
+	})
+	other := newSite(t, page(trackerPage))
+	c, err := NewClient(Options{Name: "Трекер", Mirrors: []string{slow.URL, other.URL}, Classify: testClassify, Rate: 1000, Timeout: 200 * time.Millisecond})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := c.Post(context.Background(), "/login", "a=1", WithoutClassify()); err == nil {
+		t.Fatal("ошибки нет")
+	}
+	if posts.Load() != 1 || other.hits.Load() != 0 {
+		t.Fatalf("форма ушла %d раз, на другое зеркало — %d", posts.Load(), other.hits.Load())
+	}
+}

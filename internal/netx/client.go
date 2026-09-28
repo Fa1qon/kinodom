@@ -162,7 +162,11 @@ func (c *Client) Get(ctx context.Context, path string, opts ...GetOption) (*Page
 		o(&g)
 	}
 	var down []string // почему не ответило каждое зеркало — для текста ошибки
-	for _, t := range c.targets(path) {
+	targets := c.targets(path)
+	if g.method == http.MethodPost {
+		targets = targets[:1] // форму — только на текущее зеркало: вход на другом — уже другая попытка
+	}
+	for _, t := range targets {
 		host := hostOf(t.url)
 		p, err := c.load(ctx, t.url, g)
 		var de *downError
@@ -262,6 +266,10 @@ func (c *Client) load(ctx context.Context, rawURL string, g getOpts) (*Page, err
 	var re *retryError
 	if !errors.As(err, &re) {
 		return p, err
+	}
+	// Форму не повторяем: сервер мог её уже принять (у Rutracker лишний вход приближает капчу).
+	if g.method == http.MethodPost {
+		return nil, &downError{re.reason}
 	}
 	c.o.Log.Info(c.o.Name+": повторяю запрос", "url", rawURL, "reason", re.reason)
 	p, err = c.once(ctx, rawURL, g)
