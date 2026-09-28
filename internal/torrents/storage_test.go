@@ -102,8 +102,16 @@ func TestDeletedFileIsNotConsideredDownloadedAfterRestart(t *testing.T) {
 	}
 	path := enginePath(down, &info, mi.HashInfoBytes(), info.UpvertedFiles()[0])
 	e1.Close()
-	if err := os.RemoveAll(filepath.Dir(path)); err != nil {
-		t.Fatal(err)
+	// Только что записанный файл Windows может ещё мгновение держать (антивирус, дочитывание
+	// кусков) — удаление повторяется, как и в процедуре удаления этапа 6.
+	for deadline := time.Now().Add(3 * time.Second); ; time.Sleep(20 * time.Millisecond) {
+		err := os.RemoveAll(filepath.Dir(path))
+		if err == nil {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal(err)
+		}
 	}
 
 	e2, err := NewEngine(Config{DownloadsDir: down, StateDir: state, Offline: true, Log: quiet()})
