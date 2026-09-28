@@ -54,7 +54,6 @@ type Options struct {
 type Rutor struct {
 	c        *netx.Client
 	download string
-	log      *slog.Logger
 }
 
 var _ source.Source = (*Rutor)(nil)
@@ -81,7 +80,7 @@ func New(o Options) (*Rutor, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &Rutor{c: c, download: strings.TrimRight(o.DownloadBase, "/"), log: o.Log}, nil
+	return &Rutor{c: c, download: strings.TrimRight(o.DownloadBase, "/")}, nil
 }
 
 func (r *Rutor) Name() string { return Name }
@@ -119,8 +118,8 @@ func (r *Rutor) Top(ctx context.Context, categoryID string, limit int) ([]source
 }
 
 // Search ищет по видеокатегориям: шесть запросов, не больше трёх одновременно и мимо
-// ограничителя «1 в секунду» (спека, раздел 7). Часть категорий не ответила — возвращаем
-// найденное в остальных (и пишем в журнал); не ответила ни одна — ошибку.
+// ограничителя «1 в секунду» (спека, раздел 7). Часть категорий не ответила или вышло время —
+// возвращаем найденное вместе с *source.PartialError; не ответила ни одна — только ошибку.
 func (r *Rutor) Search(ctx context.Context, query string) ([]source.Release, error) {
 	q := searchQuery(query)
 	if q == "" {
@@ -157,10 +156,14 @@ func (r *Rutor) Search(ctx context.Context, query string) ([]source.Release, err
 	if len(failed) == len(searchCategories) {
 		return nil, failed[0]
 	}
-	for _, err := range failed {
-		r.log.Warn("Rutor: поиск в одной из категорий не удался", "err", err)
-	}
 	sortBySeeders(out)
+	if len(failed) > 0 {
+		cause := failed[0]
+		if ctx.Err() != nil {
+			cause = ctx.Err() // вышло время на весь поиск — это главное, что нужно знать каталогу
+		}
+		return out, &source.PartialError{Tracker: title, Failed: len(failed), Total: len(searchCategories), Err: cause}
+	}
 	return out, nil
 }
 

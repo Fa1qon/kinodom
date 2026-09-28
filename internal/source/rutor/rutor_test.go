@@ -10,6 +10,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"kinodom/internal/netx"
 	"kinodom/internal/source"
@@ -141,13 +142,37 @@ func TestSearchPartialFailureKeepsResults(t *testing.T) {
 		return false
 	}
 	rs, err := newRutor(t, s).Search(ctx, "Матрица")
-	if err != nil || len(rs) == 0 {
-		t.Fatalf("найдено %d, ошибка %v — результаты других категорий потеряны", len(rs), err)
+	if len(rs) == 0 {
+		t.Fatalf("результаты других категорий потеряны: %v", err)
+	}
+	// Найденное приходит вместе с ошибкой: каталог покажет его, но не сочтёт поиск полным.
+	var pe *source.PartialError
+	if !errors.As(err, &pe) || pe.Failed != 1 || pe.Total != 6 || !errors.Is(err, netx.ErrTrackerDown) {
+		t.Fatalf("ожидалась PartialError (1 из 6, трекер недоступен), получено %v", err)
 	}
 	for _, r := range rs {
 		if r.CategoryID == "12" {
 			t.Fatal("результат из категории, которая не ответила")
 		}
+	}
+}
+
+// Время на поиск вышло посередине — найденное не теряется, но видно, что поиск неполный.
+func TestSearchCancelledReturnsPartialResults(t *testing.T) {
+	s := rutortest.NewServer(t)
+	s.Override = func(w http.ResponseWriter, r *http.Request) bool {
+		if strings.HasPrefix(r.URL.Path, "/search/0/12/") {
+			<-r.Context().Done() // категория молчит, пока клиент не бросит запрос
+			return true
+		}
+		return false
+	}
+	cctx, cancel := context.WithTimeout(ctx, 500*time.Millisecond)
+	defer cancel()
+	rs, err := newRutor(t, s).Search(cctx, "Матрица")
+	var pe *source.PartialError
+	if len(rs) == 0 || !errors.As(err, &pe) || !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("найдено %d, ошибка %v — нужна PartialError с причиной «время вышло»", len(rs), err)
 	}
 }
 

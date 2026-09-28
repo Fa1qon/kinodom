@@ -16,7 +16,7 @@ type Source interface {
 	Name() string
 	Categories(ctx context.Context) ([]Category, error)                       // разделы для настроек
 	Top(ctx context.Context, categoryID string, limit int) ([]Release, error) // по раздающим, убыв.
-	Search(ctx context.Context, query string) ([]Release, error)              // только видеокатегории
+	Search(ctx context.Context, query string) ([]Release, error)              // только видеокатегории; найденное может прийти вместе с *PartialError
 	Details(ctx context.Context, topicID string) (Details, error)             // страница раздачи
 }
 
@@ -64,3 +64,19 @@ type ErrParse struct {
 func (e *ErrParse) Error() string {
 	return fmt.Sprintf("%s: на странице не найден блок «%s» — похоже, трекер изменил разметку", e.Tracker, e.Block)
 }
+
+// PartialError — поиск прошёл не везде: часть запросов не ответила или вышло время. Search
+// возвращает найденное вместе с этой ошибкой: показать можно, но считать поиск полным и класть
+// в кэш как полный — нельзя. errors.Is и errors.As доходят до причины (в том числе до
+// context.DeadlineExceeded).
+type PartialError struct {
+	Tracker       string // «Rutor»
+	Failed, Total int    // сколько запросов не ответило из скольких
+	Err           error  // причина: отмена или первая ошибка
+}
+
+func (e *PartialError) Error() string {
+	return fmt.Sprintf("%s: поиск прошёл не везде — не ответили %d из %d категорий: %v", e.Tracker, e.Failed, e.Total, e.Err)
+}
+
+func (e *PartialError) Unwrap() error { return e.Err }

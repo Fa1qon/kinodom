@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
@@ -66,10 +67,14 @@ func cmdSource(args []string, stdout, stderr io.Writer) int {
 		printReleases(stdout, rs, *limit)
 	case "search":
 		rs, err := src.Search(ctx, strings.Join(fs.Args(), " "))
-		if err != nil {
+		var partial *source.PartialError
+		if err != nil && !errors.As(err, &partial) {
 			return fail(stderr, err)
 		}
 		printReleases(stdout, rs, *limit)
+		if partial != nil {
+			fmt.Fprintln(stderr, "Внимание:", partial)
+		}
 	case "details":
 		d, err := src.Details(ctx, fs.Arg(0))
 		if err != nil {

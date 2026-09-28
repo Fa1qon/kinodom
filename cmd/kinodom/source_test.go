@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"net/http"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -65,5 +66,21 @@ func TestSourceUsage(t *testing.T) {
 		if code := runCLI(args, &out, &errb); code != 2 || !strings.Contains(errb.String(), "Использование") {
 			t.Errorf("%v: код %d, %q", args, code, errb.String())
 		}
+	}
+}
+
+// Поиск прошёл не везде — найденное показывается, а в поток ошибок идёт предупреждение.
+func TestSourceRutorSearchPartial(t *testing.T) {
+	s := rutortest.NewServer(t)
+	s.Override = func(w http.ResponseWriter, r *http.Request) bool {
+		if strings.HasPrefix(r.URL.Path, "/search/0/12/") {
+			w.WriteHeader(http.StatusBadGateway)
+			return true
+		}
+		return false
+	}
+	code, out, errOut := runSource(t, "search", "--mirror", s.Mirror.URL, "Матрица")
+	if code != 0 || !strings.Contains(out, "Найдено") || !strings.Contains(errOut, "поиск прошёл не везде") {
+		t.Fatalf("код %d\n%s\n%s", code, out, errOut)
 	}
 }
