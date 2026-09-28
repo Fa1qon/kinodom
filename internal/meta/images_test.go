@@ -133,3 +133,20 @@ func TestHandlerRejectsBadKeys(t *testing.T) {
 		}
 	}
 }
+
+// Хостинги картинок отвечают 404 на User-Agent Go по умолчанию (fastpic, проверено вживую,
+// исследование, раздел 13) — картинки качаются с UA браузера.
+func TestFetchSendsBrowserUserAgent(t *testing.T) {
+	pic := pngBytes(t)
+	s := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasPrefix(r.UserAgent(), "Go-http-client") {
+			http.NotFound(w, r)
+			return
+		}
+		w.Write(pic)
+	}))
+	t.Cleanup(s.Close)
+	if _, err := newImages(t, "").Fetch(ctx, s.URL+"/p.jpg", Direct); err != nil {
+		t.Fatalf("хостинг, который не пускает Go: %v", err)
+	}
+}

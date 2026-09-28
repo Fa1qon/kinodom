@@ -56,6 +56,10 @@ var imageExt = map[string]string{"image/jpeg": ".jpg", "image/png": ".png", "ima
 
 var reImageKey = regexp.MustCompile(`^[0-9a-f]{40}$`)
 
+// browserUA — хостинги картинок отвечают 404 на User-Agent Go по умолчанию (fastpic, проверено
+// вживую 2026-09-28): картинки качаются как браузером.
+const browserUA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/140.0.0.0 Safari/537.36"
+
 func NewImages(o ImagesOptions) (*Images, error) {
 	if o.Rate == 0 {
 		o.Rate = 2
@@ -115,6 +119,8 @@ func (im *Images) Fetch(ctx context.Context, src string, via Via) (string, error
 	if err != nil {
 		return "", ErrNoImage
 	}
+	req.Header.Set("User-Agent", browserUA)
+	req.Header.Set("Accept", "image/avif,image/webp,image/*,*/*;q=0.8")
 	resp, err := client.Do(req)
 	if err != nil {
 		return "", fmt.Errorf("картинка %s: %w", u.Host, err)
