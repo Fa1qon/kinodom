@@ -70,17 +70,19 @@ func (c *Catalog) enrichStep(ctx context.Context, tracker string) (bool, error) 
 		return false, nil
 	case errors.Is(err, source.ErrRemoved):
 		return true, c.st.markRemoved(ctx, r.ID)
-	case errors.Is(err, netx.ErrChallenge):
-		// Форум закрыт проверкой, а пропуск добыть не вышло: не ходить за страницами (иначе каждая
-		// из сотен раздач — лишний запрос), названия новых раздач — из ленты (спека, разделы 6, 16).
+	case errors.Is(err, netx.ErrChallenge) || trackerDown(err):
+		// Форум закрыт проверкой (пропуск добыть не вышло) или не отвечает сам либо через прокси: не
+		// ходить за страницами — иначе каждая из сотен раздач — лишний запрос или таймауты по
+		// зеркалам. Названия новых раздач — из ленты (спека, разделы 6, 16). Проблему ставит
+		// догрузка: топы Rutracker идут по API, который жив и при лежащем форуме, а к разделу
+		// обновление топов заглядывает раз в 6 часов.
 		c.pauseForum(tracker, now.Add(forumPause))
-		c.setProblem(ctx, "catalog."+tracker+".forum", err.Error()+" — пока новые раздачи без описаний, названия из ленты")
+		text := err.Error() + " — пока новые раздачи без описаний"
+		if _, ok := src.(recentFetcher); ok {
+			text += ", названия из ленты"
+		}
+		c.setProblem(ctx, "catalog."+tracker+".forum", text)
 		c.recentTitles(ctx, tracker)
-		return true, nil
-	case errors.Is(err, netx.ErrTrackerDown) || errors.Is(err, netx.ErrProxyDown):
-		// Трекер или прокси не отвечают: не перебирать раздачи по одной (у каждой — таймауты по
-		// зеркалам). Проблему пишет обновление топов.
-		c.pauseForum(tracker, now.Add(forumPause))
 		return true, nil
 	case err != nil:
 		var pe *source.ParseError

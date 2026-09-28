@@ -194,3 +194,57 @@ func TestDBErrorIsModuleFailure(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+// Переименовано одно поле — нули только у раздающих или только у размера, другое разобралось.
+// В топе по раздающим так не бывает: позиции прежние, проблема раздела (Review Focus 1).
+func TestOneZeroFieldKeepsPositions(t *testing.T) {
+	for name, zero := range map[string]func(*source.Release){
+		"раздающие": func(r *source.Release) { r.Seeders = 0 },
+		"размер":    func(r *source.Release) { r.Size = 0 },
+	} {
+		t.Run(name, func(t *testing.T) {
+			rutor := newFake("rutor")
+			rutor.top["12"] = many("rutor", 10)
+			db := openDB(t)
+			c, _ := newCatalog(t, db, nil, rutor)
+			refresh(t, c, true)
+			var broken []source.Release
+			for _, r := range many("rutor", 10) {
+				zero(&r)
+				broken = append(broken, r)
+			}
+			rutor.set(func() { rutor.top["12"] = broken })
+			refresh(t, c, true)
+			if es := list(t, c, ListOptions{}); len(es) != 10 || es[0].Seeders != 100 || es[0].Size != 1<<30 {
+				t.Fatalf("карточки заменились нулями: %+v", es[0])
+			}
+			if p := problemText(t, db, "catalog.rutor:12"); !strings.Contains(p, "изменил разметку") {
+				t.Fatalf("проблема %q", p)
+			}
+		})
+	}
+}
+
+// Трекер не отвечает — остальные его разделы в этом проходе не запрашиваются (у каждого — таймауты
+// по зеркалам, минуты), и другой трекер обновляется, не дожидаясь их.
+func TestTrackerDownSkipsItsOtherSections(t *testing.T) {
+	rutor, rt := newFake("rutor"), newFake("rutracker")
+	rt.topErr = fmt.Errorf("Rutracker недоступен (api.rutracker.cc — таймаут): %w", netx.ErrTrackerDown)
+	rutor.top["12"] = many("rutor", 3)
+	db := openDB(t)
+	c, _ := newCatalog(t, db, func(o *Options) {
+		o.Categories = []CategoryRef{{"rutracker", "1"}, {"rutracker", "2"}, {"rutracker", "3"}, {"rutor", "12"}}
+	}, rutor, rt)
+	if wait := refresh(t, c, false); wait != time.Minute {
+		t.Fatalf("повтор через %v", wait)
+	}
+	if rt.Calls("top") != 1 {
+		t.Fatalf("разделов лежащего трекера запрошено %d за проход", rt.Calls("top"))
+	}
+	if n := len(list(t, c, ListOptions{Tracker: "rutor"})); n != 3 {
+		t.Fatalf("Rutor не обновился: карточек %d", n)
+	}
+	if p := problemText(t, db, "catalog.rutracker"); !strings.Contains(p, "таймаут") {
+		t.Fatalf("проблема %q", p)
+	}
+}

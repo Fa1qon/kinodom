@@ -180,3 +180,26 @@ func TestRatingsQueueFollowsCatalog(t *testing.T) {
 		t.Fatalf("после обновления в очереди %d", queued())
 	}
 }
+
+// Форум Rutracker не отвечает, а API топов живой: обновление топов этого не видит — проблему ставит
+// догрузка, названия новых раздач — из ленты, как при закрытом Cloudflare (Review Focus 2).
+func TestForumDownWhileAPIUpIsVisible(t *testing.T) {
+	rt := newFake("rutracker")
+	rt.top["2110"] = []source.Release{rel("rutracker", "7", "", 30, 1, "a"), rel("rutracker", "8", "", 20, 1, "b")}
+	down := fmt.Errorf("Rutracker недоступен (rutracker.org, rutracker.net — таймаут): %w", netx.ErrTrackerDown)
+	rt.detailsErr["7"], rt.detailsErr["8"] = down, down
+	rt.recent["2110"] = []source.Release{{Tracker: "rutracker", TopicID: "8", Title: "Название из ленты"}}
+	db := openDB(t)
+	c, _ := newCatalog(t, db, nil, rt)
+	refresh(t, c, true)
+	enrichAll(t, c, "rutracker")
+	if rt.Calls("details") != 1 {
+		t.Fatalf("страниц %d при лежащем форуме", rt.Calls("details"))
+	}
+	if p := problemText(t, db, "catalog.rutracker.forum"); !strings.Contains(p, "таймаут") || !strings.Contains(p, "без описаний") {
+		t.Fatalf("проблема %q", p)
+	}
+	if es := list(t, c, ListOptions{}); es[1].Title != "Название из ленты" {
+		t.Fatalf("карточки %+v", es)
+	}
+}

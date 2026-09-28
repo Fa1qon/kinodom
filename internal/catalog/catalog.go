@@ -5,6 +5,7 @@ package catalog
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"strings"
@@ -12,6 +13,7 @@ import (
 	"time"
 
 	"kinodom/internal/meta"
+	"kinodom/internal/netx"
 	"kinodom/internal/source"
 	"kinodom/internal/store"
 	"kinodom/internal/supervisor"
@@ -163,6 +165,9 @@ func (c *Catalog) refreshPass(ctx context.Context, force bool) (time.Duration, e
 		if !ok {
 			continue
 		}
+		if trackerDown(trackerErr[cat.Tracker]) {
+			continue // трекер или прокси в этом проходе уже не ответили: у каждого раздела — таймауты по зеркалам
+		}
 		last, at, err := c.st.state(ctx, cat)
 		if err != nil {
 			return 0, err
@@ -229,9 +234,9 @@ func (c *Catalog) refreshCategory(ctx context.Context, cat CategoryRef, src sour
 		err := keptError{fmt.Sprintf("%s: в разделе «%s» пришло %d раздач вместо %d", title(cat.Tracker), name, len(rs), last)}
 		c.setProblem(ctx, problem, err.Error())
 		return err
-	case allZero(rs):
+	case brokenNumbers(rs):
 		// Переименованное поле на странице дало бы нули без ошибки разбора (хвост этапа 3).
-		err := keptError{fmt.Sprintf("%s: в разделе «%s» у всех раздач нет раздающих и размера — похоже, трекер изменил разметку", title(cat.Tracker), name)}
+		err := keptError{fmt.Sprintf("%s: в разделе «%s» у всех раздач нет раздающих или размера — похоже, трекер изменил разметку", title(cat.Tracker), name)}
 		c.setProblem(ctx, problem, err.Error())
 		return err
 	}
@@ -242,17 +247,23 @@ func (c *Catalog) refreshCategory(ctx context.Context, cat CategoryRef, src sour
 	return nil
 }
 
-// allZero — у всех раздач нет раздающих и размера (пустой топ — не повод).
-func allZero(rs []source.Release) bool {
+// brokenNumbers — у всех раздач нет раздающих или у всех нет размера: в топе по раздающим так не
+// бывает, значит, переименовано поле (пустой топ — не повод).
+func brokenNumbers(rs []source.Release) bool {
 	if len(rs) == 0 {
 		return false
 	}
+	noSeeders, noSize := true, true
 	for _, r := range rs {
-		if r.Seeders != 0 || r.Size != 0 {
-			return false
-		}
+		noSeeders = noSeeders && r.Seeders == 0
+		noSize = noSize && r.Size == 0
 	}
-	return true
+	return noSeeders || noSize
+}
+
+// trackerDown — трекер или прокси не отвечают (а не «пришло мало» и не сломанный разбор).
+func trackerDown(err error) bool {
+	return errors.Is(err, netx.ErrTrackerDown) || errors.Is(err, netx.ErrProxyDown)
 }
 
 // refreshTree — дерево разделов трекера: для названий в каталоге и настроек. У Rutracker оно из
