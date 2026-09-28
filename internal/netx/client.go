@@ -271,12 +271,17 @@ func (c *Client) once(ctx context.Context, rawURL string, g getOpts) (*Page, err
 			return nil, ctx.Err()
 		case errors.Is(err, ErrProxyDown):
 			return nil, err
+		case proxyRefusal(err) != nil:
+			return nil, proxyRefusal(err)
 		case actx.Err() != nil:
 			return nil, &retryError{"нет ответа за " + seconds(c.o.Timeout)}
 		}
 		return nil, &downError{netReason(err)}
 	}
 	defer resp.Body.Close()
+	if resp.StatusCode == http.StatusProxyAuthRequired { // обычный http:// через HTTP-прокси
+		return nil, errProxyAuth
+	}
 	body, err := io.ReadAll(io.LimitReader(resp.Body, maxBody+1))
 	if err != nil {
 		switch {

@@ -6,6 +6,7 @@ import (
 	"errors"
 	"io"
 	"log"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -354,5 +355,59 @@ func TestDefaultsFollowSpec(t *testing.T) {
 	}
 	if c.lim.Limit() != 1 || c.o.Timeout != 90*time.Second {
 		t.Fatalf("по умолчанию %v запросов/с и таймаут %v; спека: 1/с и 90 с", c.lim.Limit(), c.o.Timeout)
+	}
+}
+
+// socksRefusing — SOCKS5-прокси, который не принимает ни один способ входа.
+func socksRefusing(t *testing.T) string {
+	t.Helper()
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { ln.Close() })
+	go func() {
+		for {
+			c, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			go func() {
+				defer c.Close()
+				hdr := make([]byte, 2) // версия, число способов входа
+				if _, err := io.ReadFull(c, hdr); err != nil {
+					return
+				}
+				io.ReadFull(c, make([]byte, hdr[1]))
+				c.Write([]byte{5, 0xFF}) // «ни один способ не подходит»
+			}()
+		}
+	}()
+	return ln.Addr().String()
+}
+
+// Прокси ответил, но отказал (неверный логин или пароль) — это проблема прокси, а не трекера:
+// зеркала не перебираются, ошибка — ErrProxyDown с понятным текстом (спека, раздел 16).
+func TestProxyRefusalIsProxyProblem(t *testing.T) {
+	proxy407 := newSite(t, func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusProxyAuthRequired)
+	})
+	cases := map[string]Options{
+		"HTTP-прокси, 407 на CONNECT":       {Mirrors: []string{"https://rutor.example", "https://rutor2.example"}, Proxy: proxy407.URL},
+		"HTTP-прокси, 407 на обычный запрос": {Mirrors: []string{"http://rutor.example", "http://rutor2.example"}, Proxy: proxy407.URL},
+		"SOCKS5 не принимает логин":          {Mirrors: []string{"https://rutor.example", "https://rutor2.example"}, Proxy: "socks5://user:pass@" + socksRefusing(t)},
+	}
+	for name, o := range cases {
+		t.Run(name, func(t *testing.T) {
+			o.Name, o.Rate = "Трекер", 1000
+			c, err := NewClient(o)
+			if err != nil {
+				t.Fatal(err)
+			}
+			_, err = c.Get(context.Background(), "/browse")
+			if !errors.Is(err, ErrProxyDown) || errors.Is(err, ErrTrackerDown) || !strings.Contains(err.Error(), "логин") {
+				t.Fatalf("ожидалась ошибка прокси про логин, получено %v", err)
+			}
+		})
 	}
 }
