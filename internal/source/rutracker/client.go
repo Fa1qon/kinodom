@@ -64,10 +64,12 @@ type Rutracker struct {
 	passer   Passer
 	passes   singleflight.Group
 	log      *slog.Logger
+	now      func() time.Time // часы (тесты подменяют)
 
 	mu              sync.Mutex
 	login, password string
-	loginBlock      error // неверный пароль или капча: автоматический вход не повторяется
+	loginBlock      error                  // неверный пароль или капча: автоматический вход не повторяется
+	passFail        map[string]passFailure // зеркало → последняя неудачная добыча пропуска
 	tree            *forumTree
 	treeAt          time.Time
 }
@@ -111,7 +113,7 @@ func New(o Options) (*Rutracker, error) {
 		return nil, err
 	}
 	return &Rutracker{forum: forum, api: api, feedBase: strings.TrimRight(o.FeedBase, "/"), jar: jar,
-		passer: o.Passer, log: o.Log, login: o.Login, password: o.Password}, nil
+		passer: o.Passer, log: o.Log, now: time.Now, login: o.Login, password: o.Password}, nil
 }
 
 func (r *Rutracker) Name() string { return Name }
@@ -153,11 +155,29 @@ func (r *Rutracker) renewPass(ctx context.Context, path string) error {
 		return fmt.Errorf("Rutracker: форум закрыт проверкой Cloudflare, а Edge не подключён: %w", netx.ErrChallenge)
 	}
 	mirror := r.forum.Mirror()
+	// Недавно не вышло — не запускаем Edge снова: каталог иначе гонял бы его (45–75 с и
+	// 200–600 МБ) на каждую раздачу. Через passRetryAfter — новая попытка.
+	r.mu.Lock()
+	last, failed := r.passFail[mirror]
+	r.mu.Unlock()
+	if failed && r.now().Sub(last.at) < passRetryAfter {
+		return fmt.Errorf("Rutracker: не удаётся пройти защиту Cloudflare: %w", &passError{last.err})
+	}
 	// Добыча идёт на своём контексте: отмена одного из ждущих (закрыли вкладку поиска) не должна
 	// сорвать её остальным. Сам Edge ограничен своим таймаутом (45 с + 30 с).
 	passCtx := context.WithoutCancel(ctx)
 	ch := r.passes.DoChan(mirror, func() (any, error) {
 		cookies, err := r.passer.Pass(passCtx, mirror+path)
+		r.mu.Lock()
+		if err != nil {
+			if r.passFail == nil {
+				r.passFail = map[string]passFailure{}
+			}
+			r.passFail[mirror] = passFailure{at: r.now(), err: err}
+		} else {
+			delete(r.passFail, mirror)
+		}
+		r.mu.Unlock()
 		if err != nil {
 			return nil, err
 		}
@@ -174,6 +194,15 @@ func (r *Rutracker) renewPass(ctx context.Context, path string) error {
 	case <-ctx.Done():
 		return ctx.Err()
 	}
+}
+
+// passRetryAfter — сколько после неудачной добычи пропуска не запускать Edge снова (как шаг
+// повторов каталога, спека, раздел 7).
+const passRetryAfter = 10 * time.Minute
+
+type passFailure struct {
+	at  time.Time
+	err error
 }
 
 // passError — пропуск не добыт. Для errors.Is это netx.ErrChallenge: форум закрыт проверкой.

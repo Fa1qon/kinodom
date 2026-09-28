@@ -175,3 +175,28 @@ func TestCancelledCallerDoesNotSpoilSharedPass(t *testing.T) {
 		t.Fatalf("добыч %d", p.calls.Load())
 	}
 }
+
+// Неудачная добыча запоминается: 10 минут форум не трогает Edge (каталог иначе запускал бы его
+// на каждую раздачу), потом — новая попытка.
+func TestFailedPassIsRememberedForAWhile(t *testing.T) {
+	s := rutrackertest.NewServer(t)
+	s.NeedPass = true
+	s.Login, s.Password = "user", "pass"
+	p := &fakePasser{err: errors.New("Edge не прошёл проверку Cloudflare")}
+	r := newRutracker(t, s, func(o *Options) { o.Passer = p; o.Login, o.Password = "user", "pass" })
+	base := time.Now()
+	r.now = func() time.Time { return base }
+	for range 3 {
+		if _, err := r.Details(ctx, "6914565"); !errors.Is(err, netx.ErrChallenge) {
+			t.Fatalf("получено %v", err)
+		}
+	}
+	if p.calls.Load() != 1 {
+		t.Fatalf("Edge запускали %d раз — после неудачи нужно подождать", p.calls.Load())
+	}
+	r.now = func() time.Time { return base.Add(11 * time.Minute) }
+	r.Details(ctx, "6914565")
+	if p.calls.Load() != 2 {
+		t.Fatalf("через 11 минут Edge запускали %d раз, нужна новая попытка", p.calls.Load())
+	}
+}
