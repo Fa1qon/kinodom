@@ -3,10 +3,15 @@ package app
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"fmt"
+	"net"
 	"net/http"
+	"strings"
 	"testing"
 	"time"
 
+	"kinodom/internal/api"
 	"kinodom/internal/supervisor"
 )
 
@@ -103,5 +108,34 @@ func TestModuleCanBeDisabledBySetting(t *testing.T) {
 	}
 	if a.ModuleEnabled(ctx, "iptv") {
 		t.Fatal("настройка modules.iptv.enabled=false не выключила модуль")
+	}
+}
+
+// Порт может занять чужая программа по-разному: только IPv4, только 127.0.0.1, только ::1
+// или двухстеково. В любом случае сервер не должен стартовать «наполовину».
+func TestBusyPortIsDetectedInEveryForm(t *testing.T) {
+	forms := []struct{ network, addr string }{
+		{"tcp4", "0.0.0.0:0"},
+		{"tcp4", "127.0.0.1:0"},
+		{"tcp6", "[::1]:0"},
+		{"tcp", ":0"},
+	}
+	for _, f := range forms {
+		ln, err := net.Listen(f.network, f.addr)
+		if err != nil {
+			t.Logf("%s %s: не удалось занять порт (%v), пропускаю", f.network, f.addr, err)
+			continue
+		}
+		port := ln.Addr().(*net.TCPAddr).Port
+		a, err := New(context.Background(), Options{Home: t.TempDir(), ListenAddr: fmt.Sprintf(":%d", port)})
+		ln.Close()
+		if err == nil {
+			a.Close()
+			t.Errorf("%s %s: порт %d занят, а сервер запустился", f.network, f.addr, port)
+			continue
+		}
+		if !errors.Is(err, api.ErrPortBusy) || !strings.Contains(err.Error(), "занят") {
+			t.Errorf("%s %s: ожидалась ошибка «порт занят», получено %v", f.network, f.addr, err)
+		}
 	}
 }
