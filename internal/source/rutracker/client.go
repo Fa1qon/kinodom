@@ -77,6 +77,7 @@ type Rutracker struct {
 	tree            *forumTree
 	treeAt          time.Time
 	loginRetryAt    time.Time // до этого времени страница раздачи не входит сама (после временной неудачи)
+	loginRetryErr   error     // временная неудача входа, из-за которой стоит пауза
 	loginWarned     string    // неудача входа, о которой журнал уже знает
 	treeRetryAt     time.Time // до этого времени не пробовать снова обновить дерево разделов
 }

@@ -2,6 +2,7 @@ package rutracker
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"log/slog"
 	"net/http"
@@ -351,5 +352,56 @@ func TestSearchRaw(t *testing.T) {
 	}
 	if s.LastQuery() != "космос" || s.LastForums() != "2076" {
 		t.Fatalf("сервер получил nm=%q f=%q", s.LastQuery(), s.LastForums())
+	}
+}
+
+// Несколько раздач открываются одновременно, а вход сорвался из-за сети — форма входа уходит
+// один раз: ждавшие своей очереди не повторяют неудачную попытку (ревью этапа 5a).
+func TestConcurrentDetailsRespectLoginPause(t *testing.T) {
+	s := rutrackertest.NewServer(t)
+	s.Login, s.Password = "user", "pass"
+	s.BeforeLogin = func() {
+		time.Sleep(100 * time.Millisecond) // остальные успевают встать в очередь за входом
+		panic(http.ErrAbortHandler)        // ответ на вход обрывается
+	}
+	r := newRutracker(t, s, withCreds("user", "pass"))
+	var wg sync.WaitGroup
+	for range 5 {
+		wg.Go(func() { r.Details(ctx, "6914565") })
+	}
+	wg.Wait()
+	if s.Logins() != 1 {
+		t.Fatalf("попыток входа %d — после временной неудачи вход минуту не повторяется", s.Logins())
+	}
+}
+
+// API не отвечает совсем (пакеты теряются, API не идёт через VPN), а дерево устарело — поиск
+// не ждёт API до своего срока, а берёт старое дерево; повтор обновления — через 10 минут
+// (ревью этапа 5a).
+func TestSearchDoesNotWaitForHangingAPI(t *testing.T) {
+	saved := treeRefreshTimeout
+	treeRefreshTimeout = 200 * time.Millisecond
+	t.Cleanup(func() { treeRefreshTimeout = saved })
+	s := rutrackertest.NewServer(t)
+	s.Login, s.Password = "user", "pass"
+	r := newRutracker(t, s, withCreds("user", "pass"))
+	if _, err := r.Search(ctx, "космос"); err != nil {
+		t.Fatal(err)
+	}
+	r.mu.Lock()
+	r.treeAt = r.treeAt.Add(-25 * time.Hour) // дерево устарело
+	r.mu.Unlock()
+	s.APIHang.Store(true)
+	before := s.Hits("/v1/static/cat_forum_tree")
+	for range 2 {
+		sctx, cancel := context.WithTimeout(ctx, 2*time.Second)
+		_, err := r.Search(sctx, "космос")
+		cancel()
+		if err != nil {
+			t.Fatalf("поиск при зависшем API: %v", err)
+		}
+	}
+	if got := s.Hits("/v1/static/cat_forum_tree") - before; got != 1 {
+		t.Fatalf("обновлений дерева %d за два поиска — после неудачи повтор через 10 минут", got)
 	}
 }

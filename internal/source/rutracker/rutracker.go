@@ -29,7 +29,7 @@ func (r *Rutracker) SetCredentials(login, password string) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.login, r.password, r.loginBlock = login, password, nil
-	r.loginRetryAt, r.loginWarned = time.Time{}, ""
+	r.loginRetryAt, r.loginRetryErr, r.loginWarned = time.Time{}, nil, ""
 	r.credGen++
 }
 
@@ -100,14 +100,14 @@ func (r *Rutracker) doLogin(ctx context.Context) error {
 	defer r.mu.Unlock()
 	switch {
 	case err == nil:
-		r.loginRetryAt = time.Time{}
+		r.loginRetryAt, r.loginRetryErr = time.Time{}, nil
 	case errors.Is(err, ErrWrongPassword) || errors.As(err, &ce):
 		if r.credGen == gen { // пароль не меняли, пока шёл вход
 			r.loginBlock = err
 		}
 	case ctx.Err() == nil:
 		// Сеть, форум, непонятный ответ — временно: страница раздачи минуту не входит сама.
-		r.loginRetryAt = r.now().Add(loginRetryAfter)
+		r.loginRetryAt, r.loginRetryErr = r.now().Add(loginRetryAfter), err
 	}
 	return err
 }
@@ -121,6 +121,24 @@ func (r *Rutracker) mayAutoLogin() bool {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	return r.login != "" && r.password != "" && !r.now().Before(r.loginRetryAt)
+}
+
+// autoLogin — вход для страницы раздачи: как ensureLogin, но после временной неудачи минуту
+// не пробует снова — в том числе те, кто ждал своей очереди, пока шла неудачная попытка:
+// одновременные раздачи иначе отправили бы форму каждая (ревью этапа 5a).
+func (r *Rutracker) autoLogin(ctx context.Context, stale string) error {
+	r.loginMu.Lock()
+	defer r.loginMu.Unlock()
+	if s := r.session(); s != "" && s != stale {
+		return nil
+	}
+	r.mu.Lock()
+	paused, cause := r.now().Before(r.loginRetryAt), r.loginRetryErr
+	r.mu.Unlock()
+	if paused {
+		return cause
+	}
+	return r.doLogin(ctx)
 }
 
 // noteLogin пишет в журнал неудачу входа страницы раздачи — один раз на каждую новую причину,
@@ -180,13 +198,13 @@ func (r *Rutracker) Details(ctx context.Context, topicID string) (source.Details
 		return source.Details{}, fmt.Errorf("Rutracker: номер раздачи %q — не число", topicID)
 	}
 	if r.mayAutoLogin() && !r.loggedIn() {
-		r.noteLogin(r.ensureLogin(ctx, ""))
+		r.noteLogin(r.autoLogin(ctx, ""))
 	}
 	path := "/forum/viewtopic.php?t=" + topicID
 	stale := r.session()
 	p, err := r.forumPage(ctx, path, "")
 	if errors.Is(err, netx.ErrLoginRequired) && r.mayAutoLogin() {
-		if err = r.ensureLogin(ctx, stale); err == nil {
+		if err = r.autoLogin(ctx, stale); err == nil {
 			p, err = r.forumPage(ctx, path, "")
 		}
 	}

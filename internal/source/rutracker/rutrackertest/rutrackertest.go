@@ -65,6 +65,7 @@ type Server struct {
 	BeforeLogin      func()      // если задан — вызывается на каждый POST входа до ответа (тесты гонок)
 	TopicNeedsLogin  bool        // viewtopic без действующей сессии — редирект на вход (раздача «только для вошедших»)
 	APIDown          atomic.Bool // API отвечает 502 (обновление дерева разделов не удаётся)
+	APIHang          atomic.Bool // API молчит, пока клиент не бросит запрос (пакеты теряются)
 
 	pages      map[string][]byte
 	mu         sync.Mutex
@@ -190,6 +191,10 @@ func (s *Server) forum(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) api(w http.ResponseWriter, r *http.Request) {
 	s.count(r.URL.Path)
+	if s.APIHang.Load() {
+		<-r.Context().Done()
+		return
+	}
 	if s.APIDown.Load() {
 		w.WriteHeader(http.StatusBadGateway)
 		return

@@ -86,6 +86,10 @@ func sortedIDs[V any](m map[string]V) []string {
 // treeRetryAfter — через сколько повторить неудачное обновление дерева разделов.
 const treeRetryAfter = 10 * time.Minute
 
+// treeRefreshTimeout — сколько ждать API, обновляя устаревшее дерево, когда старое есть: зависший
+// API (не идёт через VPN, пакеты теряются) не должен съедать срок поиска. Тесты укорачивают.
+var treeRefreshTimeout = 5 * time.Second
+
 // forumTree — дерево из кэша; раз в сутки — заново. Не обновилось (API недоступен) — старое
 // дерево: разделы меняются редко, а поиску оно нужно, пока форум работает (ревью этапа 4).
 func (r *Rutracker) forumTree(ctx context.Context) (*forumTree, error) {
@@ -96,7 +100,13 @@ func (r *Rutracker) forumTree(ctx context.Context) (*forumTree, error) {
 	if t != nil && (now.Sub(at) < 24*time.Hour || now.Before(retryAt)) {
 		return t, nil
 	}
-	b, err := r.apiBody(ctx, "/v1/static/cat_forum_tree")
+	refreshCtx := ctx
+	if t != nil {
+		var cancel context.CancelFunc
+		refreshCtx, cancel = context.WithTimeout(ctx, treeRefreshTimeout)
+		defer cancel()
+	}
+	b, err := r.apiBody(refreshCtx, "/v1/static/cat_forum_tree")
 	var fresh *forumTree
 	if err == nil {
 		fresh, err = parseForumTree(b)
