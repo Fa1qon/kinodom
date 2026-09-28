@@ -133,3 +133,15 @@ func TestSourcet2SearchNeedsCredentials(t *testing.T) {
 		t.Fatalf("код %d: %s", code, errOut)
 	}
 }
+
+// search-raw: несколько наборов параметров за один вход, у каждого — сводка по разделам.
+func TestSourcet2SearchRaw(t *testing.T) {
+	s := t2test.NewServer(t)
+	s.Login, s.Password = "user", "pass"
+	t.Setenv("KINODOM_t2_LOGIN", "user")
+	t.Setenv("KINODOM_t2_PASSWORD", "pass")
+	code, out, errOut := runt2(t, s, "search-raw", "--limit", "2", "nm=космос", "f=2076&nm=космос")
+	if code != 0 || strings.Count(out, "Разделы: 2076×") != 2 || s.LastForums() != "2076" || s.Logins() != 1 {
+		t.Fatalf("код %d, входов %d\n%s\n%s", code, s.Logins(), out, errOut)
+	}
+}
