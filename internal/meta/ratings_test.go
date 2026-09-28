@@ -335,3 +335,23 @@ func TestSearchNeedsYearWhenReleaseHasOne(t *testing.T) {
 		t.Fatalf("фильм %+v, %v — нужен 6549627 (2026), а не запись без года", got, ok)
 	}
 }
+
+// Поиск отстаёт от карточки фильма: у новинки в выдаче нет ни года, ни рейтинга (вживую —
+// «Бегущая / The Runner» 6549627: в поиске год и рейтинг null, по номеру — 2026 и 6.1).
+// Запись без года засчитывается, только если совпали оба названия раздачи, а рейтинг берётся
+// по номеру — иначе 30 дней висел бы 0 (исследование, раздел 13).
+func TestYearlessSearchResultNeedsBothNamesAndFullFilm(t *testing.T) {
+	f := newFakeKP(t)
+	f.search["The Runner"] = itemsJSON(filmJSON(589920, "", "The Runner", 0, nil), filmJSON(6549627, "Бегущая", "The Runner", 0, nil))
+	f.films[6549627] = filmJSON(6549627, "Бегущая", "The Runner", 2026, 6.1)
+	r, _, _ := newRatings(t, f, testKey)
+	enqueue(t, r, 1, Item{Release: "rutor:1104968", Title: "Бегущая / The Runner (2026) WEB-DL 1080p | P"})
+	drain(t, r)
+	got, ok := ratingOf(t, r, "rutor:1104968")
+	if !ok || got.KinopoiskID != 6549627 || got.Kinopoisk != 6.1 || got.Year != 2026 {
+		t.Fatalf("фильм %+v, %v", got, ok)
+	}
+	if f.Hits("search") != 1 || f.Hits("film") != 1 {
+		t.Fatalf("поисков %d, фильмов %d — нужен один поиск и один запрос фильма", f.Hits("search"), f.Hits("film"))
+	}
+}
