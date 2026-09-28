@@ -56,6 +56,15 @@ func (s ratingStore) enqueue(ctx context.Context, prio int, it Item) error {
 	return err
 }
 
+// demoteBase — приоритет «после всего каталога»: каталог не бывает больше миллиона раздач.
+const demoteBase = 1_000_000
+
+// demoteAll отодвигает всю очередь за каталог; EnqueueCatalog затем возвращает места нынешнему.
+func (s ratingStore) demoteAll(ctx context.Context) error {
+	_, err := s.db.W.ExecContext(ctx, `UPDATE kp_queue SET prio = prio + ? WHERE prio < ?`, demoteBase, demoteBase)
+	return err
+}
+
 // next — первая задача очереди, которую можно делать сейчас. keylessOnly — только те, где номер
 // фильма уже известен: без ключа (или без квоты) искать нечем, а рейтинг по номеру — можно.
 func (s ratingStore) next(ctx context.Context, now time.Time, keylessOnly bool) (queued, bool, error) {
