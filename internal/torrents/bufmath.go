@@ -49,11 +49,23 @@ func bufferPercent(done, total int64) int {
 	return int(done * 100 / total)
 }
 
-// smoothInSec — через сколько секунд можно смотреть без остановок (спека, раздел 9):
-// длительность оставшегося × (1 − скорость/битрейт); 0, если качаем не медленнее показа.
-func smoothInSec(remaining int64, bitrate, speed float64) int {
-	if bitrate <= 0 || speed >= bitrate {
+// smoothInSec — сколько секунд подождать, чтобы при текущей скорости досмотреть без остановок.
+// Если начать смотреть через W секунд, к концу фильма (длительность S/b) скачается
+// остаток R, только если R/v ≤ W + S/b, то есть W = R/v − S/b (и не меньше 0).
+// Проверено симуляцией в TestSmoothInSecBySimulation. −1 — скорость нулевая, оценить нельзя.
+func smoothInSec(remaining, size int64, bitrate, speed float64) int {
+	if remaining <= 0 {
 		return 0
 	}
-	return int(math.Ceil(float64(remaining) / bitrate * (1 - speed/bitrate)))
+	if speed <= 0 {
+		return -1
+	}
+	if bitrate <= 0 {
+		return 0
+	}
+	w := float64(remaining)/speed - float64(size)/bitrate
+	if w <= 0 {
+		return 0
+	}
+	return int(math.Ceil(w))
 }

@@ -161,8 +161,11 @@ func (p *player) waitBuffer(ctx context.Context, path string) (string, error) {
 			return "", errors.New(fs.Error)
 		}
 		fmt.Fprintf(p.out, "  буферизация %d %% · пиров %d · %s/с", fs.BufferPercent, fs.Peers, humanBytes(fs.Speed))
-		if fs.SmoothInSec > 0 {
+		switch {
+		case fs.SmoothInSec > 0:
 			fmt.Fprintf(p.out, " · без остановок через ~%d мин", (fs.SmoothInSec+59)/60)
+		case fs.SmoothInSec < 0:
+			fmt.Fprint(p.out, " · скорость пока неизвестна")
 		}
 		fmt.Fprintln(p.out)
 		if time.Now().After(deadline) {
