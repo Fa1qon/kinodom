@@ -19,7 +19,7 @@ const testKey = "test-key-5b"
 //	/api/v1/api_keys/{key}   — kp-api-keys.json (ключ не тот — 401)
 //	/api/v2.2/films/{id}     — films[id], 301 — образец; иначе 404
 //	/api/v2.2/films?imdbId=  — imdb[id], tt0133093 — образец; иначе пустой список
-//	/api/v2.2/films?keyword= — кириллица — 500, как вживую; search[keyword]; иначе пустой список
+//	/api/v2.2/films?keyword= — кириллица — 500 (так бывает вживую); search[keyword]; иначе пустой список
 //	/{id}.xml                — xml[id], 301 — образец; иначе 404
 type fakeKP struct {
 	*httptest.Server
@@ -137,7 +137,7 @@ func (f *fakeKP) serve(w http.ResponseWriter, r *http.Request) {
 		fmt.Fprint(w, itemsJSON())
 	case p == "/api/v2.2/films" && q.Get("keyword") != "":
 		f.hits["search"]++
-		if hasCyrillic(q.Get("keyword")) { // как вживую (исследование, раздел 12)
+		if hasCyrillic(q.Get("keyword")) { // так бывает вживую (исследование, разделы 12–13)
 			w.WriteHeader(http.StatusInternalServerError)
 			fmt.Fprint(w, `{"message":"something went wrong."}`)
 			return

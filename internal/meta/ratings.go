@@ -15,7 +15,7 @@ import (
 const (
 	ratingMaxAge      = 30 * 24 * time.Hour // рейтинг найденного фильма обновляется раз в 30 дней
 	notFoundRetry     = 30 * 24 * time.Hour // не найдено — повтор через 30 дней
-	brokenSearchRetry = 7 * 24 * time.Hour  // поиск ответил 5xx (кириллица) — повтор через неделю: каждая попытка тратит квоту
+	brokenSearchRetry = 7 * 24 * time.Hour  // поиск ответил 5xx (бывает на кириллице) — повтор через неделю: каждая попытка тратит квоту
 	errorRetry        = 5 * time.Minute     // сеть, 5xx у фильма — повтор задачи
 	rateLimitRetry    = 2 * time.Second     // 429 — короткая пауза
 	quotaRecheck      = time.Hour           // квота кончилась — проверять раз в час, пока не восстановится
@@ -280,7 +280,7 @@ func (r *Ratings) findFilm(ctx context.Context, it queued) (int, time.Time, erro
 		fs, err := r.kp.Search(ctx, kw, t.Year)
 		var se *ServiceError
 		if errors.As(err, &se) {
-			broken = true // кириллица сейчас всегда 500 (исследование, раздел 12)
+			broken = true // бывает на кириллице (исследование, разделы 12–13)
 			continue
 		}
 		if err != nil {
@@ -302,6 +302,8 @@ func (r *Ratings) findFilm(ctx context.Context, it queued) (int, time.Time, erro
 
 // match — фильм, у которого русское или оригинальное название совпадает с одним из названий
 // раздачи, а год — с точностью до года. Иначе не найдено: без рейтинга лучше, чем с чужим.
+// Есть год у раздачи — нужен и у фильма: записи Кинопоиска без года (заглушки) иначе совпали бы
+// с любым годом (вживую «Бегущая / The Runner (2026)» получила бы 589920 вместо 6549627).
 func match(fs []Film, t Title) (Film, bool) {
 	names := map[string]bool{}
 	for _, n := range t.Names {
@@ -309,7 +311,7 @@ func match(fs []Film, t Title) (Film, bool) {
 	}
 	for _, f := range fs {
 		sameName := (f.NameRu != "" && names[NormTitle(f.NameRu)]) || (f.NameOrig != "" && names[NormTitle(f.NameOrig)])
-		if sameName && (t.Year == 0 || f.Year == 0 || abs(f.Year-t.Year) <= 1) {
+		if sameName && (t.Year == 0 || (f.Year != 0 && abs(f.Year-t.Year) <= 1)) {
 			return f, true
 		}
 	}

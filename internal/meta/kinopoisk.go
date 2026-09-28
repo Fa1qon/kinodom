@@ -33,8 +33,8 @@ var (
 	ErrRateLimited = errors.New("Кинопоиск: слишком частые запросы")
 )
 
-// ServiceError — Кинопоиск ответил 5xx. Поиск по названию на кириллице сейчас всегда отвечает 500
-// (исследование, раздел 12), а каждый такой ответ тратит квоту.
+// ServiceError — Кинопоиск ответил 5xx. Поиск по названию на кириллице бывает отвечает 500 — не
+// на каждое название (исследование, разделы 12–13), а каждый такой ответ тратит квоту.
 type ServiceError struct {
 	Status int
 }
@@ -138,7 +138,7 @@ func (k *Kinopoisk) ByIMDb(ctx context.Context, imdbID string) (Film, error) {
 }
 
 // Search — поиск по названию и году ±1 (/api/v2.2/films). year = 0 — без года. Порядок — по
-// числу оценок: известный фильм первым. Кириллица сейчас даёт *ServiceError (500).
+// числу оценок: известный фильм первым. На кириллице бывает *ServiceError (500).
 func (k *Kinopoisk) Search(ctx context.Context, keyword string, year int) ([]Film, error) {
 	q := url.Values{"keyword": {keyword}, "order": {"NUM_VOTE"}, "type": {"ALL"}}
 	if year > 0 {
