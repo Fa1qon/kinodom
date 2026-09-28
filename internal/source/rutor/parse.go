@@ -31,7 +31,7 @@ var (
 	sizeUnits   = map[string]float64{"B": 1, "KB": 1 << 10, "MB": 1 << 20, "GB": 1 << 30, "TB": 1 << 40}
 )
 
-func parseErr(block string) error { return &source.ErrParse{Tracker: title, Block: block} }
+func parseErr(block string) error { return &source.ParseError{Tracker: title, Block: block} }
 
 // parseList разбирает таблицы раздач (div#index) страниц /browse и /search: строки tr.gai
 // и tr.tum. Таблица с заголовком (tr.backgr) без строк — «ничего не найдено», не ошибка.

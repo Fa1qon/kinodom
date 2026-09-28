@@ -76,9 +76,9 @@ func TestParseListGarbage(t *testing.T) {
 	}
 	for name, c := range cases {
 		_, err := parseList([]byte(c.body))
-		var pe *source.ErrParse
+		var pe *source.ParseError
 		if !errors.As(err, &pe) || pe.Block != c.block || pe.Tracker != "Rutor" {
-			t.Errorf("%s: ожидалась ErrParse{%q}, получено %v", name, c.block, err)
+			t.Errorf("%s: ожидалась ParseError{%q}, получено %v", name, c.block, err)
 		}
 	}
 }
@@ -201,9 +201,9 @@ func TestParseTopicMissingBlocks(t *testing.T) {
 	u, _ := url.Parse("https://rutor.info/torrent/1")
 	for want, body := range cases {
 		_, err := parseTopic([]byte(body), u)
-		var pe *source.ErrParse
+		var pe *source.ParseError
 		if !errors.As(err, &pe) || !strings.Contains(pe.Block, want) {
-			t.Errorf("ожидалась ErrParse с блоком %q, получено %v", want, err)
+			t.Errorf("ожидалась ParseError с блоком %q, получено %v", want, err)
 		}
 	}
 }

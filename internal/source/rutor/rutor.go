@@ -59,9 +59,11 @@ type Rutor struct {
 var _ source.Source = (*Rutor)(nil)
 
 func New(o Options) (*Rutor, error) {
+	// Копия: список по умолчанию — общий, его правка не должна менять работающий источник.
 	if len(o.Mirrors) == 0 {
 		o.Mirrors = DefaultMirrors
 	}
+	o.Mirrors = slices.Clone(o.Mirrors)
 	if o.DownloadBase == "" {
 		o.DownloadBase = DefaultDownloadBase
 	}
@@ -74,7 +76,7 @@ func New(o Options) (*Rutor, error) {
 	}
 	c, err := netx.NewClient(netx.Options{
 		Name: title, Mirrors: o.Mirrors, ExtraHosts: []string{dl.Host},
-		Proxy: o.Proxy, UserAgent: userAgent, Classify: classify,
+		Proxy: o.Proxy, UserAgent: userAgent, Classify: classify, ChallengeIsMirrorDown: true,
 		Rate: o.Rate, Timeout: o.Timeout, Log: o.Log,
 	})
 	if err != nil {

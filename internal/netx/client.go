@@ -20,7 +20,7 @@ import (
 
 // Verdict — вывод об ответе трекера (спека, раздел 5, «Классификация ответа трекера»).
 // «Каркас есть, нужного блока нет» сюда не входит: это ошибка разбора страницы
-// (source.ErrParse), её возвращает парсер трекера, и зеркало при ней не меняется.
+// (source.ParseError), её возвращает парсер трекера, и зеркало при ней не меняется.
 type Verdict int
 
 const (
@@ -51,15 +51,18 @@ type Page struct {
 }
 
 type Options struct {
-	Name       string        // «Rutor» — для текстов ошибок и журнала
-	Mirrors    []string      // базовые адреса зеркал по порядку предпочтения: "https://rutor.info"
-	ExtraHosts []string      // другие свои хосты (d.rutor.info): редирект туда — не «чужой сайт»
-	Proxy      string        // прокси из настроек; пусто — напрямую
-	UserAgent  string        // пусто — User-Agent Go по умолчанию
-	Classify   ClassifyFunc  // nil — всё, что прошло общие проверки, считается OK
-	Rate       rate.Limit    // запросов в секунду на трекер; 0 — 1 (спека, раздел 5)
-	Timeout    time.Duration // на одну попытку вместе с чтением ответа; 0 — 90 с
-	Log        *slog.Logger  // nil — без журнала
+	Name       string       // «Rutor» — для текстов ошибок и журнала
+	Mirrors    []string     // базовые адреса зеркал по порядку предпочтения: "https://rutor.info"
+	ExtraHosts []string     // другие свои хосты (d.rutor.info): редирект туда — не «чужой сайт»
+	Proxy      string       // прокси из настроек; пусто — напрямую
+	UserAgent  string       // пусто — User-Agent Go по умолчанию
+	Classify   ClassifyFunc // nil — всё, что прошло общие проверки, считается OK
+	// ChallengeIsMirrorDown — проверка Cloudflare значит «зеркало недоступно»: для трекеров,
+	// которым пропуск не добыть (у Rutor нет Edge), лучше перейти на другое зеркало.
+	ChallengeIsMirrorDown bool
+	Rate                  rate.Limit    // запросов в секунду на трекер; 0 — 1 (спека, раздел 5)
+	Timeout               time.Duration // на одну попытку вместе с чтением ответа; 0 — 90 с
+	Log                   *slog.Logger  // nil — без журнала
 }
 
 // Client — HTTP-клиент одного трекера: перебор зеркал, классификация ответов, повтор,
@@ -200,6 +203,9 @@ func (c *Client) judge(p *Page) (Verdict, string) {
 	}
 	// Проверка Cloudflare приходит с кодом 403 или 503 — её смотрим раньше, чем 5xx.
 	if isChallenge(p) {
+		if c.o.ChallengeIsMirrorDown {
+			return MirrorDown, "проверка Cloudflare"
+		}
 		return Challenge, ""
 	}
 	if p.Status >= 500 || p.Status == http.StatusUnavailableForLegalReasons {

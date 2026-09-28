@@ -393,7 +393,7 @@ func TestProxyRefusalIsProxyProblem(t *testing.T) {
 		w.WriteHeader(http.StatusProxyAuthRequired)
 	})
 	cases := map[string]Options{
-		"HTTP-прокси, 407 на CONNECT":       {Mirrors: []string{"https://rutor.example", "https://rutor2.example"}, Proxy: proxy407.URL},
+		"HTTP-прокси, 407 на CONNECT":        {Mirrors: []string{"https://rutor.example", "https://rutor2.example"}, Proxy: proxy407.URL},
 		"HTTP-прокси, 407 на обычный запрос": {Mirrors: []string{"http://rutor.example", "http://rutor2.example"}, Proxy: proxy407.URL},
 		"SOCKS5 не принимает логин":          {Mirrors: []string{"https://rutor.example", "https://rutor2.example"}, Proxy: "socks5://user:pass@" + socksRefusing(t)},
 	}
@@ -409,5 +409,24 @@ func TestProxyRefusalIsProxyProblem(t *testing.T) {
 				t.Fatalf("ожидалась ошибка прокси про логин, получено %v", err)
 			}
 		})
+	}
+}
+
+// У трекеров без Edge (Rutor) проверка Cloudflare на зеркале — повод перейти на другое.
+func TestChallengeCanMeanMirrorDown(t *testing.T) {
+	cf := newSite(t, func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Cf-Mitigated", "challenge")
+		w.WriteHeader(http.StatusForbidden)
+	})
+	good := newSite(t, page(trackerPage))
+	c, err := NewClient(Options{Name: "Трекер", Mirrors: []string{cf.URL, good.URL}, Classify: testClassify, Rate: 1000, ChallengeIsMirrorDown: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := c.Get(context.Background(), "/browse"); err != nil {
+		t.Fatalf("ожидался переход на рабочее зеркало, получено %v", err)
+	}
+	if c.Mirror() != good.URL {
+		t.Fatalf("текущее зеркало %s", c.Mirror())
 	}
 }
