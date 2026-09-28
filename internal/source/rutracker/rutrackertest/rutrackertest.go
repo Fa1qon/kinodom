@@ -72,6 +72,7 @@ type Server struct {
 	logins     int
 	lastQuery  string
 	lastUA     string
+	lastForums string
 	sessionGen int
 }
 
@@ -99,6 +100,9 @@ func (s *Server) Logins() int { s.mu.Lock(); defer s.mu.Unlock(); return s.login
 
 // LastQuery — последний поисковый запрос nm, раскодированный из windows-1251.
 func (s *Server) LastQuery() string { s.mu.Lock(); defer s.mu.Unlock(); return s.lastQuery }
+
+// LastForums — параметр f последнего поиска (как пришёл).
+func (s *Server) LastForums() string { s.mu.Lock(); defer s.mu.Unlock(); return s.lastForums }
 
 // LastUserAgent — User-Agent последнего запроса к форуму.
 func (s *Server) LastUserAgent() string { s.mu.Lock(); defer s.mu.Unlock(); return s.lastUA }
@@ -154,6 +158,7 @@ func (s *Server) forum(w http.ResponseWriter, r *http.Request) {
 		q, _ := dec.String(r.URL.Query().Get("nm"))
 		s.mu.Lock()
 		s.lastQuery = q
+		s.lastForums = r.URL.Query().Get("f")
 		s.mu.Unlock()
 		s.html(w, "search-f2076-seeds.raw-cp1251.html")
 	case "/forum/login.php":

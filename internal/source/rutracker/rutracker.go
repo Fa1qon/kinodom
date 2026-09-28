@@ -4,7 +4,9 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"maps"
 	"net/url"
+	"slices"
 	"strings"
 	"time"
 
@@ -154,21 +156,7 @@ func (r *Rutracker) Search(ctx context.Context, query string) ([]source.Release,
 	if err != nil {
 		return nil, err
 	}
-	if err := r.ensureLogin(ctx, ""); err != nil {
-		return nil, err
-	}
-	path := "/forum/tracker.php?nm=" + url.QueryEscape(cp1251(q)) + "&o=10&s=2"
-	stale := r.session()
-	p, err := r.forumPage(ctx, path, "")
-	if errors.Is(err, netx.ErrLoginRequired) {
-		if err = r.ensureLogin(ctx, stale); err == nil {
-			p, err = r.forumPage(ctx, path, "")
-		}
-	}
-	if err != nil {
-		return nil, err
-	}
-	rs, err := parseSearch(p.Body)
+	rs, err := r.trackerPage(ctx, url.Values{"nm": {q}, "o": {"10"}, "s": {"2"}})
 	if err != nil {
 		return nil, err
 	}
@@ -211,4 +199,45 @@ func (r *Rutracker) Details(ctx context.Context, topicID string) (source.Details
 	}
 	d.TopicID = topicID
 	return d, nil
+}
+
+// SearchRaw — страница поиска tracker.php с параметрами как есть, без фильтра по категориям:
+// для проверки параметров поиска вживую (kinodom source rutracker search-raw).
+func (r *Rutracker) SearchRaw(ctx context.Context, params url.Values) ([]source.Release, error) {
+	if !r.hasCredentials() {
+		return nil, ErrNoCredentials
+	}
+	return r.trackerPage(ctx, params)
+}
+
+// trackerPage — результаты tracker.php со входом: гостя форум отправляет на страницу входа,
+// истёкшая сессия — тихий повторный вход.
+func (r *Rutracker) trackerPage(ctx context.Context, params url.Values) ([]source.Release, error) {
+	if err := r.ensureLogin(ctx, ""); err != nil {
+		return nil, err
+	}
+	path := "/forum/tracker.php?" + queryCP1251(params)
+	stale := r.session()
+	p, err := r.forumPage(ctx, path, "")
+	if errors.Is(err, netx.ErrLoginRequired) {
+		if err = r.ensureLogin(ctx, stale); err == nil {
+			p, err = r.forumPage(ctx, path, "")
+		}
+	}
+	if err != nil {
+		return nil, err
+	}
+	return parseSearch(p.Body)
+}
+
+// queryCP1251 — строка запроса со значениями в windows-1251, как их шлёт форма форума; ключи —
+// по алфавиту.
+func queryCP1251(v url.Values) string {
+	parts := make([]string, 0, len(v))
+	for _, k := range slices.Sorted(maps.Keys(v)) {
+		for _, x := range v[k] {
+			parts = append(parts, url.QueryEscape(cp1251(k))+"="+url.QueryEscape(cp1251(x)))
+		}
+	}
+	return strings.Join(parts, "&")
 }

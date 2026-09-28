@@ -133,3 +133,15 @@ func TestSourceRutrackerSearchNeedsCredentials(t *testing.T) {
 		t.Fatalf("код %d: %s", code, errOut)
 	}
 }
+
+// search-raw: несколько наборов параметров за один вход, у каждого — сводка по разделам.
+func TestSourceRutrackerSearchRaw(t *testing.T) {
+	s := rutrackertest.NewServer(t)
+	s.Login, s.Password = "user", "pass"
+	t.Setenv("KINODOM_RUTRACKER_LOGIN", "user")
+	t.Setenv("KINODOM_RUTRACKER_PASSWORD", "pass")
+	code, out, errOut := runRutracker(t, s, "search-raw", "--limit", "2", "nm=космос", "f=2076&nm=космос")
+	if code != 0 || strings.Count(out, "Разделы: 2076×") != 2 || s.LastForums() != "2076" || s.Logins() != 1 {
+		t.Fatalf("код %d, входов %d\n%s\n%s", code, s.Logins(), out, errOut)
+	}
+}

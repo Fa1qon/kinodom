@@ -5,6 +5,7 @@ import (
 	"errors"
 	"log/slog"
 	"net/http"
+	"net/url"
 	"slices"
 	"strings"
 	"sync"
@@ -335,5 +336,20 @@ func TestDetailsPausesLoginAfterTransientFailure(t *testing.T) {
 	}
 	if s.Logins() != 2 || !r.loggedIn() {
 		t.Fatalf("через минуту: входов %d, вошли %v", s.Logins(), r.loggedIn())
+	}
+}
+
+// search-raw: параметры tracker.php как есть (для проверки f= вживую), значения — в windows-1251,
+// без фильтра по категориям поиска.
+func TestSearchRaw(t *testing.T) {
+	s := rutrackertest.NewServer(t)
+	s.Login, s.Password = "user", "pass"
+	r := newRutracker(t, s, withCreds("user", "pass"))
+	rs, err := r.SearchRaw(ctx, url.Values{"nm": {"космос"}, "f": {"2076"}})
+	if err != nil || len(rs) != 50 {
+		t.Fatalf("найдено %d, %v", len(rs), err)
+	}
+	if s.LastQuery() != "космос" || s.LastForums() != "2076" {
+		t.Fatalf("сервер получил nm=%q f=%q", s.LastQuery(), s.LastForums())
 	}
 }
