@@ -68,6 +68,8 @@ type Rutracker struct {
 	mu              sync.Mutex
 	login, password string
 	loginBlock      error // неверный пароль или капча: автоматический вход не повторяется
+	tree            *forumTree
+	treeAt          time.Time
 }
 
 func New(o Options) (*Rutracker, error) {
