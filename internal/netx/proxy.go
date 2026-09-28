@@ -18,10 +18,24 @@ func ParseProxy(s string) (*url.URL, error) {
 	}
 	u, err := url.Parse(s)
 	if err != nil || u.Host == "" || (u.Scheme != "socks5" && u.Scheme != "http") {
-		return nil, fmt.Errorf("адрес прокси %q не понят: укажите его целиком, например socks5://127.0.0.1:1080 или http://127.0.0.1:8080", s)
+		return nil, fmt.Errorf("адрес прокси %q не понят: укажите его целиком, например socks5://127.0.0.1:1080 или http://127.0.0.1:8080", redact(s))
 	}
 	if u.Port() == "" {
-		return nil, fmt.Errorf("в адресе прокси %q нет порта", s)
+		return nil, fmt.Errorf("в адресе прокси %q нет порта", redact(s))
 	}
 	return u, nil
+}
+
+// redact прячет логин и пароль в адресе прокси: текст ошибки попадает в журнал и в «Состояние»,
+// а секреты туда не пишутся (спека, раздел 4).
+func redact(s string) string {
+	at := strings.LastIndex(s, "@")
+	if at < 0 {
+		return s
+	}
+	start := 0
+	if i := strings.Index(s, "://"); i >= 0 && i < at {
+		start = i + len("://")
+	}
+	return s[:start] + "***" + s[at:]
 }
