@@ -2,6 +2,7 @@ package torrents
 
 import (
 	"fmt"
+	"hash/fnv"
 	"path/filepath"
 	"strings"
 	"unicode/utf8"
@@ -49,6 +50,8 @@ func sanitizeComponent(s string) string {
 }
 
 // truncateKeepExt обрезает имя до max символов, сохраняя расширение (если оно не длиннее 10).
+// К обрезанному имени добавляется короткий хэш исходного: иначе серии с длинным общим
+// началом («… - 01.mkv», «… - 02.mkv») получили бы одно имя и писали бы в один файл.
 func truncateKeepExt(s string, max int) string {
 	if utf8.RuneCountInString(s) <= max {
 		return s
@@ -57,9 +60,12 @@ func truncateKeepExt(s string, max int) string {
 	if utf8.RuneCountInString(ext) > 10 {
 		ext = ""
 	}
+	h := fnv.New32a()
+	h.Write([]byte(s))
+	tag := fmt.Sprintf("~%08x", h.Sum32())
 	stem := []rune(strings.TrimSuffix(s, ext))
-	keep := max - utf8.RuneCountInString(ext)
-	return strings.TrimRight(string(stem[:keep]), " .") + ext
+	keep := max - utf8.RuneCountInString(ext) - len(tag)
+	return strings.TrimRight(string(stem[:keep]), " .") + tag + ext
 }
 
 // torrentDir — папка раздачи: «<название> [<первые 8 символов infohash>]». Хэш в имени

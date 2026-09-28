@@ -3,6 +3,7 @@ package torrents
 import (
 	"context"
 	"fmt"
+	"os"
 
 	"github.com/anacrolix/torrent/metainfo"
 	"github.com/anacrolix/torrent/storage"
@@ -22,8 +23,21 @@ type prepStorage struct {
 }
 
 func (s prepStorage) OpenTorrent(ctx context.Context, info *metainfo.Info, ih metainfo.Hash) (storage.TorrentImpl, error) {
+	var off int64
 	for _, fi := range info.UpvertedFiles() {
 		p := enginePath(s.base, info, ih, fi)
+		// Файл удалили (почистили папку в Проводнике) или он короче нужного: отметки его
+		// кусков в базе врут. Сбрасываем их до того, как пересоздадим файл, — иначе движок
+		// счёл бы файл скачанным и отдавал бы нули.
+		if st, err := os.Stat(p); fi.Length > 0 && (err != nil || st.Size() < fi.Length) {
+			sp := spanFor(info.PieceLength, off, fi.Length)
+			for i := sp.begin; i < sp.end; i++ {
+				if err := s.pc.Set(metainfo.PieceKey{InfoHash: ih, Index: i}, false); err != nil {
+					return storage.TorrentImpl{}, fmt.Errorf("отметки кусков: %w", err)
+				}
+			}
+		}
+		off += fi.Length
 		if err := createSparse(p, fi.Length); err != nil {
 			return storage.TorrentImpl{}, fmt.Errorf("разрежённый файл %s: %w", p, err)
 		}
