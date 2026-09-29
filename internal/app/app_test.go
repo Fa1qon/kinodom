@@ -933,3 +933,51 @@ func TestDownloadAndWatchThroughAPI(t *testing.T) {
 		t.Fatalf("нет раздачи: %d", resp.StatusCode)
 	}
 }
+
+// Трекер по его проблемам: не ответил — «не отвечает», раздел, форум, разбор или вход t2 —
+// «частично»; «не отвечает» хуже (спека этапа 7, раздел 5.7).
+func TestTrackerStateFromProblems(t *testing.T) {
+	ps := []store.Problem{
+		{ID: "t2.login", Text: "t2: капча — вход не выполнен"},
+		{ID: "catalog.t1:12", Text: "t1: в разделе «Научно-популярные» пришло 3 раздачи вместо 100"},
+		{ID: "catalog.t1", Text: "t1 недоступен"},
+		{ID: "proxy.invalid", Text: "Прокси не работает"},
+	}
+	if st := trackerOf(ps, "t2"); st.State != "warn" || !strings.Contains(st.Text, "капча") {
+		t.Fatalf("t2: %+v", st)
+	}
+	if st := trackerOf(ps, "t1"); st.State != "down" || st.Text != "t1 недоступен" {
+		t.Fatalf("t1: %+v", st)
+	}
+	if st := trackerOf(ps[3:], "t1"); st.State != "ok" {
+		t.Fatalf("без проблем трекера: %+v", st)
+	}
+}
+
+// «Состояние» через API: с этого ПК, оба трекера (у t2 — вход), ключ Кинопоиска, место в
+// папке загрузок, потоки.
+func TestStatusThroughAPI(t *testing.T) {
+	a := startApp(t)
+	var st struct {
+		Local    bool `json:"local"`
+		Trackers map[string]struct {
+			State string               `json:"state"`
+			Login *t2.LoginInfo `json:"login"`
+		} `json:"trackers"`
+		Kinopoisk struct {
+			KeySet bool `json:"keySet"`
+		} `json:"kinopoisk"`
+		Disk    torrents.DiskInfo `json:"disk"`
+		Streams struct {
+			Count int `json:"count"`
+		} `json:"streams"`
+	}
+	getJSON(t, "http://"+a.API.Addr()+"/api/v1/status", &st)
+	if rt, ok := st.Trackers["t2"]; !st.Local || !ok || rt.Login == nil || rt.Login.State != t2.LoginNone || st.Trackers["t1"].State == "" {
+		t.Fatalf("трекеры: %+v", st.Trackers)
+	}
+	if st.Kinopoisk.KeySet || st.Disk.FreeBytes <= 0 || st.Disk.TotalBytes < st.Disk.FreeBytes || st.Disk.MinFreeBytes != 20<<30 ||
+		st.Streams.Count != 0 {
+		t.Fatalf("состояние: %+v", st)
+	}
+}

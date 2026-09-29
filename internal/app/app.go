@@ -153,6 +153,7 @@ func New(ctx context.Context, o Options) (*App, error) {
 	if err := a.initCatalog(ctx, o, vals); err != nil {
 		return fail(err)
 	}
+	a.API.SetStatus(a.statusFields)
 	// Следующие этапы добавляют сюда свои модули так же: a.Sup.Add(m, a.ModuleEnabled(ctx, m.Name())).
 	return a, nil
 }

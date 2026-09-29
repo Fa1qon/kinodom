@@ -49,6 +49,41 @@ type DownloadsView struct {
 
 var stateOrder = []DownloadState{DownloadWatching, DownloadDownloading, DownloadQueued, DownloadPaused, DownloadDone}
 
+// DiskInfo — место в папке загрузок для «Состояния».
+type DiskInfo struct {
+	UsedBytes    int64 `json:"usedBytes"` // скачанное Kinodom
+	FreeBytes    int64 `json:"freeBytes"`
+	TotalBytes   int64 `json:"totalBytes"`
+	MinFreeBytes int64 `json:"minFreeBytes"`
+	Low          bool  `json:"low"` // места меньше запаса: докачки на паузе
+}
+
+// Disk — место в папке загрузок: сколько занято скачанным, свободно и всего на диске.
+func (s *Service) Disk(ctx context.Context) (DiskInfo, error) {
+	v, err := s.Downloads(ctx)
+	if err != nil {
+		return DiskInfo{}, err
+	}
+	d := DiskInfo{UsedBytes: v.UsedBytes, FreeBytes: v.FreeBytes, MinFreeBytes: s.pol().MinFree, Low: v.LowSpace}
+	if eng := s.Engine(); eng != nil {
+		if total, err := s.totalSpace(eng.DownloadsDir()); err == nil {
+			d.TotalBytes = total
+		}
+	}
+	return d, nil
+}
+
+// Speeds — скорость загрузки и отдачи всех раздач вместе, байт/с.
+func (s *Service) Speeds() (down, up int64) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for _, ss := range s.sessions {
+		down += int64(ss.speed)
+		up += int64(ss.upSpeed)
+	}
+	return down, up
+}
+
 // Downloads — хранимые файлы: сначала те, что смотрят и качаются, потом очередь и пауза, потом
 // скачанное — недавно открытое первым.
 func (s *Service) Downloads(ctx context.Context) (DownloadsView, error) {
