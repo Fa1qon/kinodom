@@ -8,7 +8,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
-	"strconv"
+	"maps"
 	"time"
 
 	"golang.org/x/time/rate"
@@ -21,6 +21,7 @@ import (
 	"kinodom/internal/meta"
 	"kinodom/internal/netx"
 	"kinodom/internal/power"
+	"kinodom/internal/settings"
 	"kinodom/internal/source"
 	"kinodom/internal/source/rutor"
 	"kinodom/internal/source/rutracker"
@@ -69,10 +70,11 @@ type App struct {
 	Ratings  *meta.Ratings     // рейтинги Кинопоиска (модуль ratings)
 	Images   *meta.Images      // картинки, которые сервер отдаёт по /img/{key}
 	Catalog  *catalog.Catalog  // каталог и поиск (модуль catalog)
+	Settings *settings.Service // настройки из пульта: меняются без перезапуска (этап 7)
 
-	opts    Options
-	kp      *meta.Kinopoisk
-	closers []io.Closer // закрываются в обратном порядке
+	kp        *meta.Kinopoisk
+	rutracker *rutracker.Rutracker
+	closers   []io.Closer // закрываются в обратном порядке
 }
 
 func New(ctx context.Context, o Options) (*App, error) {
@@ -80,7 +82,7 @@ func New(ctx context.Context, o Options) (*App, error) {
 	if home == "" {
 		home = config.DefaultHome()
 	}
-	a := &App{Paths: config.NewPaths(home), opts: o}
+	a := &App{Paths: config.NewPaths(home)}
 	if err := a.Paths.Ensure(); err != nil {
 		return nil, fmt.Errorf("папки Kinodom: %w", err)
 	}
@@ -112,6 +114,11 @@ func New(ctx context.Context, o Options) (*App, error) {
 	}
 	a.DB = db
 	a.closers = append(a.closers, db)
+	vals, err := loadSettings(ctx, db, o)
+	if err != nil {
+		return fail(fmt.Errorf("настройки: %w", err))
+	}
+	a.Settings = settings.New(db, vals, a)
 
 	a.Sup = supervisor.New(log, supervisor.WithErrorSink(func(module, text string) {
 		if err := db.AddError(context.Background(), module, text); err != nil {
@@ -128,38 +135,49 @@ func New(ctx context.Context, o Options) (*App, error) {
 		return fail(err)
 	}
 	a.Sup.Add(a.API, true) // API выключать нельзя: без него нет ни пульта, ни телевизоров
+	a.Settings.Register(a.API)
 
 	a.Power = power.New(log.With("module", "power"))
 	a.closers = append(a.closers, closerFunc(a.Power.Close))
-	a.initTorrents(ctx, o)
-	if err := a.initMeta(ctx, o); err != nil {
+	a.initTorrents(ctx, o, vals)
+	if err := a.initMeta(ctx, o, vals); err != nil {
 		return fail(err)
 	}
-	if err := a.initCatalog(ctx, o); err != nil {
+	if err := a.initCatalog(ctx, o, vals); err != nil {
 		return fail(err)
 	}
 	// Следующие этапы добавляют сюда свои модули так же: a.Sup.Add(m, a.ModuleEnabled(ctx, m.Name())).
 	return a, nil
 }
 
+// loadSettings — настройки из базы. Options.Settings и Options.DownloadsDir — поверх базы и в неё не
+// пишутся (тесты, kinodom catalog, kinodom run --downloads).
+func loadSettings(ctx context.Context, db *store.DB, o Options) (settings.Values, error) {
+	overrides := maps.Clone(o.Settings)
+	if overrides == nil {
+		overrides = map[string]string{}
+	}
+	if o.DownloadsDir != "" {
+		overrides[settings.KeyDownloadsDir] = o.DownloadsDir
+	}
+	return settings.Load(ctx, db, settings.Defaults{DownloadsDir: DefaultDownloadsDir,
+		Sections: catalog.FormatCategories(catalog.DefaultCategories)}, overrides)
+}
+
 // initTorrents добавляет модуль торрентов. Движок создаётся внутри модуля: если папка
 // загрузок недоступна, сервер работает без торрентов (проблема в «Состоянии», маршруты — 503),
-// а сторож повторяет попытки, пока папка не появится.
-func (a *App) initTorrents(ctx context.Context, o Options) {
-	downloads := o.DownloadsDir
-	if downloads == "" {
-		downloads = a.setting(ctx, "downloads.dir", DefaultDownloadsDir)
-	}
-	proxy := a.setting(ctx, "proxy.trackers", "")
+// а сторож повторяет попытки, пока папка не появится или её не сменят в настройках.
+func (a *App) initTorrents(ctx context.Context, o Options, v settings.Values) {
+	proxy := v.Proxy
 	if _, err := netx.ParseProxy(proxy); err != nil {
 		a.setProblem(ctx, "proxy.invalid", "Прокси в настройках не работает: "+err.Error())
 		proxy = "" // без прокси торренты работают, только анонсы Rutracker могут не пройти
 	} else {
 		a.clearProblem(ctx, "proxy.invalid")
 	}
-	upMBps, err := strconv.ParseFloat(a.setting(ctx, "torrents.uploadLimitMBps", "2"), 64)
-	if err != nil || upMBps < 0 {
-		upMBps = 2
+	var upMBps float64 // 0 — без ограничения
+	if v.UploadMBps != nil {
+		upMBps = *v.UploadMBps
 	}
 	port := a.Boot.TorrentPort
 	if o.Offline {
@@ -167,7 +185,6 @@ func (a *App) initTorrents(ctx context.Context, o Options) {
 	}
 	log := a.Log.With("module", "torrents")
 	cfg := torrents.Config{
-		DownloadsDir: downloads,
 		StateDir:     a.Paths.Torrent,
 		ListenPort:   port,
 		UploadLimit:  upMBps * 1024 * 1024,
@@ -176,7 +193,12 @@ func (a *App) initTorrents(ctx context.Context, o Options) {
 		Log:          log,
 	}
 	a.Torrents = torrents.NewLazyService(
-		func() (*torrents.Engine, error) { return torrents.NewEngine(cfg) },
+		func() (*torrents.Engine, error) {
+			// Папка — текущая из настроек: если прежняя была недоступна, её могли сменить в пульте.
+			c := cfg
+			c.DownloadsDir = a.Settings.Current().DownloadsDir
+			return torrents.NewEngine(c)
+		},
 		torrents.NewRegistry(a.DB), log,
 		func(err error) {
 			if err != nil {
@@ -192,11 +214,7 @@ func (a *App) initTorrents(ctx context.Context, o Options) {
 		}
 		return nil
 	}))
-	// Правила хранения (спека, раздел 15): срок после последнего открытия и запас места.
-	a.Torrents.SetPolicy(torrents.Policy{
-		KeepFor: time.Duration(a.intSetting(ctx, "torrents.keepDays", 14)) * 24 * time.Hour,
-		MinFree: int64(a.intSetting(ctx, "torrents.minFreeGB", 20)) << 30,
-	})
+	a.Torrents.SetPolicy(policyOf(v))
 	a.Torrents.UseKeeper(a.Power)
 	a.Torrents.Register(a.API)
 	a.Sup.Add(a.Torrents, a.ModuleEnabled(ctx, a.Torrents.Name()))
@@ -205,14 +223,14 @@ func (a *App) initTorrents(ctx context.Context, o Options) {
 // initMeta — кэш картинок (маршрут /img/{key}) и модуль ratings: рейтинги Кинопоиска по ключу из
 // настроек kinopoisk.key (спека, разделы 8 и 15). Без ключа модуль работает: рейтинги по номеру —
 // без ключа (rating.kinopoisk.ru), поиск ждёт ключа.
-func (a *App) initMeta(ctx context.Context, o Options) error {
+func (a *App) initMeta(ctx context.Context, o Options, v settings.Values) error {
 	images, err := meta.NewImages(meta.ImagesOptions{Dir: a.Paths.Images, Proxy: a.trackerProxy(ctx), Log: a.Log.With("module", "images")})
 	if err != nil {
 		return err
 	}
 	a.Images = images
 	a.API.Handle("GET /img/{key}", "", images.Handler())
-	a.kp = meta.NewKinopoisk(meta.KinopoiskOptions{Key: a.setting(ctx, "kinopoisk.key", ""), APIBase: o.KinopoiskAPI, RatingBase: o.KinopoiskAPI})
+	a.kp = meta.NewKinopoisk(meta.KinopoiskOptions{Key: v.KinopoiskKey, APIBase: o.KinopoiskAPI, RatingBase: o.KinopoiskAPI})
 	a.Ratings = meta.NewRatings(meta.RatingsOptions{KP: a.kp, DB: a.DB, Log: a.Log.With("module", "ratings")})
 	a.Sup.Add(a.Ratings, a.ModuleEnabled(ctx, a.Ratings.Name()))
 	return nil
@@ -222,10 +240,10 @@ func (a *App) initMeta(ctx context.Context, o Options) error {
 // proxy.trackers, rutracker.login, rutracker.password, catalog.categories («rutracker:2110,
 // rutor:12»; пусто — разделы по умолчанию). Источник каждого трекера — один на процесс: предел
 // «три поиска Rutor одновременно» и один ограничитель на трекер — на экземпляр.
-func (a *App) initCatalog(ctx context.Context, o Options) error {
+func (a *App) initCatalog(ctx context.Context, o Options, v settings.Values) error {
 	proxy := a.trackerProxy(ctx)
 	log := a.Log.With("module", "catalog")
-	cats, err := catalog.ParseCategories(a.setting(ctx, "catalog.categories", ""))
+	cats, err := catalog.ParseCategories(v.Sections)
 	if err != nil {
 		a.setProblem(ctx, "catalog.categories", "Разделы каталога в настройках не читаются — взяты разделы по умолчанию: "+err.Error())
 		cats = catalog.DefaultCategories
@@ -239,7 +257,7 @@ func (a *App) initCatalog(ctx context.Context, o Options) error {
 	}
 	rto := rutracker.Options{Proxy: proxy, Mirrors: o.Trackers.RutrackerMirrors, APIBase: o.Trackers.RutrackerAPI,
 		FeedBase: o.Trackers.RutrackerFeed, Rate: o.Trackers.Rate, Log: log,
-		Login: a.setting(ctx, "rutracker.login", ""), Password: a.setting(ctx, "rutracker.password", "")}
+		Login: v.RutrackerLogin, Password: v.RutrackerPassword}
 	edgeOn := !o.Trackers.NoEdge && a.ModuleEnabled(ctx, "edge")
 	if edgeOn {
 		// UA — только начальный: Edge пересчитывает его на каждый проход, и источник переключается
@@ -255,6 +273,7 @@ func (a *App) initCatalog(ctx context.Context, o Options) error {
 	if err != nil {
 		return err
 	}
+	a.rutracker = rtSrc
 	a.Sup.Add(edge.NewModule(a.Log.With("module", "edge")), edgeOn)
 	a.Catalog = catalog.New(catalog.Options{DB: a.DB, Sources: []source.Source{rutorSrc, rtSrc}, Categories: cats,
 		Ratings: a.Ratings, Images: a.Images, KinopoiskPoster: a.kp.PosterURL, Log: log})
@@ -265,7 +284,7 @@ func (a *App) initCatalog(ctx context.Context, o Options) error {
 // trackerProxy — прокси для трекеров из настроек; неверный — пусто (проблему proxy.invalid
 // записывает initTorrents).
 func (a *App) trackerProxy(ctx context.Context) string {
-	proxy := a.setting(ctx, "proxy.trackers", "")
+	proxy := a.Settings.Current().Proxy
 	if _, err := netx.ParseProxy(proxy); err != nil {
 		return ""
 	}
@@ -279,18 +298,6 @@ func (a *App) ModuleEnabled(ctx context.Context, name string) bool {
 		return true
 	}
 	return v != "false"
-}
-
-// setting — значение настройки или def, если её нет.
-func (a *App) setting(ctx context.Context, key, def string) string {
-	if v, ok := a.opts.Settings[key]; ok && v != "" {
-		return v
-	}
-	v, ok, err := a.DB.Setting(ctx, key)
-	if err != nil || !ok || v == "" {
-		return def
-	}
-	return v
 }
 
 func (a *App) setProblem(ctx context.Context, id, text string) {
@@ -325,11 +332,43 @@ type closerFunc func() error
 
 func (f closerFunc) Close() error { return f() }
 
-// intSetting — целая настройка; нет, не число или меньше 1 — значение по умолчанию.
-func (a *App) intSetting(ctx context.Context, key string, def int) int {
-	n, err := strconv.Atoi(a.setting(ctx, key, strconv.Itoa(def)))
-	if err != nil || n < 1 {
-		return def
+// policyOf — правила хранения из настроек (основная спека, раздел 15).
+func policyOf(v settings.Values) torrents.Policy {
+	return torrents.Policy{KeepFor: time.Duration(v.KeepDays) * 24 * time.Hour, MinFree: int64(v.MinFreeGB) << 30}
+}
+
+// Check — проверки настроек из пульта, которым нужны модули (settings.Applier). Ошибка — отказ,
+// ничего не сохраняется.
+func (a *App) Check(ctx context.Context, old, n settings.Values) error {
+	if n.DownloadsDir != old.DownloadsDir {
+		if err := torrents.CheckDownloadsDir(n.DownloadsDir); err != nil {
+			return &settings.FieldError{Field: "Папка загрузок", Text: err.Error()}
+		}
 	}
-	return n
+	if n.Sections != old.Sections {
+		if _, err := catalog.ParseCategories(n.Sections); err != nil {
+			return &settings.FieldError{Field: "Разделы каталога", Text: err.Error()}
+		}
+	}
+	return nil
+}
+
+// Apply — сохранённые настройки из пульта к работающим модулям, без перезапуска (settings.Applier).
+func (a *App) Apply(ctx context.Context, old, n settings.Values) {
+	if n.KinopoiskKey != old.KinopoiskKey {
+		a.kp.SetKey(n.KinopoiskKey)
+		a.Ratings.KeyChanged(ctx)
+	}
+	if n.KeepDays != old.KeepDays || n.MinFreeGB != old.MinFreeGB {
+		a.Torrents.SetPolicy(policyOf(n))
+	}
+	if n.DownloadsDir != old.DownloadsDir {
+		if e := a.Torrents.Engine(); e != nil {
+			e.SetDownloadsDir(n.DownloadsDir)
+		}
+	}
+	if n.RutrackerLogin != old.RutrackerLogin || n.RutrackerPassword != old.RutrackerPassword {
+		a.rutracker.SetCredentials(n.RutrackerLogin, n.RutrackerPassword)
+	}
+	a.Log.Info("настройки изменены в пульте") // без значений: среди них пароли и ключ
 }

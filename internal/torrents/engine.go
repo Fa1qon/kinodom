@@ -54,7 +54,7 @@ func NewEngine(c Config) (*Engine, error) {
 	if c.Log == nil {
 		c.Log = slog.Default()
 	}
-	if err := checkDownloadsDir(c.DownloadsDir); err != nil {
+	if err := CheckDownloadsDir(c.DownloadsDir); err != nil {
 		return nil, err
 	}
 	if err := os.MkdirAll(c.StateDir, 0o755); err != nil {
@@ -168,7 +168,11 @@ func limitOf(bytesPerSec float64) rate.Limit {
 }
 
 func (e *Engine) Client() *torrent.Client { return e.cl }
-func (e *Engine) DownloadsDir() string    { return e.cfg.DownloadsDir }
+func (e *Engine) DownloadsDir() string    { return e.dirs.defaultDir() }
+
+// SetDownloadsDir — новая папка для новых раздач; открытые раньше остаются, где качались
+// (основная спека, раздел 9). Проверка папки — CheckDownloadsDir, до вызова.
+func (e *Engine) SetDownloadsDir(dir string) { e.dirs.setDefault(dir) }
 
 // SetTorrentDir — папка загрузок раздачи; вызывать до добавления раздачи в движок.
 func (e *Engine) SetTorrentDir(ih metainfo.Hash, dir string) { e.dirs.set(ih, dir) }

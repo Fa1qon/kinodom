@@ -28,6 +28,7 @@ import (
 	"kinodom/internal/catalog"
 	"kinodom/internal/config"
 	"kinodom/internal/meta"
+	"kinodom/internal/settings"
 	"kinodom/internal/source/rutor/rutortest"
 	"kinodom/internal/source/rutracker/rutrackertest"
 	"kinodom/internal/store"
@@ -581,5 +582,66 @@ func TestStoragePolicyFromSettings(t *testing.T) {
 	}
 	if a.Power == nil {
 		t.Fatal("запрет сна не создан")
+	}
+}
+
+func putJSON(t *testing.T, url string, in any) (int, string) {
+	t.Helper()
+	b, _ := json.Marshal(in)
+	req, _ := http.NewRequest(http.MethodPut, url, bytes.NewReader(b))
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	body, _ := io.ReadAll(resp.Body)
+	return resp.StatusCode, string(body)
+}
+
+// Настройки из пульта действуют сразу, без перезапуска: правила хранения, ключ Кинопоиска, папка
+// загрузок. Пароль и ключ в ответ не попадают; неверная папка — отказ, в базу ничего не пишется
+// (спека этапа 7, раздел 5.1).
+func TestSettingsApplyWithoutRestart(t *testing.T) {
+	kp := httptest.NewServer(http.NotFoundHandler()) // новый ключ проверяется — не в настоящий Кинопоиск
+	t.Cleanup(kp.Close)
+	a := startAppWith(t, Options{Home: t.TempDir(), ListenAddr: "127.0.0.1:0", Offline: true, DownloadsDir: t.TempDir(), KinopoiskAPI: kp.URL})
+	ctx := context.Background()
+	url := "http://" + a.API.Addr() + "/api/v1/settings"
+	if code, body := putJSON(t, url, map[string]any{"storage": map[string]any{"keepDays": 3, "minFreeGB": 0}}); code != 200 {
+		t.Fatalf("хранение: %d %s", code, body)
+	}
+	if p := a.Torrents.Policy(); p.KeepFor != 3*24*time.Hour || p.MinFree != 0 {
+		t.Fatalf("правила хранения не применились: %+v", p)
+	}
+	code, body := putJSON(t, url, map[string]any{"kinopoisk": map[string]any{"key": "key-SECRET"},
+		"rutracker": map[string]any{"login": "user", "password": "pass-SECRET"}})
+	if code != 200 || strings.Contains(body, "SECRET") {
+		t.Fatalf("ключ и пароль: %d %s", code, body)
+	}
+	if !a.kp.HasKey() {
+		t.Fatal("ключ Кинопоиска не дошёл до клиента")
+	}
+	blocker := filepath.Join(t.TempDir(), "file")
+	os.WriteFile(blocker, nil, 0o644)
+	code, body = putJSON(t, url, map[string]any{"storage": map[string]any{"downloadsDir": filepath.Join(blocker, "sub")}})
+	if code != http.StatusBadRequest || !strings.Contains(body, "Папка загрузок") {
+		t.Fatalf("неверная папка: %d %s", code, body)
+	}
+	if _, ok, _ := a.DB.Setting(ctx, "downloads.dir"); ok {
+		t.Fatal("неверная папка записана в базу")
+	}
+	newDir := t.TempDir()
+	if code, body := putJSON(t, url, map[string]any{"storage": map[string]any{"downloadsDir": newDir}}); code != 200 {
+		t.Fatalf("новая папка: %d %s", code, body)
+	}
+	if got := a.Torrents.Engine().DownloadsDir(); got != newDir {
+		t.Fatalf("движок качает в %s, а не в %s", got, newDir)
+	}
+	var v settings.View
+	getJSON(t, url, &v)
+	if !v.Rutracker.PasswordSet || v.Rutracker.Login != "user" || !v.Kinopoisk.KeySet || v.Storage.KeepDays != 3 ||
+		v.Storage.MinFreeGB != 0 || v.Storage.DownloadsDir != newDir {
+		t.Fatalf("GET /settings: %+v", v)
 	}
 }

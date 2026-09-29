@@ -473,3 +473,39 @@ func TestEnqueueCatalogDemotesDropped(t *testing.T) {
 		t.Fatal("выпавшая раздача не удаляется — её мог поставить и поиск")
 	}
 }
+
+// Ключ сменили в настройках: проблема «ключ не подходит» снимается сразу, лимиты нового ключа
+// работающий модуль узнаёт сам, без перезапуска (хвост 5b).
+func TestKeyChangeRechecksQuotaWithoutRestart(t *testing.T) {
+	f := newFakeKP(t)
+	r, _, db := newRatings(t, f, "wrong-key")
+	r.now = time.Now
+	cctx, cancel := context.WithCancel(ctx)
+	done := make(chan error, 1)
+	go func() { done <- r.Run(cctx) }()
+	defer func() { cancel(); <-done }()
+	waitFor(t, "проблема «ключ не подходит»", func() bool {
+		ps, _ := db.Problems(ctx)
+		return len(ps) == 1 && ps[0].ID == ProblemKinopoiskKey
+	})
+	r.kp.SetKey(testKey)
+	r.KeyChanged(ctx)
+	if ps, _ := db.Problems(ctx); len(ps) != 0 {
+		t.Fatalf("проблема старого ключа осталась: %+v", ps)
+	}
+	waitFor(t, "лимиты нового ключа", func() bool {
+		st, _ := r.Status(ctx)
+		return st.HasKey && !st.BadKey && st.Quota.DailyLimit == 500
+	})
+}
+
+func waitFor(t *testing.T, what string, cond func() bool) {
+	t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	for !cond() {
+		if time.Now().After(deadline) {
+			t.Fatalf("не дождались за 5 с: %s", what)
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+}

@@ -12,6 +12,7 @@ import (
 	"net/url"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"golang.org/x/text/encoding/charmap"
@@ -44,7 +45,7 @@ func (e *ServiceError) Error() string {
 }
 
 type KinopoiskOptions struct {
-	Key        string        // ключ из настроек; "" — только пути без ключа
+	Key        string        // ключ из настроек при старте; "" — только пути без ключа; дальше — SetKey
 	APIBase    string        // "" — DefaultKinopoiskAPI
 	RatingBase string        // "" — DefaultRatingBase
 	Rate       rate.Limit    // 0 — 3 запроса/с (спека, раздел 5: заявлено 5, берём с запасом)
@@ -57,6 +58,9 @@ type Kinopoisk struct {
 	o    KinopoiskOptions
 	http *http.Client
 	lim  *rate.Limiter
+
+	mu  sync.Mutex // ключ меняется в настройках на ходу (SetKey)
+	key string
 }
 
 func NewKinopoisk(o KinopoiskOptions) *Kinopoisk {
@@ -74,11 +78,24 @@ func NewKinopoisk(o KinopoiskOptions) *Kinopoisk {
 	if o.Timeout == 0 {
 		o.Timeout = 30 * time.Second
 	}
-	return &Kinopoisk{o: o, http: &http.Client{Timeout: o.Timeout}, lim: rate.NewLimiter(o.Rate, 1)}
+	return &Kinopoisk{o: o, http: &http.Client{Timeout: o.Timeout}, lim: rate.NewLimiter(o.Rate, 1), key: o.Key}
+}
+
+// SetKey — новый ключ из настроек: действует со следующего запроса, без перезапуска (хвост 5b).
+func (k *Kinopoisk) SetKey(key string) {
+	k.mu.Lock()
+	k.key = key
+	k.mu.Unlock()
+}
+
+func (k *Kinopoisk) currentKey() string {
+	k.mu.Lock()
+	defer k.mu.Unlock()
+	return k.key
 }
 
 // HasKey — ключ задан.
-func (k *Kinopoisk) HasKey() bool { return k.o.Key != "" }
+func (k *Kinopoisk) HasKey() bool { return k.currentKey() != "" }
 
 // Film — фильм или сериал Кинопоиска.
 type Film struct {
@@ -106,10 +123,11 @@ func (k *Kinopoisk) Quota(ctx context.Context) (Quota, error) {
 		DailyQuota struct{ Value, Used int } `json:"dailyQuota"`
 		Account    string                    `json:"accountType"`
 	}
-	if !k.HasKey() {
+	key := k.currentKey()
+	if key == "" {
 		return Quota{}, ErrNoKey
 	}
-	if err := k.getJSON(ctx, "лимиты ключа", "/api/v1/api_keys/"+url.PathEscape(k.o.Key), nil, &v); err != nil {
+	if err := k.getJSON(ctx, "лимиты ключа", "/api/v1/api_keys/"+url.PathEscape(key), nil, &v); err != nil {
 		return Quota{}, err
 	}
 	return Quota{DailyLimit: v.DailyQuota.Value, DailyUsed: v.DailyQuota.Used,
@@ -225,7 +243,7 @@ func (k *Kinopoisk) get(ctx context.Context, what, u string, withKey bool) ([]by
 		return nil, fmt.Errorf("Кинопоиск: %s — неверный запрос", what)
 	}
 	if withKey {
-		req.Header.Set("X-API-KEY", k.o.Key)
+		req.Header.Set("X-API-KEY", k.currentKey())
 		req.Header.Set("Accept", "application/json")
 	}
 	resp, err := k.http.Do(req)
