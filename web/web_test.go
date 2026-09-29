@@ -18,6 +18,7 @@ var required = []string{
 	"fonts/OFL-golos-text.txt", "fonts/OFL-unbounded.txt",
 	"views/catalog.js", "views/release.js", "views/search.js", "views/downloads.js",
 	"views/settings-layout.js", "views/settings-status.js", "views/settings-params.js", "views/settings-sections.js",
+	"views/channels.js", "views/channel.js", "views/tvkit.js", "views/settings-iptv.js", "views/settings-unrecognized.js",
 }
 
 // scripts — все модули пульта.
@@ -179,6 +180,55 @@ const lines = [
   [groupLine({ release: null, items: [f('z', 0, 'done', 1, 1), f('z', 1, 'done', 1, 1), f('z', 2, 'done', 1, 1), f('z', 3, 'done', 1, 1), f('z', 4, 'done', 1, 1)] }), '5 серий'],
 ];
 for (const [got, want] of lines) {
+  if (got !== want) {
+    console.error(JSON.stringify(got), '≠', JSON.stringify(want));
+    process.exitCode = 1;
+  }
+}
+`
+	cmd := exec.Command(node, "--input-type=module", "--no-warnings", "-e", script)
+	cmd.Dir = "static"
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Errorf("%v\n%s", err, out)
+	}
+}
+
+// «Каналы» (спека этапа 8, раздел 6.2): вкладка «Избранные» — только избранное устройства; вкладка
+// категории — все каналы категории, в том числе избранные и федеральные; страна и язык — в том числе
+// «не указаны»; во «Всех» — заголовки «Избранные», «Федеральные» и категории по порядку сервера.
+func TestPultChannelsFilter(t *testing.T) {
+	node := lookNode(t)
+	script := `
+import { filterChannels, sections, UNKNOWN } from './views/channels.js';
+import { progressOf } from './views/tvkit.js';
+import { dateStr } from './views/channel.js';
+const c = (key, block, category, categoryName, country, languages) => ({ key, block, category, categoryName, country, languages });
+const all = [
+  c('bbc', 'favorite', 'news', 'Новости', 'GB', ['eng']),
+  c('pervy', 'federal', 'general', 'Общие', 'RU', ['rus']),
+  c('match', 'federal', 'sports', 'Спорт', 'RU', ['rus']),
+  c('kino', '', 'movies', 'Фильмы и сериалы', 'RU', ['rus']),
+  c('euro', '', 'sports', 'Спорт', 'FR', ['fra', 'eng']),
+  c('local', '', '', 'Без категории', '', []),
+];
+const keys = (cs) => cs.map((x) => x.key).join(' ');
+const checks = [
+  [keys(filterChannels(all, { tab: 'all' })), 'bbc pervy match kino euro local'],
+  [keys(filterChannels(all, { tab: 'fav' })), 'bbc'],
+  [keys(filterChannels(all, { tab: 'sports' })), 'match euro'],
+  [keys(filterChannels(all, { tab: 'all', country: 'RU' })), 'pervy match kino'],
+  [keys(filterChannels(all, { tab: 'all', country: UNKNOWN })), 'local'],
+  [keys(filterChannels(all, { tab: 'all', lang: 'eng' })), 'bbc euro'],
+  [keys(filterChannels(all, { tab: 'all', lang: UNKNOWN })), 'local'],
+  [keys(filterChannels(all, { tab: 'sports', lang: 'fra' })), 'euro'],
+  [sections(all, 'all').map((s) => s.title + ':' + s.items.length).join(' | '), 'Избранные:1 | Федеральные:2 | Фильмы и сериалы:1 | Спорт:1 | Без категории:1'],
+  [sections(filterChannels(all, { tab: 'sports' }), 'sports').map((s) => s.title + ':' + s.items.length).join(' | '), ':2'],
+  [sections([], 'sports').length, 0],
+  [progressOf({ start: '2026-09-29T19:00:00+07:00', stop: '2026-09-29T20:00:00+07:00' }, Date.parse('2026-09-29T19:15:00+07:00')), 25],
+  [progressOf({ start: '2026-09-29T19:00:00+07:00', stop: '2026-09-29T20:00:00+07:00' }, Date.parse('2026-09-29T21:00:00+07:00')), 100],
+  [dateStr(1, new Date(2026, 8, 30, 23, 30)), '2026-10-01'],
+];
+for (const [got, want] of checks) {
   if (got !== want) {
     console.error(JSON.stringify(got), '≠', JSON.stringify(want));
     process.exitCode = 1;
