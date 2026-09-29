@@ -42,6 +42,7 @@ type Engine struct {
 	fc        storage.ClientImplCloser
 	pc        storage.PieceCompletion // отметки кусков: удаление файла сбрасывает их (этап 6)
 	dirs      *torrentDirs
+	recreated bool // файл отметок был повреждён и создан заново: хранимое — перепроверить
 	up        *rate.Limiter
 	cfg       Config
 	nodesFile string
@@ -58,6 +59,13 @@ func NewEngine(c Config) (*Engine, error) {
 	}
 	if err := os.MkdirAll(c.StateDir, 0o755); err != nil {
 		return nil, fmt.Errorf("папка %s недоступна: %w", c.StateDir, err)
+	}
+	recreated, err := checkMarks(c.StateDir)
+	if err != nil {
+		return nil, err
+	}
+	if recreated {
+		c.Log.Warn("файл отметок кусков был повреждён — создан заново, скачанное перепроверяется по хэшам")
 	}
 	pc, err := storage.NewBoltPieceCompletion(c.StateDir)
 	if err != nil {
@@ -101,7 +109,7 @@ func NewEngine(c Config) (*Engine, error) {
 		fc.Close()
 		return nil, fmt.Errorf("торрент-клиент: %w", err)
 	}
-	e := &Engine{cl: cl, fc: fc, pc: pc, dirs: dirs, up: up, cfg: c, nodesFile: filepath.Join(c.StateDir, "dht-nodes.dat")}
+	e := &Engine{cl: cl, fc: fc, pc: pc, dirs: dirs, recreated: recreated, up: up, cfg: c, nodesFile: filepath.Join(c.StateDir, "dht-nodes.dat")}
 	e.loadNodes()
 	return e, nil
 }

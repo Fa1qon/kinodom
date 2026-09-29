@@ -59,6 +59,7 @@ type session struct {
 	readers      map[int]int  // открытые потоки по файлам: такой файл «сейчас смотрят»
 	paused       map[int]bool // докачка на паузе: мало места (этап 6)
 	quiet        bool         // раздача молчит: не входит в раздаваемые (этап 6)
+	verifying    int          // сколько её кусков ждут перепроверки по хэшу
 	lastSeen     time.Time    // когда раздачу последний раз открывали или спрашивали о ней
 }
 
@@ -86,6 +87,7 @@ type Service struct {
 	expiredAt time.Time                       // когда последний раз чистили по сроку хранения (только Run)
 	keeper    *power.Keeper                   // запрет сна, пока идёт поток; nil — без него
 	upload    float64                         // лимит отдачи, выставленный сейчас (только Run)
+	toVerify  []pieceRef                      // куски на перепроверку: файл отметок был повреждён
 	spaceMu   sync.Mutex                      // одна проверка места за раз (Prepare, уборка)
 	freeSpace func(dir string) (int64, error) // свободное место на диске папки; тесты подменяют
 
@@ -156,6 +158,7 @@ func (s *Service) Run(ctx context.Context) error {
 		case <-tick.C:
 			s.sample()
 			s.shapeUpload()
+			s.verifySome(500 * time.Millisecond)
 		case <-maint.C:
 			if err := s.maintain(ctx); err != nil {
 				return fmt.Errorf("уборка: %w", err)
@@ -210,6 +213,9 @@ func (s *Service) restore(ctx context.Context) error {
 				ss.storedFiles[i] = true
 				files[i].SetPriority(torrent.PiecePriorityNormal)
 			}
+		}
+		if s.eng.recreated {
+			s.queueVerify(ss)
 		}
 		s.mu.Unlock()
 	}
