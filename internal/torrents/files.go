@@ -1,9 +1,13 @@
 package torrents
 
 import (
+	"bytes"
+	"fmt"
 	"regexp"
 	"sort"
 	"strings"
+
+	"github.com/anacrolix/torrent/metainfo"
 )
 
 // videoTypes — расширения видео и Content-Type для потока.
@@ -63,6 +67,24 @@ func playableFiles(all []FileInfo) []FileInfo {
 	}
 	sort.SliceStable(out, func(i, j int) bool { return naturalLess(out[i].Name, out[j].Name) })
 	return out
+}
+
+// PlayableFiles — видеофайлы раздачи по её метаинфо (содержимое .torrent): список серий виден ещё до
+// «Скачать» (спека этапа 7, раздел 5.4). Правила те же, что у открытой раздачи.
+func PlayableFiles(raw []byte) ([]FileInfo, error) {
+	mi, err := metainfo.Load(bytes.NewReader(raw))
+	if err != nil {
+		return nil, fmt.Errorf("метаинфо не читается: %w", err)
+	}
+	info, err := mi.UnmarshalInfo()
+	if err != nil {
+		return nil, fmt.Errorf("метаинфо не читается: %w", err)
+	}
+	var all []FileInfo
+	for i, fi := range info.UpvertedFiles() {
+		all = append(all, FileInfo{Index: i, Name: fi.DisplayPath(&info), Size: fi.Length})
+	}
+	return playableFiles(all), nil
 }
 
 // naturalLess сравнивает строки «по-человечески»: числа внутри — как числа,

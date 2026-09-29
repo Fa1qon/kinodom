@@ -10,9 +10,11 @@ import (
 	"log/slog"
 	"maps"
 	"net/http"
+	"strconv"
 	"time"
 	"unicode"
 
+	"github.com/anacrolix/torrent/metainfo"
 	"golang.org/x/time/rate"
 
 	"kinodom/internal/api"
@@ -295,6 +297,7 @@ func (a *App) initCatalog(ctx context.Context, o Options, v settings.Values) err
 	a.Catalog = catalog.New(catalog.Options{DB: a.DB, Sources: []source.Source{rutorSrc, rtSrc}, Sections: sections,
 		Ratings: a.Ratings, Images: a.Images, KinopoiskPoster: a.kp.PosterURL, Log: log})
 	a.Catalog.Register(a.API)
+	a.API.Handle("GET /api/v1/releases/{id}", a.Catalog.Name(), http.HandlerFunc(a.handleRelease))
 	a.Sup.Add(a.Catalog, a.ModuleEnabled(ctx, a.Catalog.Name()))
 	return nil
 }
@@ -310,6 +313,43 @@ func (a *App) rutrackerLogin(info rutracker.LoginInfo) {
 	text := []rune(info.Text)
 	text[0] = unicode.ToLower(text[0])
 	a.setProblem(ctx, "rutracker.login", "Rutracker: "+string(text))
+}
+
+// releaseView — раздача для экрана раздачи: описание — от каталога, список серий — от торрентов,
+// если он известен до «Скачать» (спека этапа 7, раздел 5.4).
+type releaseView struct {
+	catalog.ReleaseView
+	Files []torrents.FileInfo `json:"files"` // [] — неизвестен, пока раздачу не открыли
+}
+
+func (a *App) handleRelease(w http.ResponseWriter, r *http.Request) {
+	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
+	if err != nil {
+		httpx.WriteError(w, http.StatusBadRequest, "неверный номер раздачи")
+		return
+	}
+	rel, err := a.Catalog.Release(r.Context(), id)
+	switch {
+	case errors.Is(err, catalog.ErrNoRelease):
+		httpx.WriteError(w, http.StatusNotFound, err.Error())
+		return
+	case err != nil:
+		httpx.WriteError(w, http.StatusInternalServerError, "раздача не читается: "+err.Error())
+		return
+	}
+	out := releaseView{ReleaseView: rel.View(), Files: []torrents.FileInfo{}}
+	var ih metainfo.Hash
+	switch {
+	case len(rel.Torrent) > 0: // Rutor: .torrent скачан заранее
+		if fs, err := torrents.PlayableFiles(rel.Torrent); err == nil {
+			out.Files = fs
+		}
+	case rel.InfoHash != "" && ih.FromHexString(rel.InfoHash) == nil:
+		if fs, ok, err := a.Torrents.KnownFiles(r.Context(), ih); err == nil && ok {
+			out.Files = fs
+		}
+	}
+	httpx.WriteJSON(w, http.StatusOK, out)
 }
 
 // ModuleEnabled — модуль включён, если в настройках нет modules.<имя>.enabled = "false".

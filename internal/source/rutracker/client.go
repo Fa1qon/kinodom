@@ -135,6 +135,11 @@ func (r *Rutracker) Name() string { return Name }
 // Mirror — зеркало форума, ответившее последним.
 func (r *Rutracker) Mirror() string { return r.forum.Mirror() }
 
+// TopicURL — страница раздачи на текущем зеркале (ссылка «На трекере» в пульте).
+func (r *Rutracker) TopicURL(id string) string {
+	return r.forum.Mirror() + "/forum/viewtopic.php?t=" + id
+}
+
 // forumPage — страница форума (путь от корня зеркала: /forum/…); form != "" — POST формы.
 // На проверке Cloudflare добывает пропуск и повторяет запрос один раз. Тело — уже в UTF-8.
 func (r *Rutracker) forumPage(ctx context.Context, path, form string, opts ...netx.GetOption) (*netx.Page, error) {

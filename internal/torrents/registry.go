@@ -93,6 +93,17 @@ func (r *Registry) Restorable(ctx context.Context) ([]Record, error) {
 	return out, rows.Err()
 }
 
+// Metainfo — сохранённая метаинфо раздачи; false — раздачу не открывали или метаданных ещё нет.
+func (r *Registry) Metainfo(ctx context.Context, ih metainfo.Hash) ([]byte, bool, error) {
+	var b []byte
+	err := r.db.R.QueryRowContext(ctx, `SELECT metainfo FROM torrents WHERE infohash = ? AND metainfo IS NOT NULL`,
+		ih.HexString()).Scan(&b)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, false, nil
+	}
+	return b, err == nil, err
+}
+
 // StoredFiles — номера хранимых файлов раздачи.
 func (r *Registry) StoredFiles(ctx context.Context, ih metainfo.Hash) ([]int, error) {
 	rows, err := r.db.R.QueryContext(ctx,

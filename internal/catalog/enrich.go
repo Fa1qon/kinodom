@@ -59,7 +59,15 @@ func (c *Catalog) enrichStep(ctx context.Context, tracker string) (bool, error) 
 	if c.forumPausedUntil(tracker).After(now) {
 		return false, nil
 	}
-	r, ok, err := c.st.nextToEnrich(ctx, tracker, c.enabled(), now)
+	// Сначала раздачи, открытые в пульте: их страницу ждёт человек (хвост 5c).
+	r, urgent, err := c.nextUrgent(ctx, tracker)
+	if err != nil {
+		return false, err
+	}
+	ok := urgent
+	if !ok {
+		r, ok, err = c.st.nextToEnrich(ctx, tracker, c.enabled(), now)
+	}
 	if err != nil || !ok {
 		return false, err
 	}
@@ -110,9 +118,11 @@ func (c *Catalog) enrichStep(ctx context.Context, tracker string) (bool, error) 
 	}
 	if c.ratings != nil {
 		r.Title, r.KinopoiskID, r.IMDbID = firstNonEmpty(d.Title, r.Title), kpID, d.IMDbID
-		pos, err := c.position(ctx, r.ID)
-		if err != nil {
-			return false, err
+		pos := 0 // открытую раздачу — в рейтинги первой
+		if !urgent {
+			if pos, err = c.position(ctx, r.ID); err != nil {
+				return false, err
+			}
 		}
 		if err := c.ratings.Enqueue(ctx, pos, ratingItem(r)); err != nil {
 			return false, err

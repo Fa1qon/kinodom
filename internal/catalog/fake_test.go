@@ -42,6 +42,8 @@ func (f *fakeSource) Name() string { return f.name }
 
 func (f *fakeSource) Calls(what string) int { f.mu.Lock(); defer f.mu.Unlock(); return f.calls[what] }
 
+func (f *fakeSource) TopicURL(id string) string { return "https://" + f.name + ".example/topic/" + id }
+
 func (f *fakeSource) set(fn func()) { f.mu.Lock(); fn(); f.mu.Unlock() }
 
 func (f *fakeSource) Categories(context.Context) ([]source.Category, error) {

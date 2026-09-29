@@ -414,5 +414,26 @@ func allFiles(t *torrent.Torrent) []FileInfo {
 	return out
 }
 
+// KnownFiles — видеофайлы раздачи без открытия: из движка, если раздача открыта, иначе из
+// сохранённой метаинфо. false — список ещё неизвестен (раздачу не открывали или метаданных нет).
+func (s *Service) KnownFiles(ctx context.Context, ih metainfo.Hash) ([]FileInfo, bool, error) {
+	s.mu.Lock()
+	if ss, ok := s.sessions[ih]; ok && ss.t.Info() != nil {
+		fs := playableFiles(allFiles(ss.t))
+		s.mu.Unlock()
+		return fs, true, nil
+	}
+	s.mu.Unlock()
+	raw, ok, err := s.reg.Metainfo(ctx, ih)
+	if err != nil || !ok {
+		return nil, false, err
+	}
+	fs, err := PlayableFiles(raw)
+	if err != nil {
+		return nil, false, nil // битая метаинфо — как неизвестная: список придёт от пиров
+	}
+	return fs, true, nil
+}
+
 // UseKeeper — запрет сна на время потоков (общий для всех модулей); вызывать до Run.
 func (s *Service) UseKeeper(k *power.Keeper) { s.keeper = k }

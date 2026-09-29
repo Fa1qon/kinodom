@@ -783,3 +783,98 @@ func TestCatalogSectionsFromSettings(t *testing.T) {
 		t.Fatalf("в базе: %q", v)
 	}
 }
+
+// Экран раздачи через API: описание со страницы, ссылка «На трекере», список серий из заранее
+// скачанного .torrent Rutor — ещё до «Скачать» (спека этапа 7, раздел 5.4).
+// rutorApp — сервер с каталогом Rutor на фейковом трекере: постер со страницы раздачи 1077013 — по
+// http через фейковый прокси (тесты не ходят на настоящий хостинг картинок).
+func rutorApp(t *testing.T) *App {
+	t.Helper()
+	rutor := rutortest.NewServer(t)
+	// Постер со страницы — по http через фейковый прокси: тест не должен ходить на настоящий хостинг.
+	topic := bytes.ReplaceAll(rutortest.Page(t, "torrent_1077013.html"), []byte("https://"), []byte("http://"))
+	rutor.Override = func(w http.ResponseWriter, r *http.Request) bool {
+		if r.URL.Path != "/torrent/1077013" {
+			return false
+		}
+		w.Header().Set("Content-Type", "text/html; charset=UTF-8")
+		w.Write(topic)
+		return true
+	}
+	var pic bytes.Buffer
+	png.Encode(&pic, image.NewRGBA(image.Rect(0, 0, 1, 1)))
+	proxy := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !strings.HasPrefix(r.URL.Host, "127.0.0.1") {
+			w.Write(pic.Bytes())
+			return
+		}
+		out, _ := http.NewRequest(r.Method, r.URL.String(), nil)
+		out.Header = r.Header.Clone()
+		resp, err := http.DefaultTransport.RoundTrip(out)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadGateway)
+			return
+		}
+		defer resp.Body.Close()
+		for k, v := range resp.Header {
+			w.Header()[k] = v
+		}
+		w.WriteHeader(resp.StatusCode)
+		io.Copy(w, resp.Body)
+	}))
+	t.Cleanup(proxy.Close)
+	kp := httptest.NewServer(http.NotFoundHandler())
+	t.Cleanup(kp.Close)
+	dead := "http://" + closedAddr(t)
+	a := startAppWith(t, Options{Home: t.TempDir(), ListenAddr: "127.0.0.1:0", Offline: true, DownloadsDir: t.TempDir(), KinopoiskAPI: kp.URL,
+		Settings: map[string]string{"catalog.categories": "rutor:12", "proxy.trackers": proxy.URL},
+		Trackers: Trackers{RutorMirrors: []string{rutor.Mirror.URL}, RutorDownload: rutor.Download.URL,
+			RutrackerMirrors: []string{dead}, RutrackerAPI: dead, RutrackerFeed: dead, NoEdge: true, Rate: 1000}})
+	return a
+}
+
+// rutorRelease — номер раздачи 1077013 (с .torrent) в каталоге, когда её страница догрузилась.
+func rutorRelease(t *testing.T, a *App) int64 {
+	t.Helper()
+	var id int64
+	waitUntil(t, "раздача 1077013 в каталоге", func() bool {
+		es, _, err := a.Catalog.List(context.Background(), catalog.ListOptions{Tracker: "rutor", Limit: 200})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if i := slices.IndexFunc(es, func(e catalog.Entry) bool { return e.TopicID == "1077013" }); i >= 0 {
+			id = es[i].ID
+		}
+		return id != 0
+	})
+	waitUntil(t, "страница раздачи и .torrent", func() bool {
+		r, err := a.Catalog.Release(context.Background(), id)
+		return err == nil && !r.DetailsPending && len(r.Torrent) > 0
+	})
+	return id
+}
+
+func TestReleaseCardThroughAPI(t *testing.T) {
+	a := rutorApp(t)
+	base := "http://" + a.API.Addr() + "/api/v1"
+	id := rutorRelease(t, a)
+	var rel struct {
+		catalog.ReleaseView
+		Files []torrents.FileInfo `json:"files"`
+	}
+	waitUntil(t, "страница раздачи и .torrent", func() bool {
+		getJSON(t, fmt.Sprintf("%s/releases/%d", base, id), &rel)
+		return !rel.DetailsPending && len(rel.Files) > 0
+	})
+	if rel.Description == "" || !strings.HasSuffix(rel.TrackerURL, "/torrent/1077013") || rel.Name != "Динозавры" || rel.Hash == "" {
+		t.Fatalf("раздача: %+v", rel.ReleaseView)
+	}
+	resp, err := http.Get(base + "/releases/999999")
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusNotFound {
+		t.Fatalf("нет раздачи: %d", resp.StatusCode)
+	}
+}
