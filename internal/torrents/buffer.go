@@ -73,7 +73,9 @@ func (s *Service) prepare(ctx context.Context, ih metainfo.Hash, index int) erro
 	ss.lastSeen = s.now()
 	if _, done := ss.prepared[index]; done {
 		// Файл уже выбран (второй телевизор или «Смотреть» снова): только фокус — на него.
-		s.setFocusLocked(ss, index)
+		if !fileDone(files[index]) {
+			s.setFocusLocked(ss, index)
+		}
 		s.applyLocked(ss)
 		ss.downloadErr = "" // прежняя неудача отложенного «Скачать» больше не про эту раздачу
 		return nil
@@ -93,8 +95,11 @@ func (s *Service) prepare(ctx context.Context, ih metainfo.Hash, index int) erro
 	ss.prepared[index] = p
 	s.wakeLocked(ss) // «молчащую» раздачу выбрали снова — ей нужны пиры
 
-	// Выбранный файл — в фокус очереди: качается он, остальные хранимые ждут (этап 7).
-	s.setFocusLocked(ss, index)
+	// Выбранный файл — в фокус очереди: качается он, остальные хранимые ждут (этап 7). Скачанный
+	// файл фокус не забирает: иначе очередь ушла бы с серии, выбранной жёлтой «Смотреть».
+	if !fileDone(f) {
+		s.setFocusLocked(ss, index)
+	}
 	s.applyLocked(ss)
 	ss.downloadErr = ""
 	// Начало и конец — первыми: без конца файла MKV/AVI/MP4 плеер не может перематывать.
