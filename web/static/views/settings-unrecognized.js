@@ -1,6 +1,6 @@
 // «Настройки → Не распознано» (спека этапа 8, разделы 5.3 и 6.2): потоки, которые не привязались ни к
 // одному каналу, — по названию; «Назначить» — поиск канала телепрограммы; «Скрыть». Страницы по 50.
-import { h, icon, keepFocus, plural } from '../ui.js';
+import { h, fill, icon, keepFocus, plural } from '../ui.js';
 import { get, put } from '../api.js';
 import { layout, remoteNote } from './settings-layout.js';
 
@@ -14,8 +14,8 @@ export function render(root, r, ctx) {
   let open = ''; // название, для которого открыт поиск канала
   let found = [];
 
-  const search = h('input', { class: 'input', value: q, placeholder: 'Название', 'aria-label': 'Название', 'data-key': 'q' });
-  const pick = h('input', { class: 'input', placeholder: 'Канал в телепрограмме', 'aria-label': 'Канал в телепрограмме', 'data-key': 'pick-q' });
+  const search = h('input', { class: 'input', name: 'q', value: q, placeholder: 'Название', 'aria-label': 'Название', 'data-key': 'q' });
+  const pick = h('input', { class: 'input', name: 'channel', placeholder: 'Канал в телепрограмме', 'aria-label': 'Канал в телепрограмме', 'data-key': 'pick-q' });
   const list = h('div', { class: 'un-list' });
   const pages = h('div', { class: 'pages' });
   content.append(
@@ -49,7 +49,7 @@ export function render(root, r, ctx) {
 
   function draw() {
     if (!data) {
-      list.replaceChildren(error ? h('p', { class: 'error' }, error) : h('p', { class: 'muted' }, 'Загружается…'));
+      fill(list, error ? h('p', { class: 'error' }, error) : h('p', { class: 'muted' }, 'Загружается…'));
       return;
     }
     keepFocus(root, () => {
@@ -84,11 +84,11 @@ export function render(root, r, ctx) {
         }
         return row;
       });
-      list.replaceChildren(ctx.canEdit ? '' : remoteNote(), error ? h('p', { class: 'error' }, error) : '',
+      fill(list, ctx.canEdit ? '' : remoteNote(), error ? h('p', { class: 'error' }, error) : '',
         h('div', { class: 'muted' }, plural(data.total, 'название', 'названия', 'названий')),
         ...(rows.length ? rows : [h('p', { class: 'empty' }, 'Всё распознано')]));
       const link = (n) => `#/settings/unrecognized?${q ? 'q=' + encodeURIComponent(q) + '&' : ''}page=${n}`;
-      pages.replaceChildren(...(data.pages > 1 ? [
+      fill(pages, ...(data.pages > 1 ? [
         page > 1 ? h('a', { class: 'page', href: link(page - 1), 'aria-label': 'Назад', 'data-key': 'prev' }, icon('chevron_left')) : null,
         h('span', { class: 'page on' }, String(page)),
         h('span', { class: 'muted' }, `из ${data.pages}`),

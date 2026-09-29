@@ -1,7 +1,7 @@
 // Карточка канала (спека этапа 8, раздел 6.2): «Смотреть», ★, «Скрыть канал», «Проверить»; программа
 // на сегодня и завтра; источники по порядку с проверками «днём / вечером», «Закрепить первым», «Это
 // другой канал»; правка категории, страны и языка. Правки — из домашней сети.
-import { h, icon, poll, keepFocus, ago } from '../ui.js';
+import { h, fill, icon, poll, keepFocus, ago } from '../ui.js';
 import { get, put, post } from '../api.js';
 import { GRADE, gradeMark, hhmm, logo, watchChannel, toggleFavorite, starButton } from './tvkit.js';
 
@@ -33,7 +33,7 @@ export function render(root, r, ctx) {
   let found = [];
   let probing = 0; // время нажатия «Проверить»
   // Поле поиска создаётся один раз: карточка перерисовывается при опросе, а набранное не должно пропадать.
-  const reInput = h('input', { class: 'input', placeholder: 'Название канала', 'aria-label': 'Название канала', 'data-key': 'reassign-q' });
+  const reInput = h('input', { class: 'input', name: 'channel', placeholder: 'Название канала', 'aria-label': 'Название канала', 'data-key': 'reassign-q' });
 
   const top = h('div');
   const actions = h('div', { class: 'row wrap' });
@@ -51,7 +51,7 @@ export function render(root, r, ctx) {
     } catch (e) {
       if (e.status === 404) {
         cardPoll.stop();
-        top.replaceChildren(h('p', { class: 'error' }, 'Такого канала нет'));
+        fill(top, h('p', { class: 'error' }, 'Такого канала нет'));
         return;
       }
       error = e.message;
@@ -85,13 +85,13 @@ export function render(root, r, ctx) {
     const c = card;
     const g = GRADE[c.grade] || GRADE.unrated;
     keepFocus(root, () => {
-      top.replaceChildren(h('div', { class: 'row chan-head' }, logo(c, 'ch-logo big'),
+      fill(top, h('div', { class: 'row chan-head' }, logo(c, 'ch-logo big'),
         h('div', { class: 'grow' },
           h('h1', null, c.name),
           h('div', { class: 'muted sub' }, [c.number ? `№ ${c.number}` : null, c.categoryName, c.countryName, c.languageNames.join(', ') || null].filter(Boolean).join(' · ')),
           h('div', { class: 'tags' }, h('span', { class: 'tag' }, gradeMark(c.grade), g.label),
             c.now ? h('span', { class: 'tag' }, `Сейчас: ${c.now.title}`) : null))));
-      actions.replaceChildren(
+      fill(actions, 
         h('button', { class: 'btn inv big', type: 'button', 'data-key': 'watch', onclick: () => act(() => watchChannel(key, ctx)) }, icon('play_arrow'), 'Смотреть'),
         h('a', { class: 'btn big wide-only', href: `/m3u/channel/${enc}.m3u8`, download: '', 'data-key': 'm3u' }, icon('playlist_play'), '.m3u8'),
         ctx.canEdit ? starButton(c.favorite, () => act(async () => {
@@ -131,7 +131,7 @@ export function render(root, r, ctx) {
       const on = new Date(p.start).getTime() <= now && now < new Date(p.stop).getTime();
       return h('div', { class: on ? 'prog on' : 'prog', 'aria-current': on ? 'true' : null }, h('span', { class: 'prog-time' }, hhmm(p.start)), h('span', null, p.title));
     });
-    prog.replaceChildren(h('div', { class: 'row' }, h('div', { class: 'h grow' }, 'Программа'), tabs),
+    fill(prog, h('div', { class: 'row' }, h('div', { class: 'h grow' }, 'Программа'), tabs),
       ...(rows.length ? rows : [h('p', { class: 'muted' }, items ? 'Программы нет' : 'Загружается…')]));
   }
 
@@ -168,7 +168,7 @@ export function render(root, r, ctx) {
       out.push(row);
     });
     if (!card.sources.length) out.push(h('p', { class: 'muted' }, 'Источников нет'));
-    srcs.replaceChildren(...out);
+    fill(srcs, ...out);
   }
 
   function reassignBox(s) {
@@ -197,7 +197,7 @@ export function render(root, r, ctx) {
 
   function drawEdit() {
     if (!ctx.canEdit) {
-      edit.replaceChildren();
+      fill(edit, );
       edit.hidden = true;
       return;
     }
@@ -211,17 +211,17 @@ export function render(root, r, ctx) {
     }
     const c = card;
     const opt = (v, t, cur) => h('option', { value: v, selected: v === cur }, t);
-    const cat = h('select', { class: 'input', 'data-key': 'cat', 'aria-label': 'Категория' }, CATEGORIES.map(([v, t]) => opt(v, t, c.category)));
+    const cat = h('select', { class: 'input', name: 'category', 'data-key': 'cat', 'aria-label': 'Категория' }, CATEGORIES.map(([v, t]) => opt(v, t, c.category)));
     const countries = facets.countries.filter((x) => x.id);
     if (c.country && !countries.some((x) => x.id === c.country)) countries.push({ id: c.country, name: c.countryName });
-    const country = h('select', { class: 'input', 'data-key': 'country', 'aria-label': 'Страна' },
+    const country = h('select', { class: 'input', name: 'country', 'data-key': 'country', 'aria-label': 'Страна' },
       opt('', 'Страна не указана', c.country), countries.map((x) => opt(x.id, x.name, c.country)));
     const langs = facets.languages.filter((x) => x.id);
     for (const [i, l] of c.languages.entries()) if (!langs.some((x) => x.id === l)) langs.push({ id: l, name: c.languageNames[i] });
-    const lang = h('select', { class: 'input', 'data-key': 'lang', 'aria-label': 'Язык' },
+    const lang = h('select', { class: 'input', name: 'language', 'data-key': 'lang', 'aria-label': 'Язык' },
       opt('', 'Язык не указан', c.languages[0] || ''), langs.map((x) => opt(x.id, x.name, c.languages[0] || '')));
     const overridden = c.override.category !== null || c.override.country !== null || c.override.languages !== null;
-    edit.replaceChildren(h('div', { class: 'h' }, 'Метки'),
+    fill(edit, h('div', { class: 'h' }, 'Метки'),
       h('label', { class: 'fld' }, 'Категория', cat), h('label', { class: 'fld' }, 'Страна', country), h('label', { class: 'fld' }, 'Язык', lang),
       h('div', { class: 'row gap10' },
         h('button', { class: 'btn inv', type: 'button', 'data-key': 'save-labels', onclick: () => act(() => put(`/channels/${enc}`,

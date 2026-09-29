@@ -1,7 +1,7 @@
 // «Каналы» (спека этапа 8, разделы 5.5 и 6.2): избранное устройства, федеральные, остальные по
 // категориям; вкладки категорий, переключатели страны и языка; в строке — «сейчас и следом», оценка
 // проверки, ★ и «Смотреть». Список опрашивается раз в минуту.
-import { h, icon, poll, store, keepFocus, plural } from '../ui.js';
+import { h, fill, icon, poll, store, keepFocus, plural } from '../ui.js';
 import { get } from '../api.js';
 import { gradeMark, hhmm, progressOf, logo, watchChannel, toggleFavorite, starButton } from './tvkit.js';
 
@@ -99,23 +99,23 @@ export function render(root, r, ctx) {
   function select(label, value, facets, key) {
     const opts = [h('option', { value: '' }, label)];
     for (const x of facets) opts.push(h('option', { value: x.id || UNKNOWN, selected: (x.id || UNKNOWN) === value }, `${x.name} · ${x.count}`));
-    return h('select', { class: 'input sel', 'aria-label': label, 'data-key': `sel-${key}`, onchange: (e) => go({ [key]: e.target.value }) }, opts);
+    return h('select', { class: 'input sel', name: key, 'aria-label': label, 'data-key': `sel-${key}`, onchange: (e) => go({ [key]: e.target.value }) }, opts);
   }
 
   function draw() {
     if (!data) {
-      list.replaceChildren(error ? h('p', { class: 'error' }, error) : h('p', { class: 'muted' }, 'Загружается…'));
+      fill(list, error ? h('p', { class: 'error' }, error) : h('p', { class: 'muted' }, 'Загружается…'));
       return;
     }
     const shown = filterChannels(data.channels, f);
     const hasFav = data.channels.some((c) => c.block === 'favorite');
     keepFocus(root, () => {
-      head.replaceChildren(h('h1', { class: 'grow' }, 'Каналы'),
+      fill(head, h('h1', { class: 'grow' }, 'Каналы'),
         h('span', { class: 'muted' }, plural(shown.length, 'канал', 'канала', 'каналов')),
         select('Все страны', f.country, data.countries, 'country'),
         select('Все языки', f.lang, data.languages, 'lang'));
       const tabs = [['all', 'Все'], ...(hasFav ? [['fav', 'Избранные']] : []), ...data.categories.map((c) => [c.id, c.name])];
-      filters.replaceChildren(...tabs.map(([id, t]) => h('a', { class: id === f.tab ? 'fil on' : 'fil', role: 'tab', 'aria-selected': String(id === f.tab),
+      fill(filters, ...tabs.map(([id, t]) => h('a', { class: id === f.tab ? 'fil on' : 'fil', role: 'tab', 'aria-selected': String(id === f.tab),
         href: '#', 'data-key': `tab-${id || 'none'}`, onclick: (e) => {
           e.preventDefault();
           go({ tab: id });
@@ -128,7 +128,7 @@ export function render(root, r, ctx) {
         if (s.title) out.push(h('h2', { class: 'ch-sec' }, s.title));
         out.push(...s.items.map(row));
       }
-      list.replaceChildren(...out);
+      fill(list, ...out);
     });
   }
 

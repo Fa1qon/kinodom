@@ -162,14 +162,13 @@ func (m *Module) Run(ctx context.Context) error {
 	m.mu.Lock()
 	m.pool, m.runCtx = p, ctx
 	m.mu.Unlock()
-	m.rebuild(ctx)
+	// Телепрограмма с диска — до готовности (секунды): иначе первые секунды после старта каналов «нет»,
+	// и карточка канала на телевизоре показала бы «Такого канала нет». Пока модуль готовится, его
+	// маршруты отвечают 503 «временно недоступен».
+	m.loadFiles(ctx)
 	supervisor.Ready(ctx)
-	supervisor.Go(ctx, func(ctx context.Context) error {
-		m.loadFiles(ctx)
-		m.poke(m.wake)
-		m.poke(m.lightNew)
-		return nil
-	})
+	m.poke(m.wake)
+	m.poke(m.lightNew)
 	supervisor.Go(ctx, m.rebuildLoop)
 	supervisor.Go(ctx, m.updateLoop)
 	supervisor.Go(ctx, m.lightLoop)
