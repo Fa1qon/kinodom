@@ -165,6 +165,29 @@ func TestPendingDownloadSurvivesRestart(t *testing.T) {
 	waitFor(t, "файл стал хранимым", func() bool { return len(stored(t, s2, ih)) == 1 })
 }
 
+// Отложенное «Скачать» упало по месту; место освободили и нажали «Скачать» снова — раздача
+// качается, и прежняя ошибка «мало места» больше не показывается (финальное ревью 7a).
+func TestDownloadClearsOldDownloadError(t *testing.T) {
+	ctx := context.Background()
+	s := newTestService(t)
+	s.freeSpace = func(string) (int64, error) { return 50 << 30, nil }
+	ih, ep := archive(t, s)
+	s.mu.Lock()
+	s.sessions[ih].downloadErr = "мало места на диске"
+	s.mu.Unlock()
+	must(t, s.Download(ctx, ih, nil))
+	if st, _ := s.Status(ih); st.Error != "" {
+		t.Fatalf("после удачного «Скачать» ошибка %q", st.Error)
+	}
+	s.mu.Lock()
+	s.sessions[ih].downloadErr = "мало места на диске"
+	s.mu.Unlock()
+	must(t, s.Prepare(ctx, ih, ep[1]))
+	if st, _ := s.Status(ih); st.Error != "" {
+		t.Fatalf("после удачного «Смотреть» ошибка %q", st.Error)
+	}
+}
+
 // Перезапуск посреди сериала: фокус остаётся на серии, которую выбрали жёлтой «Смотреть», а не
 // возвращается к первой недокачанной (Review Focus 3 плана 7a).
 func TestFocusSurvivesRestart(t *testing.T) {

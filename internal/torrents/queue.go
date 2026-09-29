@@ -73,7 +73,7 @@ func (s *Service) Download(ctx context.Context, ih metainfo.Hash, files []int) e
 			s.mu.Unlock()
 			return ErrNoInfo // номер файла без списка файлов не понять
 		}
-		ss.wantAll = true
+		ss.wantAll, ss.downloadErr = true, ""
 		s.mu.Unlock()
 		return s.reg.SetDownloadAll(ctx, ih, true)
 	}
@@ -119,6 +119,7 @@ func (s *Service) Download(ctx context.Context, ih metainfo.Hash, files []int) e
 	if ss.focus < 0 || !ss.storedFiles[ss.focus] || fileDone(all[ss.focus]) {
 		s.setFocusLocked(ss, s.nextFocusLocked(ss))
 	}
+	ss.downloadErr = "" // место нашлось: прежняя неудача отложенного «Скачать» больше не про эту раздачу
 	s.wakeLocked(ss)
 	s.applyLocked(ss)
 	return nil
