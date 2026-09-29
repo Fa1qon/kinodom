@@ -2,6 +2,8 @@ package torrents
 
 import (
 	"context"
+	"database/sql"
+	"errors"
 	"time"
 
 	"github.com/anacrolix/torrent/metainfo"
@@ -113,4 +115,57 @@ func (r *Registry) setProblem(ctx context.Context, id, text string) {
 
 func (r *Registry) clearProblem(ctx context.Context, id string) {
 	r.db.ClearProblem(context.WithoutCancel(ctx), id)
+}
+
+// StoredFile — хранимый файл: когда его открывали и смотрели.
+type StoredFile struct {
+	InfoHash   metainfo.Hash
+	Index      int
+	Path       string
+	Size       int64
+	LastOpened time.Time
+	LastStream time.Time // ноль — не смотрели
+}
+
+const storedFileColumns = `infohash, file_index, path, size, last_opened_at, last_stream_at`
+
+func scanStoredFile(sc interface{ Scan(...any) error }) (StoredFile, error) {
+	var (
+		f              StoredFile
+		hexHash        string
+		opened, stream int64
+	)
+	if err := sc.Scan(&hexHash, &f.Index, &f.Path, &f.Size, &opened, &stream); err != nil {
+		return f, err
+	}
+	if err := f.InfoHash.FromHexString(hexHash); err != nil {
+		return f, err
+	}
+	f.LastOpened = time.UnixMilli(opened)
+	if stream > 0 {
+		f.LastStream = time.UnixMilli(stream)
+	}
+	return f, nil
+}
+
+// StoredFile — хранимый файл раздачи; false — такого нет.
+func (r *Registry) StoredFile(ctx context.Context, ih metainfo.Hash, index int) (StoredFile, bool, error) {
+	f, err := scanStoredFile(r.db.R.QueryRowContext(ctx,
+		`SELECT `+storedFileColumns+` FROM stored_files WHERE infohash = ? AND file_index = ?`, ih.HexString(), index))
+	if errors.Is(err, sql.ErrNoRows) {
+		return f, false, nil
+	}
+	return f, err == nil, err
+}
+
+// Unstore — файл удалён с диска: больше не хранится и не докачивается.
+func (r *Registry) Unstore(ctx context.Context, ih metainfo.Hash, index int) error {
+	_, err := r.db.W.ExecContext(ctx, `DELETE FROM stored_files WHERE infohash = ? AND file_index = ?`, ih.HexString(), index)
+	return err
+}
+
+// Forget — раздача убрана совсем (её хранимые файлы уходят вместе с ней).
+func (r *Registry) Forget(ctx context.Context, ih metainfo.Hash) error {
+	_, err := r.db.W.ExecContext(ctx, `DELETE FROM torrents WHERE infohash = ?`, ih.HexString())
+	return err
 }

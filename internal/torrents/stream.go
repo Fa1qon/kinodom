@@ -37,6 +37,7 @@ func (s *Service) StreamHandler() http.Handler {
 		f := files[index]
 		s.activeStreams.Add(1)
 		defer s.activeStreams.Add(-1)
+		defer s.openReader(ih, index)()
 		if err := s.reg.TouchStream(r.Context(), ih, index, s.now()); err != nil {
 			s.log.Warn("не удалось отметить просмотр", "err", err)
 		}
@@ -79,4 +80,21 @@ func parseHash(w http.ResponseWriter, r *http.Request) (metainfo.Hash, bool) {
 		return ih, false
 	}
 	return ih, true
+}
+
+// openReader отмечает открытый поток к файлу (такой файл «сейчас смотрят» и не удаляется);
+// возвращает отметку закрытия.
+func (s *Service) openReader(ih metainfo.Hash, index int) func() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	ss := s.sessions[ih]
+	if ss == nil {
+		return func() {}
+	}
+	ss.readers[index]++
+	return func() {
+		s.mu.Lock()
+		defer s.mu.Unlock()
+		ss.readers[index]--
+	}
 }

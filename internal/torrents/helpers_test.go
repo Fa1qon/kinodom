@@ -4,6 +4,7 @@ import (
 	"context"
 	"io"
 	"log/slog"
+	"sync"
 	"testing"
 	"time"
 
@@ -93,4 +94,32 @@ func problemText(t *testing.T, db *store.DB, id string) string {
 		}
 	}
 	return ""
+}
+
+// testClock — часы теста: сервис смотрит на них вместо настоящих.
+type testClock struct {
+	mu sync.Mutex
+	t  time.Time
+}
+
+func (c *testClock) now() time.Time {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.t
+}
+
+func (c *testClock) add(d time.Duration) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.t = c.t.Add(d)
+}
+
+// readersOf — сколько потоков открыто к файлу.
+func (s *Service) readersOf(ih metainfo.Hash, index int) int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if ss, ok := s.sessions[ih]; ok {
+		return ss.readers[index]
+	}
+	return 0
 }
