@@ -189,6 +189,10 @@ func (s *Service) Run(ctx context.Context) error {
 // Раздачи, которые уже в движке, не трогает: вызывается и повторно — вернуть раздачи с диска,
 // который был недоступен.
 func (s *Service) restore(ctx context.Context) error {
+	// Первый вызов — при запуске модуля: раздачи без папки (до этапа 6) лежат в текущей папке.
+	if err := s.reg.PinDirs(ctx, s.eng.DownloadsDir()); err != nil {
+		return err
+	}
 	recs, err := s.reg.Restorable(ctx)
 	if err != nil {
 		return err

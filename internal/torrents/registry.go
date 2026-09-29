@@ -39,6 +39,13 @@ func (r *Registry) Remember(ctx context.Context, ih metainfo.Hash, source, dir s
 	return got, err
 }
 
+// PinDirs закрепляет папку за раздачами без папки (записаны до этапа 6): они лежат в папке
+// загрузок, которая действует сейчас. Иначе после смены папки в пульте их искали бы в новой.
+func (r *Registry) PinDirs(ctx context.Context, dir string) error {
+	_, err := r.db.W.ExecContext(ctx, `UPDATE torrents SET dir = ? WHERE dir = ''`, dir)
+	return err
+}
+
 // SaveMetainfo сохраняет метаинфо, когда движок её получил. Источник не меняется.
 func (r *Registry) SaveMetainfo(ctx context.Context, ih metainfo.Hash, name string, mi []byte) error {
 	_, err := r.db.W.ExecContext(ctx,
