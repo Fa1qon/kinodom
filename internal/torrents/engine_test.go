@@ -2,17 +2,21 @@ package torrents
 
 import (
 	"net/http"
-	"strings"
 	"testing"
 	"time"
 
 	"golang.org/x/time/rate"
 
+	"kinodom/internal/netx"
 	"kinodom/internal/torrents/torrenttest"
 )
 
 func TestBuildConfigSendsOnlyHTTPAnnouncesThroughProxy(t *testing.T) {
-	c := Config{TrackerProxy: "socks5://127.0.0.1:1080", Log: quiet()}
+	px, err := netx.NewProxy("socks5://127.0.0.1:1080")
+	if err != nil {
+		t.Fatal(err)
+	}
+	c := Config{Proxy: px, Log: quiet()}
 	cfg, err := buildClientConfig(c, nil, rate.NewLimiter(rate.Inf, 0))
 	if err != nil {
 		t.Fatal(err)
@@ -22,19 +26,17 @@ func TestBuildConfigSendsOnlyHTTPAnnouncesThroughProxy(t *testing.T) {
 	if err != nil || u == nil || u.String() != "socks5://127.0.0.1:1080" {
 		t.Fatalf("анонс не идёт через прокси: %v, %v", u, err)
 	}
+	// Прокси сменили в настройках — следующий анонс идёт через новый, без перезапуска движка.
+	px.Set("http://user:pw@127.0.0.1:3128")
+	if u, _ := cfg.HTTPProxy(req); u == nil || u.String() != "http://user:pw@127.0.0.1:3128" {
+		t.Fatalf("после смены прокси анонс идёт через %v", u)
+	}
 	tr, ok := cfg.WebTransport.(*http.Transport)
 	if !ok || tr.Proxy != nil {
 		t.Fatal("внутренний HTTP-клиент движка (веб-сиды — это данные) не должен ходить через прокси")
 	}
 	if cfg.TrackerListenPacket != nil {
 		t.Fatal("UDP-анонсы должны идти напрямую")
-	}
-}
-
-func TestBuildConfigRejectsBadProxy(t *testing.T) {
-	_, err := buildClientConfig(Config{TrackerProxy: "127.0.0.1:1080", Log: quiet()}, nil, rate.NewLimiter(rate.Inf, 0))
-	if err == nil || !strings.Contains(err.Error(), "socks5://") {
-		t.Fatalf("ожидалась подсказка про формат прокси, получено %v", err)
 	}
 }
 

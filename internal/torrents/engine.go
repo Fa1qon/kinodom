@@ -26,13 +26,13 @@ import (
 
 // Config — параметры движка.
 type Config struct {
-	DownloadsDir    string  // куда качать
-	StateDir        string  // отметки кусков (bolt) и узлы DHT
-	ListenPort      int     // 42000; 0 — любой свободный (тесты)
-	UploadLimit     float64 // байт/с; 0 — без ограничения
-	ConnsPerTorrent int     // соединений на раздачу; 0 — 20
-	TrackerProxy    string  // прокси для HTTP-анонсов; пусто — напрямую
-	Offline         bool    // без DHT, трекеров и проброса порта, только 127.0.0.1 (тесты)
+	DownloadsDir    string      // куда качать
+	StateDir        string      // отметки кусков (bolt) и узлы DHT
+	ListenPort      int         // 42000; 0 — любой свободный (тесты)
+	UploadLimit     float64     // байт/с; 0 — без ограничения
+	ConnsPerTorrent int         // соединений на раздачу; 0 — 20
+	Proxy           *netx.Proxy // прокси для HTTP-анонсов (общий, меняется в настройках); nil — напрямую
+	Offline         bool        // без DHT, трекеров и проброса порта, только 127.0.0.1 (тесты)
 	Log             *slog.Logger
 }
 
@@ -145,13 +145,10 @@ func buildClientConfig(c Config, st storage.ClientImpl, up *rate.Limiter) (*torr
 		cfg.DisableUTP = true
 		cfg.KeepAliveTimeout = 100 * time.Millisecond // тесты: простой из-за потерянного пробуждения — доли секунды
 	}
-	u, err := netx.ParseProxy(c.TrackerProxy)
-	if err != nil {
-		return nil, err
-	}
-	if u != nil {
-		// Через прокси — только HTTP-анонсы: адреса анонсов Rutracker в РФ заблокированы.
-		cfg.HTTPProxy = http.ProxyURL(u)
+	if c.Proxy != nil {
+		// Через прокси — только HTTP-анонсы: адреса анонсов Rutracker в РФ заблокированы. Прокси
+		// спрашивается на каждый анонс: смена в настройках действует без перезапуска движка.
+		cfg.HTTPProxy = c.Proxy.ForRequest
 		// Иначе HTTPProxy попал бы и во внутренний HTTP-клиент движка (веб-сиды) — а это данные.
 		cfg.WebTransport = &http.Transport{Proxy: nil, MaxConnsPerHost: 10}
 		// UDP-анонсы через HTTP/SOCKS-прокси не ходят; публичные UDP-трекеры не заблокированы,

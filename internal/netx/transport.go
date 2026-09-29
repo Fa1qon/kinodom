@@ -16,28 +16,23 @@ import (
 // бесполезно, чинить надо прокси.
 var ErrProxyDown = errors.New("прокси не отвечает")
 
-// NewTransport — транспорт для внешних сайтов. proxy — строка из настроек
-// (socks5://… или http://…); пусто — напрямую: трафик идёт как у системы, через правила
-// VPN-клиента. Переменные окружения HTTP_PROXY и т. п. не читаются: у службы их нет,
-// а в консоли они не должны менять поведение.
-func NewTransport(proxy string) (*http.Transport, error) {
-	u, err := ParseProxy(proxy)
-	if err != nil {
-		return nil, err
-	}
+// NewTransport — транспорт для внешних сайтов через прокси p (nil — напрямую: трафик идёт как у
+// системы, через правила VPN-клиента). Прокси спрашивается при каждом новом соединении — смена в
+// настройках действует без нового транспорта. Логин и пароль из адреса прокси уходят прокси сами:
+// HTTP — заголовком Proxy-Authorization, SOCKS5 — входом по имени и паролю. Переменные окружения
+// HTTP_PROXY и т. п. не читаются: у службы их нет, а в консоли они не должны менять поведение.
+func NewTransport(p *Proxy) *http.Transport {
 	d := &net.Dialer{Timeout: 30 * time.Second, KeepAlive: 30 * time.Second}
 	t := &http.Transport{
-		DialContext:           d.DialContext,
 		ForceAttemptHTTP2:     true,
 		MaxIdleConns:          20,
 		IdleConnTimeout:       90 * time.Second,
 		TLSHandshakeTimeout:   30 * time.Second,
 		ExpectContinueTimeout: time.Second,
 	}
-	if u == nil {
-		return t, nil
+	if p != nil {
+		t.Proxy = p.ForRequest
 	}
-	t.Proxy = http.ProxyURL(u)
 	// HTTPS идёт через прокси командой CONNECT; 407 на неё — прокси отклонил логин или пароль.
 	t.OnProxyConnectResponse = func(_ context.Context, _ *url.URL, _ *http.Request, res *http.Response) error {
 		if res.StatusCode == http.StatusProxyAuthRequired {
@@ -47,15 +42,15 @@ func NewTransport(proxy string) (*http.Transport, error) {
 	}
 	// К прокси (и HTTP, и SOCKS5) net/http подключается через этот же DialContext —
 	// так «не отвечает прокси» отличается от «не отвечает сайт за прокси».
-	proxyAddr := u.Host
 	t.DialContext = func(ctx context.Context, network, addr string) (net.Conn, error) {
 		conn, err := d.DialContext(ctx, network, addr)
-		if err != nil && strings.EqualFold(addr, proxyAddr) {
-			return nil, fmt.Errorf("%w (%s): %w", ErrProxyDown, proxyAddr, err)
+		if u := p.URL(); err != nil && u != nil && strings.EqualFold(addr, u.Host) {
+			return nil, fmt.Errorf("%w (%s): %w", ErrProxyDown, u.Host, err)
 		}
 		return conn, err
 	}
-	return t, nil
+	p.track(t)
+	return t
 }
 
 // proxyError — прокси ответил, но отказал. Для errors.Is это тоже ErrProxyDown: чинить надо

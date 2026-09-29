@@ -45,7 +45,7 @@ type Passer interface {
 }
 
 type Options struct {
-	Proxy           string        // прокси для трекеров из настроек; пусто — напрямую
+	Proxy           *netx.Proxy   // прокси для трекеров из настроек; nil — напрямую
 	Mirrors         []string      // пусто — DefaultMirrors
 	APIBase         string        // пусто — DefaultAPIBase
 	FeedBase        string        // пусто — DefaultFeedBase

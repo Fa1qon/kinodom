@@ -45,7 +45,7 @@ var videoCategories = []source.Category{
 }
 
 type Options struct {
-	Proxy        string        // прокси для трекеров из настроек; пусто — напрямую
+	Proxy        *netx.Proxy   // прокси для трекеров из настроек; nil — напрямую
 	Mirrors      []string      // пусто — DefaultMirrors
 	DownloadBase string        // пусто — DefaultDownloadBase
 	Rate         rate.Limit    // 0 — 1 запрос/с (тесты ускоряют)

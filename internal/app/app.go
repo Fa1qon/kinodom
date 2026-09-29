@@ -74,6 +74,7 @@ type App struct {
 
 	kp        *meta.Kinopoisk
 	rutracker *rutracker.Rutracker
+	proxy     *netx.Proxy // прокси для трекеров: один на всех, меняется в пульте на ходу
 	closers   []io.Closer // закрываются в обратном порядке
 }
 
@@ -119,6 +120,7 @@ func New(ctx context.Context, o Options) (*App, error) {
 		return fail(fmt.Errorf("настройки: %w", err))
 	}
 	a.Settings = settings.New(db, vals, a)
+	a.proxy = a.initProxy(ctx, vals.Proxy)
 
 	a.Sup = supervisor.New(log, supervisor.WithErrorSink(func(module, text string) {
 		if err := db.AddError(context.Background(), module, text); err != nil {
@@ -164,17 +166,24 @@ func loadSettings(ctx context.Context, db *store.DB, o Options) (settings.Values
 		Sections: catalog.FormatCategories(catalog.DefaultCategories)}, overrides)
 }
 
+// initProxy — прокси для трекеров, общий для источников, картинок, Edge и анонсов. Неверный адрес в
+// базе (записан до этапа 7) — работа напрямую и проблема в «Состоянии»: торренты работают, только
+// анонсы Rutracker могут не пройти.
+func (a *App) initProxy(ctx context.Context, s string) *netx.Proxy {
+	px, err := netx.NewProxy(s)
+	if err != nil {
+		a.setProblem(ctx, "proxy.invalid", "Прокси в настройках не работает: "+err.Error())
+		px, _ = netx.NewProxy("")
+		return px
+	}
+	a.clearProblem(ctx, "proxy.invalid")
+	return px
+}
+
 // initTorrents добавляет модуль торрентов. Движок создаётся внутри модуля: если папка
 // загрузок недоступна, сервер работает без торрентов (проблема в «Состоянии», маршруты — 503),
 // а сторож повторяет попытки, пока папка не появится или её не сменят в настройках.
 func (a *App) initTorrents(ctx context.Context, o Options, v settings.Values) {
-	proxy := v.Proxy
-	if _, err := netx.ParseProxy(proxy); err != nil {
-		a.setProblem(ctx, "proxy.invalid", "Прокси в настройках не работает: "+err.Error())
-		proxy = "" // без прокси торренты работают, только анонсы Rutracker могут не пройти
-	} else {
-		a.clearProblem(ctx, "proxy.invalid")
-	}
 	var upMBps float64 // 0 — без ограничения
 	if v.UploadMBps != nil {
 		upMBps = *v.UploadMBps
@@ -185,12 +194,12 @@ func (a *App) initTorrents(ctx context.Context, o Options, v settings.Values) {
 	}
 	log := a.Log.With("module", "torrents")
 	cfg := torrents.Config{
-		StateDir:     a.Paths.Torrent,
-		ListenPort:   port,
-		UploadLimit:  upMBps * 1024 * 1024,
-		TrackerProxy: proxy,
-		Offline:      o.Offline,
-		Log:          log,
+		StateDir:    a.Paths.Torrent,
+		ListenPort:  port,
+		UploadLimit: upMBps * 1024 * 1024,
+		Proxy:       a.proxy,
+		Offline:     o.Offline,
+		Log:         log,
 	}
 	a.Torrents = torrents.NewLazyService(
 		func() (*torrents.Engine, error) {
@@ -224,7 +233,7 @@ func (a *App) initTorrents(ctx context.Context, o Options, v settings.Values) {
 // настроек kinopoisk.key (спека, разделы 8 и 15). Без ключа модуль работает: рейтинги по номеру —
 // без ключа (rating.kinopoisk.ru), поиск ждёт ключа.
 func (a *App) initMeta(ctx context.Context, o Options, v settings.Values) error {
-	images, err := meta.NewImages(meta.ImagesOptions{Dir: a.Paths.Images, Proxy: a.trackerProxy(ctx), Log: a.Log.With("module", "images")})
+	images, err := meta.NewImages(meta.ImagesOptions{Dir: a.Paths.Images, Proxy: a.proxy, Log: a.Log.With("module", "images")})
 	if err != nil {
 		return err
 	}
@@ -241,7 +250,6 @@ func (a *App) initMeta(ctx context.Context, o Options, v settings.Values) error 
 // rutor:12»; пусто — разделы по умолчанию). Источник каждого трекера — один на процесс: предел
 // «три поиска Rutor одновременно» и один ограничитель на трекер — на экземпляр.
 func (a *App) initCatalog(ctx context.Context, o Options, v settings.Values) error {
-	proxy := a.trackerProxy(ctx)
 	log := a.Log.With("module", "catalog")
 	cats, err := catalog.ParseCategories(v.Sections)
 	if err != nil {
@@ -250,12 +258,12 @@ func (a *App) initCatalog(ctx context.Context, o Options, v settings.Values) err
 	} else {
 		a.clearProblem(ctx, "catalog.categories")
 	}
-	rutorSrc, err := rutor.New(rutor.Options{Proxy: proxy, Mirrors: o.Trackers.RutorMirrors,
+	rutorSrc, err := rutor.New(rutor.Options{Proxy: a.proxy, Mirrors: o.Trackers.RutorMirrors,
 		DownloadBase: o.Trackers.RutorDownload, Rate: o.Trackers.Rate, Log: log})
 	if err != nil {
 		return err
 	}
-	rto := rutracker.Options{Proxy: proxy, Mirrors: o.Trackers.RutrackerMirrors, APIBase: o.Trackers.RutrackerAPI,
+	rto := rutracker.Options{Proxy: a.proxy, Mirrors: o.Trackers.RutrackerMirrors, APIBase: o.Trackers.RutrackerAPI,
 		FeedBase: o.Trackers.RutrackerFeed, Rate: o.Trackers.Rate, Log: log,
 		Login: v.RutrackerLogin, Password: v.RutrackerPassword}
 	edgeOn := !o.Trackers.NoEdge && a.ModuleEnabled(ctx, "edge")
@@ -264,7 +272,7 @@ func (a *App) initCatalog(ctx context.Context, o Options, v settings.Values) err
 		// на UA пропуска (Edge мог обновиться, пока служба работает, — этап 5a).
 		if ua, err := edge.UserAgent(); err == nil {
 			rto.UserAgent = ua
-			rto.Passer = edge.New(edge.Options{ProfileDir: a.Paths.EdgeProfile, Proxy: proxy, Log: a.Log.With("module", "edge")})
+			rto.Passer = edge.New(edge.Options{ProfileDir: a.Paths.EdgeProfile, Proxy: a.proxy, Log: a.Log.With("module", "edge")})
 		} else {
 			log.Warn("Edge не найден — Rutracker только по API", "err", err)
 		}
@@ -279,16 +287,6 @@ func (a *App) initCatalog(ctx context.Context, o Options, v settings.Values) err
 		Ratings: a.Ratings, Images: a.Images, KinopoiskPoster: a.kp.PosterURL, Log: log})
 	a.Sup.Add(a.Catalog, a.ModuleEnabled(ctx, a.Catalog.Name()))
 	return nil
-}
-
-// trackerProxy — прокси для трекеров из настроек; неверный — пусто (проблему proxy.invalid
-// записывает initTorrents).
-func (a *App) trackerProxy(ctx context.Context) string {
-	proxy := a.Settings.Current().Proxy
-	if _, err := netx.ParseProxy(proxy); err != nil {
-		return ""
-	}
-	return proxy
 }
 
 // ModuleEnabled — модуль включён, если в настройках нет modules.<имя>.enabled = "false".
@@ -365,6 +363,12 @@ func (a *App) Apply(ctx context.Context, old, n settings.Values) {
 	if n.DownloadsDir != old.DownloadsDir {
 		if e := a.Torrents.Engine(); e != nil {
 			e.SetDownloadsDir(n.DownloadsDir)
+		}
+	}
+	if n.Proxy != old.Proxy {
+		// Адрес уже проверен settings.Values.With: Set не откажет.
+		if err := a.proxy.Set(n.Proxy); err == nil {
+			a.clearProblem(ctx, "proxy.invalid")
 		}
 	}
 	if n.RutrackerLogin != old.RutrackerLogin || n.RutrackerPassword != old.RutrackerPassword {

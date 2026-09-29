@@ -645,3 +645,78 @@ func TestSettingsApplyWithoutRestart(t *testing.T) {
 		t.Fatalf("GET /settings: %+v", v)
 	}
 }
+
+// countingProxy — HTTP-прокси, который считает запросы и пересылает их дальше.
+func countingProxy(t *testing.T, hits *atomic.Int32) *httptest.Server {
+	t.Helper()
+	s := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		hits.Add(1)
+		out, err := http.NewRequest(r.Method, r.URL.String(), r.Body)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadGateway)
+			return
+		}
+		out.Header = r.Header.Clone()
+		resp, err := http.DefaultTransport.RoundTrip(out)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadGateway)
+			return
+		}
+		defer resp.Body.Close()
+		for k, v := range resp.Header {
+			w.Header()[k] = v
+		}
+		w.WriteHeader(resp.StatusCode)
+		io.Copy(w, resp.Body)
+	}))
+	t.Cleanup(s.Close)
+	return s
+}
+
+// Прокси сменили в пульте — трекеры сразу идут через новый, без перезапуска (спека этапа 7, 5.2).
+func TestProxyChangeWithoutRestart(t *testing.T) {
+	rutor := rutortest.NewServer(t)
+	var first, second atomic.Int32
+	p1, p2 := countingProxy(t, &first), countingProxy(t, &second)
+	home := t.TempDir()
+	db, err := store.Open(context.Background(), config.NewPaths(home).DB)
+	if err != nil {
+		t.Fatal(err)
+	}
+	db.SetSetting(context.Background(), "proxy.trackers", p1.URL)
+	db.SetSetting(context.Background(), "catalog.categories", "rutor:12")
+	db.Close()
+	kp := httptest.NewServer(http.NotFoundHandler())
+	t.Cleanup(kp.Close)
+	a := startAppWith(t, Options{Home: home, ListenAddr: "127.0.0.1:0", Offline: true, DownloadsDir: t.TempDir(), KinopoiskAPI: kp.URL,
+		Trackers: Trackers{RutorMirrors: []string{rutor.Mirror.URL}, RutorDownload: rutor.Download.URL,
+			RutrackerMirrors: []string{"http://" + closedAddr(t)}, RutrackerAPI: "http://" + closedAddr(t),
+			RutrackerFeed: "http://" + closedAddr(t), NoEdge: true, Rate: 1000}})
+	waitUntil(t, "каталог через первый прокси", func() bool { return first.Load() > 0 })
+	u := strings.TrimPrefix(p2.URL, "http://")
+	if code, body := putJSON(t, "http://"+a.API.Addr()+"/api/v1/settings", map[string]any{"proxy": map[string]any{"type": "http", "address": u}}); code != 200 {
+		t.Fatalf("смена прокси: %d %s", code, body)
+	}
+	a.Catalog.Refresh()
+	waitUntil(t, "каталог через второй прокси", func() bool { return second.Load() > 0 })
+	// Запрос, начатый до смены, мог прийти к первому прокси уже после неё: сравниваем со следующим
+	// обновлением, когда таких запросов в пути нет.
+	before, next := first.Load(), second.Load()
+	a.Catalog.Refresh()
+	waitUntil(t, "снова через второй прокси", func() bool { return second.Load() > next })
+	if first.Load() != before {
+		t.Fatalf("после смены через первый прокси прошло ещё %d запросов", first.Load()-before)
+	}
+}
+
+// closedAddr — адрес, где никто не слушает.
+func closedAddr(t *testing.T) string {
+	t.Helper()
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	addr := ln.Addr().String()
+	ln.Close()
+	return addr
+}
