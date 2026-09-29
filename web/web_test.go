@@ -19,6 +19,7 @@ var required = []string{
 	"views/catalog.js", "views/release.js", "views/search.js", "views/downloads.js",
 	"views/settings-layout.js", "views/settings-status.js", "views/settings-params.js", "views/settings-sections.js",
 	"views/channels.js", "views/channel.js", "views/tvkit.js", "views/settings-iptv.js", "views/settings-unrecognized.js",
+	"views/history.js",
 }
 
 // scripts — все модули пульта.
@@ -227,6 +228,42 @@ const checks = [
   [progressOf({ start: '2026-09-29T19:00:00+07:00', stop: '2026-09-29T20:00:00+07:00' }, Date.parse('2026-09-29T19:15:00+07:00')), 25],
   [progressOf({ start: '2026-09-29T19:00:00+07:00', stop: '2026-09-29T20:00:00+07:00' }, Date.parse('2026-09-29T21:00:00+07:00')), 100],
   [dateStr(1, new Date(2026, 8, 30, 23, 30)), '2026-10-01'],
+];
+for (const [got, want] of checks) {
+  if (got !== want) {
+    console.error(JSON.stringify(got), '≠', JSON.stringify(want));
+    process.exitCode = 1;
+  }
+}
+`
+	cmd := exec.Command(node, "--input-type=module", "--no-warnings", "-e", script)
+	cmd.Dir = "static"
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Errorf("%v\n%s", err, out)
+	}
+}
+
+// История (спека этапа 8, раздел 7.5): где остановились — минутами, процентом или «досмотрено»; какой
+// файл продолжать — начатый и недосмотренный, смотренный последним, иначе следующий после последнего
+// просмотренного.
+func TestPultHistory(t *testing.T) {
+	node := lookNode(t)
+	script := `
+import { duration, whereStopped, resumeIndex } from './views/history.js';
+const p = (index, fraction, watched, at, positionSec = 0, durationSec = 0) => ({ index, fraction, watched, updatedAt: at, positionSec, durationSec });
+const checks = [
+  [duration(3120), '52 мин'], [duration(7080), '1 ч 58 мин'], [duration(3600), '1 ч'],
+  [whereStopped(p(0, 0.44, false, '', 3120, 7080)), 'остановились на 52 мин из 1 ч 58 мин'],
+  [whereStopped(p(0, 0.43, false, '')), 'остановились на 43 %'],
+  [whereStopped(p(0, 0.95, true, '')), 'досмотрено'],
+  [whereStopped(null), ''],
+  // серии в порядке экрана: 3, 1, 2 (номера файлов в раздаче не по порядку)
+  [resumeIndex([3, 1, 2], []), null],
+  [resumeIndex([3, 1, 2], [p(3, 1, true, '2026-09-29T10:00:00Z'), p(1, 0.4, false, '2026-09-29T11:00:00Z')]), 1],
+  [resumeIndex([3, 1, 2], [p(3, 1, true, '2026-09-29T10:00:00Z')]), 1],
+  [resumeIndex([3, 1, 2], [p(3, 1, true, '2026-09-29T10:00:00Z'), p(1, 1, true, '2026-09-29T11:00:00Z')]), 2],
+  [resumeIndex([3, 1, 2], [p(2, 1, true, '2026-09-29T12:00:00Z')]), null],
+  [resumeIndex([3, 1, 2], [p(1, 0.2, false, '2026-09-29T09:00:00Z'), p(3, 1, true, '2026-09-29T12:00:00Z')]), 1],
 ];
 for (const [got, want] of checks) {
   if (got !== want) {
