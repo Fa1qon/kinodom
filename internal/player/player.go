@@ -24,6 +24,7 @@ type M3UItem struct {
 	URL       string
 	UserAgent string
 	Referrer  string
+	StartSec  int // открыть с этого места, с; 0 — с начала (спека этапа 8, раздел 7.3)
 }
 
 var oneLine = strings.NewReplacer("\r", " ", "\n", " ")
@@ -40,6 +41,9 @@ func M3UList(items []M3UItem) []byte {
 		}
 		if it.Referrer != "" {
 			b.WriteString("#EXTVLCOPT:http-referrer=" + oneLine.Replace(it.Referrer) + "\n")
+		}
+		if it.StartSec > 0 {
+			b.WriteString("#EXTVLCOPT:start-time=" + strconv.Itoa(it.StartSec) + "\n")
 		}
 		b.WriteString(oneLine.Replace(it.URL) + "\n")
 	}
@@ -59,8 +63,28 @@ func M3UDisposition(title string) string {
 }
 
 // LaunchURL — ссылка «Открыть в плеере» для браузера на этом ПК: её открывает kinodom open.
-func LaunchURL(streamURL, title string) string {
-	return "kinodom://play?" + url.Values{"url": {streamURL}, "title": {title}}.Encode()
+func LaunchURL(streamURL, title string) string { return LaunchURLAt(streamURL, title, 0) }
+
+// LaunchURLAt — то же с местом, откуда открыть (секунды; 0 — с начала).
+func LaunchURLAt(streamURL, title string, startSec int) string {
+	v := url.Values{"url": {streamURL}, "title": {title}}
+	if startSec > 0 {
+		v.Set("start", strconv.Itoa(startSec))
+	}
+	return "kinodom://play?" + v.Encode()
+}
+
+// LaunchStart — место из ссылки kinodom:// (секунды); нет или неверное — 0.
+func LaunchStart(link string) int {
+	u, err := url.Parse(link)
+	if err != nil {
+		return 0
+	}
+	n, err := strconv.Atoi(u.Query().Get("start"))
+	if err != nil || n < 0 || n > 7*24*3600 {
+		return 0
+	}
+	return n
 }
 
 // ErrBadLink — ссылка не та, что делает Kinodom: плеер не запускается.

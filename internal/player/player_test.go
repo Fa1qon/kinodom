@@ -35,6 +35,32 @@ func TestM3UList(t *testing.T) {
 	}
 }
 
+// Продолжить с места (спека этапа 8, раздел 7.3): в плейлисте — start-time, в ссылке kinodom:// —
+// start, плееру — --start-time у VLC и /start в миллисекундах у MPC-HC.
+func TestStartTime(t *testing.T) {
+	got := string(M3UList([]M3UItem{{Title: "Серия", URL: "http://h/stream/a/0/x.mkv", StartSec: 1790}}))
+	want := "#EXTM3U" + nl + "#EXTINF:-1,Серия" + nl + "#EXTVLCOPT:start-time=1790" + nl + "http://h/stream/a/0/x.mkv" + nl
+	if got != want {
+		t.Errorf("плейлист: %q", got)
+	}
+	link := LaunchURLAt("http://127.0.0.1:8090/stream/ab/0/x.mkv", "Серия", 1790)
+	if _, _, err := ParseLaunch(link, 8090); err != nil || LaunchStart(link) != 1790 {
+		t.Errorf("ссылка %s: %v, start %d", link, err, LaunchStart(link))
+	}
+	if LaunchStart(LaunchURL("http://127.0.0.1:8090/stream/ab/0/x.mkv", "Серия")) != 0 ||
+		LaunchStart("kinodom://play?url=x&start=-5") != 0 || LaunchStart("kinodom://play?url=x&start=abc") != 0 {
+		t.Errorf("start без места или неверный — не 0")
+	}
+	vlc := launchArgs(Player{Name: "VLC"}, "http://s", "Серия", 1790)
+	mpc := launchArgs(Player{Name: "MPC-HC"}, "http://s", "Серия", 1790)
+	if strings.Join(vlc, " ") != "http://s --meta-title=Серия --start-time=1790" || strings.Join(mpc, " ") != "http://s /start 1790000" {
+		t.Errorf("аргументы: VLC %v, MPC-HC %v", vlc, mpc)
+	}
+	if got := launchArgs(Player{Name: "VLC"}, "http://s", "", 0); strings.Join(got, " ") != "http://s" {
+		t.Errorf("без названия и места: %v", got)
+	}
+}
+
 // nl — перевод строки (так тест читается и не зависит от экранирования).
 const nl = "\n"
 

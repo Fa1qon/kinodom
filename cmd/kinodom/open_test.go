@@ -35,8 +35,8 @@ func TestOpenLaunchesChosenPlayer(t *testing.T) {
 		asked = choice
 		return player.Player{Name: "MPC-HC", Path: `C:\MPC\mpc-hc64.exe`}, nil
 	}
-	launchPlayer = func(p player.Player, stream, title string) error {
-		launched = []string{p.Path, stream, title}
+	launchPlayer = func(p player.Player, stream, title string, start int) error {
+		launched = []string{p.Path, stream, title, strconv.Itoa(start)}
 		return nil
 	}
 	t.Cleanup(func() { findPlayer, launchPlayer = player.Find, player.Launch })
@@ -46,8 +46,12 @@ func TestOpenLaunchesChosenPlayer(t *testing.T) {
 	if code := runCLI([]string{"open", player.LaunchURL(stream, "Фильм")}, &out, &errb); code != 0 {
 		t.Fatalf("код %d: %s", code, errb.String())
 	}
-	if asked != "mpc-hc" || len(launched) != 3 || launched[1] != stream || launched[2] != "Фильм" {
+	if asked != "mpc-hc" || len(launched) != 4 || launched[1] != stream || launched[2] != "Фильм" || launched[3] != "0" {
 		t.Fatalf("плеер %q, запуск %v", asked, launched)
+	}
+	// Продолжить с места (спека этапа 8, раздел 7.3): место из ссылки доходит до плеера.
+	if code := runCLI([]string{"open", player.LaunchURLAt(stream, "Фильм", 1790)}, &out, &errb); code != 0 || launched[3] != "1790" {
+		t.Fatalf("с места: код %d, запуск %v", code, launched)
 	}
 	launched = nil
 	if code := runCLI([]string{"open", "kinodom://play?url=http://127.0.0.1:" + port + "/api/v1/settings"}, &out, &errb); code != 1 ||
