@@ -120,6 +120,7 @@ type watchResponse struct {
 	Play      Play    `json:"play"`
 	M3UURL    string  `json:"m3uUrl"`
 	LaunchURL *string `json:"launchUrl"` // только запросу с этого ПК: kinodom:// открывает плеер здесь
+	StartSec  int     `json:"startSec"`  // откуда открыть, с; 0 — с начала (спека этапа 8, раздел 7.3)
 }
 
 // handleWatch — «Смотреть» (спека этапа 7, раздел 5.5): файл хранится, фокус очереди — на нём, в
@@ -133,6 +134,12 @@ func (s *Service) handleWatch(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
+	var req struct {
+		FromStart bool `json:"fromStart"` // «С начала»
+	}
+	if r.ContentLength != 0 && !httpx.ReadJSON(w, r, &req) {
+		return
+	}
 	if err := s.Prepare(r.Context(), ih, index); err != nil {
 		writePrepareError(w, err)
 		return
@@ -142,10 +149,16 @@ func (s *Service) handleWatch(w http.ResponseWriter, r *http.Request) {
 	path := streamPath(ih, index, name)
 	out := watchResponse{Play: Play{URL: "http://" + r.Host + path, Title: title, Kind: "video"},
 		M3UURL: fmt.Sprintf("http://%s/m3u/%s/%d.m3u8", r.Host, ih.HexString(), index)}
+	if s.watch != nil && !req.FromStart {
+		out.StartSec = s.watch.StartSec(r.Context(), httpx.Device(r), ih.HexString(), index)
+	}
+	if out.StartSec > 0 {
+		out.M3UURL += "?start=" + strconv.Itoa(out.StartSec)
+	}
 	if httpx.FromThisPC(r) {
 		// Ссылка для kinodom open — строго на 127.0.0.1 и порт API, как бы ни открыли пульт.
 		if _, port, err := net.SplitHostPort(r.Host); err == nil {
-			l := player.LaunchURL("http://127.0.0.1:"+port+path, title)
+			l := player.LaunchURLAt("http://127.0.0.1:"+port+path, title, out.StartSec)
 			out.LaunchURL = &l
 		}
 	}
@@ -187,9 +200,10 @@ func (s *Service) handleM3U(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	title := strings.TrimSuffix(baseName(name), extOf(name))
+	start, _ := strconv.Atoi(r.URL.Query().Get("start")) // продолжить с места (спека этапа 8, 7.3)
 	w.Header().Set("Content-Type", "audio/x-mpegurl; charset=utf-8")
 	w.Header().Set("Content-Disposition", player.M3UDisposition(title))
-	w.Write(player.M3U(title, "http://"+r.Host+streamPath(ih, index, name)))
+	w.Write(player.M3UList([]player.M3UItem{{Title: title, URL: "http://" + r.Host + streamPath(ih, index, name), StartSec: max(start, 0)}}))
 }
 
 func parseIndex(w http.ResponseWriter, r *http.Request) (int, bool) {

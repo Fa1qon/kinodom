@@ -108,6 +108,8 @@ type Service struct {
 	totalSpace func(dir string) (int64, error) // размер диска папки
 
 	activeStreams atomic.Int32
+	watch         WatchTracker // история просмотров; nil — без неё (этап 8c)
+	durTried      sync.Map     // durationKey → длительность уже пробовали узнать
 }
 
 func NewService(eng *Engine, reg *Registry, log *slog.Logger) *Service {

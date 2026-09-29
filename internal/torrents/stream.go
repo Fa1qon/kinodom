@@ -2,6 +2,7 @@ package torrents
 
 import (
 	"context"
+	"io"
 	"net/http"
 	"strconv"
 	"time"
@@ -59,7 +60,14 @@ func (s *Service) StreamHandler() http.Handler {
 			ct = "application/octet-stream"
 		}
 		w.Header().Set("Content-Type", ct) // иначе ServeContent стал бы угадывать тип по байтам
-		http.ServeContent(w, r, "", time.Time{}, rd)
+		var body io.ReadSeeker = rd
+		if s.watch != nil { // место по чтению — в историю устройства (спека этапа 8, раздел 7.2)
+			tr := &trackedReader{rs: rd}
+			body = tr
+			defer s.trackWatch(httpx.Device(r), ih, index, f.Length(), tr)()
+			s.learnDuration(ih, index, f)
+		}
+		http.ServeContent(w, r, "", time.Time{}, body)
 	})
 }
 

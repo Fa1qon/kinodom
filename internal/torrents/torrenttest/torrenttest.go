@@ -24,6 +24,7 @@ import (
 type File struct {
 	Path string
 	Size int
+	Data []byte // содержимое; nil — Size случайных байт
 }
 
 // MakeTorrent создаёт dir/name со случайным содержимым и возвращает метаинфо и путь к корню.
@@ -40,8 +41,11 @@ func MakeTorrent(t testing.TB, dir, name string, pieceLen int64, files ...File) 
 		if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
 			t.Fatal(err)
 		}
-		b := make([]byte, f.Size)
-		rand.Read(b)
+		b := f.Data
+		if b == nil {
+			b = make([]byte, f.Size)
+			rand.Read(b)
+		}
 		if err := os.WriteFile(p, b, 0o644); err != nil {
 			t.Fatal(err)
 		}
