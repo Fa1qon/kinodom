@@ -6,6 +6,8 @@ import (
 	"testing"
 
 	"golang.org/x/time/rate"
+
+	"kinodom/internal/torrents/torrenttest"
 )
 
 func TestBuildConfigSendsOnlyHTTPAnnouncesThroughProxy(t *testing.T) {
@@ -83,5 +85,29 @@ func TestSetUploadLimit(t *testing.T) {
 	e.SetUploadLimit(0)
 	if e.up.Limit() != rate.Inf {
 		t.Fatal("0 — без ограничения")
+	}
+}
+
+// Офлайн (тесты) — только TCP. uTP через loopback под нагрузкой теряет пакеты, а anacrolix/utp
+// (чистый Go: CGO выключен) после потери не восстанавливается — загрузка вставала посреди куска
+// (плавающее «не докачался» этапов 2–6, стеки: утп Read/Write ждут друг друга). В службе uTP
+// включён, как требует спека (раздел 9).
+func TestOfflineEngineUsesTCPOnly(t *testing.T) {
+	off, err := buildClientConfig(Config{Offline: true, Log: quiet()}, nil, rate.NewLimiter(rate.Inf, 0))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !off.DisableUTP {
+		t.Fatal("офлайн-движок должен ходить только по TCP")
+	}
+	on, err := buildClientConfig(Config{ListenPort: 42000, Log: quiet()}, nil, rate.NewLimiter(rate.Inf, 0))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if on.DisableUTP {
+		t.Fatal("в службе uTP должен быть включён (спека, раздел 9)")
+	}
+	if !torrenttest.OfflineConfig(t.TempDir()).DisableUTP {
+		t.Fatal("тестовые клиенты — тоже только TCP")
 	}
 }

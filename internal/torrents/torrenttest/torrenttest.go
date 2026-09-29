@@ -68,6 +68,9 @@ func OfflineConfig(dataDir string) *torrent.ClientConfig {
 	cfg.ListenPort = 0
 	cfg.DisableIPv6 = true
 	cfg.Seed = true
+	// Только TCP: uTP через loopback под нагрузкой теряет пакеты, и anacrolix/utp (чистый Go)
+	// после потери не восстанавливается — загрузка вставала посреди куска (этап 6).
+	cfg.DisableUTP = true
 	return cfg
 }
 
