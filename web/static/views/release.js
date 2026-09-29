@@ -1,12 +1,15 @@
 // Раздача: постер, название, теги, описание; до «Скачать» — одна светлая кнопка, после — у каждого
-// файла прогресс и «Смотреть» цвета готовности, справа — панель файла в фокусе (спека этапа 7,
-// разделы 5.4, 5.5 и 6.3).
+// файла прогресс и «Смотреть» цвета готовности, справа — панель файла в фокусе; ниже — «Другие раздачи»
+// фильма и «Искать на трекерах» (спека этапа 7, разделы 5.4, 5.5, 6.3 и 10.7).
 import { h, icon, size, speed, rating, minutes, ready, poll, copyText, store, plural, shortNames, keepFocus, fileFormat } from '../ui.js';
 import { get, post } from '../api.js';
 import { poster } from './catalog.js';
+import { trackerTags } from './search.js';
 
 const TRACKER = { rutor: 'Rutor', rutracker: 'Rutracker' };
 const PENDING_FOR = 120000; // догрузку страницы раздачи ждём не дольше 2 минут (трекер мог лечь)
+const SEARCH_FOR = 30000; // поиск других раздач сервер держит не дольше 30 с
+const FORMATS_FOR = 120000; // формат найденных ждём не дольше 2 минут: их страницы догружаются
 
 export function render(root, r, ctx) {
   const id = r.parts[1];
@@ -19,14 +22,26 @@ export function render(root, r, ctx) {
   let torrentPoll = null;
   let descOpen = false; // описание развёрнуто
   const started = Date.now();
+  let variants = null; // /releases/{id}/variants — «Другие раздачи»
+  let searchPoll = null; // «Искать на трекерах» идёт
+  let searchStarted = 0;
+  let fetchedAt = 0;
+  let searchError = '';
 
   const back = h('div');
   const cover = h('div', { class: 'rel-cover' });
   const info = h('div', { class: 'rel-info' });
   const live = h('div', { class: 'rel-live' });
   const side = h('aside', { class: 'panel', 'aria-label': 'Просмотр' });
+  const others = h('section', { class: 'others', 'aria-label': 'Другие раздачи' });
   root.append(h('div', { class: 'screen release' }, back,
-    h('div', { class: 'rel-grid' }, cover, h('div', { class: 'rel-main' }, info, live), side)));
+    h('div', { class: 'rel-grid' }, cover, h('div', { class: 'rel-main' }, info, live, others), side)));
+  get(`/releases/${id}/variants`).then((v) => {
+    if (alive && !searchPoll) {
+      variants = v;
+      drawOthers();
+    }
+  }, () => {});
 
   const releasePoll = poll(async () => {
     try {
@@ -223,6 +238,72 @@ export function render(root, r, ctx) {
     drawLive();
   }
 
+  // drawOthers — «Другие раздачи»: раздачи того же фильма на обоих трекерах (текущая отмечена), под
+  // ними — «Искать на трекерах» и состояние трекеров (спека этапа 7, разделы 10.4, 10.5 и 10.7).
+  function drawOthers() {
+    const items = variants ? variants.items : [];
+    const searched = !!(variants && variants.search);
+    const out = [];
+    if (items.length > 1 || searched) {
+      out.push(h('h2', null, 'Другие раздачи'));
+      out.push(h('div', { class: 'var-list' }, items.map(variantRow)));
+    }
+    out.push(h('div', { class: 'row gap10' },
+      h('button', { class: 'btn', type: 'button', disabled: !!searchPoll, 'data-key': 'search-others', onclick: searchOthers },
+        icon('search'), 'Искать на трекерах'),
+      searched ? h('div', { class: 'tags' }, trackerTags(variants.search.trackers, items)) : null));
+    if (searchError) out.push(h('div', { class: 'error' }, searchError));
+    keepFocus(others, () => others.replaceChildren(...out));
+  }
+
+  function variantRow(e) {
+    const current = String(e.id) === String(id);
+    const what = h('span', { class: 'var-what' },
+      h('span', { class: 'strong ellipsis' }, [TRACKER[e.tracker] || e.tracker, e.quality].filter(Boolean).join(' · ')),
+      h('span', { class: 'muted small ellipsis', title: e.title }, [current ? 'эта раздача' : null, e.season || null].filter(Boolean).join(' · ') || e.name));
+    const cells = [what,
+      e.format ? h('span', null, e.format) : h('span', { class: 'muted', 'aria-label': e.detailsPending ? 'формат загружается' : 'формат неизвестен' }, e.detailsPending ? '…' : '—'),
+      h('span', null, size(e.size)),
+      h('span', { class: 'seeders' }, icon('arrow_upward', 16), String(e.seeders))];
+    return current
+      ? h('div', { class: 'var-row on', 'aria-current': 'true' }, ...cells)
+      : h('a', { class: 'var-row', href: `#/release/${e.id}`, 'data-key': `var-${e.id}` }, ...cells);
+  }
+
+  // searchOthers — «Искать на трекерах»: опрос раз в 1 с, пока поиск идёт (до 30 с), потом раз в 3 с,
+  // пока у найденных догружается страница (до 2 минут). Повторные опросы — с poll=1: сервер не ищет
+  // заново, даже если трекер ответил ошибкой; новое нажатие — ищет.
+  function searchOthers() {
+    searchError = '';
+    searchStarted = Date.now();
+    fetchedAt = 0;
+    let repeat = '';
+    searchPoll = poll(async () => {
+      const done = variants && variants.search && (variants.search.complete || Date.now() - searchStarted > SEARCH_FOR);
+      if (done && Date.now() - fetchedAt < 3000) return;
+      try {
+        variants = await get(`/releases/${id}/variants?search=1${repeat}`);
+        repeat = '&poll=1';
+        fetchedAt = Date.now();
+      } catch (e) {
+        searchError = e.message;
+        stopSearch();
+        return;
+      }
+      if (!alive) return;
+      const loading = variants.items.some((e) => e.detailsPending);
+      if ((variants.search.complete && !loading) || Date.now() - searchStarted > FORMATS_FOR) stopSearch();
+      else drawOthers();
+    }, 1000);
+    drawOthers();
+  }
+
+  function stopSearch() {
+    if (searchPoll) searchPoll.stop();
+    searchPoll = null;
+    if (alive) drawOthers();
+  }
+
   async function copyLink(f, button) {
     const name = f.name.split(/[\\/]/).pop();
     try {
@@ -237,6 +318,7 @@ export function render(root, r, ctx) {
     alive = false;
     releasePoll.stop();
     if (torrentPoll) torrentPoll.stop();
+    if (searchPoll) searchPoll.stop();
   };
 }
 

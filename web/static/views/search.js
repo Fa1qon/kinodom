@@ -74,14 +74,7 @@ export function render(root, r, ctx) {
   }, 1000);
 
   function draw(res) {
-    const count = {};
-    for (const e of res.results) count[e.tracker] = (count[e.tracker] || 0) + 1;
-    trackers.replaceChildren(...Object.keys(TRACKER).filter((t) => t in res.trackers).map((t) => {
-      const s = res.trackers[t];
-      if (s === 'ok') return h('span', { class: 'tag ok-tag' }, icon('check', 18, 'Готово'), `${TRACKER[t]} · ${count[t] || 0}`);
-      if (s === 'идёт') return h('span', { class: 'tag busy-tag' }, icon('progress_activity', 18), `${TRACKER[t]} · ищет…`);
-      return h('span', { class: 'tag warn-tag' }, icon('warning', 18), s.startsWith(TRACKER[t]) ? s : `${TRACKER[t]} · ${s}`);
-    }));
+    trackers.replaceChildren(...trackerTags(res.trackers, res.results));
     if (!res.results.length) {
       table.replaceChildren(res.complete ? h('p', { class: 'muted' }, 'Ничего не нашлось') : '');
       return;
@@ -101,4 +94,17 @@ export function render(root, r, ctx) {
     alive = false;
     search.stop();
   };
+}
+
+// trackerTags — состояние каждого трекера в поиске: сколько найдено, ищет, текст ошибки. Им же
+// пользуется «Искать на трекерах» на экране раздачи.
+export function trackerTags(trackers, results) {
+  const count = {};
+  for (const e of results) count[e.tracker] = (count[e.tracker] || 0) + 1;
+  return Object.keys(TRACKER).filter((t) => t in trackers).map((t) => {
+    const s = trackers[t];
+    if (s === 'ok') return h('span', { class: 'tag ok-tag' }, icon('check', 18, 'Готово'), `${TRACKER[t]} · ${count[t] || 0}`);
+    if (s === 'идёт') return h('span', { class: 'tag busy-tag' }, icon('progress_activity', 18), `${TRACKER[t]} · ищет…`);
+    return h('span', { class: 'tag warn-tag' }, icon('warning', 18), s.startsWith(TRACKER[t]) ? s : `${TRACKER[t]} · ${s}`);
+  });
 }

@@ -1,6 +1,6 @@
 // Каталог трекера: вкладки Rutracker и Rutor, раздел, сетка постеров по раздающим, страницы
 // (спека этапа 7, разделы 5.4 и 6.3).
-import { h, icon, ago, size, rating, store } from '../ui.js';
+import { h, icon, ago, size, rating, store, plural } from '../ui.js';
 import { get } from '../api.js';
 
 export const TRACKERS = [['rutracker', 'Rutracker'], ['rutor', 'Rutor']];
@@ -77,10 +77,12 @@ export function entry(e) {
       h('span', { class: 'stat', title: 'Размер' }, size(e.size))));
 }
 
-// poster — картинка раздачи; нет картинки или она не загрузилась — тёмный прямоугольник с названием.
+// poster — картинка раздачи; нет картинки или она не загрузилась — тёмный прямоугольник с названием. У
+// карточки фильма с несколькими раздачами — «N раздач» (спека этапа 7, раздел 10.7).
 export function poster(e, title, cls = 'poster') {
   const box = h('div', { class: cls },
     e.kinopoisk > 0 ? h('span', { class: 'kp' }, 'КП ' + rating(e.kinopoisk)) : null,
+    e.variants > 1 ? h('span', { class: 'vars' }, plural(e.variants, 'раздача', 'раздачи', 'раздач')) : null,
     h('div', { class: 'ptitle' }, title || ''));
   if (e.imageKey) {
     const img = h('img', { src: `/img/${e.imageKey}`, alt: '', loading: 'lazy', decoding: 'async' });
