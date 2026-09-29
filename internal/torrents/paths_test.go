@@ -1,6 +1,7 @@
 package torrents
 
 import (
+	"path/filepath"
 	"strings"
 	"testing"
 	"unicode/utf8"
@@ -67,5 +68,36 @@ func TestLongNamesDifferingOnlyInTailStayDistinct(t *testing.T) {
 		if utf8.RuneCountInString(s) > maxComponentRunes || !strings.HasSuffix(s, ".mkv") {
 			t.Fatalf("неверное имя: %q", s)
 		}
+	}
+}
+
+// Глубоко вложенный файл: путь внутри раздачи не длиннее 120 символов, чтобы полный путь
+// уложился в 260; файлы одной папки — рядом, одноимённые из разных папок — не сливаются (хвост
+// этапа 2).
+func TestDeepFilePathIsShortened(t *testing.T) {
+	var ih metainfo.Hash
+	long := strings.Repeat("Очень длинное название папки ", 4)
+	info := &metainfo.Info{Name: strings.Repeat("Длинное название раздачи ", 5), Files: []metainfo.FileInfo{
+		{Path: []string{long, "Субтитры " + long, "Серия 01.srt"}, Length: 1},
+		{Path: []string{long, "Субтитры " + long, "Серия 02.srt"}, Length: 1},
+		{Path: []string{long, "Звук " + long, "Серия 01.srt"}, Length: 1},
+		{Path: []string{"Сезон 1", "Серия 01.mkv"}, Length: 1},
+	}}
+	var ps []string
+	for _, fi := range info.Files {
+		p := enginePath(`D:\Загрузки\Kinodom\Фильмы и сериалы`, info, ih, fi)
+		if n := utf8.RuneCountInString(p); n >= 260 {
+			t.Fatalf("путь %d символов: %s", n, p)
+		}
+		ps = append(ps, p)
+	}
+	if filepath.Dir(ps[0]) != filepath.Dir(ps[1]) {
+		t.Fatalf("файлы одной папки разошлись: %s / %s", ps[0], ps[1])
+	}
+	if ps[0] == ps[2] {
+		t.Fatal("одноимённые файлы из разных папок слились")
+	}
+	if !strings.HasSuffix(ps[3], `\Сезон 1\Серия 01.mkv`) {
+		t.Fatalf("короткий путь изменился: %s", ps[3])
 	}
 }

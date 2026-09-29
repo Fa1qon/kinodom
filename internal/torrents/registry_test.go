@@ -23,6 +23,13 @@ func newTestDB(t *testing.T) *store.DB {
 	return db
 }
 
+func remember(t *testing.T, r *Registry, ih metainfo.Hash, source string) {
+	t.Helper()
+	if _, err := r.Remember(context.Background(), ih, source, `D:\K`); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func hashOf(t *testing.T, c string) metainfo.Hash {
 	t.Helper()
 	var ih metainfo.Hash
@@ -38,9 +45,9 @@ func TestRestorableNeedsMetainfoAndStoredFile(t *testing.T) {
 	noMeta, noFiles, ok := hashOf(t, "a"), hashOf(t, "b"), hashOf(t, "c")
 	now := time.Now()
 
-	must(t, r.Remember(ctx, noMeta, "magnet:a"))
+	remember(t, r, noMeta, "magnet:a")
 	must(t, r.MarkStored(ctx, noMeta, 0, `D:\K\a.mkv`, 1, now)) // файл есть, метаинфо нет
-	must(t, r.SaveMetainfo(ctx, noFiles, "B", []byte("mi-b")))    // метаинфо есть, файлов нет
+	must(t, r.SaveMetainfo(ctx, noFiles, "B", []byte("mi-b")))  // метаинфо есть, файлов нет
 	must(t, r.SaveMetainfo(ctx, ok, "C", []byte("mi-c")))
 	must(t, r.MarkStored(ctx, ok, 1, `D:\K\C\1.mkv`, 100, now))
 
@@ -62,7 +69,7 @@ func TestSaveMetainfoKeepsSource(t *testing.T) {
 	db := newTestDB(t)
 	r := NewRegistry(db)
 	ih := hashOf(t, "d")
-	must(t, r.Remember(ctx, ih, "magnet:?xt=urn:btih:dd"))
+	remember(t, r, ih, "magnet:?xt=urn:btih:dd")
 	must(t, r.SaveMetainfo(ctx, ih, "D", []byte("mi")))
 	var source string
 	if err := db.R.QueryRow("SELECT source FROM torrents WHERE infohash = ?", ih.HexString()).Scan(&source); err != nil {
@@ -78,7 +85,7 @@ func TestMarkStoredTwiceUpdatesOpenTime(t *testing.T) {
 	db := newTestDB(t)
 	r := NewRegistry(db)
 	ih := hashOf(t, "e")
-	must(t, r.Remember(ctx, ih, "x"))
+	remember(t, r, ih, "x")
 	t1 := time.UnixMilli(1_000_000)
 	t2 := time.UnixMilli(2_000_000)
 	must(t, r.MarkStored(ctx, ih, 0, "p", 10, t1))

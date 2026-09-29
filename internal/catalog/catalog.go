@@ -130,6 +130,7 @@ func (c *Catalog) Run(ctx context.Context) error {
 	for name := range c.sources {
 		supervisor.Go(ctx, func(ctx context.Context) error { return c.enrichLoop(ctx, name) })
 	}
+	supervisor.Go(ctx, c.imagesLoop)
 	supervisor.Ready(ctx)
 	force := false
 	for {
@@ -368,4 +369,47 @@ func (e dbError) Unwrap() error { return e.err }
 func isDBError(err error) bool {
 	_, ok := err.(dbError)
 	return ok
+}
+
+// imagesKeepFor — картинки раздач, которых нет в каталоге и которых не трогали столько, уходят
+// из кэша.
+const imagesKeepFor = 30 * 24 * time.Hour
+
+// imagesLoop — раз в сутки (первый раз — через 10 минут после старта) чистит кэш картинок.
+func (c *Catalog) imagesLoop(ctx context.Context) error {
+	wait := 10 * time.Minute
+	for {
+		select {
+		case <-ctx.Done():
+			return nil
+		case <-time.After(wait):
+		}
+		if err := c.sweepImages(ctx); err != nil {
+			return err
+		}
+		wait = 24 * time.Hour
+	}
+}
+
+// sweepImages удаляет из кэша картинки, которые каталогу больше не нужны. Сейчас кэшем пользуется
+// только каталог; медиатека и каналы (этапы 8–9) добавят сюда свои картинки.
+func (c *Catalog) sweepImages(ctx context.Context) error {
+	if c.images == nil {
+		return nil
+	}
+	keep, err := c.st.imageKeysInUse(ctx, c.now().Add(-imagesKeepFor))
+	if err != nil {
+		return dbError{err}
+	}
+	removed, err := c.images.Sweep(func(k string) bool { return keep[k] }, c.now())
+	if err != nil {
+		c.log.Warn("каталог: кэш картинок не почистился", "err", err)
+	}
+	if err := c.st.forgetImages(ctx, removed); err != nil {
+		return dbError{err}
+	}
+	if len(removed) > 0 {
+		c.log.Info("каталог: из кэша удалены ненужные картинки", "count", len(removed))
+	}
+	return nil
 }

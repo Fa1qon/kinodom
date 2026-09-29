@@ -11,6 +11,7 @@ import (
 	"github.com/anacrolix/torrent/metainfo"
 	"github.com/anacrolix/torrent/storage"
 
+	"kinodom/internal/netx"
 	"kinodom/internal/torrents/torrenttest"
 )
 
@@ -39,7 +40,14 @@ func TestPrepStorageCreatesSparseFilesAndPremarks(t *testing.T) {
 		UsePartFiles:    g.Some(false),
 	})
 	cfg := torrenttest.OfflineConfig(down)
-	cfg.DefaultStorage = prepStorage{inner: fc, pc: pc, base: down}
+	cfg.DefaultStorage = prepStorage{inner: fc, pc: pc, dirs: newTorrentDirs(down)}
+	// Порт — свободный сразу для TCP и UDP: случайный TCP-порт попадал в диапазон UDP, который
+	// держит Windows (Hyper-V, WSL), и тест падал на bind (плавающее падение, этап 6).
+	port, err := netx.FreeTCPUDPPort("127.0.0.1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg.ListenPort = port
 	cl, err := torrent.NewClient(cfg)
 	if err != nil {
 		t.Fatal(err)
@@ -91,7 +99,9 @@ func TestDeletedFileIsNotConsideredDownloadedAfterRestart(t *testing.T) {
 	}
 	t1, _ := e1.Client().AddTorrent(&mi)
 	<-t1.GotInfo()
-	t1.AddClientPeer(seeder)
+	// С повторным предложением раздающего: единственный AddClientPeer после редкого обрыва
+	// соединения оставлял загрузку ждать вечно (плавающее падение теста, этапы 5b–6).
+	torrenttest.Connect(t, t1, seeder)
 	t1.DownloadAll()
 	deadline := time.Now().Add(15 * time.Second)
 	for t1.BytesCompleted() < info.TotalLength() {

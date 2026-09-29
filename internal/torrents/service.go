@@ -6,6 +6,9 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"os"
+	"slices"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -14,6 +17,7 @@ import (
 	"github.com/anacrolix/torrent/bencode"
 	"github.com/anacrolix/torrent/metainfo"
 
+	"kinodom/internal/power"
 	"kinodom/internal/supervisor"
 )
 
@@ -52,6 +56,13 @@ type session struct {
 	speed        float64 // байт/с, сглаженная
 	prepared     map[int]*prepared
 	storedFiles  map[int]bool // файлы, которые хранятся и докачиваются (в том числе до перезапуска)
+	readers      map[int]int  // открытые потоки по файлам: такой файл «сейчас смотрят»
+	paused       map[int]bool // докачка на паузе: мало места (этап 6)
+	quiet        bool         // раздача молчит: не входит в раздаваемые (этап 6)
+	verifyQ      map[int]bool // куски, ждущие перепроверки по хэшу (и проверяемый сейчас)
+	raw          []byte       // содержимое .torrent, пока метаинфо не сохранена
+	metaSaved    bool         // метаинфо в базе
+	lastSeen     time.Time    // когда раздачу последний раз открывали или спрашивали о ней
 }
 
 // prepared — файл, выбранный для просмотра.
@@ -62,9 +73,9 @@ type prepared struct {
 
 // Service — модуль «torrents».
 type Service struct {
-	eng       *Engine                  // nil, пока движок не создан (NewLazyService)
-	newEngine func() (*Engine, error)  // создаёт движок в Run; ошибка — сбой модуля, сторож повторит
-	onEngine  func(err error)          // сообщает, удалось ли создать движок (проблема в «Состоянии»)
+	eng       *Engine                 // nil, пока движок не создан (NewLazyService)
+	newEngine func() (*Engine, error) // создаёт движок в Run; ошибка — сбой модуля, сторож повторит
+	onEngine  func(err error)         // сообщает, удалось ли создать движок (проблема в «Состоянии»)
 	reg       *Registry
 	log       *slog.Logger
 	now       func() time.Time
@@ -73,6 +84,15 @@ type Service struct {
 
 	mu       sync.Mutex
 	sessions map[metainfo.Hash]*session
+	policy   Policy
+
+	expiredAt time.Time                       // когда последний раз чистили по сроку хранения (только Run)
+	keeper    *power.Keeper                   // запрет сна, пока идёт поток; nil — без него
+	upload    float64                         // лимит отдачи, выставленный сейчас (только Run)
+	toVerify  []pieceRef                      // куски на перепроверку: файл отметок был повреждён
+	verifyNow pieceRef                        // кусок, который проверяется прямо сейчас (без s.mu)
+	spaceMu   sync.Mutex                      // одна проверка места за раз (Prepare, уборка)
+	freeSpace func(dir string) (int64, error) // свободное место на диске папки; тесты подменяют
 
 	activeStreams atomic.Int32
 }
@@ -86,6 +106,9 @@ func NewService(eng *Engine, reg *Registry, log *slog.Logger) *Service {
 		noPeersAfter: noPeersAfter,
 		noMetaAfter:  noMetadataAfter,
 		sessions:     map[metainfo.Hash]*session{},
+		policy:       Policy{KeepFor: defaultKeepFor, MinFree: defaultMinFree, MaxSeeding: defaultMaxSeeding},
+		upload:       -1,
+		freeSpace:    diskFree,
 	}
 }
 
@@ -129,28 +152,51 @@ func (s *Service) Run(ctx context.Context) error {
 	supervisor.Ready(ctx) // хранимые раздачи на месте — маршруты модуля можно обслуживать
 	tick := time.NewTicker(time.Second)
 	defer tick.Stop()
+	maint := time.NewTimer(0) // уборка — сразу после старта, дальше раз в 5 минут
+	defer maint.Stop()
 	for {
 		select {
 		case <-ctx.Done():
 			return nil
 		case <-tick.C:
 			s.sample()
+			s.shapeUpload()
+			s.verifySome(500 * time.Millisecond)
+		case <-maint.C:
+			if err := s.maintain(ctx); err != nil {
+				return fmt.Errorf("уборка: %w", err)
+			}
+			maint.Reset(maintainEvery)
 		}
 	}
 }
 
 // restore добавляет в движок раздачи с хранимыми файлами — из метаинфо в базе, без пиров.
+// Раздачи, которые уже в движке, не трогает: вызывается и повторно — вернуть раздачи с диска,
+// который был недоступен.
 func (s *Service) restore(ctx context.Context) error {
 	recs, err := s.reg.Restorable(ctx)
 	if err != nil {
 		return err
 	}
+	missing := map[string]int{} // недоступная папка → сколько раздач в ней ждут
 	for _, rec := range recs {
+		if _, ok := s.eng.cl.Torrent(rec.InfoHash); ok {
+			continue
+		}
+		if rec.Dir != "" {
+			if _, err := os.Stat(rec.Dir); err != nil {
+				// Диск не подключён: записи не удаляются, раздача вернётся вместе с диском.
+				missing[rec.Dir]++
+				continue
+			}
+		}
 		mi, err := metainfo.Load(bytes.NewReader(rec.Metainfo))
 		if err != nil {
 			s.log.Warn("метаинфо раздачи не читается, пропускаю", "hash", rec.InfoHash.HexString(), "err", err)
 			continue
 		}
+		s.eng.SetTorrentDir(rec.InfoHash, rec.Dir)
 		t, err := s.eng.cl.AddTorrent(mi)
 		if err != nil {
 			s.log.Warn("раздача не восстановилась", "hash", rec.InfoHash.HexString(), "err", err)
@@ -162,7 +208,7 @@ func (s *Service) restore(ctx context.Context) error {
 		}
 		s.mu.Lock()
 		ss := s.sessionFor(t)
-		ss.stored = true
+		ss.stored, ss.metaSaved = true, true
 		// Хранимые файлы докачиваются дальше (и раздаются), остальные не нужны.
 		files := t.Files()
 		for _, i := range idxs {
@@ -171,8 +217,22 @@ func (s *Service) restore(ctx context.Context) error {
 				files[i].SetPriority(torrent.PiecePriorityNormal)
 			}
 		}
+		if s.eng.recreated {
+			s.queueVerify(ss)
+		}
 		s.mu.Unlock()
 	}
+	if len(missing) == 0 {
+		s.reg.clearProblem(ctx, "torrents.dirs")
+		return nil
+	}
+	var parts []string
+	for dir, n := range missing {
+		parts = append(parts, fmt.Sprintf("%s (раздач: %d)", dir, n))
+	}
+	slices.Sort(parts)
+	s.reg.setProblem(ctx, "torrents.dirs", "Папка загрузок недоступна: "+strings.Join(parts, ", ")+
+		" — эти раздачи не раздаются и не докачиваются, пока диск не вернётся")
 	return nil
 }
 
@@ -180,21 +240,18 @@ func (s *Service) restore(ctx context.Context) error {
 // возвращает её же; после ошибки «нет раздающих» — начинает заново.
 func (s *Service) Open(ctx context.Context, src Source) (metainfo.Hash, error) {
 	var (
-		t      *torrent.Torrent
+		mi     *metainfo.MetaInfo
+		ih     metainfo.Hash
 		raw    []byte
 		source string
-		err    error
 	)
 	switch {
 	case len(src.Torrent) > 0:
-		mi, lerr := metainfo.Load(bytes.NewReader(src.Torrent))
+		m, lerr := metainfo.Load(bytes.NewReader(src.Torrent))
 		if lerr != nil {
 			return metainfo.Hash{}, fmt.Errorf("файл .torrent не читается: %w", lerr)
 		}
-		if t, err = s.eng.cl.AddTorrent(mi); err != nil {
-			return metainfo.Hash{}, fmt.Errorf("файл .torrent не принят: %w", err)
-		}
-		raw, source = src.Torrent, "torrent-file"
+		mi, ih, raw, source = m, m.HashInfoBytes(), src.Torrent, "torrent-file"
 	case src.Magnet != "":
 		// Движок паникует на ссылке без infohash, а не возвращает ошибку — проверяем сами.
 		m, perr := metainfo.ParseMagnetUri(src.Magnet)
@@ -204,21 +261,33 @@ func (s *Service) Open(ctx context.Context, src Source) (metainfo.Hash, error) {
 		if m.InfoHash == (metainfo.Hash{}) {
 			return metainfo.Hash{}, errors.New("magnet-ссылка не читается: infohash раздачи — одни нули")
 		}
-		if t, err = s.eng.cl.AddMagnet(src.Magnet); err != nil {
-			return metainfo.Hash{}, fmt.Errorf("magnet-ссылка не читается: %w", err)
-		}
-		source = src.Magnet
+		ih, source = m.InfoHash, src.Magnet
 	default:
 		return metainfo.Hash{}, errors.New("не указан источник раздачи: нужна magnet-ссылка или .torrent")
 	}
-	ih := t.InfoHash()
-	if err := s.reg.Remember(ctx, ih, source); err != nil {
+	// Под s.mu: уборка не должна убрать запись о раздаче между Remember и появлением сессии.
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	// Папку раздачи движок должен знать до добавления: файлы создаются сразу, как придёт метаинфо.
+	dir, err := s.reg.Remember(ctx, ih, source, s.eng.DownloadsDir())
+	if err != nil {
 		return ih, err
 	}
-	s.mu.Lock()
-	s.observe(s.sessionFor(t), s.now())
-	s.mu.Unlock()
-	go s.saveMetainfoWhenReady(t, raw)
+	s.eng.SetTorrentDir(ih, dir)
+	var t *torrent.Torrent
+	if mi != nil {
+		if t, err = s.eng.cl.AddTorrent(mi); err != nil {
+			return metainfo.Hash{}, fmt.Errorf("файл .torrent не принят: %w", err)
+		}
+	} else if t, err = s.eng.cl.AddMagnet(src.Magnet); err != nil {
+		return metainfo.Hash{}, fmt.Errorf("magnet-ссылка не читается: %w", err)
+	}
+	ss := s.sessionFor(t)
+	ss.lastSeen = s.now()
+	s.observe(ss, s.now())
+	if ss.raw == nil {
+		ss.raw = raw
+	}
 	return ih, nil
 }
 
@@ -229,29 +298,32 @@ func (s *Service) sessionFor(t *torrent.Torrent) *session {
 	if ss, ok := s.sessions[ih]; ok && ss.t == t {
 		return ss
 	}
-	ss := &session{t: t, prepared: map[int]*prepared{}, storedFiles: map[int]bool{}}
+	ss := &session{t: t, prepared: map[int]*prepared{}, storedFiles: map[int]bool{}, readers: map[int]int{},
+		paused: map[int]bool{}, verifyQ: map[int]bool{}, lastSeen: s.now()}
 	s.sessions[ih] = ss
 	return ss
 }
 
-// saveMetainfoWhenReady сохраняет метаинфо, как только движок её получил.
-func (s *Service) saveMetainfoWhenReady(t *torrent.Torrent, raw []byte) {
-	select {
-	case <-t.GotInfo():
-	case <-t.Closed():
-		return
-	}
+// saveMetainfo сохраняет метаинфо раздачи, которую движок уже получил: после перезапуска её не
+// придётся ждать от пиров. Зовётся из цикла Run (хвост этапа 2: раньше — горутина на каждое
+// открытие, висевшая, пока сеть не готова).
+func (s *Service) saveMetainfo(ss *session) {
+	raw := ss.raw
 	if raw == nil {
-		b, err := bencode.Marshal(t.Metainfo())
+		b, err := bencode.Marshal(ss.t.Metainfo())
 		if err != nil {
 			s.log.Warn("метаинфо не сериализуется", "err", err)
 			return
 		}
 		raw = b
 	}
-	if err := s.reg.SaveMetainfo(context.Background(), t.InfoHash(), t.Name(), raw); err != nil {
-		s.log.Warn("метаинфо не сохранилась", "hash", t.InfoHash().HexString(), "err", err)
+	if err := s.reg.SaveMetainfo(context.Background(), ss.t.InfoHash(), ss.t.Name(), raw); err != nil {
+		s.log.Warn("метаинфо не сохранилась", "hash", ss.t.InfoHash().HexString(), "err", err)
+		return
 	}
+	s.mu.Lock()
+	ss.metaSaved, ss.raw = true, nil
+	s.mu.Unlock()
 }
 
 // Status — состояние раздачи; false, если её не открывали.
@@ -262,6 +334,7 @@ func (s *Service) Status(ih metainfo.Hash) (TorrentStatus, bool) {
 	if !ok {
 		return TorrentStatus{}, false
 	}
+	ss.lastSeen = s.now()
 	s.observe(ss, s.now())
 	st := TorrentStatus{
 		Hash:  ih.HexString(),
@@ -309,8 +382,8 @@ func (s *Service) observe(ss *session, now time.Time) {
 // sample раз в секунду обновляет сглаженную скорость и состояния всех раздач.
 func (s *Service) sample() {
 	now := s.now()
+	var unsaved []*session
 	s.mu.Lock()
-	defer s.mu.Unlock()
 	for _, ss := range s.sessions {
 		st := ss.t.Stats()
 		b := st.BytesReadData.Int64()
@@ -321,6 +394,13 @@ func (s *Service) sample() {
 		}
 		ss.lastBytes, ss.lastSample = b, now
 		s.observe(ss, now)
+		if !ss.metaSaved && ss.t.Info() != nil {
+			unsaved = append(unsaved, ss)
+		}
+	}
+	s.mu.Unlock()
+	for _, ss := range unsaved { // запись в базу — без s.mu
+		s.saveMetainfo(ss)
 	}
 }
 
@@ -333,3 +413,6 @@ func allFiles(t *torrent.Torrent) []FileInfo {
 	}
 	return out
 }
+
+// UseKeeper — запрет сна на время потоков (общий для всех модулей); вызывать до Run.
+func (s *Service) UseKeeper(k *power.Keeper) { s.keeper = k }

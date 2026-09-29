@@ -8,9 +8,12 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"path/filepath"
+	"slices"
 	"strings"
 	"sync/atomic"
 	"testing"
+	"time"
 )
 
 // pngBytes — настоящая маленькая картинка PNG.
@@ -148,5 +151,44 @@ func TestFetchSendsBrowserUserAgent(t *testing.T) {
 	t.Cleanup(s.Close)
 	if _, err := newImages(t, "").Fetch(ctx, s.URL+"/p.jpg", Direct); err != nil {
 		t.Fatalf("хостинг, который не пускает Go: %v", err)
+	}
+}
+
+// Кэш чистится: ненужная картинка старше суток и обрывок .tmp старше часа удаляются; нужная,
+// свежая, свежий обрывок и чужие файлы — остаются (хвост этапа 5b).
+func TestImagesSweep(t *testing.T) {
+	dir := t.TempDir()
+	im, err := NewImages(ImagesOptions{Dir: dir})
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now()
+	old, kept, fresh := ImageKey("http://h/old.jpg"), ImageKey("http://h/kept.jpg"), ImageKey("http://h/fresh.jpg")
+	files := map[string]time.Duration{
+		old + ".jpg": 48 * time.Hour, kept + ".png": 48 * time.Hour, fresh + ".jpg": time.Hour,
+		old + "-1.tmp": 2 * time.Hour, fresh + "-2.tmp": time.Minute, "readme.txt": 48 * time.Hour,
+	}
+	for name, age := range files {
+		p := filepath.Join(dir, name)
+		if err := os.WriteFile(p, []byte("x"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Chtimes(p, now.Add(-age), now.Add(-age)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	removed, err := im.Sweep(func(k string) bool { return k == kept }, now)
+	if err != nil || !slices.Equal(removed, []string{old}) {
+		t.Fatalf("удалены %v, %v", removed, err)
+	}
+	left, _ := os.ReadDir(dir)
+	var names []string
+	for _, e := range left {
+		names = append(names, e.Name())
+	}
+	want := []string{fresh + "-2.tmp", fresh + ".jpg", kept + ".png", "readme.txt"}
+	slices.Sort(want)
+	if !slices.Equal(names, want) {
+		t.Fatalf("остались %v", names)
 	}
 }

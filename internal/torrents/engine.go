@@ -17,6 +17,7 @@ import (
 	"github.com/anacrolix/dht/v2"
 	g "github.com/anacrolix/generics"
 	"github.com/anacrolix/torrent"
+	"github.com/anacrolix/torrent/metainfo"
 	"github.com/anacrolix/torrent/storage"
 	"golang.org/x/time/rate"
 
@@ -39,6 +40,9 @@ type Config struct {
 type Engine struct {
 	cl        *torrent.Client
 	fc        storage.ClientImplCloser
+	pc        storage.PieceCompletion // отметки кусков: удаление файла сбрасывает их (этап 6)
+	dirs      *torrentDirs
+	recreated bool // файл отметок был повреждён и создан заново: хранимое — перепроверить
 	up        *rate.Limiter
 	cfg       Config
 	nodesFile string
@@ -50,18 +54,30 @@ func NewEngine(c Config) (*Engine, error) {
 	if c.Log == nil {
 		c.Log = slog.Default()
 	}
-	for _, d := range []string{c.DownloadsDir, c.StateDir} {
-		if err := os.MkdirAll(d, 0o755); err != nil {
-			return nil, fmt.Errorf("папка %s недоступна: %w", d, err)
-		}
+	if err := checkDownloadsDir(c.DownloadsDir); err != nil {
+		return nil, err
+	}
+	if err := os.MkdirAll(c.StateDir, 0o755); err != nil {
+		return nil, fmt.Errorf("папка %s недоступна: %w", c.StateDir, err)
+	}
+	recreated, err := checkMarks(c.StateDir)
+	if err != nil {
+		return nil, err
+	}
+	if recreated {
+		c.Log.Warn("файл отметок кусков был повреждён — создан заново, скачанное перепроверяется по хэшам")
 	}
 	pc, err := storage.NewBoltPieceCompletion(c.StateDir)
 	if err != nil {
 		return nil, fmt.Errorf("отметки кусков: %w", err)
 	}
+	dirs := newTorrentDirs(c.DownloadsDir)
 	fc := storage.NewFileOpts(storage.NewFileClientOpts{
-		ClientBaseDir:   c.DownloadsDir,
-		TorrentDirMaker: torrentDir,
+		ClientBaseDir: c.DownloadsDir,
+		// Папка — своя у каждой раздачи: та, куда она качалась (torrentDirs).
+		TorrentDirMaker: func(_ string, info *metainfo.Info, ih metainfo.Hash) string {
+			return torrentDir(dirs.get(ih), info, ih)
+		},
 		FilePathMaker:   filePath,
 		PieceCompletion: pc,
 		// Без part-файлов: с ними после перезапуска недокачанный файл считается нескачанным.
@@ -83,7 +99,7 @@ func NewEngine(c Config) (*Engine, error) {
 		c.ListenPort = port
 	}
 	up := rate.NewLimiter(limitOf(c.UploadLimit), 0) // burst 0 — клиент подставит свой
-	cfg, err := buildClientConfig(c, prepStorage{inner: fc, pc: pc, base: c.DownloadsDir}, up)
+	cfg, err := buildClientConfig(c, prepStorage{inner: fc, pc: pc, dirs: dirs}, up)
 	if err != nil {
 		fc.Close()
 		return nil, err
@@ -93,7 +109,7 @@ func NewEngine(c Config) (*Engine, error) {
 		fc.Close()
 		return nil, fmt.Errorf("торрент-клиент: %w", err)
 	}
-	e := &Engine{cl: cl, fc: fc, up: up, cfg: c, nodesFile: filepath.Join(c.StateDir, "dht-nodes.dat")}
+	e := &Engine{cl: cl, fc: fc, pc: pc, dirs: dirs, recreated: recreated, up: up, cfg: c, nodesFile: filepath.Join(c.StateDir, "dht-nodes.dat")}
 	e.loadNodes()
 	return e, nil
 }
@@ -112,6 +128,11 @@ func buildClientConfig(c Config, st storage.ClientImpl, up *rate.Limiter) (*torr
 	// Общего лимита соединений в движке нет — только на раздачу (проверено).
 	cfg.EstablishedConnsPerTorrent = cmp.Or(c.ConnsPerTorrent, 20)
 	cfg.TotalHalfOpenConns = 100
+	// В anacrolix v1.61 пробуждение горутины записи теряется (гонка Broadcast и Signaled):
+	// соединение перестаёт запрашивать куски и оживает только по таймеру keepalive — по умолчанию
+	// через минуту. С 5 с простой пира не дольше; цена — 4 байта keepalive на простаивающее
+	// соединение раз в 5 с (этап 6, найдено по стекам зависших тестов).
+	cfg.KeepAliveTimeout = 5 * time.Second
 	cfg.DhtStartingNodes = fastBootstrap
 	if c.Offline {
 		cfg.NoDHT = true
@@ -119,6 +140,10 @@ func buildClientConfig(c Config, st storage.ClientImpl, up *rate.Limiter) (*torr
 		cfg.NoDefaultPortForwarding = true
 		cfg.ListenHost = func(string) string { return "127.0.0.1" }
 		cfg.DisableIPv6 = true
+		// Только TCP: uTP через loopback под нагрузкой теряет пакеты, и anacrolix/utp (чистый Go,
+		// CGO выключен) после потери не восстанавливается — загрузка в тестах вставала посреди куска.
+		cfg.DisableUTP = true
+		cfg.KeepAliveTimeout = 100 * time.Millisecond // тесты: простой из-за потерянного пробуждения — доли секунды
 	}
 	u, err := netx.ParseProxy(c.TrackerProxy)
 	if err != nil {
@@ -144,6 +169,12 @@ func limitOf(bytesPerSec float64) rate.Limit {
 
 func (e *Engine) Client() *torrent.Client { return e.cl }
 func (e *Engine) DownloadsDir() string    { return e.cfg.DownloadsDir }
+
+// SetTorrentDir — папка загрузок раздачи; вызывать до добавления раздачи в движок.
+func (e *Engine) SetTorrentDir(ih metainfo.Hash, dir string) { e.dirs.set(ih, dir) }
+
+// TorrentDir — папка загрузок, в которой лежат файлы раздачи.
+func (e *Engine) TorrentDir(ih metainfo.Hash) string { return e.dirs.get(ih) }
 
 // SetUploadLimit меняет лимит отдачи на лету (урезание во время просмотра — этап 6).
 func (e *Engine) SetUploadLimit(bytesPerSec float64) { e.up.SetLimit(limitOf(bytesPerSec)) }

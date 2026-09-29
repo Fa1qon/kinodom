@@ -22,6 +22,8 @@ func (s *Service) Register(r Router) {
 	r.Handle("POST /api/v1/torrents/{hash}/files/{index}/prepare", s.Name(), http.HandlerFunc(s.handlePrepare))
 	r.Handle("GET /api/v1/torrents/{hash}/files/{index}", s.Name(), http.HandlerFunc(s.handleFileStatus))
 	r.Handle("GET /stream/{hash}/{index}/{name}", s.Name(), s.StreamHandler())
+	// Удалять скачанное — только с этого ПК (спека, раздел 13).
+	r.HandleLocal("DELETE /api/v1/downloads/{hash}/{index}", s.Name(), http.HandlerFunc(s.handleDelete))
 }
 
 type openRequest struct {
@@ -81,6 +83,8 @@ func (s *Service) handlePrepare(w http.ResponseWriter, r *http.Request) {
 		httpx.WriteError(w, http.StatusNotFound, err.Error())
 	case errors.Is(err, ErrNoInfo):
 		httpx.WriteError(w, http.StatusConflict, err.Error())
+	case errors.Is(err, ErrLowSpace):
+		httpx.WriteError(w, http.StatusInsufficientStorage, err.Error())
 	default:
 		httpx.WriteError(w, http.StatusInternalServerError, err.Error())
 	}
@@ -111,4 +115,26 @@ func parseIndex(w http.ResponseWriter, r *http.Request) (int, bool) {
 		return 0, false
 	}
 	return i, true
+}
+
+func (s *Service) handleDelete(w http.ResponseWriter, r *http.Request) {
+	ih, ok := parseHash(w, r)
+	if !ok {
+		return
+	}
+	index, ok := parseIndex(w, r)
+	if !ok {
+		return
+	}
+	err := s.DeleteFile(r.Context(), ih, index)
+	switch {
+	case err == nil:
+		w.WriteHeader(http.StatusNoContent)
+	case errors.Is(err, ErrNotStored):
+		httpx.WriteError(w, http.StatusNotFound, err.Error())
+	case errors.Is(err, ErrWatching), errors.Is(err, errDirMissing):
+		httpx.WriteError(w, http.StatusConflict, err.Error())
+	default:
+		httpx.WriteError(w, http.StatusInternalServerError, err.Error())
+	}
 }

@@ -131,7 +131,7 @@ func TestRestoreOpensStoredTorrentWithoutPeers(t *testing.T) {
 	must(t, reg.SaveMetainfo(ctx, ih, "film.mkv", torrentBytes(t, mi)))
 	must(t, reg.MarkStored(ctx, ih, 0, `D:\K\film.mkv`, 300_000, time.Now()))
 
-	s := NewService(newOfflineEngine(t), reg, quiet())
+	s := serviceFor(newOfflineEngine(t), reg)
 	runService(t, s)
 	st := waitStatus(t, s, ih, StateReady) // метаинфо из базы — пиры не нужны
 	if len(st.Files) != 1 {
