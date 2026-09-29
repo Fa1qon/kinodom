@@ -296,6 +296,37 @@ func (s catalogStore) tree(ctx context.Context, tracker string) ([]source.Catego
 	return out, rows.Err()
 }
 
+// categoryNames — названия разделов раздач rs: по запросу на трекер, а не на каждую раздачу (ревью
+// 5c: ~370 запросов на один опрос поиска).
+func (s catalogStore) categoryNames(ctx context.Context, rs []row) (map[CategoryRef]string, error) {
+	out := map[CategoryRef]string{}
+	done := map[string]bool{}
+	for _, r := range rs {
+		if done[r.Tracker] {
+			continue
+		}
+		done[r.Tracker] = true
+		rows, err := s.db.R.QueryContext(ctx, `SELECT id, name FROM categories WHERE tracker = ?`, r.Tracker)
+		if err != nil {
+			return nil, err
+		}
+		for rows.Next() {
+			var id, name string
+			if err := rows.Scan(&id, &name); err != nil {
+				rows.Close()
+				return nil, err
+			}
+			out[CategoryRef{r.Tracker, id}] = name
+		}
+		err = rows.Err()
+		rows.Close()
+		if err != nil {
+			return nil, err
+		}
+	}
+	return out, nil
+}
+
 func (s catalogStore) categoryName(ctx context.Context, tracker, id string) string {
 	var name string
 	if err := s.db.R.QueryRowContext(ctx, `SELECT name FROM categories WHERE tracker = ? AND id = ?`, tracker, id).Scan(&name); err != nil {
