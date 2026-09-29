@@ -83,6 +83,8 @@ func (s *Service) handlePrepare(w http.ResponseWriter, r *http.Request) {
 		httpx.WriteError(w, http.StatusNotFound, err.Error())
 	case errors.Is(err, ErrNoInfo):
 		httpx.WriteError(w, http.StatusConflict, err.Error())
+	case errors.Is(err, ErrLowSpace):
+		httpx.WriteError(w, http.StatusInsufficientStorage, err.Error())
 	default:
 		httpx.WriteError(w, http.StatusInternalServerError, err.Error())
 	}

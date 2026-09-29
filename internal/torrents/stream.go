@@ -98,3 +98,13 @@ func (s *Service) openReader(ih metainfo.Hash, index int) func() {
 		ss.readers[index]--
 	}
 }
+
+// streaming — к какому-то файлу раздачи открыт поток. Вызывать под s.mu.
+func (ss *session) streaming() bool {
+	for _, n := range ss.readers {
+		if n > 0 {
+			return true
+		}
+	}
+	return false
+}

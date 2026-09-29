@@ -32,7 +32,15 @@ func newOfflineEngine(t *testing.T) *Engine {
 func newTestService(t *testing.T) *Service {
 	t.Helper()
 	db := newTestDB(t)
-	return NewService(newOfflineEngine(t), NewRegistry(db), quiet())
+	return serviceFor(newOfflineEngine(t), NewRegistry(db))
+}
+
+// serviceFor — сервис для тестов: места на диске «сколько угодно», чтобы уборка по расписанию
+// не ставила докачки на паузу на машине, где свободно меньше 20 ГБ.
+func serviceFor(eng *Engine, reg *Registry) *Service {
+	s := NewService(eng, reg, quiet())
+	s.freeSpace = func(string) (int64, error) { return 1 << 50, nil }
+	return s
 }
 
 // runService запускает Run сервиса; останавливается раньше, чем закрываются движок и база.
