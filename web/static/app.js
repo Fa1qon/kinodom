@@ -10,12 +10,13 @@ import * as settingsStatus from './views/settings-status.js';
 import * as settingsParams from './views/settings-params.js';
 import * as settingsSections from './views/settings-sections.js';
 import * as channels from './views/channels.js';
+import * as history from './views/history.js';
 import * as channel from './views/channel.js';
 import * as settingsIPTV from './views/settings-iptv.js';
 import * as settingsUnrecognized from './views/settings-unrecognized.js';
 
 // views — экраны по первой части адреса; у «Настроек» — по второй.
-const views = { catalog, release, search, downloads, channels, channel };
+const views = { catalog, release, search, downloads, channels, channel, history };
 const settingsViews = { status: settingsStatus, params: settingsParams, sections: settingsSections, iptv: settingsIPTV, unrecognized: settingsUnrecognized };
 
 // ctx — общее для экранов: последнее «Состояние» и переходы. local — пульт открыт на ПК с Kinodom
@@ -49,6 +50,7 @@ function defaultRoute() {
 
 const NAV = [
   ['catalog', 'Каталог'],
+  ['history', 'История'],
   ['channels', 'Каналы'],
   ['library', 'Медиатека', true],
   ['downloads', 'Загрузки'],

@@ -295,6 +295,11 @@ a.res-row:hover { background: var(--hover); }
 
 /* Средние ширины — планшет, небольшой ноутбук, веб-вид телевизора (финальное ревью 7b): шапка
    поджимается, раздача — в две колонки (панель «Смотреть» под постером), каталог — в 4 колонки. */
+/* История (спека этапа 8, раздел 7.5) */
+.pos-track { height: 2px; margin-top: -4px; }
+.ep-title > .ic { color: var(--green); align-self: center; }
+.hist-link { flex-grow: 1; min-width: 0; display: flex; align-items: center; gap: 18px; }
+
 /* Каналы (спека этапа 8, раздел 6) */
 .wrap { flex-wrap: wrap; }
 .visually-hidden { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }

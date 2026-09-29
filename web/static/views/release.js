@@ -2,7 +2,8 @@
 // файла прогресс и «Смотреть» цвета готовности, справа — панель файла в фокусе; ниже — «Другие раздачи»
 // фильма и «Искать на трекерах» (спека этапа 7, разделы 5.4, 5.5, 6.3 и 10.7).
 import { h, icon, size, speed, rating, minutes, ready, poll, copyText, store, plural, shortNames, keepFocus, fileFormat } from '../ui.js';
-import { get, post } from '../api.js';
+import { get, post, put } from '../api.js';
+import { whereStopped, resumeIndex } from './history.js';
 import { poster } from './catalog.js';
 import { trackerTags } from './search.js';
 
@@ -28,6 +29,8 @@ export function render(root, r, ctx) {
   let searchStarted = 0;
   let fetchedAt = 0;
   let searchError = '';
+  let progress = []; // /history/{hash} — где остановились на этом устройстве (спека этапа 8, раздел 7.5)
+  let historyPoll = null;
 
   const back = h('div');
   const cover = h('div', { class: 'rel-cover' });
@@ -58,7 +61,22 @@ export function render(root, r, ctx) {
     // Найденное поиском догружается при открытии — опрашиваем, пока страница не загрузится.
     if (!rel.detailsPending || Date.now() - started > PENDING_FOR) releasePoll.stop();
     if (rel.hash && !torrentPoll) watchTorrent();
+    if (rel.hash && !historyPoll) watchHistory();
   }, 1000);
+
+  // watchHistory — места и отметки этого устройства раз в 10 с: VLC сообщает место по ходу просмотра.
+  function watchHistory() {
+    historyPoll = poll(async () => {
+      try {
+        progress = (await get(`/history/${rel.hash}`)).files;
+      } catch {
+        return;
+      }
+      if (alive) drawLive();
+    }, 10000);
+  }
+
+  const progressOf = (f) => progress.find((p) => p.index === f.index) || null;
 
   // watchTorrent — состояние раздачи раз в секунду, пока она качается (спека этапа 7, раздел 4).
   function watchTorrent() {
@@ -153,17 +171,21 @@ export function render(root, r, ctx) {
             chosen = f.index;
             drawLive();
           } },
-          h('span', { class: 'ep-title' }, h('span', { class: 'ep-name', title: f.name }, label(f)), h('span', { class: 'muted small' }, fileInfo(f))),
-          f.stored ? h('div', { class: 'track' }, h('div', { style: { width: `${f.percent}%`, background: rd.color || 'var(--buffer)' } })) : null),
+          h('span', { class: 'ep-title' }, progressOf(f) && progressOf(f).watched ? icon('check', 18, 'просмотрено') : null,
+            h('span', { class: 'ep-name', title: f.name }, label(f)), h('span', { class: 'muted small' }, [fileInfo(f), whereStopped(progressOf(f))].filter(Boolean).join(' · '))),
+          f.stored ? h('div', { class: 'track' }, h('div', { style: { width: `${f.percent}%`, background: rd.color || 'var(--buffer)' } })) : null,
+          positionLine(progressOf(f))),
           f.readiness && f.readiness !== 'none' ? watchButton(f, 'btn')
             : downloading() ? h('button', { class: 'btn', type: 'button', disabled: busy, 'data-key': `get-${f.index}`,
               'aria-label': `Скачать серию ${n + 1}`, onclick: () => download(f.index) }, icon('download'), 'Скачать') : null);
       }));
   }
 
-  // panelFile — файл панели: выбранный человеком, иначе в фокусе загрузки, иначе первый.
+  // panelFile — файл панели: выбранный человеком, иначе тот, что продолжать (история устройства), иначе
+  // в фокусе загрузки, иначе первый.
   function panelFile(fs) {
-    return fs.find((f) => f.index === chosen) || (st && fs.find((f) => f.index === st.focus)) || fs[0] || null;
+    const resume = resumeIndex(fs.map((f) => f.index), progress);
+    return fs.find((f) => f.index === chosen) || fs.find((f) => f.index === resume) || (st && fs.find((f) => f.index === st.focus)) || fs[0] || null;
   }
 
   function panel(fs, label) {
@@ -182,7 +204,9 @@ export function render(root, r, ctx) {
     }
     const rd = ready[f.readiness || 'none'] || ready.none;
     const inFocus = st && f.index === st.focus;
+    const p = progressOf(f);
     out.push(h('div', { class: 'panel-title', title: f.name }, label(f)));
+    if (whereStopped(p)) out.push(h('div', { class: 'muted' }, whereStopped(p)), positionLine(p));
     const buf = h('div', { class: 'buffer' }, h('div', { class: 'got', style: { width: `${f.percent}%` } }));
     if (inFocus && f.head) buf.append(h('div', { class: 'head', style: { width: `${f.head}%`, background: rd.color } }));
     if (inFocus && f.tail) buf.append(h('div', { class: 'tail', style: { width: `${f.tail}%`, background: rd.color } }));
@@ -192,13 +216,32 @@ export function render(root, r, ctx) {
     if (f.readiness === 'wait' && f.waitSec > 0) out.push(h('div', { class: 'eta' }, `Без остановок через ${minutes(f.waitSec)}`));
     if (f.readiness && f.readiness !== 'none') {
       out.push(watchButton(f, 'btn big wide'));
+      if (p && !p.watched && p.fraction > 0) {
+        out.push(h('button', { class: 'btn', type: 'button', disabled: busy, 'data-key': `start-${f.index}`, onclick: () => watch(f, true) }, icon('history'), 'С начала'));
+      }
       out.push(h('div', { class: 'row pair' },
         h('a', { class: 'btn grow wide-only', href: `/m3u/${rel.hash}/${f.index}.m3u8`, download: '', 'data-key': 'm3u' }, icon('playlist_play'), '.m3u8'),
         h('button', { class: 'btn grow', type: 'button', 'data-key': 'copy', 'aria-label': 'Скопировать ссылку на поток', onclick: (e) => copyLink(f, e.currentTarget) },
           icon('link'), h('span', { class: 'wide-only' }, 'Ссылка'))));
     }
+    if (ctx.canEdit && rel.hash) {
+      const seen = !!(p && p.watched);
+      out.push(h('button', { class: 'btn', type: 'button', 'data-key': `seen-${f.index}`, onclick: () => mark(f, !seen) },
+        icon(seen ? 'visibility_off' : 'check'), seen ? 'Не просмотрено' : 'Просмотрено'));
+    }
     if (error) out.push(h('div', { class: 'error' }, error));
     return out;
+  }
+
+  // mark — «Просмотрено» / «Не просмотрено» у файла панели.
+  async function mark(f, watched) {
+    try {
+      await put(`/history/${rel.hash}/${f.index}`, { watched });
+      progress = (await get(`/history/${rel.hash}`)).files;
+    } catch (e) {
+      actionError = e.message;
+    }
+    if (alive) drawLive();
   }
 
   function watchButton(f, cls) {
@@ -231,13 +274,13 @@ export function render(root, r, ctx) {
 
   // watch — «Смотреть»: фокус загрузки на этот файл и плеер. На этом ПК — ссылка kinodom://, на
   // других устройствах — .m3u8 (спека этапа 7, раздел 6.3).
-  async function watch(f) {
+  async function watch(f, fromStart = false) {
     busy = true;
     actionError = '';
     chosen = f.index;
     drawLive();
     try {
-      const res = await post(`/torrents/${rel.hash}/files/${f.index}/watch`);
+      const res = await post(`/torrents/${rel.hash}/files/${f.index}/watch`, fromStart ? { fromStart: true } : {});
       location.href = ctx.local && res.launchUrl ? res.launchUrl : playerLink(res);
     } catch (e) {
       actionError = e.message;
@@ -330,7 +373,14 @@ export function render(root, r, ctx) {
     releasePoll.stop();
     if (torrentPoll) torrentPoll.stop();
     if (searchPoll) searchPoll.stop();
+    if (historyPoll) historyPoll.stop();
   };
+}
+
+// positionLine — тонкая полоса «где остановились» (не у просмотренного).
+function positionLine(p) {
+  if (!p || p.watched || !(p.fraction > 0)) return null;
+  return h('div', { class: 'track pos-track' }, h('div', { style: { width: `${Math.round(p.fraction * 100)}%`, background: 'var(--text)' } }));
 }
 
 // playerLink — плеер на другом устройстве. Android — сразу VLC ссылкой intent: Chrome считает
@@ -339,7 +389,9 @@ export function render(root, r, ctx) {
 function playerLink(res) {
   if (!/Android/i.test(navigator.userAgent)) return res.m3uUrl;
   const u = new URL(res.play.url);
+  // l.position — место для VLC, мс (спека этапа 8, раздел 7.3).
   return `intent://${u.host}${u.pathname}#Intent;scheme=${u.protocol.replace(':', '')};type=video/*;package=org.videolan.vlc;`
+    + (res.startSec > 0 ? `l.position=${res.startSec * 1000};` : '')
     + `S.title=${encodeURIComponent(res.play.title)};S.browser_fallback_url=${encodeURIComponent(res.m3uUrl)};end`;
 }
 
