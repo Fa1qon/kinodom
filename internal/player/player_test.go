@@ -18,6 +18,26 @@ func TestM3U(t *testing.T) {
 	}
 }
 
+// Плейлист канала IPTV: несколько источников по порядку, заголовки — строками #EXTVLCOPT (спека
+// этапа 8, раздел 5.9); переводы строк в значениях не ломают плейлист.
+func TestM3UList(t *testing.T) {
+	got := string(M3UList([]M3UItem{
+		{Title: "Первый канал +4", URL: "https://a.example/1.m3u8", UserAgent: "WINK/1.40", Referrer: "https://wink.example/"},
+		{Title: "Первый канал +4", URL: "http://b.example/2.ts"},
+		{Title: "Злой" + nl + "заголовок", URL: "http://c.example/3.m3u8", UserAgent: "ua" + nl + "#EXTVLCOPT:x"},
+	}))
+	want := "#EXTM3U" + nl + "#EXTINF:-1,Первый канал +4" + nl + "#EXTVLCOPT:http-user-agent=WINK/1.40" + nl +
+		"#EXTVLCOPT:http-referrer=https://wink.example/" + nl + "https://a.example/1.m3u8" + nl +
+		"#EXTINF:-1,Первый канал +4" + nl + "http://b.example/2.ts" + nl +
+		"#EXTINF:-1,Злой заголовок" + nl + "#EXTVLCOPT:http-user-agent=ua #EXTVLCOPT:x" + nl + "http://c.example/3.m3u8" + nl
+	if got != want {
+		t.Fatalf("%q", got)
+	}
+}
+
+// nl — перевод строки (так тест читается и не зависит от экранирования).
+const nl = "\n"
+
 // Ссылка «Открыть в плеере» туда и обратно: адрес потока и название с кириллицей не меняются.
 func TestLaunchRoundTrip(t *testing.T) {
 	stream := "http://127.0.0.1:8090/stream/ab12/3/%D0%A1%D0%B5%D1%80%D0%B8%D1%8F%203.mkv"
@@ -57,6 +77,7 @@ func TestParseLaunchRejectsForeignLinks(t *testing.T) {
 	for _, ok := range []string{
 		"kinodom://play?url=http://localhost:8090/media/12",
 		"kinodom://play/?url=http://127.0.0.1:8090/mcast/239.0.0.1:1234",
+		"kinodom://play?url=http://127.0.0.1:8090/m3u/channel/spas%2B4.m3u8", // канал IPTV (этап 8)
 	} {
 		if _, _, err := ParseLaunch(ok, 8090); err != nil {
 			t.Errorf("%s: %v", ok, err)
