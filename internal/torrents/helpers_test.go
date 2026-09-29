@@ -11,6 +11,7 @@ import (
 	"github.com/anacrolix/torrent/bencode"
 	"github.com/anacrolix/torrent/metainfo"
 
+	"kinodom/internal/store"
 	"kinodom/internal/torrents/torrenttest"
 )
 
@@ -77,4 +78,19 @@ func torrentBytes(t *testing.T, mi metainfo.MetaInfo) []byte {
 
 func magnetOf(mi metainfo.MetaInfo) string {
 	return "magnet:?xt=urn:btih:" + mi.HashInfoBytes().HexString()
+}
+
+// problemText — текст проблемы в «Состоянии» или "".
+func problemText(t *testing.T, db *store.DB, id string) string {
+	t.Helper()
+	ps, err := db.Problems(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, p := range ps {
+		if p.ID == id {
+			return p.Text
+		}
+	}
+	return ""
 }

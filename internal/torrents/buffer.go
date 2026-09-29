@@ -57,7 +57,7 @@ func (s *Service) Prepare(ctx context.Context, ih metainfo.Hash, index int) erro
 	f := files[index]
 	// Сначала — запись в базу: без неё файл не восстановится после перезапуска и не попадёт
 	// в очистку. Запрос телевизора могут отменить, а запись должна дойти.
-	path := enginePath(s.eng.DownloadsDir(), info, ih, info.UpvertedFiles()[index])
+	path := enginePath(s.eng.TorrentDir(ih), info, ih, info.UpvertedFiles()[index])
 	if err := s.reg.MarkStored(context.WithoutCancel(ctx), ih, index, path, f.Length(), s.now()); err != nil {
 		return err
 	}

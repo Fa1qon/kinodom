@@ -39,7 +39,7 @@ func TestPrepStorageCreatesSparseFilesAndPremarks(t *testing.T) {
 		UsePartFiles:    g.Some(false),
 	})
 	cfg := torrenttest.OfflineConfig(down)
-	cfg.DefaultStorage = prepStorage{inner: fc, pc: pc, base: down}
+	cfg.DefaultStorage = prepStorage{inner: fc, pc: pc, dirs: newTorrentDirs(down)}
 	cl, err := torrent.NewClient(cfg)
 	if err != nil {
 		t.Fatal(err)
