@@ -9,7 +9,8 @@ import (
 
 var (
 	reBrackets = regexp.MustCompile(`\[[^\]]*\]`)
-	reParens   = regexp.MustCompile(`(?i)\((?:\d{3,4}[pi]|архив|not 24/7|geo-blocked)\)`)
+	reParens   = regexp.MustCompile(`(?i)\((?:\d{3,4}[pi]|\d{1,2}|архив|not 24/7|geo-blocked)\)`) // «(2)» — номер дубля
+	rePlace    = regexp.MustCompile(`\s*\(([^()+\d][^()]*)\)\s*$`)
 	reShift    = regexp.MustCompile(`^\+[1-9]$`)
 )
 
@@ -40,10 +41,12 @@ func Norm(name string) string {
 			}
 			continue
 		case w == "+" && i+1 < len(ws) && isNumber(ws[i+1]): // «+ 4»
-			out = append(out, "+"+ws[i+1])
+			if ws[i+1] != "0" {
+				out = append(out, "+"+ws[i+1])
+			}
 			i++
 			continue
-		case w == "+":
+		case w == "+", w == "+0": // «+0» — московская версия
 			continue
 		}
 		out = append(out, w)
@@ -75,4 +78,11 @@ func SplitShift(norm string) (string, int) {
 		return norm, 0
 	}
 	return norm[:i], int(last[1] - '0')
+}
+
+// WithoutPlace — название без последней пометки в скобках, если это не сдвиг и не число: обычно город
+// региональной вставки («Россия 24 +0 (Липецк)» → «Россия 24 +0»). Сопоставление пробует его
+// последним, когда по полному названию канал не нашёлся.
+func WithoutPlace(name string) string {
+	return strings.TrimSpace(rePlace.ReplaceAllString(name, ""))
 }

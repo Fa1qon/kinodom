@@ -199,25 +199,40 @@ func match(s *Stream, p *pool, ix *epgIndex, base *labels.Base) matchResult {
 			return matchResult{key: ix.regional(found, entryShift(e)), by: "bridge"}
 		}
 	}
-	for _, e := range s.Entries {
-		for _, name := range []string{e.Name, e.TvgName} {
-			n := m3u.Norm(name)
-			if n == "" {
-				continue
-			}
-			if id, amb := ix.byName(n); id != "" {
-				return matchResult{key: id, by: "name"}
-			} else if amb {
-				continue
-			}
-			if b, shift := m3u.SplitShift(n); shift > 0 {
-				if id, _ := ix.byName(b); id != "" {
-					return matchResult{key: ix.regional(id, shift), by: "name"}
+	// Название; последней попыткой — без города в скобках («Россия 24 +0 (Липецк)»).
+	for _, strip := range []bool{false, true} {
+		for _, e := range s.Entries {
+			for _, name := range []string{e.Name, e.TvgName} {
+				if strip {
+					if name = m3u.WithoutPlace(name); name == e.Name || name == e.TvgName {
+						continue
+					}
+				}
+				if key := ix.byNameShift(m3u.Norm(name)); key != "" {
+					return matchResult{key: key, by: "name"}
 				}
 			}
 		}
 	}
 	return matchResult{}
+}
+
+// byNameShift — канал по нормализованному названию; «+N» без своего канала — сдвинутый «id+N».
+func (ix *epgIndex) byNameShift(n string) string {
+	if n == "" {
+		return ""
+	}
+	if id, amb := ix.byName(n); id != "" {
+		return id
+	} else if amb {
+		return ""
+	}
+	if b, shift := m3u.SplitShift(n); shift > 0 {
+		if id, _ := ix.byName(b); id != "" {
+			return ix.regional(id, shift)
+		}
+	}
+	return ""
 }
 
 // orgID — id канала iptv-org из tvg-id вида «Channel.ru@HD».

@@ -81,7 +81,10 @@ export function render(root, r, ctx) {
   }
 
   function draw() {
-    if (!card) return;
+    if (!card) {
+      fill(top, error ? h('p', { class: 'error' }, error) : h('p', { class: 'muted' }, 'Загружается…'));
+      return;
+    }
     const c = card;
     const g = GRADE[c.grade] || GRADE.unrated;
     keepFocus(root, () => {
