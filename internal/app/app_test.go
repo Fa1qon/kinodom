@@ -754,3 +754,32 @@ func Testt2LoginProblemAndRelogin(t *testing.T) {
 		t.Fatalf("«Войти» с верным паролем: %+v", st)
 	}
 }
+
+// Разделы каталога из пульта: проверка по дереву трекера, запись «раздел со всеми подразделами»,
+// дерево для настроек (спека этапа 7, раздел 5.4).
+func TestCatalogSectionsFromSettings(t *testing.T) {
+	rt := t2test.NewServer(t)
+	kp := httptest.NewServer(http.NotFoundHandler())
+	t.Cleanup(kp.Close)
+	dead := "http://" + closedAddr(t)
+	a := startAppWith(t, Options{Home: t.TempDir(), ListenAddr: "127.0.0.1:0", Offline: true, DownloadsDir: t.TempDir(), KinopoiskAPI: kp.URL,
+		Trackers: Trackers{t1Mirrors: []string{dead}, t1Download: dead, t2Mirrors: []string{rt.Forum.URL},
+			t2API: rt.API.URL, t2Feed: rt.Feed.URL, NoEdge: true, Rate: 1000}})
+	base := "http://" + a.API.Addr() + "/api/v1"
+	var tree []catalog.TreeNode
+	waitUntil(t, "дерево разделов t2", func() bool {
+		getJSON(t, base+"/sources/t2/categories", &tree)
+		return slices.ContainsFunc(tree, func(n catalog.TreeNode) bool { return n.ID == "2076" && n.ParentID != "" })
+	})
+	code, body := putJSON(t, base+"/settings", map[string]any{"catalog": map[string]any{"sections": map[string]any{"t2": []string{"99999999"}}}})
+	if code != http.StatusBadRequest || !strings.Contains(body, "99999999") {
+		t.Fatalf("раздела нет в дереве: %d %s", code, body)
+	}
+	code, body = putJSON(t, base+"/settings", map[string]any{"catalog": map[string]any{"sections": map[string]any{"t2": []string{"46+"}, "t1": []string{"12"}}}})
+	if code != 200 {
+		t.Fatalf("разделы: %d %s", code, body)
+	}
+	if v, _, _ := a.DB.Setting(context.Background(), "catalog.categories"); v != "t2:46+,t1:12" {
+		t.Fatalf("в базе: %q", v)
+	}
+}

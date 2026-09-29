@@ -278,6 +278,24 @@ func (s catalogStore) replaceCategories(ctx context.Context, tracker string, cs 
 	return tx.Commit()
 }
 
+// tree — дерево разделов трекера в том порядке, в каком его отдал трекер.
+func (s catalogStore) tree(ctx context.Context, tracker string) ([]source.Category, error) {
+	rows, err := s.db.R.QueryContext(ctx, `SELECT id, name, parent_id FROM categories WHERE tracker = ? ORDER BY rowid`, tracker)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []source.Category
+	for rows.Next() {
+		var c source.Category
+		if err := rows.Scan(&c.ID, &c.Name, &c.ParentID); err != nil {
+			return nil, err
+		}
+		out = append(out, c)
+	}
+	return out, rows.Err()
+}
+
 func (s catalogStore) categoryName(ctx context.Context, tracker, id string) string {
 	var name string
 	if err := s.db.R.QueryRowContext(ctx, `SELECT name FROM categories WHERE tracker = ? AND id = ?`, tracker, id).Scan(&name); err != nil {

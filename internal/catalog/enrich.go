@@ -59,7 +59,7 @@ func (c *Catalog) enrichStep(ctx context.Context, tracker string) (bool, error) 
 	if c.forumPausedUntil(tracker).After(now) {
 		return false, nil
 	}
-	r, ok, err := c.st.nextToEnrich(ctx, tracker, c.cats, now)
+	r, ok, err := c.st.nextToEnrich(ctx, tracker, c.enabled(), now)
 	if err != nil || !ok {
 		return false, err
 	}
@@ -149,7 +149,7 @@ func (c *Catalog) recentTitles(ctx context.Context, tracker string) {
 	if !ok {
 		return
 	}
-	for _, cat := range c.cats {
+	for _, cat := range c.enabled() {
 		if cat.Tracker != tracker {
 			continue
 		}
@@ -169,7 +169,7 @@ func (c *Catalog) recentTitles(ctx context.Context, tracker string) {
 
 // position — место раздачи в основном каталоге: приоритет в очереди рейтингов.
 func (c *Catalog) position(ctx context.Context, id int64) (int, error) {
-	rs, err := c.st.catalogRows(ctx, c.cats)
+	rs, err := c.st.catalogRows(ctx, c.enabled())
 	if err != nil {
 		return 0, err
 	}
