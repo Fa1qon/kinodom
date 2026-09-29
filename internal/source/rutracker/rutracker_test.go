@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"log/slog"
+	"net"
 	"net/http"
 	"net/url"
 	"slices"
@@ -418,4 +419,92 @@ func TestSearchFiltersForumsOnServer(t *testing.T) {
 	if len(ids) < 300 || !slices.Contains(ids, "2076") || slices.Contains(ids, "") {
 		t.Fatalf("f=%.80q… (%d разделов)", s.LastForums(), len(ids))
 	}
+}
+
+// Состояние входа для пульта: не задан → ещё не входили → неверный пароль (без повторов, даже если
+// пульт сохраняет ту же пару) → «Войти» после исправления на форуме — вошли. OnLogin сообщает только
+// изменения (спека этапа 7, раздел 5.3; хвост этапа 4).
+func TestLoginStateAndRelogin(t *testing.T) {
+	s := rutrackertest.NewServer(t)
+	s.Login, s.Password = "user", "right"
+	var seen []LoginInfo
+	r := newRutracker(t, s, func(o *Options) { o.OnLogin = func(i LoginInfo) { seen = append(seen, i) } })
+	if st := r.LoginState(); st.State != LoginNone {
+		t.Fatalf("без логина: %+v", st)
+	}
+	r.SetCredentials("user", "wrong")
+	if st := r.LoginState(); st.State != LoginUnknown {
+		t.Fatalf("до входа: %+v", st)
+	}
+	r.Login(ctx)
+	if st := r.LoginState(); st != (LoginInfo{State: LoginBlocked, Text: "Неверный логин или пароль"}) {
+		t.Fatalf("неверный пароль: %+v", st)
+	}
+	r.SetCredentials("user", "wrong") // пульт сохранил настройки, пароль тот же
+	r.Search(ctx, "космос")
+	if s.Logins() != 1 || r.LoginState().State != LoginBlocked {
+		t.Fatalf("та же пара сняла запрет: входов %d, %+v", s.Logins(), r.LoginState())
+	}
+	s.Password = "wrong" // на форуме пароль сменили на тот, что в настройках
+	if st := r.Relogin(ctx); st.State != LoginOK || s.Logins() != 2 {
+		t.Fatalf("«Войти»: %+v, входов %d", st, s.Logins())
+	}
+	want := []LoginState{LoginUnknown, LoginBlocked, LoginOK}
+	if len(seen) != len(want) {
+		t.Fatalf("OnLogin: %+v", seen)
+	}
+	for i, st := range want {
+		if seen[i].State != st {
+			t.Fatalf("OnLogin: %+v", seen)
+		}
+	}
+}
+
+func TestCaptchaAndFailingStates(t *testing.T) {
+	s := rutrackertest.NewServer(t)
+	r := newRutracker(t, s, withCreds("user", "pass"))
+	r.mu.Lock()
+	r.loginBlock = &CaptchaError{SID: "x"}
+	r.mu.Unlock()
+	if st := r.LoginState(); st != (LoginInfo{State: LoginBlocked, Text: "Капча — вход не выполнен"}) {
+		t.Fatalf("капча: %+v", st)
+	}
+	down := newRutracker(t, s, func(o *Options) {
+		o.Login, o.Password = "user", "pass"
+		o.Mirrors = []string{"http://" + closedAddr(t)}
+	})
+	down.Login(ctx)
+	if st := down.LoginState(); st.State != LoginFailing || st.Text == "" {
+		t.Fatalf("форум не ответил: %+v", st)
+	}
+}
+
+// Сменили учётную запись — сессия прежней не остаётся (хвост этапа 4).
+func TestSwitchingAccountDropsOldSession(t *testing.T) {
+	s := rutrackertest.NewServer(t)
+	s.Login, s.Password = "user", "pass"
+	r := newRutracker(t, s, withCreds("user", "pass"))
+	if err := r.Login(ctx); err != nil || !r.loggedIn() {
+		t.Fatalf("вход: %v", err)
+	}
+	r.SetCredentials("user", "pass") // те же значения — сессия остаётся
+	if !r.loggedIn() {
+		t.Fatal("сессия сброшена без смены учётной записи")
+	}
+	r.SetCredentials("other", "secret")
+	if r.loggedIn() || r.LoginState().State != LoginUnknown {
+		t.Fatalf("сессия прежней учётной записи осталась: %+v", r.LoginState())
+	}
+}
+
+// closedAddr — адрес, где никто не слушает.
+func closedAddr(t *testing.T) string {
+	t.Helper()
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	addr := ln.Addr().String()
+	ln.Close()
+	return addr
 }

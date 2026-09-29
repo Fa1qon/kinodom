@@ -11,9 +11,12 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"kinodom/internal/netx"
 )
 
 // pngBytes — настоящая маленькая картинка PNG.
@@ -55,7 +58,11 @@ func imageSite(t *testing.T, hits *atomic.Int32) *httptest.Server {
 
 func newImages(t *testing.T, proxy string) *Images {
 	t.Helper()
-	im, err := NewImages(ImagesOptions{Dir: t.TempDir(), Proxy: proxy, Rate: 1000})
+	px, err := netx.NewProxy(proxy)
+	if err != nil {
+		t.Fatal(err)
+	}
+	im, err := NewImages(ImagesOptions{Dir: t.TempDir(), Proxy: px, Rate: 1000, AllowPrivate: true})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -190,5 +197,99 @@ func TestImagesSweep(t *testing.T) {
 	slices.Sort(want)
 	if !slices.Equal(names, want) {
 		t.Fatalf("остались %v", names)
+	}
+}
+
+// Одну картинку одновременно просят несколько раздач: у всех — ключ, ни одной ошибки «Access is
+// denied» от второго переименования (ревью 5b, M4).
+func TestConcurrentFetchOfSameImage(t *testing.T) {
+	var hits atomic.Int32
+	s := imageSite(t, &hits)
+	im := newImages(t, "")
+	var wg sync.WaitGroup
+	errs := make([]error, 8)
+	for i := range errs {
+		wg.Go(func() { _, errs[i] = im.Fetch(ctx, s.URL+"/p.png", Direct) })
+	}
+	wg.Wait()
+	if err := errors.Join(errs...); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// Адрес, где не картинка, не качается снова: заглушку хостинга просят сотни раздач (ревью 5b, M4).
+func TestNoImageAddressIsRemembered(t *testing.T) {
+	var hits atomic.Int32
+	s := imageSite(t, &hits)
+	im := newImages(t, "")
+	for range 3 {
+		if _, err := im.Fetch(ctx, s.URL+"/page", Direct); !errors.Is(err, ErrNoImage) {
+			t.Fatalf("заглушка: %v", err)
+		}
+	}
+	if hits.Load() != 1 {
+		t.Fatalf("заглушка скачана %d раз", hits.Load())
+	}
+}
+
+// Адреса этого ПК и домашней сети из описаний раздач не скачиваются — ни прямо, ни по имени,
+// которое указывает в домашнюю сеть; сам прокси в домашней сети при этом работает (ревью 5b, M10).
+func TestPrivateAddressesAreNotFetched(t *testing.T) {
+	var hits atomic.Int32
+	s := imageSite(t, &hits)
+	im, err := NewImages(ImagesOptions{Dir: t.TempDir(), Rate: 1000})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, port, _ := strings.Cut(strings.TrimPrefix(s.URL, "http://"), ":")
+	for _, u := range []string{"http://192.168.1.1/p.png", "http://localhost:" + port + "/p.png", "http://[::1]:" + port + "/p.png"} {
+		if _, err := im.Fetch(ctx, u, ViaProxy); !errors.Is(err, ErrNoImage) {
+			t.Errorf("%s: %v", u, err)
+		}
+	}
+	if _, err := im.Fetch(ctx, s.URL+"/p.png", Direct); !errors.Is(err, ErrNoImage) {
+		t.Errorf("127.0.0.1 напрямую: %v", err)
+	}
+	if hits.Load() != 0 {
+		t.Fatalf("до домашней сети дошло %d запросов", hits.Load())
+	}
+	pic := pngBytes(t)
+	proxy := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { w.Write(pic) }))
+	t.Cleanup(proxy.Close)
+	px, _ := netx.NewProxy(proxy.URL) // прокси — на этом ПК
+	viaProxy, err := NewImages(ImagesOptions{Dir: t.TempDir(), Rate: 1000, Proxy: px})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := viaProxy.Fetch(ctx, "http://images.example/p.png", ViaProxy); err != nil {
+		t.Fatalf("через прокси в домашней сети: %v", err)
+	}
+}
+
+// С прокси соединение идёт только с самим прокси, и проверка при соединении не видит, куда ведёт
+// редирект: хостинг из описания раздачи отвечает 302 на адрес домашней сети — туда не ходим
+// (финальное ревью 7a, M10).
+func TestRedirectToPrivateAddressIsNotFollowed(t *testing.T) {
+	pic := pngBytes(t)
+	var private atomic.Int32
+	proxy := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Hostname() == "192.168.1.1" {
+			private.Add(1)
+			w.Write(pic)
+			return
+		}
+		http.Redirect(w, r, "http://192.168.1.1/admin.png", http.StatusFound)
+	}))
+	t.Cleanup(proxy.Close)
+	px, _ := netx.NewProxy(proxy.URL)
+	im, err := NewImages(ImagesOptions{Dir: t.TempDir(), Rate: 1000, Proxy: px})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := im.Fetch(ctx, "http://images.example/p.png", ViaProxy); !errors.Is(err, ErrNoImage) {
+		t.Errorf("редирект в домашнюю сеть: %v", err)
+	}
+	if private.Load() != 0 {
+		t.Fatalf("до домашней сети дошло %d запросов", private.Load())
 	}
 }

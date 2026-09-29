@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"kinodom/internal/edge"
+	"kinodom/internal/netx"
 	"kinodom/internal/source"
 	"kinodom/internal/source/rutor"
 	"kinodom/internal/source/rutracker"
@@ -66,8 +67,12 @@ func cmdSourceRutor(action string, rest []string, stdout, stderr io.Writer) int 
 		fmt.Fprint(stderr, sourceUsage)
 		return 2
 	}
+	px, err := netx.NewProxy(*proxy)
+	if err != nil {
+		return fail(stderr, err)
+	}
 	src, err := rutor.New(rutor.Options{
-		Proxy: *proxy, Mirrors: mirrors, DownloadBase: *download,
+		Proxy: px, Mirrors: mirrors, DownloadBase: *download,
 		// Предупреждения (зеркало не ответило, повтор запроса) — в поток ошибок.
 		Log: slog.New(slog.NewTextHandler(stderr, &slog.HandlerOptions{Level: slog.LevelWarn})),
 	})
@@ -139,7 +144,11 @@ func cmdSourceRutracker(action string, rest []string, stdout, stderr io.Writer) 
 		return 2
 	}
 	log := slog.New(slog.NewTextHandler(stderr, &slog.HandlerOptions{Level: slog.LevelInfo}))
-	o := rutracker.Options{Proxy: *proxy, Mirrors: mirrors, APIBase: *apiBase, FeedBase: *feedBase, Log: log,
+	px, err := netx.NewProxy(*proxy)
+	if err != nil {
+		return fail(stderr, err)
+	}
+	o := rutracker.Options{Proxy: px, Mirrors: mirrors, APIBase: *apiBase, FeedBase: *feedBase, Log: log,
 		Login: os.Getenv("KINODOM_RUTRACKER_LOGIN"), Password: os.Getenv("KINODOM_RUTRACKER_PASSWORD")}
 	if !*noEdge {
 		ua, err := edge.UserAgent()
@@ -147,7 +156,7 @@ func cmdSourceRutracker(action string, rest []string, stdout, stderr io.Writer) 
 			return fail(stderr, err)
 		}
 		o.UserAgent = ua
-		o.Passer = edge.New(edge.Options{ProfileDir: *profile, Proxy: *proxy, UserAgent: ua, Log: log})
+		o.Passer = edge.New(edge.Options{ProfileDir: *profile, Proxy: px, UserAgent: ua, Log: log})
 	}
 	src, err := rutracker.New(o)
 	if err != nil {

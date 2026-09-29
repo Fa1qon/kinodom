@@ -215,7 +215,7 @@ func TestAbsoluteURLIsNotRotated(t *testing.T) {
 
 func TestProxyDownStopsWithoutTryingMirrors(t *testing.T) {
 	m := newSite(t, page(trackerPage))
-	c, err := NewClient(Options{Name: "Трекер", Mirrors: []string{m.URL, "http://" + closedAddr(t)}, Proxy: "http://" + closedAddr(t), Rate: 1000})
+	c, err := NewClient(Options{Name: "Трекер", Mirrors: []string{m.URL, "http://" + closedAddr(t)}, Proxy: mustProxy(t, "http://"+closedAddr(t)), Rate: 1000})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -232,7 +232,6 @@ func TestNewClientRejectsBadOptions(t *testing.T) {
 	cases := map[string]Options{
 		"нет зеркал":        {Name: "Трекер"},
 		"зеркало без схемы": {Name: "Трекер", Mirrors: []string{"rutor.info"}},
-		"прокси без схемы":  {Name: "Трекер", Mirrors: []string{"https://rutor.info"}, Proxy: "127.0.0.1:1080"},
 	}
 	for name, o := range cases {
 		if _, err := NewClient(o); err == nil {
@@ -399,9 +398,9 @@ func TestProxyRefusalIsProxyProblem(t *testing.T) {
 		w.WriteHeader(http.StatusProxyAuthRequired)
 	})
 	cases := map[string]Options{
-		"HTTP-прокси, 407 на CONNECT":        {Mirrors: []string{"https://rutor.example", "https://rutor2.example"}, Proxy: proxy407.URL},
-		"HTTP-прокси, 407 на обычный запрос": {Mirrors: []string{"http://rutor.example", "http://rutor2.example"}, Proxy: proxy407.URL},
-		"SOCKS5 не принимает логин":          {Mirrors: []string{"https://rutor.example", "https://rutor2.example"}, Proxy: "socks5://user:pass@" + socksRefusing(t)},
+		"HTTP-прокси, 407 на CONNECT":        {Mirrors: []string{"https://rutor.example", "https://rutor2.example"}, Proxy: mustProxy(t, proxy407.URL)},
+		"HTTP-прокси, 407 на обычный запрос": {Mirrors: []string{"http://rutor.example", "http://rutor2.example"}, Proxy: mustProxy(t, proxy407.URL)},
+		"SOCKS5 не принимает логин":          {Mirrors: []string{"https://rutor.example", "https://rutor2.example"}, Proxy: mustProxy(t, "socks5://user:pass@"+socksRefusing(t))},
 	}
 	for name, o := range cases {
 		t.Run(name, func(t *testing.T) {

@@ -30,9 +30,10 @@ type FileStatus struct {
 	Error         string    `json:"error,omitempty"`
 }
 
-// Prepare выбирает файл для просмотра: он качается целиком и хранится, а начало и конец —
-// в первую очередь. Повторный вызов (второй телевизор) ничего не меняет. Места не хватает —
-// сначала очистка самых давно открытых, потом ErrLowSpace (спека, раздел 9).
+// Prepare выбирает файл для просмотра («Смотреть»): он хранится, качается целиком и становится
+// фокусом очереди раздачи, а начало и конец — в первую очередь. Повторный вызов (второй телевизор)
+// переносит фокус на этот файл. Места не хватает — сначала очистка самых давно открытых, потом
+// ErrLowSpace (спека, раздел 9; спека этапа 7, раздел 5.5).
 func (s *Service) Prepare(ctx context.Context, ih metainfo.Hash, index int) error {
 	// Одна проверка места за раз: две серии, выбранные одновременно, не займут одно место дважды.
 	s.spaceMu.Lock()
@@ -71,13 +72,16 @@ func (s *Service) prepare(ctx context.Context, ih metainfo.Hash, index int) erro
 	}
 	ss.lastSeen = s.now()
 	if _, done := ss.prepared[index]; done {
+		// Файл уже выбран (второй телевизор или «Смотреть» снова): только фокус — на него.
+		if !fileDone(files[index]) {
+			s.setFocusLocked(ss, index)
+		}
+		s.applyLocked(ss)
+		ss.downloadErr = "" // прежняя неудача отложенного «Скачать» больше не про эту раздачу
 		return nil
 	}
 	f := files[index]
-	// Сначала — запись в базу: без неё файл не восстановится после перезапуска и не попадёт
-	// в очистку. Запрос телевизора могут отменить, а запись должна дойти.
-	path := enginePath(s.eng.TorrentDir(ih), info, ih, info.UpvertedFiles()[index])
-	if err := s.reg.MarkStored(context.WithoutCancel(ctx), ih, index, path, f.Length(), s.now()); err != nil {
+	if err := s.storeLocked(ctx, ss, index); err != nil {
 		return err
 	}
 	episode := len(playableFiles(allFiles(t))) > 1
@@ -89,18 +93,15 @@ func (s *Service) prepare(ctx context.Context, ih metainfo.Hash, index int) erro
 		tail:    spanFor(info.PieceLength, f.Offset()+f.Length()-tail, tail),
 	}
 	ss.prepared[index] = p
-	ss.stored = true
-	ss.storedFiles[index] = true
 	s.wakeLocked(ss) // «молчащую» раздачу выбрали снова — ей нужны пиры
 
-	// Хранимые файлы (и выбранные раньше, и восстановленные после перезапуска) докачиваются,
-	// остальные серии — только когда их откроют.
-	for i, other := range files {
-		if !ss.storedFiles[i] {
-			other.SetPriority(torrent.PiecePriorityNone)
-		}
+	// Выбранный файл — в фокус очереди: качается он, остальные хранимые ждут (этап 7). Скачанный
+	// файл фокус не забирает: иначе очередь ушла бы с серии, выбранной жёлтой «Смотреть».
+	if !fileDone(f) {
+		s.setFocusLocked(ss, index)
 	}
-	f.SetPriority(torrent.PiecePriorityNormal)
+	s.applyLocked(ss)
+	ss.downloadErr = ""
 	// Начало и конец — первыми: без конца файла MKV/AVI/MP4 плеер не может перематывать.
 	for _, sp := range []pieceSpan{p.head, p.tail} {
 		for i := sp.begin; i < sp.end; i++ {

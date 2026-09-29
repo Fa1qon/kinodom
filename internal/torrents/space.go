@@ -10,7 +10,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/anacrolix/torrent"
 	"github.com/anacrolix/torrent/metainfo"
 )
 
@@ -20,7 +19,7 @@ var ErrLowSpace = errors.New("мало места на диске")
 // Policy — правила хранения из настроек (спека, раздел 15).
 type Policy struct {
 	KeepFor    time.Duration // хранить после последнего открытия; 0 — 14 дней
-	MinFree    int64         // минимум свободного места, байт; 0 — 20 ГБ
+	MinFree    int64         // минимум свободного места, байт; 0 — без запаса; меньше 0 — 20 ГБ
 	MaxSeeding int           // раздавать не больше стольких раздач; 0 — 10
 }
 
@@ -29,14 +28,14 @@ const (
 	defaultMinFree = 20 << 30
 )
 
-// SetPolicy задаёт правила хранения; вызывать до Run.
+// SetPolicy задаёт правила хранения — и до Run, и на ходу (настройки из пульта, этап 7).
 func (s *Service) SetPolicy(p Policy) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if p.KeepFor <= 0 {
 		p.KeepFor = defaultKeepFor
 	}
-	if p.MinFree <= 0 {
+	if p.MinFree < 0 {
 		p.MinFree = defaultMinFree
 	}
 	if p.MaxSeeding <= 0 {
@@ -166,15 +165,15 @@ func (s *Service) checkSpace(ctx context.Context) error {
 		}
 		s.pauseDownloads(volumeOf(dir), short > 0)
 		if short > 0 {
-			low = append(low, fmt.Sprintf("%s (свободно %s)", volumeOf(dir), gb(free)))
+			low = append(low, fmt.Sprintf("на диске %s свободно %s", volumeOf(dir), gb(free)))
 		}
 	}
 	if len(low) == 0 {
 		s.reg.clearProblem(ctx, "torrents.space")
 		return nil
 	}
-	s.reg.setProblem(ctx, "torrents.space", "Мало места на диске "+strings.Join(low, ", ")+
-		" при запасе "+gb(s.pol().MinFree)+": докачки на паузе, новые фильмы не откроются. Удалите лишнее с диска или уменьшите запас в настройках")
+	// Коротко: подробности заказчик в интерфейсе видеть не хочет (спека этапа 7, раздел 2).
+	s.reg.setProblem(ctx, "torrents.space", "Мало места в папке загрузок: "+strings.Join(low, ", "))
 	return nil
 }
 
@@ -214,15 +213,18 @@ func (s *Service) pauseDownloads(vol string, pause bool) {
 			continue
 		}
 		files := ss.t.Files()
+		changed := false
 		for i := range ss.storedFiles {
 			switch {
 			case pause && !ss.paused[i] && ss.readers[i] == 0 && files[i].BytesCompleted() < files[i].Length():
-				files[i].SetPriority(torrent.PiecePriorityNone)
-				ss.paused[i] = true
+				ss.paused[i], changed = true, true
 			case !pause && ss.paused[i]:
-				files[i].SetPriority(torrent.PiecePriorityNormal)
 				delete(ss.paused, i)
+				changed = true
 			}
+		}
+		if changed {
+			s.applyLocked(ss)
 		}
 	}
 }

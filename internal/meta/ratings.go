@@ -64,12 +64,13 @@ type RatingsOptions struct {
 // Ratings — модуль «ratings»: очередь запросов к Кинопоиску. Каталог ставит раздачи в очередь
 // в порядке основного каталога (Enqueue) и берёт готовые рейтинги (For).
 type Ratings struct {
-	kp   *Kinopoisk
-	st   ratingStore
-	db   *store.DB
-	log  *slog.Logger
-	now  func() time.Time
-	wake chan struct{}
+	kp      *Kinopoisk
+	st      ratingStore
+	db      *store.DB
+	log     *slog.Logger
+	now     func() time.Time
+	wake    chan struct{}
+	recheck chan struct{} // ключ сменили: узнать лимиты заново (в цикле Run, не в запросе пульта)
 
 	mu          sync.Mutex
 	quota       Quota
@@ -82,7 +83,8 @@ func NewRatings(o RatingsOptions) *Ratings {
 	if o.Log == nil {
 		o.Log = slog.New(slog.DiscardHandler)
 	}
-	return &Ratings{kp: o.KP, st: ratingStore{o.DB}, db: o.DB, log: o.Log, now: time.Now, wake: make(chan struct{}, 1)}
+	return &Ratings{kp: o.KP, st: ratingStore{o.DB}, db: o.DB, log: o.Log, now: time.Now, wake: make(chan struct{}, 1),
+		recheck: make(chan struct{}, 1)}
 }
 
 func (r *Ratings) Name() string { return "ratings" }
@@ -173,6 +175,8 @@ func (r *Ratings) Run(ctx context.Context) error {
 			return nil
 		case <-r.wake:
 		case <-hourly.C:
+			r.checkQuota(ctx)
+		case <-r.recheck:
 			r.checkQuota(ctx)
 		case <-time.After(idlePoll):
 		}
@@ -311,7 +315,23 @@ func (r *Ratings) resolve(ctx context.Context, it queued, keyless bool) error {
 	if err != nil {
 		return err
 	}
+	// Фильм нашёлся поиском по названию записью без года, а в карточке год есть и чужой — это не
+	// тот фильм: без рейтинга лучше, чем с чужим (ревью 5b, M1).
+	if t := ParseTitle(it.Title); it.KinopoiskID == 0 && it.IMDbID == "" && t.Year != 0 && f.Year != 0 && abs(f.Year-t.Year) > 1 {
+		if err := r.st.link(ctx, it.Release, 0, now.Add(notFoundRetry)); err != nil {
+			return err
+		}
+		return r.st.setTitle(ctx, titleKey(t), t.Year, 0, now.Add(notFoundRetry))
+	}
 	return r.st.saveFilm(ctx, f, now)
+}
+
+// titleKey — ключ кэша «название и год → фильм»: оригинальное название, если есть, иначе русское.
+func titleKey(t Title) string {
+	if t.Orig != "" {
+		return NormTitle(t.Orig)
+	}
+	return NormTitle(t.Ru)
 }
 
 // findFilm ищет фильм раздачи без номера Кинопоиска: по IMDb (точно, один запрос), иначе по
@@ -360,7 +380,7 @@ func (r *Ratings) findFilm(ctx context.Context, it queued) (int, time.Time, erro
 	if len(keywords) == 0 {
 		return 0, now.Add(notFoundRetry), nil
 	}
-	key := NormTitle(keywords[0])
+	key := titleKey(t)
 	if id, retryAt, found, err := r.st.titleLink(ctx, key, t.Year); err != nil || (found && (id != 0 || now.Before(retryAt))) {
 		return id, retryAt, err
 	}
@@ -466,6 +486,24 @@ func (r *Ratings) checkQuota(ctx context.Context) {
 	r.mu.Unlock()
 	if err := r.db.ClearProblem(ctx, ProblemKinopoiskKey); err != nil {
 		r.log.Error("не удалось снять проблему", "id", ProblemKinopoiskKey, "err", err)
+	}
+}
+
+// KeyChanged — ключ сменили в настройках (Kinopoisk.SetKey уже вызван): прежние «ключ не подходит»
+// и пауза квоты относились к старому ключу. Лимиты нового ключа модуль узнает в своём цикле —
+// запрос пульта не ждёт Кинопоиск (хвост 5b: раньше ключ читался только при старте).
+func (r *Ratings) KeyChanged(ctx context.Context) {
+	r.mu.Lock()
+	r.badKey, r.pausedUntil, r.quota, r.fails = false, time.Time{}, Quota{}, 0
+	r.mu.Unlock()
+	if err := r.db.ClearProblem(ctx, ProblemKinopoiskKey); err != nil {
+		r.log.Error("не удалось снять проблему", "id", ProblemKinopoiskKey, "err", err)
+	}
+	for _, ch := range []chan struct{}{r.recheck, r.wake} {
+		select {
+		case ch <- struct{}{}:
+		default:
+		}
 	}
 }
 

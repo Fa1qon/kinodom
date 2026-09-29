@@ -12,19 +12,6 @@ import (
 	"kinodom/internal/source"
 )
 
-func TestParseCategories(t *testing.T) {
-	got, err := ParseCategories(" rutracker:2110, rutor:12 ")
-	if err != nil || !slices.Equal(got, []CategoryRef{{"rutracker", "2110"}, {"rutor", "12"}}) {
-		t.Fatalf("%v, %v", got, err)
-	}
-	if got, _ := ParseCategories(""); !slices.Equal(got, DefaultCategories) {
-		t.Fatal("пусто — категории по умолчанию")
-	}
-	if _, err := ParseCategories("rutracker2110"); err == nil {
-		t.Fatal("ошибки нет")
-	}
-}
-
 // Основной каталог: все включённые разделы вместе, по убыванию раздающих; у топа Rutracker нет
 // названий — карточка без названия, пока не загрузится страница раздачи (спека, раздел 7).
 func TestRefreshBuildsCatalogBySeeders(t *testing.T) {
@@ -233,7 +220,7 @@ func TestTrackerDownSkipsItsOtherSections(t *testing.T) {
 	rutor.top["12"] = many("rutor", 3)
 	db := openDB(t)
 	c, _ := newCatalog(t, db, func(o *Options) {
-		o.Categories = []CategoryRef{{"rutracker", "1"}, {"rutracker", "2"}, {"rutracker", "3"}, {"rutor", "12"}}
+		o.Sections = []Section{{"rutracker", "1", false}, {"rutracker", "2", false}, {"rutracker", "3", false}, {"rutor", "12", false}}
 	}, rutor, rt)
 	if wait := refresh(t, c, false); wait != time.Minute {
 		t.Fatalf("повтор через %v", wait)

@@ -24,6 +24,7 @@ type Record struct {
 	Metainfo []byte // bencode
 	Source   string
 	Dir      string // папка загрузок раздачи; пусто — текущая
+	Focus    int    // файл, который качался (очередь загрузки); −1 — никакой
 }
 
 // Remember запоминает раздачу при открытии; метаинфо может ещё не быть. Возвращает папку
@@ -36,6 +37,13 @@ func (r *Registry) Remember(ctx context.Context, ih metainfo.Hash, source, dir s
 		 RETURNING dir`,
 		ih.HexString(), source, time.Now().UnixMilli(), dir).Scan(&got)
 	return got, err
+}
+
+// PinDirs закрепляет папку за раздачами без папки (записаны до этапа 6): они лежат в папке
+// загрузок, которая действует сейчас. Иначе после смены папки в пульте их искали бы в новой.
+func (r *Registry) PinDirs(ctx context.Context, dir string) error {
+	_, err := r.db.W.ExecContext(ctx, `UPDATE torrents SET dir = ? WHERE dir = ''`, dir)
+	return err
 }
 
 // SaveMetainfo сохраняет метаинфо, когда движок её получил. Источник не меняется.
@@ -70,7 +78,7 @@ func (r *Registry) TouchStream(ctx context.Context, ih metainfo.Hash, index int,
 // Restorable — раздачи с метаинфо и хотя бы одним хранимым файлом.
 func (r *Registry) Restorable(ctx context.Context) ([]Record, error) {
 	rows, err := r.db.R.QueryContext(ctx,
-		`SELECT t.infohash, t.name, t.metainfo, t.source, t.dir FROM torrents t
+		`SELECT t.infohash, t.name, t.metainfo, t.source, t.dir, t.focus_file FROM torrents t
 		 WHERE t.metainfo IS NOT NULL
 		   AND EXISTS (SELECT 1 FROM stored_files f WHERE f.infohash = t.infohash)
 		 ORDER BY t.added_at`)
@@ -82,6 +90,30 @@ func (r *Registry) Restorable(ctx context.Context) ([]Record, error) {
 	for rows.Next() {
 		var rec Record
 		var hexHash string
+		if err := rows.Scan(&hexHash, &rec.Name, &rec.Metainfo, &rec.Source, &rec.Dir, &rec.Focus); err != nil {
+			return nil, err
+		}
+		if err := rec.InfoHash.FromHexString(hexHash); err != nil {
+			return nil, err
+		}
+		out = append(out, rec)
+	}
+	return out, rows.Err()
+}
+
+// Pending — раздачи, для которых нажали «Скачать» до того, как пришёл список файлов: после
+// перезапуска их надо открыть снова.
+func (r *Registry) Pending(ctx context.Context) ([]Record, error) {
+	rows, err := r.db.R.QueryContext(ctx,
+		`SELECT infohash, name, metainfo, source, dir FROM torrents WHERE download_all = 1 ORDER BY added_at`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []Record
+	for rows.Next() {
+		rec := Record{Focus: -1}
+		var hexHash string
 		if err := rows.Scan(&hexHash, &rec.Name, &rec.Metainfo, &rec.Source, &rec.Dir); err != nil {
 			return nil, err
 		}
@@ -91,6 +123,29 @@ func (r *Registry) Restorable(ctx context.Context) ([]Record, error) {
 		out = append(out, rec)
 	}
 	return out, rows.Err()
+}
+
+// SetDownloadAll запоминает (или снимает) «Скачать всё» до получения списка файлов.
+func (r *Registry) SetDownloadAll(ctx context.Context, ih metainfo.Hash, on bool) error {
+	_, err := r.db.W.ExecContext(ctx, `UPDATE torrents SET download_all = ? WHERE infohash = ?`, on, ih.HexString())
+	return err
+}
+
+// SetFocus запоминает файл, который качается сейчас: после перезапуска очередь продолжится с него.
+func (r *Registry) SetFocus(ctx context.Context, ih metainfo.Hash, index int) error {
+	_, err := r.db.W.ExecContext(ctx, `UPDATE torrents SET focus_file = ? WHERE infohash = ?`, index, ih.HexString())
+	return err
+}
+
+// Metainfo — сохранённая метаинфо раздачи; false — раздачу не открывали или метаданных ещё нет.
+func (r *Registry) Metainfo(ctx context.Context, ih metainfo.Hash) ([]byte, bool, error) {
+	var b []byte
+	err := r.db.R.QueryRowContext(ctx, `SELECT metainfo FROM torrents WHERE infohash = ? AND metainfo IS NOT NULL`,
+		ih.HexString()).Scan(&b)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, false, nil
+	}
+	return b, err == nil, err
 }
 
 // StoredFiles — номера хранимых файлов раздачи.
@@ -196,7 +251,8 @@ func (r *Registry) StoredByAge(ctx context.Context) ([]StoredFile, error) {
 func (r *Registry) Unstored(ctx context.Context, before time.Time) ([]Record, error) {
 	rows, err := r.db.R.QueryContext(ctx,
 		`SELECT t.infohash, t.name, t.metainfo, t.source, t.dir FROM torrents t
-		 WHERE t.added_at < ? AND NOT EXISTS (SELECT 1 FROM stored_files f WHERE f.infohash = t.infohash)`,
+		 WHERE t.added_at < ? AND t.download_all = 0
+		   AND NOT EXISTS (SELECT 1 FROM stored_files f WHERE f.infohash = t.infohash)`,
 		before.UnixMilli())
 	if err != nil {
 		return nil, err

@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -18,6 +19,8 @@ import (
 	"time"
 
 	"github.com/chromedp/cdproto/network"
+
+	"kinodom/internal/netx"
 )
 
 func needEdge(t *testing.T) {
@@ -162,11 +165,37 @@ func TestPassLogsNoCookieValues(t *testing.T) {
 	}
 }
 
-func TestPassRejectsProxyWithPassword(t *testing.T) {
-	f := New(Options{ProfileDir: t.TempDir(), ExecPath: "msedge.exe", UserAgent: "UA", Proxy: "socks5://user:secret@127.0.0.1:1080"})
-	_, _, err := f.Pass(context.Background(), "https://rutracker.org/forum/index.php")
-	if !errors.Is(err, ErrProxyAuth) || strings.Contains(err.Error(), "secret") {
-		t.Fatalf("ожидалась ErrProxyAuth без пароля в тексте, получено %v", err)
+// Прокси с паролем: Edge получает адрес локального переходника без пароля; после прохода
+// переходник закрыт. Прокси без пароля — как есть (спека этапа 7, раздел 5.2).
+func TestProxyWithPasswordGoesThroughForwarder(t *testing.T) {
+	px, err := netx.NewProxy("socks5://user:secret@192.168.1.20:1080")
+	if err != nil {
+		t.Fatal(err)
+	}
+	f := New(Options{ProfileDir: t.TempDir(), ExecPath: "msedge.exe", UserAgent: "UA", Proxy: px})
+	flag, done, err := f.proxyServer()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.HasPrefix(flag, "http://127.0.0.1:") || strings.Contains(flag, "secret") {
+		t.Fatalf("флаг --proxy-server=%s", flag)
+	}
+	addr := strings.TrimPrefix(flag, "http://")
+	if c, err := net.Dial("tcp", addr); err != nil {
+		t.Fatalf("переходник не слушает: %v", err)
+	} else {
+		c.Close()
+	}
+	done()
+	if c, err := net.Dial("tcp", addr); err == nil {
+		c.Close()
+		t.Fatal("после прохода переходник всё ещё слушает")
+	}
+	if err := px.Set("http://192.168.1.20:3128"); err != nil {
+		t.Fatal(err)
+	}
+	if flag, _, _ := f.proxyServer(); flag != "http://192.168.1.20:3128" {
+		t.Fatalf("прокси без пароля — как есть: %s", flag)
 	}
 }
 

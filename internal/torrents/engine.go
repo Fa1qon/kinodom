@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 
@@ -26,13 +27,13 @@ import (
 
 // Config — параметры движка.
 type Config struct {
-	DownloadsDir    string  // куда качать
-	StateDir        string  // отметки кусков (bolt) и узлы DHT
-	ListenPort      int     // 42000; 0 — любой свободный (тесты)
-	UploadLimit     float64 // байт/с; 0 — без ограничения
-	ConnsPerTorrent int     // соединений на раздачу; 0 — 20
-	TrackerProxy    string  // прокси для HTTP-анонсов; пусто — напрямую
-	Offline         bool    // без DHT, трекеров и проброса порта, только 127.0.0.1 (тесты)
+	DownloadsDir    string      // куда качать
+	StateDir        string      // отметки кусков (bolt) и узлы DHT
+	ListenPort      int         // 42000; 0 — любой свободный (тесты)
+	UploadLimit     float64     // байт/с; 0 — без ограничения
+	ConnsPerTorrent int         // соединений на раздачу; 0 — 20
+	Proxy           *netx.Proxy // прокси для HTTP-анонсов (общий, меняется в настройках); nil — напрямую
+	Offline         bool        // без DHT, трекеров и проброса порта, только 127.0.0.1 (тесты)
 	Log             *slog.Logger
 }
 
@@ -54,7 +55,8 @@ func NewEngine(c Config) (*Engine, error) {
 	if c.Log == nil {
 		c.Log = slog.Default()
 	}
-	if err := checkDownloadsDir(c.DownloadsDir); err != nil {
+	c.Log = slog.New(quietLog{c.Log.Handler()}) // шум anacrolix — на Debug (хвост этапа 2)
+	if err := CheckDownloadsDir(c.DownloadsDir); err != nil {
 		return nil, err
 	}
 	if err := os.MkdirAll(c.StateDir, 0o755); err != nil {
@@ -145,19 +147,50 @@ func buildClientConfig(c Config, st storage.ClientImpl, up *rate.Limiter) (*torr
 		cfg.DisableUTP = true
 		cfg.KeepAliveTimeout = 100 * time.Millisecond // тесты: простой из-за потерянного пробуждения — доли секунды
 	}
-	u, err := netx.ParseProxy(c.TrackerProxy)
-	if err != nil {
-		return nil, err
-	}
-	if u != nil {
-		// Через прокси — только HTTP-анонсы: адреса анонсов Rutracker в РФ заблокированы.
-		cfg.HTTPProxy = http.ProxyURL(u)
+	if c.Proxy != nil {
+		// Через прокси — только HTTP-анонсы: адреса анонсов Rutracker в РФ заблокированы. Прокси
+		// спрашивается на каждый анонс: смена в настройках действует без перезапуска движка.
+		cfg.HTTPProxy = c.Proxy.ForRequest
 		// Иначе HTTPProxy попал бы и во внутренний HTTP-клиент движка (веб-сиды) — а это данные.
 		cfg.WebTransport = &http.Transport{Proxy: nil, MaxConnsPerHost: 10}
 		// UDP-анонсы через HTTP/SOCKS-прокси не ходят; публичные UDP-трекеры не заблокированы,
 		// поэтому TrackerListenPacket не трогаем — они идут напрямую.
 	}
 	return cfg, nil
+}
+
+// noise — сообщения anacrolix, которые идут на каждый кусок или на каждого ушедшего зрителя: в
+// журнале службы они бесполезны и забивают его (хвост этапа 2).
+var noise = []string{"short write", "error flushing file before promotion", "initial read failed"}
+
+// quietLog — журнал движка, где шум anacrolix опущен до Debug.
+type quietLog struct{ slog.Handler }
+
+func (h quietLog) Handle(ctx context.Context, r slog.Record) error {
+	if r.Level > slog.LevelDebug && isNoise(r) {
+		r.Level = slog.LevelDebug
+		if !h.Handler.Enabled(ctx, r.Level) {
+			return nil
+		}
+	}
+	return h.Handler.Handle(ctx, r)
+}
+
+func (h quietLog) WithAttrs(as []slog.Attr) slog.Handler { return quietLog{h.Handler.WithAttrs(as)} }
+func (h quietLog) WithGroup(name string) slog.Handler    { return quietLog{h.Handler.WithGroup(name)} }
+
+func isNoise(r slog.Record) bool {
+	text := r.Message
+	r.Attrs(func(a slog.Attr) bool {
+		text += " " + a.Value.String()
+		return true
+	})
+	for _, n := range noise {
+		if strings.Contains(text, n) {
+			return true
+		}
+	}
+	return false
 }
 
 func limitOf(bytesPerSec float64) rate.Limit {
@@ -168,7 +201,11 @@ func limitOf(bytesPerSec float64) rate.Limit {
 }
 
 func (e *Engine) Client() *torrent.Client { return e.cl }
-func (e *Engine) DownloadsDir() string    { return e.cfg.DownloadsDir }
+func (e *Engine) DownloadsDir() string    { return e.dirs.defaultDir() }
+
+// SetDownloadsDir — новая папка для новых раздач; открытые раньше остаются, где качались
+// (основная спека, раздел 9). Проверка папки — CheckDownloadsDir, до вызова.
+func (e *Engine) SetDownloadsDir(dir string) { e.dirs.setDefault(dir) }
 
 // SetTorrentDir — папка загрузок раздачи; вызывать до добавления раздачи в движок.
 func (e *Engine) SetTorrentDir(ih metainfo.Hash, dir string) { e.dirs.set(ih, dir) }

@@ -1,6 +1,7 @@
 package catalog
 
 import (
+	"cmp"
 	"context"
 	"slices"
 	"time"
@@ -40,7 +41,8 @@ func (c *Catalog) List(ctx context.Context, o ListOptions) (entries []Entry, tot
 	if o.Limit <= 0 {
 		o.Limit = 50
 	}
-	rs, err := c.st.catalogRows(ctx, c.cats)
+	o.Offset = max(o.Offset, 0) // отрицательное смещение уронило бы срез (ревью 5c)
+	rs, err := c.st.catalogRows(ctx, c.enabled())
 	if err != nil {
 		return nil, 0, err
 	}
@@ -96,10 +98,14 @@ func (c *Catalog) entries(ctx context.Context, rs []row) ([]Entry, error) {
 			return nil, err
 		}
 	}
+	names, err := c.st.categoryNames(ctx, rs)
+	if err != nil {
+		return nil, err
+	}
 	out := make([]Entry, len(rs))
 	for i, r := range rs {
 		out[i] = Entry{ID: r.ID, Tracker: r.Tracker, TopicID: r.TopicID, Title: r.Title, Quality: meta.ParseTitle(r.Title).Quality,
-			CategoryID: r.CategoryID, Category: c.st.categoryName(ctx, r.Tracker, r.CategoryID), Seeders: r.Seeders,
+			CategoryID: r.CategoryID, Category: cmp.Or(names[CategoryRef{r.Tracker, r.CategoryID}], r.CategoryID), Seeders: r.Seeders,
 			Leechers: r.Leechers, Size: r.Size, Added: r.Added, InfoHash: r.InfoHash, ImageKey: r.ImageKey,
 			Rating: ratings[r.Tracker+":"+r.TopicID]}
 	}
@@ -116,20 +122,55 @@ type Category struct {
 
 // Categories — включённые разделы с названиями и числом карточек (фильтр каталога).
 func (c *Catalog) Categories(ctx context.Context) ([]Category, error) {
-	rs, err := c.st.catalogRows(ctx, c.cats)
+	cats := c.enabled()
+	rs, err := c.st.catalogRows(ctx, cats)
 	if err != nil {
 		return nil, err
 	}
-	count := map[CategoryRef]int{}
-	for _, r := range collapse(rs) {
-		count[CategoryRef{r.Tracker, r.CategoryID}]++
+	// Карточки считаются, как их показывает каталог: по трекерам отдельно, одинаковый infohash
+	// схлопнут внутри трекера (спека этапа 7, раздел 3).
+	byTracker := map[string][]row{}
+	for _, r := range rs {
+		byTracker[r.Tracker] = append(byTracker[r.Tracker], r)
 	}
-	out := make([]Category, 0, len(c.cats))
-	for _, cat := range c.cats {
+	count := map[CategoryRef]int{}
+	for _, trs := range byTracker {
+		for _, r := range collapse(trs) {
+			count[CategoryRef{r.Tracker, r.CategoryID}]++
+		}
+	}
+	var refs []row
+	for _, cat := range cats {
+		refs = append(refs, row{Tracker: cat.Tracker, CategoryID: cat.ID})
+	}
+	names, err := c.st.categoryNames(ctx, refs)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]Category, 0, len(cats))
+	for _, cat := range cats {
 		if _, ok := c.sources[cat.Tracker]; !ok {
 			continue
 		}
-		out = append(out, Category{Tracker: cat.Tracker, ID: cat.ID, Name: c.st.categoryName(ctx, cat.Tracker, cat.ID), Count: count[cat]})
+		out = append(out, Category{Tracker: cat.Tracker, ID: cat.ID, Name: cmp.Or(names[cat], cat.ID), Count: count[cat]})
 	}
 	return out, nil
+}
+
+// UpdatedAt — последнее удачное обновление разделов трекера в каталоге; нуль — ещё не было.
+func (c *Catalog) UpdatedAt(ctx context.Context, tracker string) (time.Time, error) {
+	var last time.Time
+	for _, cat := range c.enabled() {
+		if cat.Tracker != tracker {
+			continue
+		}
+		_, at, err := c.st.state(ctx, cat)
+		if err != nil {
+			return time.Time{}, err
+		}
+		if at.After(last) {
+			last = at
+		}
+	}
+	return last, nil
 }

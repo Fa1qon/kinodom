@@ -10,18 +10,59 @@ const (
 	streamUploadShare = 0.25 // во время просмотра — четверть лимита отдачи
 )
 
+// NoUpload — лимит отдачи «не раздавать» (0 в настройках, спека этапа 7, раздел 5.5).
+const NoUpload = -1.0
+
+// SetUploadLimit — лимит отдачи из настроек, байт/с: 0 — без ограничения, NoUpload — не раздавать.
+// Действует со следующего такта цикла Run, без перезапуска.
+func (s *Service) SetUploadLimit(bytesPerSec float64) {
+	s.mu.Lock()
+	s.uploadBase, s.uploadSet = bytesPerSec, true
+	s.mu.Unlock()
+}
+
+// UploadLimit — лимит отдачи из настроек, байт/с: заданный на ходу, иначе при создании движка.
+func (s *Service) UploadLimit() float64 {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.uploadSet {
+		return s.uploadBase
+	}
+	return s.eng.cfg.UploadLimit
+}
+
 // shapeUpload — лимит отдачи: пока идёт хоть один поток (любого модуля), четверть лимита из
 // настроек — иначе отдача забивает канал, и фильм тормозит (спека, раздел 9). Без лимита
-// (0) — без лимита и во время просмотра.
+// (0) — без лимита и во время просмотра. «Не раздавать» — раздачи не отдают куски вовсе.
 func (s *Service) shapeUpload() {
-	base := s.eng.cfg.UploadLimit
-	limit := base
+	base := s.UploadLimit()
+	s.setUploadOff(base < 0)
+	limit := max(base, 0)
 	if s.keeper.Active() > 0 || s.ActiveStreams() > 0 {
-		limit = base * streamUploadShare
+		limit = limit * streamUploadShare
 	}
 	if limit != s.upload {
 		s.eng.SetUploadLimit(limit)
 		s.upload = limit
+	}
+}
+
+// setUploadOff включает и выключает «не раздавать» у всех раздач. Молчащие раздачи не отдают и
+// так — их будит только wakeLocked.
+func (s *Service) setUploadOff(off bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if off == s.uploadOff {
+		return
+	}
+	s.uploadOff = off
+	for _, ss := range s.sessions {
+		switch {
+		case off:
+			ss.t.DisallowDataUpload()
+		case !ss.quiet:
+			ss.t.AllowDataUpload()
+		}
 	}
 }
 
@@ -74,7 +115,9 @@ func (s *Service) wakeLocked(ss *session) {
 	if !ss.quiet {
 		return
 	}
-	ss.t.AllowDataUpload()
+	if !s.uploadOff {
+		ss.t.AllowDataUpload()
+	}
 	ss.t.SetMaxEstablishedConns(cmp.Or(s.eng.cfg.ConnsPerTorrent, 20))
 	ss.quiet = false
 }

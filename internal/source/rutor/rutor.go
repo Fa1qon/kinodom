@@ -45,7 +45,7 @@ var videoCategories = []source.Category{
 }
 
 type Options struct {
-	Proxy        string        // прокси для трекеров из настроек; пусто — напрямую
+	Proxy        *netx.Proxy   // прокси для трекеров из настроек; nil — напрямую
 	Mirrors      []string      // пусто — DefaultMirrors
 	DownloadBase string        // пусто — DefaultDownloadBase
 	Rate         rate.Limit    // 0 — 1 запрос/с (тесты ускоряют)
@@ -92,6 +92,9 @@ func (r *Rutor) Name() string { return Name }
 
 // Mirror — зеркало, ответившее последним (каталог запомнит его между запусками — этап 5).
 func (r *Rutor) Mirror() string { return r.c.Mirror() }
+
+// TopicURL — страница раздачи на текущем зеркале (ссылка «На трекере» в пульте).
+func (r *Rutor) TopicURL(id string) string { return r.c.Mirror() + "/torrent/" + id }
 
 // Categories — видеоразделы Rutor; список постоянный, на трекер за ним не ходим.
 func (r *Rutor) Categories(context.Context) ([]source.Category, error) {

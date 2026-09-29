@@ -28,7 +28,9 @@ import (
 	"kinodom/internal/catalog"
 	"kinodom/internal/config"
 	"kinodom/internal/meta"
+	"kinodom/internal/settings"
 	"kinodom/internal/source/rutor/rutortest"
+	"kinodom/internal/source/rutracker"
 	"kinodom/internal/source/rutracker/rutrackertest"
 	"kinodom/internal/store"
 	"kinodom/internal/supervisor"
@@ -419,7 +421,8 @@ func TestRatingsAndImagesTogether(t *testing.T) {
 	}
 	db.SetSetting(context.Background(), "kinopoisk.key", "k")
 	db.Close()
-	a := startAppWith(t, Options{Home: home, ListenAddr: "127.0.0.1:0", Offline: true, DownloadsDir: t.TempDir(), KinopoiskAPI: kp.URL})
+	a := startAppWith(t, Options{Home: home, ListenAddr: "127.0.0.1:0", Offline: true, DownloadsDir: t.TempDir(), KinopoiskAPI: kp.URL,
+		LocalImages: true})
 
 	ctx := context.Background()
 	if err := a.Ratings.Enqueue(ctx, 1, meta.Item{Release: "rutor:1", KinopoiskID: 301}); err != nil {
@@ -581,5 +584,401 @@ func TestStoragePolicyFromSettings(t *testing.T) {
 	}
 	if a.Power == nil {
 		t.Fatal("запрет сна не создан")
+	}
+}
+
+func putJSON(t *testing.T, url string, in any) (int, string) {
+	t.Helper()
+	b, _ := json.Marshal(in)
+	req, _ := http.NewRequest(http.MethodPut, url, bytes.NewReader(b))
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	body, _ := io.ReadAll(resp.Body)
+	return resp.StatusCode, string(body)
+}
+
+// Настройки из пульта действуют сразу, без перезапуска: правила хранения, ключ Кинопоиска, папка
+// загрузок. Пароль и ключ в ответ не попадают; неверная папка — отказ, в базу ничего не пишется
+// (спека этапа 7, раздел 5.1).
+func TestSettingsApplyWithoutRestart(t *testing.T) {
+	kp := httptest.NewServer(http.NotFoundHandler()) // новый ключ проверяется — не в настоящий Кинопоиск
+	t.Cleanup(kp.Close)
+	a := startAppWith(t, Options{Home: t.TempDir(), ListenAddr: "127.0.0.1:0", Offline: true, DownloadsDir: t.TempDir(), KinopoiskAPI: kp.URL})
+	ctx := context.Background()
+	url := "http://" + a.API.Addr() + "/api/v1/settings"
+	if code, body := putJSON(t, url, map[string]any{"storage": map[string]any{"keepDays": 3, "minFreeGB": 0}}); code != 200 {
+		t.Fatalf("хранение: %d %s", code, body)
+	}
+	if p := a.Torrents.Policy(); p.KeepFor != 3*24*time.Hour || p.MinFree != 0 {
+		t.Fatalf("правила хранения не применились: %+v", p)
+	}
+	code, body := putJSON(t, url, map[string]any{"kinopoisk": map[string]any{"key": "key-SECRET"},
+		"rutracker": map[string]any{"login": "user", "password": "pass-SECRET"}})
+	if code != 200 || strings.Contains(body, "SECRET") {
+		t.Fatalf("ключ и пароль: %d %s", code, body)
+	}
+	if !a.kp.HasKey() {
+		t.Fatal("ключ Кинопоиска не дошёл до клиента")
+	}
+	blocker := filepath.Join(t.TempDir(), "file")
+	os.WriteFile(blocker, nil, 0o644)
+	code, body = putJSON(t, url, map[string]any{"storage": map[string]any{"downloadsDir": filepath.Join(blocker, "sub")}})
+	if code != http.StatusBadRequest || !strings.Contains(body, "Папка загрузок") {
+		t.Fatalf("неверная папка: %d %s", code, body)
+	}
+	if _, ok, _ := a.DB.Setting(ctx, "downloads.dir"); ok {
+		t.Fatal("неверная папка записана в базу")
+	}
+	newDir := t.TempDir()
+	if code, body := putJSON(t, url, map[string]any{"storage": map[string]any{"downloadsDir": newDir}}); code != 200 {
+		t.Fatalf("новая папка: %d %s", code, body)
+	}
+	if got := a.Torrents.Engine().DownloadsDir(); got != newDir {
+		t.Fatalf("движок качает в %s, а не в %s", got, newDir)
+	}
+	var v settings.View
+	getJSON(t, url, &v)
+	if !v.Rutracker.PasswordSet || v.Rutracker.Login != "user" || !v.Kinopoisk.KeySet || v.Storage.KeepDays != 3 ||
+		v.Storage.MinFreeGB != 0 || v.Storage.DownloadsDir != newDir {
+		t.Fatalf("GET /settings: %+v", v)
+	}
+}
+
+// countingProxy — HTTP-прокси, который считает запросы и пересылает их дальше.
+func countingProxy(t *testing.T, hits *atomic.Int32) *httptest.Server {
+	t.Helper()
+	s := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		hits.Add(1)
+		out, err := http.NewRequest(r.Method, r.URL.String(), r.Body)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadGateway)
+			return
+		}
+		out.Header = r.Header.Clone()
+		resp, err := http.DefaultTransport.RoundTrip(out)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadGateway)
+			return
+		}
+		defer resp.Body.Close()
+		for k, v := range resp.Header {
+			w.Header()[k] = v
+		}
+		w.WriteHeader(resp.StatusCode)
+		io.Copy(w, resp.Body)
+	}))
+	t.Cleanup(s.Close)
+	return s
+}
+
+// Прокси сменили в пульте — трекеры сразу идут через новый, без перезапуска (спека этапа 7, 5.2).
+func TestProxyChangeWithoutRestart(t *testing.T) {
+	rutor := rutortest.NewServer(t)
+	var first, second atomic.Int32
+	p1, p2 := countingProxy(t, &first), countingProxy(t, &second)
+	home := t.TempDir()
+	db, err := store.Open(context.Background(), config.NewPaths(home).DB)
+	if err != nil {
+		t.Fatal(err)
+	}
+	db.SetSetting(context.Background(), "proxy.trackers", p1.URL)
+	db.SetSetting(context.Background(), "catalog.categories", "rutor:12")
+	db.Close()
+	kp := httptest.NewServer(http.NotFoundHandler())
+	t.Cleanup(kp.Close)
+	a := startAppWith(t, Options{Home: home, ListenAddr: "127.0.0.1:0", Offline: true, DownloadsDir: t.TempDir(), KinopoiskAPI: kp.URL,
+		Trackers: Trackers{RutorMirrors: []string{rutor.Mirror.URL}, RutorDownload: rutor.Download.URL,
+			RutrackerMirrors: []string{"http://" + closedAddr(t)}, RutrackerAPI: "http://" + closedAddr(t),
+			RutrackerFeed: "http://" + closedAddr(t), NoEdge: true, Rate: 1000}})
+	waitUntil(t, "каталог через первый прокси", func() bool { return first.Load() > 0 })
+	u := strings.TrimPrefix(p2.URL, "http://")
+	if code, body := putJSON(t, "http://"+a.API.Addr()+"/api/v1/settings", map[string]any{"proxy": map[string]any{"type": "http", "address": u}}); code != 200 {
+		t.Fatalf("смена прокси: %d %s", code, body)
+	}
+	a.Catalog.Refresh()
+	waitUntil(t, "каталог через второй прокси", func() bool { return second.Load() > 0 })
+	// Запрос, начатый до смены, мог прийти к первому прокси уже после неё: сравниваем со следующим
+	// обновлением, когда таких запросов в пути нет.
+	before, next := first.Load(), second.Load()
+	a.Catalog.Refresh()
+	waitUntil(t, "снова через второй прокси", func() bool { return second.Load() > next })
+	if first.Load() != before {
+		t.Fatalf("после смены через первый прокси прошло ещё %d запросов", first.Load()-before)
+	}
+}
+
+// closedAddr — адрес, где никто не слушает.
+func closedAddr(t *testing.T) string {
+	t.Helper()
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	addr := ln.Addr().String()
+	ln.Close()
+	return addr
+}
+
+// Вход Rutracker заблокирован (неверный пароль) — проблема rutracker.login; новый пароль в пульте
+// снимает её, «Войти» входит сразу (спека этапа 7, раздел 5.3; хвост 5c).
+func TestRutrackerLoginProblemAndRelogin(t *testing.T) {
+	rt := rutrackertest.NewServer(t)
+	rt.Login, rt.Password = "user", "right"
+	kp := httptest.NewServer(http.NotFoundHandler())
+	t.Cleanup(kp.Close)
+	dead := "http://" + closedAddr(t)
+	a := startAppWith(t, Options{Home: t.TempDir(), ListenAddr: "127.0.0.1:0", Offline: true, DownloadsDir: t.TempDir(), KinopoiskAPI: kp.URL,
+		Settings: map[string]string{"rutracker.login": "user", "rutracker.password": "wrong", "catalog.categories": "rutor:12"},
+		Trackers: Trackers{RutorMirrors: []string{dead}, RutorDownload: dead, RutrackerMirrors: []string{rt.Forum.URL},
+			RutrackerAPI: rt.API.URL, RutrackerFeed: rt.Feed.URL, NoEdge: true, Rate: 1000}})
+	login := "http://" + a.API.Addr() + "/api/v1/sources/rutracker/login"
+	var st rutracker.LoginInfo
+	postJSON(t, login, struct{}{}, &st)
+	if st.State != rutracker.LoginBlocked {
+		t.Fatalf("неверный пароль: %+v", st)
+	}
+	if p := problemsOf(t, a); !strings.Contains(p, "Rutracker: неверный логин или пароль") {
+		t.Fatalf("нет проблемы входа: %q", p)
+	}
+	if code, body := putJSON(t, "http://"+a.API.Addr()+"/api/v1/settings", map[string]any{"rutracker": map[string]any{"password": "right"}}); code != 200 {
+		t.Fatalf("новый пароль: %d %s", code, body)
+	}
+	if p := problemsOf(t, a); strings.Contains(p, "Rutracker: неверный") {
+		t.Fatalf("проблема не снята после смены пароля: %q", p)
+	}
+	postJSON(t, login, struct{}{}, &st)
+	if st.State != rutracker.LoginOK {
+		t.Fatalf("«Войти» с верным паролем: %+v", st)
+	}
+}
+
+// Разделы каталога из пульта: проверка по дереву трекера, запись «раздел со всеми подразделами»,
+// дерево для настроек (спека этапа 7, раздел 5.4).
+func TestCatalogSectionsFromSettings(t *testing.T) {
+	rt := rutrackertest.NewServer(t)
+	kp := httptest.NewServer(http.NotFoundHandler())
+	t.Cleanup(kp.Close)
+	dead := "http://" + closedAddr(t)
+	a := startAppWith(t, Options{Home: t.TempDir(), ListenAddr: "127.0.0.1:0", Offline: true, DownloadsDir: t.TempDir(), KinopoiskAPI: kp.URL,
+		Trackers: Trackers{RutorMirrors: []string{dead}, RutorDownload: dead, RutrackerMirrors: []string{rt.Forum.URL},
+			RutrackerAPI: rt.API.URL, RutrackerFeed: rt.Feed.URL, NoEdge: true, Rate: 1000}})
+	base := "http://" + a.API.Addr() + "/api/v1"
+	var tree []catalog.TreeNode
+	waitUntil(t, "дерево разделов Rutracker", func() bool {
+		getJSON(t, base+"/sources/rutracker/categories", &tree)
+		return slices.ContainsFunc(tree, func(n catalog.TreeNode) bool { return n.ID == "2076" && n.ParentID != "" })
+	})
+	code, body := putJSON(t, base+"/settings", map[string]any{"catalog": map[string]any{"sections": map[string]any{"rutracker": []string{"99999999"}}}})
+	if code != http.StatusBadRequest || !strings.Contains(body, "99999999") {
+		t.Fatalf("раздела нет в дереве: %d %s", code, body)
+	}
+	code, body = putJSON(t, base+"/settings", map[string]any{"catalog": map[string]any{"sections": map[string]any{"rutracker": []string{"46+"}, "rutor": []string{"12"}}}})
+	if code != 200 {
+		t.Fatalf("разделы: %d %s", code, body)
+	}
+	if v, _, _ := a.DB.Setting(context.Background(), "catalog.categories"); v != "rutracker:46+,rutor:12" {
+		t.Fatalf("в базе: %q", v)
+	}
+}
+
+// Экран раздачи через API: описание со страницы, ссылка «На трекере», список серий из заранее
+// скачанного .torrent Rutor — ещё до «Скачать» (спека этапа 7, раздел 5.4).
+// rutorApp — сервер с каталогом Rutor на фейковом трекере: постер со страницы раздачи 1077013 — по
+// http через фейковый прокси (тесты не ходят на настоящий хостинг картинок).
+func rutorApp(t *testing.T) *App {
+	t.Helper()
+	rutor := rutortest.NewServer(t)
+	// Постер со страницы — по http через фейковый прокси: тест не должен ходить на настоящий хостинг.
+	topic := bytes.ReplaceAll(rutortest.Page(t, "torrent_1077013.html"), []byte("https://"), []byte("http://"))
+	rutor.Override = func(w http.ResponseWriter, r *http.Request) bool {
+		if r.URL.Path != "/torrent/1077013" {
+			return false
+		}
+		w.Header().Set("Content-Type", "text/html; charset=UTF-8")
+		w.Write(topic)
+		return true
+	}
+	var pic bytes.Buffer
+	png.Encode(&pic, image.NewRGBA(image.Rect(0, 0, 1, 1)))
+	proxy := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !strings.HasPrefix(r.URL.Host, "127.0.0.1") {
+			w.Write(pic.Bytes())
+			return
+		}
+		out, _ := http.NewRequest(r.Method, r.URL.String(), nil)
+		out.Header = r.Header.Clone()
+		resp, err := http.DefaultTransport.RoundTrip(out)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadGateway)
+			return
+		}
+		defer resp.Body.Close()
+		for k, v := range resp.Header {
+			w.Header()[k] = v
+		}
+		w.WriteHeader(resp.StatusCode)
+		io.Copy(w, resp.Body)
+	}))
+	t.Cleanup(proxy.Close)
+	kp := httptest.NewServer(http.NotFoundHandler())
+	t.Cleanup(kp.Close)
+	dead := "http://" + closedAddr(t)
+	a := startAppWith(t, Options{Home: t.TempDir(), ListenAddr: "127.0.0.1:0", Offline: true, DownloadsDir: t.TempDir(), KinopoiskAPI: kp.URL,
+		Settings: map[string]string{"catalog.categories": "rutor:12", "proxy.trackers": proxy.URL},
+		Trackers: Trackers{RutorMirrors: []string{rutor.Mirror.URL}, RutorDownload: rutor.Download.URL,
+			RutrackerMirrors: []string{dead}, RutrackerAPI: dead, RutrackerFeed: dead, NoEdge: true, Rate: 1000}})
+	return a
+}
+
+// rutorRelease — номер раздачи 1077013 (с .torrent) в каталоге, когда её страница догрузилась.
+func rutorRelease(t *testing.T, a *App) int64 {
+	t.Helper()
+	var id int64
+	waitUntil(t, "раздача 1077013 в каталоге", func() bool {
+		es, _, err := a.Catalog.List(context.Background(), catalog.ListOptions{Tracker: "rutor", Limit: 200})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if i := slices.IndexFunc(es, func(e catalog.Entry) bool { return e.TopicID == "1077013" }); i >= 0 {
+			id = es[i].ID
+		}
+		return id != 0
+	})
+	waitUntil(t, "страница раздачи и .torrent", func() bool {
+		r, err := a.Catalog.Release(context.Background(), id)
+		return err == nil && !r.DetailsPending && len(r.Torrent) > 0
+	})
+	return id
+}
+
+func TestReleaseCardThroughAPI(t *testing.T) {
+	a := rutorApp(t)
+	base := "http://" + a.API.Addr() + "/api/v1"
+	id := rutorRelease(t, a)
+	var rel struct {
+		catalog.ReleaseView
+		Files []torrents.FileInfo `json:"files"`
+	}
+	waitUntil(t, "страница раздачи и .torrent", func() bool {
+		getJSON(t, fmt.Sprintf("%s/releases/%d", base, id), &rel)
+		return !rel.DetailsPending && len(rel.Files) > 0
+	})
+	if rel.Description == "" || !strings.HasSuffix(rel.TrackerURL, "/torrent/1077013") || rel.Name != "Динозавры" || rel.Hash == "" {
+		t.Fatalf("раздача: %+v", rel.ReleaseView)
+	}
+	resp, err := http.Get(base + "/releases/999999")
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusNotFound {
+		t.Fatalf("нет раздачи: %d", resp.StatusCode)
+	}
+}
+
+// «Скачать» → очередь → «Смотреть» через API: раздача Rutor открывается из заранее скачанного
+// .torrent, её видеофайлы хранятся, первый — в фокусе; «Смотреть» переносит фокус (спека этапа 7,
+// раздел 5.5).
+func TestDownloadAndWatchThroughAPI(t *testing.T) {
+	a := rutorApp(t)
+	base := "http://" + a.API.Addr() + "/api/v1"
+	id := rutorRelease(t, a)
+	var opened struct{ Hash string }
+	postJSON(t, fmt.Sprintf("%s/releases/%d/download", base, id), struct{}{}, &opened)
+	var st torrents.TorrentStatus
+	waitUntil(t, "раздача готова", func() bool {
+		getJSON(t, base+"/torrents/"+opened.Hash, &st)
+		return st.State == torrents.StateReady && len(st.Files) > 0
+	})
+	if st.Focus < 0 || !st.Files[0].Stored || st.Files[0].Readiness != torrents.ReadyWait {
+		t.Fatalf("после «Скачать»: фокус %d, %+v", st.Focus, st.Files[0])
+	}
+	last := st.Files[len(st.Files)-1].Index
+	var w struct {
+		Play      torrents.Play `json:"play"`
+		LaunchURL *string       `json:"launchUrl"`
+	}
+	postJSON(t, fmt.Sprintf("%s/torrents/%s/files/%d/watch", base, opened.Hash, last), struct{}{}, &w)
+	getJSON(t, base+"/torrents/"+opened.Hash, &st)
+	if st.Focus != last || !strings.Contains(w.Play.URL, "/stream/"+opened.Hash) || w.LaunchURL == nil {
+		t.Fatalf("«Смотреть»: фокус %d, %+v", st.Focus, w)
+	}
+	var dl struct {
+		Items []struct {
+			State   torrents.DownloadState `json:"state"`
+			Release *catalog.ReleaseRef    `json:"release"`
+		} `json:"items"`
+		FreeBytes int64 `json:"freeBytes"`
+	}
+	getJSON(t, base+"/downloads", &dl)
+	if len(dl.Items) != len(st.Files) || dl.Items[0].State != torrents.DownloadDownloading || dl.Items[0].Release == nil ||
+		!strings.HasPrefix(dl.Items[0].Release.Title, "Динозавры") || dl.FreeBytes <= 0 {
+		t.Fatalf("загрузки: %+v", dl)
+	}
+	if code, body := putJSON(t, base+"/settings", map[string]any{"storage": map[string]any{"uploadLimitMBps": 0}}); code != 200 {
+		t.Fatalf("раздача 0: %d %s", code, body)
+	}
+	if got := a.Torrents.UploadLimit(); got != torrents.NoUpload {
+		t.Fatalf("раздача 0 не применилась: %v", got)
+	}
+	resp, err := http.Post(base+"/releases/999999/download", "application/json", strings.NewReader("{}"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusNotFound {
+		t.Fatalf("нет раздачи: %d", resp.StatusCode)
+	}
+}
+
+// Трекер по его проблемам: не ответил — «не отвечает», раздел, форум, разбор или вход Rutracker —
+// «частично»; «не отвечает» хуже (спека этапа 7, раздел 5.7).
+func TestTrackerStateFromProblems(t *testing.T) {
+	ps := []store.Problem{
+		{ID: "rutracker.login", Text: "Rutracker: капча — вход не выполнен"},
+		{ID: "catalog.rutor:12", Text: "Rutor: в разделе «Научно-популярные» пришло 3 раздачи вместо 100"},
+		{ID: "catalog.rutor", Text: "Rutor недоступен"},
+		{ID: "proxy.invalid", Text: "Прокси не работает"},
+	}
+	if st := trackerOf(ps, "rutracker"); st.State != "warn" || !strings.Contains(st.Text, "капча") {
+		t.Fatalf("Rutracker: %+v", st)
+	}
+	if st := trackerOf(ps, "rutor"); st.State != "down" || st.Text != "Rutor недоступен" {
+		t.Fatalf("Rutor: %+v", st)
+	}
+	if st := trackerOf(ps[3:], "rutor"); st.State != "ok" {
+		t.Fatalf("без проблем трекера: %+v", st)
+	}
+}
+
+// «Состояние» через API: с этого ПК, оба трекера (у Rutracker — вход), ключ Кинопоиска, место в
+// папке загрузок, потоки.
+func TestStatusThroughAPI(t *testing.T) {
+	a := startApp(t)
+	var st struct {
+		Local    bool `json:"local"`
+		Trackers map[string]struct {
+			State string               `json:"state"`
+			Login *rutracker.LoginInfo `json:"login"`
+		} `json:"trackers"`
+		Kinopoisk struct {
+			KeySet bool `json:"keySet"`
+		} `json:"kinopoisk"`
+		Disk    torrents.DiskInfo `json:"disk"`
+		Streams struct {
+			Count int `json:"count"`
+		} `json:"streams"`
+	}
+	getJSON(t, "http://"+a.API.Addr()+"/api/v1/status", &st)
+	if rt, ok := st.Trackers["rutracker"]; !st.Local || !ok || rt.Login == nil || rt.Login.State != rutracker.LoginNone || st.Trackers["rutor"].State == "" {
+		t.Fatalf("трекеры: %+v", st.Trackers)
+	}
+	if st.Kinopoisk.KeySet || st.Disk.FreeBytes <= 0 || st.Disk.TotalBytes < st.Disk.FreeBytes || st.Disk.MinFreeBytes != 20<<30 ||
+		st.Streams.Count != 0 {
+		t.Fatalf("состояние: %+v", st)
 	}
 }

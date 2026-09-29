@@ -473,3 +473,58 @@ func TestEnqueueCatalogDemotesDropped(t *testing.T) {
 		t.Fatal("выпавшая раздача не удаляется — её мог поставить и поиск")
 	}
 }
+
+// Ключ сменили в настройках: проблема «ключ не подходит» снимается сразу, лимиты нового ключа
+// работающий модуль узнаёт сам, без перезапуска (хвост 5b).
+func TestKeyChangeRechecksQuotaWithoutRestart(t *testing.T) {
+	f := newFakeKP(t)
+	r, _, db := newRatings(t, f, "wrong-key")
+	r.now = time.Now
+	cctx, cancel := context.WithCancel(ctx)
+	done := make(chan error, 1)
+	go func() { done <- r.Run(cctx) }()
+	defer func() { cancel(); <-done }()
+	waitFor(t, "проблема «ключ не подходит»", func() bool {
+		ps, _ := db.Problems(ctx)
+		return len(ps) == 1 && ps[0].ID == ProblemKinopoiskKey
+	})
+	r.kp.SetKey(testKey)
+	r.KeyChanged(ctx)
+	if ps, _ := db.Problems(ctx); len(ps) != 0 {
+		t.Fatalf("проблема старого ключа осталась: %+v", ps)
+	}
+	waitFor(t, "лимиты нового ключа", func() bool {
+		st, _ := r.Status(ctx)
+		return st.HasKey && !st.BadKey && st.Quota.DailyLimit == 500
+	})
+}
+
+func waitFor(t *testing.T, what string, cond func() bool) {
+	t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	for !cond() {
+		if time.Now().After(deadline) {
+			t.Fatalf("не дождались за 5 с: %s", what)
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+}
+
+// Запись без года совпала обоими названиями, но в карточке фильма год чужой — это не тот фильм:
+// рейтинга нет, и другой рип с тем же названием не ищет снова (ревью 5b, M1).
+func TestYearlessMatchWithForeignYearIsRejected(t *testing.T) {
+	f := newFakeKP(t)
+	f.search["The Runner"] = itemsJSON(filmJSON(589920, "Бегущая", "The Runner", 0, nil))
+	f.films[589920] = filmJSON(589920, "Бегущая", "The Runner", 2019, 5.0)
+	r, _, _ := newRatings(t, f, testKey)
+	enqueue(t, r, 1, Item{Release: "rutor:1", Title: "Бегущая / The Runner (2026) WEB-DL 1080p"})
+	drain(t, r)
+	if got, ok := ratingOf(t, r, "rutor:1"); ok {
+		t.Fatalf("чужой фильм: %+v", got)
+	}
+	enqueue(t, r, 2, Item{Release: "rutor:2", Title: "Бегущая / The Runner (2026) WEB-DLRip"})
+	drain(t, r)
+	if f.Hits("search") != 1 {
+		t.Fatalf("поисков %d — второй рип искал снова", f.Hits("search"))
+	}
+}

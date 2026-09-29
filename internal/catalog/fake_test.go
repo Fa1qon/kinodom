@@ -28,7 +28,8 @@ type fakeSource struct {
 	recent      map[string][]source.Release
 	search      []source.Release
 	searchErr   error
-	searchBlock chan struct{} // если задан — поиск ждёт его закрытия (или отмены)
+	searchBlock chan struct{}     // если задан — поиск ждёт его закрытия (или отмены)
+	tree        []source.Category // дерево разделов; nil — по разделам топов, без вложенности
 	calls       map[string]int
 }
 
@@ -41,11 +42,16 @@ func (f *fakeSource) Name() string { return f.name }
 
 func (f *fakeSource) Calls(what string) int { f.mu.Lock(); defer f.mu.Unlock(); return f.calls[what] }
 
+func (f *fakeSource) TopicURL(id string) string { return "https://" + f.name + ".example/topic/" + id }
+
 func (f *fakeSource) set(fn func()) { f.mu.Lock(); fn(); f.mu.Unlock() }
 
 func (f *fakeSource) Categories(context.Context) ([]source.Category, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	if f.tree != nil {
+		return append([]source.Category(nil), f.tree...), nil
+	}
 	var out []source.Category
 	for id := range f.top {
 		out = append(out, source.Category{ID: id, Name: "Раздел " + id})
@@ -137,7 +143,7 @@ func openDB(t *testing.T) *store.DB {
 // newCatalog — каталог на фейковых трекерах с разделами rutor:12 и rutracker:2110.
 func newCatalog(t *testing.T, db *store.DB, mod func(*Options), srcs ...*fakeSource) (*Catalog, *clock) {
 	t.Helper()
-	o := Options{DB: db, Categories: []CategoryRef{{"rutor", "12"}, {"rutracker", "2110"}}}
+	o := Options{DB: db, Sections: []Section{{"rutor", "12", false}, {"rutracker", "2110", false}}}
 	for _, s := range srcs {
 		o.Sources = append(o.Sources, s)
 	}

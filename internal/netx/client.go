@@ -55,7 +55,7 @@ type Options struct {
 	Name       string       // «Rutor» — для текстов ошибок и журнала
 	Mirrors    []string     // базовые адреса зеркал по порядку предпочтения: "https://rutor.info"
 	ExtraHosts []string     // другие свои хосты (d.rutor.info): редирект туда — не «чужой сайт»
-	Proxy      string       // прокси из настроек; пусто — напрямую
+	Proxy      *Proxy       // прокси из настроек; nil — напрямую
 	UserAgent  string       // пусто — User-Agent Go по умолчанию
 	Classify   ClassifyFunc // nil — всё, что прошло общие проверки, считается OK
 	// ChallengeIsMirrorDown — проверка Cloudflare значит «зеркало недоступно»: для трекеров,
@@ -103,10 +103,7 @@ func NewClient(o Options) (*Client, error) {
 	if o.Log == nil {
 		o.Log = slog.New(slog.DiscardHandler)
 	}
-	tr, err := NewTransport(o.Proxy)
-	if err != nil {
-		return nil, err
-	}
+	tr := NewTransport(o.Proxy)
 	lim := o.Limiter
 	if lim == nil {
 		lim = rate.NewLimiter(o.Rate, 1)

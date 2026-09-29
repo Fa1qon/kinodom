@@ -66,7 +66,7 @@ func TestStatusShowsModulesAndProblems(t *testing.T) {
 		t.Fatalf("код %d: %s", rec.Code, rec.Body)
 	}
 	var st struct {
-		Problems []store.Problem      `json:"problems"`
+		Problems []store.Problem     `json:"problems"`
 		Modules  []supervisor.Status `json:"modules"`
 	}
 	if err := json.Unmarshal(rec.Body.Bytes(), &st); err != nil {
@@ -178,5 +178,26 @@ func TestRunListensAndStops(t *testing.T) {
 	cancel()
 	if err := <-errc; err != nil {
 		t.Fatalf("Run вернул %v", err)
+	}
+}
+
+// «Состояние»: поля приложения добавляются к проблемам и модулям; local — запрос с этого ПК.
+func TestStatusAddsAppFieldsAndLocal(t *testing.T) {
+	s, _ := newTestServer(t)
+	s.SetStatus(func(context.Context) (map[string]any, error) {
+		return map[string]any{"disk": map[string]int{"freeBytes": 7}}, nil
+	})
+	for remote, want := range map[string]bool{"192.168.0.7:5000": false, "127.0.0.1:5000": true} {
+		req := httptest.NewRequest("GET", "/api/v1/status", nil)
+		req.RemoteAddr = remote
+		rec := do(s.Handler(), req)
+		var st struct {
+			Local    bool                    `json:"local"`
+			Problems []store.Problem         `json:"problems"`
+			Disk     struct{ FreeBytes int } `json:"disk"`
+		}
+		if err := json.Unmarshal(rec.Body.Bytes(), &st); err != nil || st.Local != want || st.Disk.FreeBytes != 7 || st.Problems == nil {
+			t.Fatalf("%s: %s", remote, rec.Body)
+		}
 	}
 }

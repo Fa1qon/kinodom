@@ -19,7 +19,8 @@ import (
 // спека, раздел 16). Вход не повторяется до смены логина или пароля.
 var ErrWrongPassword = errors.New("Rutracker: неверное имя пользователя или пароль — проверьте их в настройках")
 
-// CaptchaError — Rutracker просит ввести код с картинки. Картинка и поля — для пульта (этап 7);
+// CaptchaError — Rutracker просит ввести код с картинки. Код не вводится (решение заказчика, спека
+// этапа 7): сервер только предупреждает, картинка и поля остаются для журнала и исследований;
 // до ввода кода автоматический вход не повторяется.
 type CaptchaError struct {
 	ImageURL  string // картинка static.rutracker.cc/captcha/…
@@ -28,7 +29,7 @@ type CaptchaError struct {
 }
 
 func (e *CaptchaError) Error() string {
-	return "Rutracker просит ввести код с картинки — подойдите к компьютеру"
+	return "Rutracker: капча — вход не выполнен"
 }
 
 var (
@@ -154,6 +155,10 @@ func parseLogin(body []byte) error {
 
 // buildMagnet — magnet из infohash с трекерами Rutracker: только с DHT старт занимал 35 с, с ними
 // — 6–13 с (исследование, раздел 2). HTTP-анонсы bt4/bt2 идут через прокси движка, UDP — напрямую.
+// Magnet — magnet-ссылка раздачи по infohash с трекерами Rutracker: каталог открывает по ней раздачи,
+// чья страница ещё не загружена.
+func (r *Rutracker) Magnet(infohash string) string { return buildMagnet(infohash) }
+
 func buildMagnet(infohash string) string {
 	return "magnet:?xt=urn:btih:" + infohash +
 		"&tr=" + url.QueryEscape("http://bt4.t-ru.org/ann?magnet") +

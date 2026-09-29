@@ -145,8 +145,8 @@ func TestLowSpacePausesBackgroundDownloads(t *testing.T) {
 	ctx := context.Background()
 	s := newTestService(t)
 	ih, ep := archive(t, s)
-	must(t, s.Prepare(ctx, ih, ep[0]))
 	must(t, s.Prepare(ctx, ih, ep[1]))
+	must(t, s.Prepare(ctx, ih, ep[0])) // фокус очереди — на первой серии
 	s.mu.Lock()
 	s.sessions[ih].readers[ep[1]]++ // вторую серию смотрят
 	s.mu.Unlock()
@@ -161,7 +161,7 @@ func TestLowSpacePausesBackgroundDownloads(t *testing.T) {
 	if p := tt.Files()[ep[1]].Priority(); p != torrent.PiecePriorityNormal {
 		t.Fatalf("серию, которую смотрят, поставили на паузу: приоритет %v", p)
 	}
-	if p := problemText(t, s.reg.db, "torrents.space"); !strings.Contains(p, "Мало места на диске") {
+	if p := problemText(t, s.reg.db, "torrents.space"); !strings.Contains(p, "Мало места в папке загрузок") {
 		t.Fatalf("проблема %q", p)
 	}
 	if got := stored(t, s, ih); len(got) != 2 {
@@ -242,10 +242,19 @@ func TestConcurrentPrepareKeepsBoth(t *testing.T) {
 	wg.Wait()
 	must(t, errors.Join(errs...))
 	tt, _ := s.Engine().Client().Torrent(ih)
+	// Целиком качается одна (фокус очереди), но буфер — начало файла — набирают обе: второй
+	// телевизор не ждёт, пока докачается чужая серия (этап 7).
+	normal := 0
 	for _, i := range ep[:2] {
-		if p := tt.Files()[i].Priority(); p != torrent.PiecePriorityNormal {
-			t.Fatalf("серия %d: приоритет %v", i, p)
+		if tt.Files()[i].Priority() == torrent.PiecePriorityNormal {
+			normal++
 		}
+		if p := tt.PieceState(tt.Files()[i].BeginPieceIndex()).Priority; p < torrent.PiecePriorityHigh {
+			t.Fatalf("серия %d: начало файла не в приоритете (%v)", i, p)
+		}
+	}
+	if normal != 1 {
+		t.Fatalf("целиком качаются %d серий, а не одна", normal)
 	}
 	if got := stored(t, s, ih); !slices.Equal(got, sorted(ep[0], ep[1])) {
 		t.Fatalf("хранятся %v", got)
@@ -368,5 +377,18 @@ func TestExpireForgetsRecordsOnMissingDisk(t *testing.T) {
 	must(t, s.restore(ctx))
 	if p := problemText(t, db, "torrents.dirs"); p != "" {
 		t.Fatalf("баннер остался: %q", p)
+	}
+}
+
+// Запас места 0 — разрешён (хвост этапа 6: раньше 0 превращался в 20 ГБ); меньше 0 — по умолчанию.
+func TestZeroReserveIsAllowed(t *testing.T) {
+	s := newTestService(t)
+	s.SetPolicy(Policy{MinFree: 0})
+	if got := s.Policy().MinFree; got != 0 {
+		t.Fatalf("запас 0 стал %d", got)
+	}
+	s.SetPolicy(Policy{MinFree: -1})
+	if got := s.Policy().MinFree; got != 20<<30 {
+		t.Fatalf("по умолчанию %d", got)
 	}
 }

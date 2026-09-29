@@ -25,6 +25,8 @@ func commands() []command {
 		{"source", "проверить источник раздач вживую: kinodom source rutor top 12", cmdSource},
 		{"meta", "проверить метаданные вживую: kinodom meta kp film 301", cmdMeta},
 		{"catalog", "каталог вживую на отдельной папке: kinodom catalog refresh --home …", cmdCatalog},
+		{"open", "открыть поток в плеере по ссылке kinodom:// (её открывает браузер на этом ПК)", cmdOpen},
+		{"protocol", "ссылка kinodom:// для этого пользователя: kinodom protocol install | uninstall", cmdProtocol},
 		{"version", "показать версию", cmdVersion},
 	}
 }
