@@ -16,7 +16,7 @@ var required = []string{
 	"fonts/golos-text-cyrillic.woff2", "fonts/golos-text-latin.woff2",
 	"fonts/unbounded-cyrillic.woff2", "fonts/unbounded-latin.woff2",
 	"fonts/OFL-golos-text.txt", "fonts/OFL-unbounded.txt",
-	"views/catalog.js", "views/release.js", "views/search.js",
+	"views/catalog.js", "views/release.js", "views/search.js", "views/downloads.js",
 }
 
 // scripts — все модули пульта.
@@ -135,6 +135,41 @@ for (const [got, want] of checks) {
     console.error(JSON.stringify(got), '≠', JSON.stringify(want));
     process.exitCode = 1;
   }
+}
+`
+	cmd := exec.Command(node, "--input-type=module", "--no-warnings", "-e", script)
+	cmd.Dir = "static"
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Errorf("%v\n%s", err, out)
+	}
+}
+
+// «Загрузки» по раздачам: строки файлов собираются в раздачи в порядке первой строки, серии — по имени, как
+// на экране раздачи (номер файла в торренте бывает не по порядку серий);
+// общее состояние — первое, что есть: смотрят, качается, на паузе, в очереди, скачано; процент — от
+// общего размера; удалить раздачу можно, если хоть одну её серию не смотрят (спека этапа 7, раздел 10.7).
+func TestPultDownloadGroups(t *testing.T) {
+	node := lookNode(t)
+	script := `
+import { groupDownloads } from './views/downloads.js';
+const f = (hash, index, state, size, done, extra = {}) =>
+  ({ hash, index, state, size, done, file: hash + index + '.mkv', release: null, canDelete: true, ...extra });
+const gs = groupDownloads([
+  f('a', 2, 'downloading', 100, 50, { speed: 10 }),
+  f('b', 0, 'done', 300, 300),
+  f('a', 0, 'done', 100, 100),
+  f('a', 1, 'queued', 100, 0),
+  f('c', 0, 'paused', 200, 20, { canDelete: false }),
+  f('c', 1, 'watching', 200, 0, { canDelete: false }),
+  f('d', 0, 'done', 10, 10, { file: 'S01E10.mkv' }),
+  f('d', 1, 'done', 10, 10, { file: 'S01E02.mkv' }),
+  f('d', 2, 'done', 10, 10, { file: 'S01E01.mkv' }),
+]);
+const got = gs.map((g) => [g.hash, g.items.map((d) => d.index).join(''), g.state, g.size, g.percent, g.speed, g.canDelete].join(' ')).join(' | ');
+const want = 'a 012 downloading 300 50 10 true | b 0 done 300 100 0 true | c 01 watching 400 5 0 false | d 210 done 30 100 0 true';
+if (got !== want) {
+  console.error(got, '≠', want);
+  process.exitCode = 1;
 }
 `
 	cmd := exec.Command(node, "--input-type=module", "--no-warnings", "-e", script)

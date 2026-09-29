@@ -5,9 +5,10 @@ import { initNav } from './nav.js';
 import * as catalog from './views/catalog.js';
 import * as release from './views/release.js';
 import * as search from './views/search.js';
+import * as downloads from './views/downloads.js';
 
 // views — экраны по первой части адреса; у «Настроек» — по второй.
-const views = { catalog, release, search };
+const views = { catalog, release, search, downloads };
 const settingsViews = {};
 
 // ctx — общее для экранов: последнее «Состояние» и переходы. local — пульт открыт на ПК с Kinodom
