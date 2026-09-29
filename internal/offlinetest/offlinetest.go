@@ -13,6 +13,7 @@ import (
 	"sync"
 	"testing"
 
+	"kinodom/internal/iptv"
 	"kinodom/internal/meta"
 	"kinodom/internal/source/rutor"
 	"kinodom/internal/source/rutracker"
@@ -37,8 +38,14 @@ func Main(m *testing.M) {
 	rutracker.DefaultFeedBase = trip.URL
 	meta.DefaultKinopoiskAPI = trip.URL
 	meta.DefaultRatingBase = trip.URL
+	// Телепрограмма и база iptv-org: модуль IPTV скачивает их сам при старте — это не забытый адрес,
+	// а обычная работа. Заглушка отвечает 404 и в «растяжку» не считается.
+	stub := httptest.NewServer(http.NotFoundHandler())
+	iptv.DefaultEPGURL = stub.URL + "/epg.xml.gz"
+	iptv.DefaultOrgBase = stub.URL
 	code := m.Run()
 	trip.Close()
+	stub.Close()
 	mu.Lock()
 	defer mu.Unlock()
 	if len(hits) > 0 {

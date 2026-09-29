@@ -224,19 +224,28 @@ func (im *Images) find(key string) string {
 // вне папки кэша не отдаются. Картинка по ключу не меняется — кэшировать можно надолго.
 func (im *Images) Handler() http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		key := r.PathValue("key")
-		if !reImageKey.MatchString(key) {
-			http.NotFound(w, r)
-			return
-		}
-		p := im.find(key)
-		if p == "" {
-			http.NotFound(w, r)
-			return
-		}
-		w.Header().Set("Cache-Control", "public, max-age=31536000, immutable")
-		http.ServeFile(w, r, p)
+		im.ServeKey(w, r, r.PathValue("key"), true)
 	})
+}
+
+// ServeKey отдаёт картинку из кэша по ключу. immutable — картинка по этому адресу не меняется (у
+// /img/{key} адрес — хэш картинки; у логотипа канала адрес — ключ канала, и логотип может смениться).
+func (im *Images) ServeKey(w http.ResponseWriter, r *http.Request, key string, immutable bool) {
+	if !reImageKey.MatchString(key) {
+		http.NotFound(w, r)
+		return
+	}
+	p := im.find(key)
+	if p == "" {
+		http.NotFound(w, r)
+		return
+	}
+	if immutable {
+		w.Header().Set("Cache-Control", "public, max-age=31536000, immutable")
+	} else {
+		w.Header().Set("Cache-Control", "public, max-age=86400")
+	}
+	http.ServeFile(w, r, p)
 }
 
 // Sweep чистит кэш (хвост этапа 5b: иначе ~2 ГБ на 10 000 постеров): удаляет картинки, которые

@@ -10,6 +10,7 @@ import (
 	"log/slog"
 	"maps"
 	"net/http"
+	"reflect"
 	"strconv"
 	"time"
 	"unicode"
@@ -22,6 +23,7 @@ import (
 	"kinodom/internal/config"
 	"kinodom/internal/edge"
 	"kinodom/internal/httpx"
+	"kinodom/internal/iptv"
 	"kinodom/internal/logx"
 	"kinodom/internal/meta"
 	"kinodom/internal/netx"
@@ -79,6 +81,7 @@ type App struct {
 	Images   *meta.Images      // картинки, которые сервер отдаёт по /img/{key}
 	Catalog  *catalog.Catalog  // каталог и поиск (модуль catalog)
 	Settings *settings.Service // настройки из пульта: меняются без перезапуска (этап 7)
+	IPTV     *iptv.Module      // каналы (модуль iptv, этап 8)
 
 	kp        *meta.Kinopoisk
 	rutracker *rutracker.Rutracker
@@ -154,6 +157,9 @@ func New(ctx context.Context, o Options) (*App, error) {
 		return fail(err)
 	}
 	if err := a.initCatalog(ctx, o, vals); err != nil {
+		return fail(err)
+	}
+	if err := a.initIPTV(ctx, o, vals); err != nil {
 		return fail(err)
 	}
 	a.API.SetStatus(a.statusFields)
@@ -304,6 +310,34 @@ func (a *App) initCatalog(ctx context.Context, o Options, v settings.Values) err
 	a.API.Handle("POST /api/v1/releases/{id}/download", a.Torrents.Name(), http.HandlerFunc(a.handleDownload))
 	a.Sup.Add(a.Catalog, a.ModuleEnabled(ctx, a.Catalog.Name()))
 	return nil
+}
+
+// initIPTV — модуль iptv (спека этапа 8): плейлисты, каналы, проверки. Логотипы каналов — в своём кэше
+// картинок (data\logos): кэш постеров чистит каталог. Телепрограмма, плейлисты и логотипы — напрямую.
+func (a *App) initIPTV(ctx context.Context, o Options, v settings.Values) error {
+	logos, err := meta.NewImages(meta.ImagesOptions{Dir: a.Paths.Logos, Rate: 20, Log: a.Log.With("module", "logos"),
+		AllowPrivate: o.LocalImages})
+	if err != nil {
+		return err
+	}
+	a.IPTV = iptv.New(iptv.Options{DB: a.DB, Dir: a.Paths.IPTV, EPGURL: v.EPGURL, Hidden: hiddenOf(v),
+		Location: iptv.Zone(v.UTCOffset), Log: a.Log.With("module", "iptv")})
+	a.IPTV.Register(a.API, func(w http.ResponseWriter, r *http.Request, src string) {
+		key, err := logos.Fetch(r.Context(), src, meta.Direct)
+		if err != nil {
+			http.NotFound(w, r)
+			return
+		}
+		logos.ServeKey(w, r, key, false)
+	})
+	a.Sup.Add(a.IPTV, a.ModuleEnabled(ctx, a.IPTV.Name()))
+	return nil
+}
+
+// hiddenOf — скрытие каналов из настроек.
+func hiddenOf(v settings.Values) iptv.Hidden {
+	return iptv.Hidden{Categories: v.HiddenCategories, Countries: v.HiddenCountries, Languages: v.HiddenLanguages,
+		OtherZones: v.HideOtherZones}
 }
 
 // rutrackerLogin — проблема rutracker.login, пока вход заблокирован (неверный пароль или капча):
@@ -576,6 +610,15 @@ func (a *App) Apply(ctx context.Context, old, n settings.Values) {
 		if err := a.proxy.Set(n.Proxy); err == nil {
 			a.clearProblem(ctx, "proxy.invalid")
 		}
+	}
+	if n.EPGURL != old.EPGURL {
+		a.IPTV.SetEPGURL(n.EPGURL)
+	}
+	if !reflect.DeepEqual(hiddenOf(n), hiddenOf(old)) {
+		a.IPTV.SetHidden(hiddenOf(n))
+	}
+	if n.UTCOffset != old.UTCOffset {
+		a.IPTV.SetLocation(iptv.Zone(n.UTCOffset))
 	}
 	if n.RutrackerLogin != old.RutrackerLogin || n.RutrackerPassword != old.RutrackerPassword {
 		a.rutracker.SetCredentials(n.RutrackerLogin, n.RutrackerPassword)

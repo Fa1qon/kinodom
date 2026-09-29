@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 	"testing/fstest"
@@ -129,7 +130,7 @@ func TestPatchRejectsBadFields(t *testing.T) {
 		if !errors.As(err, &fe) || !strings.Contains(err.Error(), want) {
 			t.Errorf("%s: ошибка %v, ждали «%s»", js, err, want)
 		}
-		if n != v {
+		if !reflect.DeepEqual(n, v) {
 			t.Errorf("%s: значения изменились при ошибке", js)
 		}
 	}
@@ -272,5 +273,45 @@ func TestPreferredFormatField(t *testing.T) {
 	db.SetSetting(ctx, KeyPreferredFormat, "FLAC")
 	if v = load(t, db, nil); v.PreferredFormat != "" {
 		t.Fatalf("неизвестный формат в базе: %q", v.PreferredFormat)
+	}
+}
+
+// Настройки каналов (спека этапа 8, раздел 5.6): по умолчанию скрыта «18+» и другие часовые пояса,
+// пояс каналов — UTC+7; неверные значения — отказ; после записи в базу читаются так же.
+func TestIPTVFields(t *testing.T) {
+	db := openDB(t)
+	v := load(t, db, nil)
+	iv := v.View().IPTV
+	if iv.EPGURL != "" || strings.Join(iv.HiddenCategories, ",") != "adult" || len(iv.HiddenCountries) != 0 || iv.HiddenCountries == nil ||
+		!iv.HideOtherZones || iv.UTCOffset != 7 {
+		t.Fatalf("по умолчанию: %+v", iv)
+	}
+	n, err := v.With(patch(t, `{"iptv":{"hiddenCategories":["sports",""],"hiddenCountries":["UA"],"hiddenLanguages":["ara",""],"hideOtherZones":false,"utcOffset":3,"epgUrl":"http://epg.example/x.xml"}}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := save(ctx, db, v, n); err != nil {
+		t.Fatal(err)
+	}
+	got := load(t, db, nil).View().IPTV
+	if strings.Join(got.HiddenCategories, ",") != "sports," || strings.Join(got.HiddenLanguages, ",") != "ara," || got.HideOtherZones ||
+		got.UTCOffset != 3 || got.EPGURL != "http://epg.example/x.xml" || strings.Join(got.HiddenCountries, ",") != "UA" {
+		t.Fatalf("после записи: %+v", got)
+	}
+	for _, bad := range []string{
+		`{"iptv":{"hiddenCategories":["cars"]}}`,
+		`{"iptv":{"hiddenCountries":["russia"]}}`,
+		`{"iptv":{"hiddenLanguages":["русский"]}}`,
+		`{"iptv":{"utcOffset":15}}`,
+		`{"iptv":{"epgUrl":"ftp://x"}}`,
+	} {
+		var fe *FieldError
+		if _, err := v.With(patch(t, bad)); !errors.As(err, &fe) {
+			t.Errorf("%s: %v", bad, err)
+		}
+	}
+	db.SetSetting(ctx, KeyHiddenCategories, "не json")
+	if v := load(t, db, nil); strings.Join(v.HiddenCategories, ",") != "adult" {
+		t.Errorf("испорченная строка в базе: %v", v.HiddenCategories)
 	}
 }

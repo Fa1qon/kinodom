@@ -21,8 +21,9 @@ import (
 	"kinodom/internal/supervisor"
 )
 
-// Источники по умолчанию (спека этапа 8, разделы 5.4 и 5.7).
-const (
+// Источники по умолчанию (спека этапа 8, разделы 5.4 и 5.7). Переменные: тесты (offlinetest)
+// подменяют их, чтобы не ходить в интернет.
+var (
 	DefaultEPGURL  = "https://iptvx.one/epg/epg_lite.xml.gz"
 	DefaultOrgBase = "https://iptv-org.github.io/api"
 )

@@ -19,6 +19,7 @@ type View struct {
 	Storage   StorageView   `json:"storage"`
 	Player    string        `json:"player"`
 	Catalog   CatalogView   `json:"catalog"`
+	IPTV      IPTVView      `json:"iptv"`
 }
 
 type RutrackerView struct {
@@ -50,6 +51,16 @@ type CatalogView struct {
 	PreferredFormat string              `json:"preferredFormat"` // "" — нет
 }
 
+// IPTVView — настройки каналов (спека этапа 8, раздел 5.6).
+type IPTVView struct {
+	EPGURL           string   `json:"epgUrl"` // "" — по умолчанию
+	HiddenCategories []string `json:"hiddenCategories"`
+	HiddenCountries  []string `json:"hiddenCountries"`
+	HiddenLanguages  []string `json:"hiddenLanguages"`
+	HideOtherZones   bool     `json:"hideOtherZones"`
+	UTCOffset        int      `json:"utcOffset"`
+}
+
 // View — настройки для пульта.
 func (v Values) View() View {
 	p := splitProxy(v.Proxy)
@@ -60,6 +71,8 @@ func (v Values) View() View {
 		Storage:   StorageView{DownloadsDir: v.DownloadsDir, KeepDays: v.KeepDays, KeepBehind: v.KeepBehind, MinFreeGB: v.MinFreeGB, UploadLimitMBps: v.UploadMBps},
 		Player:    v.Player,
 		Catalog:   CatalogView{Sections: splitSections(v.Sections), PreferredFormat: v.PreferredFormat},
+		IPTV: IPTVView{EPGURL: v.EPGURL, HiddenCategories: nonNil(v.HiddenCategories), HiddenCountries: nonNil(v.HiddenCountries),
+			HiddenLanguages: nonNil(v.HiddenLanguages), HideOtherZones: v.HideOtherZones, UTCOffset: v.UTCOffset},
 	}
 }
 
@@ -71,6 +84,7 @@ type Patch struct {
 	Storage   *StoragePatch   `json:"storage"`
 	Player    *string         `json:"player"`
 	Catalog   *CatalogPatch   `json:"catalog"`
+	IPTV      *IPTVPatch      `json:"iptv"`
 }
 
 type RutrackerPatch struct {
@@ -100,6 +114,23 @@ type StoragePatch struct {
 type CatalogPatch struct {
 	Sections        map[string][]string `json:"sections"`
 	PreferredFormat *string             `json:"preferredFormat"`
+}
+
+// IPTVPatch — изменения настроек каналов.
+type IPTVPatch struct {
+	EPGURL           *string   `json:"epgUrl"`
+	HiddenCategories *[]string `json:"hiddenCategories"`
+	HiddenCountries  *[]string `json:"hiddenCountries"`
+	HiddenLanguages  *[]string `json:"hiddenLanguages"`
+	HideOtherZones   *bool     `json:"hideOtherZones"`
+	UTCOffset        *int      `json:"utcOffset"`
+}
+
+func nonNil(l []string) []string {
+	if l == nil {
+		return []string{}
+	}
+	return l
 }
 
 // Optional — число, null или «поля нет в запросе». Отличить null от отсутствия обычный указатель
