@@ -30,6 +30,7 @@ import (
 	"kinodom/internal/meta"
 	"kinodom/internal/settings"
 	"kinodom/internal/source/t1/t1test"
+	"kinodom/internal/source/t2"
 	"kinodom/internal/source/t2/t2test"
 	"kinodom/internal/store"
 	"kinodom/internal/supervisor"
@@ -719,4 +720,37 @@ func closedAddr(t *testing.T) string {
 	addr := ln.Addr().String()
 	ln.Close()
 	return addr
+}
+
+// Вход t2 заблокирован (неверный пароль) — проблема t2.login; новый пароль в пульте
+// снимает её, «Войти» входит сразу (спека этапа 7, раздел 5.3; хвост 5c).
+func Testt2LoginProblemAndRelogin(t *testing.T) {
+	rt := t2test.NewServer(t)
+	rt.Login, rt.Password = "user", "right"
+	kp := httptest.NewServer(http.NotFoundHandler())
+	t.Cleanup(kp.Close)
+	dead := "http://" + closedAddr(t)
+	a := startAppWith(t, Options{Home: t.TempDir(), ListenAddr: "127.0.0.1:0", Offline: true, DownloadsDir: t.TempDir(), KinopoiskAPI: kp.URL,
+		Settings: map[string]string{"t2.login": "user", "t2.password": "wrong", "catalog.categories": "t1:12"},
+		Trackers: Trackers{t1Mirrors: []string{dead}, t1Download: dead, t2Mirrors: []string{rt.Forum.URL},
+			t2API: rt.API.URL, t2Feed: rt.Feed.URL, NoEdge: true, Rate: 1000}})
+	login := "http://" + a.API.Addr() + "/api/v1/sources/t2/login"
+	var st t2.LoginInfo
+	postJSON(t, login, struct{}{}, &st)
+	if st.State != t2.LoginBlocked {
+		t.Fatalf("неверный пароль: %+v", st)
+	}
+	if p := problemsOf(t, a); !strings.Contains(p, "t2: неверный логин или пароль") {
+		t.Fatalf("нет проблемы входа: %q", p)
+	}
+	if code, body := putJSON(t, "http://"+a.API.Addr()+"/api/v1/settings", map[string]any{"t2": map[string]any{"password": "right"}}); code != 200 {
+		t.Fatalf("новый пароль: %d %s", code, body)
+	}
+	if p := problemsOf(t, a); strings.Contains(p, "t2: неверный") {
+		t.Fatalf("проблема не снята после смены пароля: %q", p)
+	}
+	postJSON(t, login, struct{}{}, &st)
+	if st.State != t2.LoginOK {
+		t.Fatalf("«Войти» с верным паролем: %+v", st)
+	}
 }

@@ -9,7 +9,9 @@ import (
 	"io"
 	"log/slog"
 	"maps"
+	"net/http"
 	"time"
+	"unicode"
 
 	"golang.org/x/time/rate"
 
@@ -17,6 +19,7 @@ import (
 	"kinodom/internal/catalog"
 	"kinodom/internal/config"
 	"kinodom/internal/edge"
+	"kinodom/internal/httpx"
 	"kinodom/internal/logx"
 	"kinodom/internal/meta"
 	"kinodom/internal/netx"
@@ -265,7 +268,7 @@ func (a *App) initCatalog(ctx context.Context, o Options, v settings.Values) err
 	}
 	rto := t2.Options{Proxy: a.proxy, Mirrors: o.Trackers.t2Mirrors, APIBase: o.Trackers.t2API,
 		FeedBase: o.Trackers.t2Feed, Rate: o.Trackers.Rate, Log: log,
-		Login: v.t2Login, Password: v.t2Password}
+		Login: v.t2Login, Password: v.t2Password, OnLogin: a.t2Login}
 	edgeOn := !o.Trackers.NoEdge && a.ModuleEnabled(ctx, "edge")
 	if edgeOn {
 		// UA — только начальный: Edge пересчитывает его на каждый проход, и источник переключается
@@ -282,11 +285,30 @@ func (a *App) initCatalog(ctx context.Context, o Options, v settings.Values) err
 		return err
 	}
 	a.t2 = rtSrc
+	// Проблема входа прошлого запуска в базе: запрет входа живёт в памяти, после перезапуска его нет.
+	a.t2Login(rtSrc.LoginState())
+	// Кнопка «Войти» в настройках (спека этапа 7, раздел 5.3): только с этого ПК.
+	a.API.HandleLocal("POST /api/v1/sources/t2/login", "catalog", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		httpx.WriteJSON(w, http.StatusOK, rtSrc.Relogin(r.Context()))
+	}))
 	a.Sup.Add(edge.NewModule(a.Log.With("module", "edge")), edgeOn)
 	a.Catalog = catalog.New(catalog.Options{DB: a.DB, Sources: []source.Source{t1Src, rtSrc}, Categories: cats,
 		Ratings: a.Ratings, Images: a.Images, KinopoiskPoster: a.kp.PosterURL, Log: log})
 	a.Sup.Add(a.Catalog, a.ModuleEnabled(ctx, a.Catalog.Name()))
 	return nil
+}
+
+// t2Login — проблема t2.login, пока вход заблокирован (неверный пароль или капча):
+// её видно баннером во вкладке t2 и в «Состоянии» (спека этапа 7, раздел 5.3).
+func (a *App) t2Login(info t2.LoginInfo) {
+	ctx := context.Background()
+	if info.State != t2.LoginBlocked {
+		a.clearProblem(ctx, "t2.login")
+		return
+	}
+	text := []rune(info.Text)
+	text[0] = unicode.ToLower(text[0])
+	a.setProblem(ctx, "t2.login", "t2: "+string(text))
 }
 
 // ModuleEnabled — модуль включён, если в настройках нет modules.<имя>.enabled = "false".
