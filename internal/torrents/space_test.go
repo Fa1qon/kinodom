@@ -75,12 +75,80 @@ func TestPrepareFreesOldestFirst(t *testing.T) {
 	must(t, s.Prepare(ctx, ih, ep[1]))
 	openedAgo(t, s, ih, ep[0], 5*24*time.Hour)
 	openedAgo(t, s, ih, ep[1], 3*24*time.Hour)
-	// Диск 10 МиБ, занято 2, докачать 2, новая серия — 1: свободно останется 5 при запасе 6.
+	// Диск 10 МиБ, занято 2, докачивается сейчас 1 (серия 2 в фокусе, серия 1 ждёт очереди и места
+	// не занимает), новая серия — 1: свободно останется 6 при запасе 7.
 	fakeDisk(s, 10*mib)
-	s.SetPolicy(Policy{MinFree: 6 * mib})
+	s.SetPolicy(Policy{MinFree: 7 * mib})
 	must(t, s.Prepare(ctx, ih, ep[2]))
 	if got := stored(t, s, ih); !slices.Equal(got, sorted(ep[1], ep[2])) {
 		t.Fatalf("хранятся %v — удалить нужно было только самую давно открытую серию", got)
+	}
+}
+
+// Места на три серии, в сезоне шесть: качаются первые три, дальше — пауза и предупреждение.
+// Досмотрели до третьей — удаляется самая ранняя серия позади (одна позади остаётся: второй
+// телевизор может отставать), на освободившееся место качается четвёртая. У серий позади нет
+// правила 6 часов (решение заказчика, этап 7a).
+func TestSpaceWindowSlidesPastWatchedEpisodes(t *testing.T) {
+	ctx := context.Background()
+	s := newTestService(t)
+	const ep = 256 << 10
+	src := t.TempDir()
+	var files []torrenttest.File
+	for i := 1; i <= 6; i++ {
+		files = append(files, torrenttest.File{Path: "Серия " + strconv.Itoa(i) + ".mkv", Size: ep})
+	}
+	mi, _ := torrenttest.MakeTorrent(t, src, "Сезон", 64<<10, files...)
+	seeder, _ := torrenttest.NewSeeder(t, src, mi)
+	ih, err := s.Open(ctx, Source{Torrent: torrentBytes(t, mi)})
+	must(t, err)
+	tt, _ := s.Engine().Client().Torrent(ih)
+	idx := make([]int, 6)
+	for i := range idx {
+		idx[i] = fileIndex(t, tt, "Серия "+strconv.Itoa(i+1)+".mkv")
+	}
+	s.SetPolicy(Policy{MinFree: mib, KeepBehind: 1})
+	s.freeSpace = func(string) (int64, error) { return mib + 3*ep + ep/2 - tt.BytesCompleted(), nil }
+	runService(t, s)
+	connect(t, s, ih, seeder)
+	must(t, s.Download(ctx, ih, nil))
+	warned := func() bool {
+		return strings.Contains(problemText(t, s.reg.db, "torrents.space"), "удалите лишнее в «Загрузках»")
+	}
+	waitFor(t, "первые три серии скачаны, четвёртая на паузе, предупреждение", func() bool {
+		s.mu.Lock()
+		defer s.mu.Unlock()
+		ss := s.sessions[ih]
+		return tt.Files()[idx[2]].BytesCompleted() == ep && ss.focus == idx[3] && ss.paused[idx[3]] && warned()
+	})
+	if tt.Files()[idx[3]].BytesCompleted() == ep {
+		t.Fatal("четвёртая серия скачалась сверх запаса")
+	}
+	// В «Загрузках» на паузе — только серия, до которой дошла очередь; дальние ждут очереди.
+	v, err := s.Downloads(ctx)
+	must(t, err)
+	byIndex := map[int]DownloadState{}
+	for _, it := range v.Items {
+		byIndex[it.Index] = it.State
+	}
+	if byIndex[idx[3]] != DownloadPaused || byIndex[idx[4]] != DownloadQueued || !v.LowSpace {
+		t.Fatalf("«Загрузки»: четвёртая %q, пятая %q, мало места %v", byIndex[idx[3]], byIndex[idx[4]], v.LowSpace)
+	}
+	// Досмотрели до третьей; первые две смотрели два и час назад.
+	now := s.now()
+	must(t, s.reg.TouchStream(ctx, ih, idx[0], now.Add(-2*time.Hour)))
+	must(t, s.reg.TouchStream(ctx, ih, idx[1], now.Add(-time.Hour)))
+	must(t, s.reg.TouchStream(ctx, ih, idx[2], now))
+	must(t, s.checkSpace(ctx))
+	if got := stored(t, s, ih); slices.Contains(got, idx[0]) || !slices.Contains(got, idx[1]) || !slices.Contains(got, idx[2]) {
+		t.Fatalf("хранятся %v: удалить нужно было только серию 1", got)
+	}
+	waitFor(t, "четвёртая серия скачана на освободившееся место", func() bool {
+		return tt.Files()[idx[3]].BytesCompleted() == ep
+	})
+	time.Sleep(1500 * time.Millisecond) // такт Run: переход к пятой серии и проверка места
+	if tt.Files()[idx[4]].BytesCompleted() == ep || !warned() {
+		t.Fatalf("пятая серия скачана: %v, предупреждение: %v", tt.Files()[idx[4]].BytesCompleted() == ep, warned())
 	}
 }
 
@@ -114,7 +182,7 @@ func TestCleanupSkipsWatchedFile(t *testing.T) {
 	must(t, s.reg.TouchStream(ctx, ih, ep[0], s.now().Add(-time.Hour))) // смотрели час назад
 	openedAgo(t, s, ih, ep[0], 5*24*time.Hour)
 	fakeDisk(s, 10*mib)
-	s.SetPolicy(Policy{MinFree: 6 * mib})
+	s.SetPolicy(Policy{MinFree: 7 * mib}) // как в TestPrepareFreesOldestFirst
 	must(t, s.Prepare(ctx, ih, ep[2]))
 	if got := stored(t, s, ih); !slices.Equal(got, sorted(ep[0], ep[2])) {
 		t.Fatalf("хранятся %v — удалить нужно было вторую серию, а не ту, что смотрят", got)
@@ -308,7 +376,7 @@ func TestCleanupSparesJustChosenFile(t *testing.T) {
 	must(t, s.Prepare(ctx, ih, ep[1]))
 	openedAgo(t, s, ih, ep[1], 3*24*time.Hour)
 	fakeDisk(s, 10*mib)
-	s.SetPolicy(Policy{MinFree: 6 * mib})
+	s.SetPolicy(Policy{MinFree: 7 * mib}) // как в TestPrepareFreesOldestFirst
 	must(t, s.Prepare(ctx, ih, ep[2]))
 	if got := stored(t, s, ih); !slices.Equal(got, sorted(ep[0], ep[2])) {
 		t.Fatalf("хранятся %v — удалить нужно было давно открытую серию, а не только что выбранную", got)

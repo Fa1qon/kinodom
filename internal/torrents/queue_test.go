@@ -167,8 +167,7 @@ func TestPendingDownloadSurvivesRestart(t *testing.T) {
 }
 
 // «Скачать» у сезона больше свободного места: место проверяется под серию, которая качается
-// первой, как у «Смотреть»; дальше докачка встанет на паузу «Мало места», как на этапе 6 (спека
-// этапа 7, раздел 9). Раньше отказ был сразу — а другой кнопки до «Скачать» у раздачи нет.
+// первой, как у «Смотреть». Раньше отказ был сразу — а другой кнопки до «Скачать» у раздачи нет.
 func TestDownloadBiggerThanFreeSpaceStarts(t *testing.T) {
 	ctx := context.Background()
 	s := newTestService(t)
@@ -180,6 +179,15 @@ func TestDownloadBiggerThanFreeSpaceStarts(t *testing.T) {
 	st, _ := s.Status(ih)
 	if st.Focus != ep[0] || len(stored(t, s, ih)) != 4 {
 		t.Fatalf("фокус %d, хранятся %v", st.Focus, stored(t, s, ih))
+	}
+	// Проверка места: первая серия влезает — она качается, не на паузе; вся очередь не влезает —
+	// предупреждение висит, пока лишнее не удалят (решение заказчика, этап 7a).
+	must(t, s.checkSpace(ctx))
+	s.mu.Lock()
+	paused := s.sessions[ih].paused[ep[0]]
+	s.mu.Unlock()
+	if p := problemText(t, s.reg.db, "torrents.space"); paused || !strings.Contains(p, "удалите лишнее в «Загрузках»") {
+		t.Fatalf("первая серия на паузе: %v, предупреждение %q", paused, p)
 	}
 	s.freeSpace = func(string) (int64, error) { return s.pol().MinFree + mib/2, nil } // не влезает и одна
 	ih2, _ := archive(t, s)

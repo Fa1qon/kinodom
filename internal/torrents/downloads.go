@@ -108,7 +108,7 @@ func (s *Service) Downloads(ctx context.Context) (DownloadsView, error) {
 				it.State = DownloadWatching
 			case it.Done >= tf.Length():
 				it.State = DownloadDone
-			case ss.paused[f.Index]:
+			case ss.paused[f.Index] && f.Index == ss.focus: // остальные на паузе просто ждут очереди
 				it.State = DownloadPaused
 			case f.Index == ss.focus:
 				it.State, it.Speed = DownloadDownloading, int64(ss.speed)
@@ -132,7 +132,7 @@ func (s *Service) Downloads(ctx context.Context) (DownloadsView, error) {
 	})
 	if eng := s.Engine(); eng != nil {
 		dir := eng.DownloadsDir()
-		if short, free, err := s.shortfall(dir, 0); err == nil {
+		if short, free, err := s.queueShortfall(dir); err == nil {
 			out.FreeBytes, out.LowSpace = free, short > 0
 		}
 	}

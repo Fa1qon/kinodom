@@ -610,10 +610,10 @@ func TestSettingsApplyWithoutRestart(t *testing.T) {
 	a := startAppWith(t, Options{Home: t.TempDir(), ListenAddr: "127.0.0.1:0", Offline: true, DownloadsDir: t.TempDir(), KinopoiskAPI: kp.URL})
 	ctx := context.Background()
 	url := "http://" + a.API.Addr() + "/api/v1/settings"
-	if code, body := putJSON(t, url, map[string]any{"storage": map[string]any{"keepDays": 3, "minFreeGB": 0}}); code != 200 {
+	if code, body := putJSON(t, url, map[string]any{"storage": map[string]any{"keepDays": 3, "minFreeGB": 0, "keepBehind": 2}}); code != 200 {
 		t.Fatalf("хранение: %d %s", code, body)
 	}
-	if p := a.Torrents.Policy(); p.KeepFor != 3*24*time.Hour || p.MinFree != 0 {
+	if p := a.Torrents.Policy(); p.KeepFor != 3*24*time.Hour || p.MinFree != 0 || p.KeepBehind != 2 {
 		t.Fatalf("правила хранения не применились: %+v", p)
 	}
 	code, body := putJSON(t, url, map[string]any{"kinopoisk": map[string]any{"key": "key-SECRET"},
