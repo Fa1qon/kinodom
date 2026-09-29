@@ -15,8 +15,35 @@ import (
 
 // M3U — плейлист из одного потока. UTF-8: так кириллицу в названии читает и MPC-HC.
 func M3U(title, streamURL string) []byte {
-	title = strings.NewReplacer("\r", " ", "\n", " ").Replace(title)
-	return []byte("#EXTM3U\n#EXTINF:-1," + title + "\n" + streamURL + "\n")
+	return M3UList([]M3UItem{{Title: title, URL: streamURL}})
+}
+
+// M3UItem — пункт плейлиста: поток и заголовки, с которыми его открывать.
+type M3UItem struct {
+	Title     string
+	URL       string
+	UserAgent string
+	Referrer  string
+}
+
+var oneLine = strings.NewReplacer("\r", " ", "\n", " ")
+
+// M3UList — плейлист из нескольких пунктов по порядку: не открылся один — VLC берёт следующий
+// (канал IPTV, спека этапа 8, раздел 5.9). Заголовки — строками #EXTVLCOPT.
+func M3UList(items []M3UItem) []byte {
+	var b strings.Builder
+	b.WriteString("#EXTM3U\n")
+	for _, it := range items {
+		b.WriteString("#EXTINF:-1," + oneLine.Replace(it.Title) + "\n")
+		if it.UserAgent != "" {
+			b.WriteString("#EXTVLCOPT:http-user-agent=" + oneLine.Replace(it.UserAgent) + "\n")
+		}
+		if it.Referrer != "" {
+			b.WriteString("#EXTVLCOPT:http-referrer=" + oneLine.Replace(it.Referrer) + "\n")
+		}
+		b.WriteString(oneLine.Replace(it.URL) + "\n")
+	}
+	return []byte(b.String())
 }
 
 // M3UDisposition — заголовок Content-Disposition: браузер сохраняет файл как «<название>.m3u8»
@@ -41,7 +68,8 @@ var ErrBadLink = errors.New("ссылка kinodom:// не от Kinodom — пл�
 
 // ParseLaunch разбирает ссылку kinodom://play?url=…&title=… строго по основной спеке (раздел 14):
 // поток — только http на 127.0.0.1 или localhost, порт API, путь после path.Clean — /stream/,
-// /media/ или /mcast/. Иначе любая страница в браузере могла бы запустить плеер с чем угодно.
+// /media/, /mcast/ или /m3u/ (плейлист канала IPTV — этап 8). Иначе любая страница в браузере
+// могла бы запустить плеер с чем угодно.
 func ParseLaunch(link string, apiPort int) (streamURL, title string, err error) {
 	u, err := url.Parse(link)
 	if err != nil || u.Scheme != "kinodom" || u.Host != "play" || (u.Path != "" && u.Path != "/") {
@@ -55,7 +83,8 @@ func ParseLaunch(link string, apiPort int) (streamURL, title string, err error) 
 		return "", "", ErrBadLink
 	}
 	clean := path.Clean(s.Path)
-	if !strings.HasPrefix(clean, "/stream/") && !strings.HasPrefix(clean, "/media/") && !strings.HasPrefix(clean, "/mcast/") {
+	if !strings.HasPrefix(clean, "/stream/") && !strings.HasPrefix(clean, "/media/") && !strings.HasPrefix(clean, "/mcast/") &&
+		!strings.HasPrefix(clean, "/m3u/") {
 		return "", "", fmt.Errorf("%w (путь %s)", ErrBadLink, clean)
 	}
 	s.Path, s.RawPath = clean, ""
