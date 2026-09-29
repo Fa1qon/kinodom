@@ -190,3 +190,35 @@ func (im *Images) Handler() http.Handler {
 		http.ServeFile(w, r, p)
 	})
 }
+
+// Sweep чистит кэш (хвост этапа 5b: иначе ~2 ГБ на 10 000 постеров): удаляет картинки, которые
+// не нужны (keep(ключ) == false) и лежат дольше суток — свежие мог только что скачать кто-то ещё, —
+// и обрывки *.tmp старше часа (запись оборвалась при аварии). Возвращает ключи удалённых картинок.
+func (im *Images) Sweep(keep func(key string) bool, now time.Time) ([]string, error) {
+	entries, err := os.ReadDir(im.o.Dir)
+	if err != nil {
+		return nil, err
+	}
+	var removed []string
+	for _, e := range entries {
+		info, err := e.Info()
+		if err != nil || e.IsDir() {
+			continue
+		}
+		name, age := e.Name(), now.Sub(info.ModTime())
+		if strings.HasSuffix(name, ".tmp") {
+			if age > time.Hour {
+				os.Remove(filepath.Join(im.o.Dir, name))
+			}
+			continue
+		}
+		key := strings.TrimSuffix(name, filepath.Ext(name))
+		if !reImageKey.MatchString(key) || age < 24*time.Hour || keep(key) {
+			continue
+		}
+		if err := os.Remove(filepath.Join(im.o.Dir, name)); err == nil {
+			removed = append(removed, key)
+		}
+	}
+	return removed, nil
+}
