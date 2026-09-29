@@ -137,7 +137,7 @@ func TestModulePlaylists(t *testing.T) {
 	waitFor(t, "лёгкая проверка", func() bool {
 		st, _ := m.streamState(ok)
 		ds, fails := m.streamState(dead)
-		return st == StateAlive && ds == StateSilent && fails == 1
+		return st == StateAlive && ds == StateSilent && fails >= 1 // молчащий перепроверяется и полной проверкой
 	})
 	waitFor(t, "полная проверка видимого канала", func() bool {
 		m.rebuild(context.Background())

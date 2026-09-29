@@ -454,6 +454,7 @@ func (m *Module) UpdatePlaylist(ctx context.Context, id int64, p PlaylistPatch) 
 			pl.Name = n
 		}
 	}
+	unlimited := p.Limited != nil && pl.Limited && !*p.Limited
 	if p.Limited != nil {
 		pl.Limited = *p.Limited
 	}
@@ -473,6 +474,9 @@ func (m *Module) UpdatePlaylist(ctx context.Context, id int64, p PlaylistPatch) 
 		return m.apply(ctx, &pl, parsed, m.now())
 	}
 	m.rebuild(ctx)
+	if unlimited { // источники плейлиста теперь проверяются в фоне — новые сразу
+		m.poke(m.lightNew)
+	}
 	return PlaylistResult{ID: id}, nil
 }
 

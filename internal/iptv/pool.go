@@ -496,6 +496,24 @@ func (d db) favorites(ctx context.Context, device string) ([]string, error) {
 	return out, rows.Err()
 }
 
+// allFavorites — каналы в избранном хоть одного устройства.
+func (d db) allFavorites(ctx context.Context) (map[string]bool, error) {
+	rows, err := d.R.QueryContext(ctx, `SELECT DISTINCT channel FROM iptv_favorites`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := map[string]bool{}
+	for rows.Next() {
+		var k string
+		if err := rows.Scan(&k); err != nil {
+			return nil, err
+		}
+		out[k] = true
+	}
+	return out, rows.Err()
+}
+
 // setFavorites заменяет избранное устройства; повторы убираются.
 func (d db) setFavorites(ctx context.Context, device string, keys []string) error {
 	tx, err := d.W.BeginTx(ctx, nil)
