@@ -40,7 +40,7 @@ func (c *Catalog) List(ctx context.Context, o ListOptions) (entries []Entry, tot
 	if o.Limit <= 0 {
 		o.Limit = 50
 	}
-	rs, err := c.st.catalogRows(ctx, c.cats)
+	rs, err := c.st.catalogRows(ctx, c.enabled())
 	if err != nil {
 		return nil, 0, err
 	}
@@ -116,7 +116,8 @@ type Category struct {
 
 // Categories — включённые разделы с названиями и числом карточек (фильтр каталога).
 func (c *Catalog) Categories(ctx context.Context) ([]Category, error) {
-	rs, err := c.st.catalogRows(ctx, c.cats)
+	cats := c.enabled()
+	rs, err := c.st.catalogRows(ctx, cats)
 	if err != nil {
 		return nil, err
 	}
@@ -124,8 +125,8 @@ func (c *Catalog) Categories(ctx context.Context) ([]Category, error) {
 	for _, r := range collapse(rs) {
 		count[CategoryRef{r.Tracker, r.CategoryID}]++
 	}
-	out := make([]Category, 0, len(c.cats))
-	for _, cat := range c.cats {
+	out := make([]Category, 0, len(cats))
+	for _, cat := range cats {
 		if _, ok := c.sources[cat.Tracker]; !ok {
 			continue
 		}

@@ -254,10 +254,10 @@ func (a *App) initMeta(ctx context.Context, o Options, v settings.Values) error 
 // «три поиска Rutor одновременно» и один ограничитель на трекер — на экземпляр.
 func (a *App) initCatalog(ctx context.Context, o Options, v settings.Values) error {
 	log := a.Log.With("module", "catalog")
-	cats, err := catalog.ParseCategories(v.Sections)
+	sections, err := catalog.ParseSections(v.Sections)
 	if err != nil {
 		a.setProblem(ctx, "catalog.categories", "Разделы каталога в настройках не читаются — взяты разделы по умолчанию: "+err.Error())
-		cats = catalog.DefaultCategories
+		sections = catalog.DefaultSections
 	} else {
 		a.clearProblem(ctx, "catalog.categories")
 	}
@@ -292,8 +292,9 @@ func (a *App) initCatalog(ctx context.Context, o Options, v settings.Values) err
 		httpx.WriteJSON(w, http.StatusOK, rtSrc.Relogin(r.Context()))
 	}))
 	a.Sup.Add(edge.NewModule(a.Log.With("module", "edge")), edgeOn)
-	a.Catalog = catalog.New(catalog.Options{DB: a.DB, Sources: []source.Source{rutorSrc, rtSrc}, Categories: cats,
+	a.Catalog = catalog.New(catalog.Options{DB: a.DB, Sources: []source.Source{rutorSrc, rtSrc}, Sections: sections,
 		Ratings: a.Ratings, Images: a.Images, KinopoiskPoster: a.kp.PosterURL, Log: log})
+	a.Catalog.Register(a.API)
 	a.Sup.Add(a.Catalog, a.ModuleEnabled(ctx, a.Catalog.Name()))
 	return nil
 }
@@ -366,7 +367,11 @@ func (a *App) Check(ctx context.Context, old, n settings.Values) error {
 		}
 	}
 	if n.Sections != old.Sections {
-		if _, err := catalog.ParseCategories(n.Sections); err != nil {
+		ss, err := catalog.ParseSections(n.Sections)
+		if err == nil {
+			err = a.Catalog.CheckSections(ctx, ss)
+		}
+		if err != nil {
 			return &settings.FieldError{Field: "Разделы каталога", Text: err.Error()}
 		}
 	}
@@ -385,6 +390,14 @@ func (a *App) Apply(ctx context.Context, old, n settings.Values) {
 	if n.DownloadsDir != old.DownloadsDir {
 		if e := a.Torrents.Engine(); e != nil {
 			e.SetDownloadsDir(n.DownloadsDir)
+		}
+	}
+	if n.Sections != old.Sections {
+		ss, _ := catalog.ParseSections(n.Sections) // проверено в Check
+		if err := a.Catalog.SetSections(ctx, ss); err != nil {
+			a.Log.Error("разделы каталога не применились", "err", err)
+		} else {
+			a.clearProblem(ctx, "catalog.categories")
 		}
 	}
 	if n.Proxy != old.Proxy {

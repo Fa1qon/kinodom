@@ -53,28 +53,12 @@ func FormatCategories(cs []CategoryRef) string {
 	return strings.Join(parts, ",")
 }
 
-// ParseCategories — настройка catalog.categories: «rutracker:2110, rutor:12». Пусто — по умолчанию.
-func ParseCategories(s string) ([]CategoryRef, error) {
-	if strings.TrimSpace(s) == "" {
-		return DefaultCategories, nil
-	}
-	var out []CategoryRef
-	for _, part := range strings.Split(s, ",") {
-		tracker, id, ok := strings.Cut(strings.TrimSpace(part), ":")
-		if !ok || tracker == "" || id == "" {
-			return nil, fmt.Errorf("категория %q — нужно «трекер:номер», например rutracker:2110", strings.TrimSpace(part))
-		}
-		out = append(out, CategoryRef{tracker, id})
-	}
-	return out, nil
-}
-
 type Options struct {
-	DB         *store.DB
-	Sources    []source.Source // по одному на трекер
-	Categories []CategoryRef   // включённые разделы; пусто — DefaultCategories
-	Ratings    *meta.Ratings   // nil — без рейтингов
-	Images     *meta.Images    // nil — без картинок
+	DB       *store.DB
+	Sources  []source.Source // по одному на трекер
+	Sections []Section       // выбранные разделы; пусто — DefaultSections
+	Ratings  *meta.Ratings   // nil — без рейтингов
+	Images   *meta.Images    // nil — без картинок
 	// KinopoiskPoster — адрес постера Кинопоиска (meta.Kinopoisk.PosterURL): когда на странице
 	// раздачи картинки нет или хостинг не отвечает (спека, раздел 8). nil — без запасного постера.
 	KinopoiskPoster func(id int) string
@@ -86,17 +70,19 @@ type Catalog struct {
 	st       catalogStore
 	db       *store.DB
 	sources  map[string]source.Source
-	cats     []CategoryRef
 	ratings  *meta.Ratings
 	images   *meta.Images
 	kpPoster func(id int) string
 	log      *slog.Logger
 	now      func() time.Time
 
-	refreshNow chan struct{}
-	enrichWake map[string]chan struct{}
+	refreshNow      chan struct{}
+	sectionsChanged chan struct{} // разделы сменили в пульте: пройти по разделам без ожидания
+	enrichWake      map[string]chan struct{}
 
 	mu          sync.Mutex
+	sections    []Section            // разделы из настроек
+	cats        []CategoryRef        // они же после раскрытия «+» по дереву (enabled)
 	failures    int                  // неудачных проходов подряд
 	forumPaused map[string]time.Time // трекер → до какого времени не ходить за страницами раздач
 	runCtx      context.Context      // для фонового поиска: живёт, пока работает модуль
@@ -107,13 +93,19 @@ func New(o Options) *Catalog {
 	if o.Log == nil {
 		o.Log = slog.New(slog.DiscardHandler)
 	}
-	if len(o.Categories) == 0 {
-		o.Categories = DefaultCategories
+	if len(o.Sections) == 0 {
+		o.Sections = DefaultSections
 	}
-	c := &Catalog{st: catalogStore{o.DB}, db: o.DB, sources: map[string]source.Source{}, cats: o.Categories,
+	c := &Catalog{st: catalogStore{o.DB}, db: o.DB, sources: map[string]source.Source{}, sections: o.Sections,
 		ratings: o.Ratings, images: o.Images, kpPoster: o.KinopoiskPoster, log: o.Log, now: time.Now,
-		refreshNow: make(chan struct{}, 1), enrichWake: map[string]chan struct{}{},
+		refreshNow: make(chan struct{}, 1), sectionsChanged: make(chan struct{}, 1), enrichWake: map[string]chan struct{}{},
 		forumPaused: map[string]time.Time{}, searches: map[string]*searchRun{}}
+	// До первого прохода (там дерево и раскрытие «+») — разделы как записаны, без подразделов.
+	for _, s := range o.Sections {
+		if !strings.HasPrefix(s.ID, "c") {
+			c.cats = append(c.cats, CategoryRef{s.Tracker, s.ID})
+		}
+	}
 	for _, s := range o.Sources {
 		c.sources[s.Name()] = s
 		c.enrichWake[s.Name()] = make(chan struct{}, 1)
@@ -153,6 +145,7 @@ func (c *Catalog) Run(ctx context.Context) error {
 			return nil
 		case <-c.refreshNow:
 			force = true
+		case <-c.sectionsChanged:
 		case <-time.After(wait):
 		}
 	}
@@ -170,7 +163,12 @@ func (c *Catalog) refreshPass(ctx context.Context, force bool) (time.Duration, e
 			c.log.Warn("каталог: разделы трекера не обновились", "tracker", name, "err", err)
 		}
 	}
-	for _, cat := range c.cats {
+	// Дерево могло измениться: у раздела с «+» появился подраздел — он войдёт в каталог сам.
+	if err := c.reexpand(ctx); err != nil {
+		return 0, dbError{err}
+	}
+	cats := c.enabled()
+	for _, cat := range cats {
 		src, ok := c.sources[cat.Tracker]
 		if !ok {
 			continue
@@ -206,7 +204,7 @@ func (c *Catalog) refreshPass(ctx context.Context, force bool) (time.Duration, e
 			c.clearProblem(ctx, "catalog."+name)
 		}
 	}
-	if err := c.checkStale(ctx, now, trackerErr); err != nil {
+	if err := c.checkStale(ctx, cats, now, trackerErr); err != nil {
 		return 0, err
 	}
 	if touched {
@@ -291,10 +289,10 @@ func (c *Catalog) refreshTree(ctx context.Context, name string, src source.Sourc
 
 // checkStale — «Каталог не обновлялся N дней» (спека, раздел 13), пока хоть один включённый
 // раздел не обновлялся дольше двух суток.
-func (c *Catalog) checkStale(ctx context.Context, now time.Time, trackerErr map[string]error) error {
+func (c *Catalog) checkStale(ctx context.Context, cats []CategoryRef, now time.Time, trackerErr map[string]error) error {
 	var oldest time.Time
 	var reason error
-	for _, cat := range c.cats {
+	for _, cat := range cats {
 		if _, ok := c.sources[cat.Tracker]; !ok {
 			continue
 		}
@@ -324,7 +322,7 @@ func (c *Catalog) enqueueRatings(ctx context.Context) error {
 	if c.ratings == nil {
 		return nil
 	}
-	rs, err := c.st.catalogRows(ctx, c.cats)
+	rs, err := c.st.catalogRows(ctx, c.enabled())
 	if err != nil {
 		return err
 	}
