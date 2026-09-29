@@ -213,6 +213,30 @@ func TestDeleteRoute(t *testing.T) {
 	}
 }
 
+// Корзина раздачи в «Загрузках»: все хранимые серии удаляются, ту, что смотрят, — нет (спека этапа 7,
+// раздел 10.6).
+func TestDeleteReleaseRoute(t *testing.T) {
+	ctx := context.Background()
+	s, srv := apiFixture(t)
+	ih, tt, _ := seriesFixture(t, s)
+	one, two := fileIndex(t, tt, "Серия 1.mkv"), fileIndex(t, tt, "Серия 2.mkv")
+	url := srv.URL + "/api/v1/downloads/" + ih.HexString()
+	var e struct{ Error string }
+	if code := call(t, "DELETE", url, nil, &e); code != http.StatusNotFound || e.Error != ErrNotStored.Error() {
+		t.Fatalf("ничего не скачано: %d %q", code, e.Error)
+	}
+	must(t, s.Prepare(ctx, ih, one))
+	must(t, s.Prepare(ctx, ih, two))
+	must(t, s.reg.TouchStream(ctx, ih, two, time.Now())) // вторую серию сейчас смотрят
+	var out struct{ Deleted, Skipped int }
+	if code := call(t, "DELETE", url, nil, &out); code != http.StatusOK || out.Deleted != 1 || out.Skipped != 1 {
+		t.Fatalf("удаление раздачи: %d %+v", code, out)
+	}
+	if left, err := s.reg.StoredFiles(ctx, ih); err != nil || !slices.Equal(left, []int{two}) {
+		t.Fatalf("осталось %v, %v", left, err)
+	}
+}
+
 // Кусок на границе с хранимой соседней серией при удалении не трогается: его байты нужны соседу, а
 // сброс и повторная загрузка общего куска, который как раз качается, давали несошедшийся хэш — и
 // anacrolix банил единственного раздающего (плавающее «не докачался», этап 6). Скачанные куски

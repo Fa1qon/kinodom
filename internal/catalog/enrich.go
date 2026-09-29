@@ -106,16 +106,18 @@ func (c *Catalog) enrichStep(ctx context.Context, tracker string) (bool, error) 
 	// .torrent — до отметки «страница загружена»: экран раздачи перестаёт ждать догрузку и сразу
 	// показывает серии Rutor. Постер — после: медленный хостинг не держит экран раздачи
 	// (финальное ревью 7a).
+	var torrent []byte
 	if tf, ok := src.(torrentFetcher); ok {
 		if b, err := tf.Torrent(ctx, r.TopicID); err == nil {
 			if err := c.st.saveTorrent(ctx, r.ID, b); err != nil {
 				return false, err
 			}
+			torrent = b
 		} else if ctx.Err() == nil {
 			c.log.Warn("каталог: .torrent не скачался — раздача откроется по magnet", "tracker", tracker, "topic", r.TopicID, "err", err)
 		}
 	}
-	if err := c.st.saveDetails(ctx, r.ID, d, kpID, "", now); err != nil {
+	if err := c.st.saveDetails(ctx, r.ID, d, kpID, "", c.formatOf(d.Description, torrent), now); err != nil {
 		return false, err
 	}
 	if key := c.fetchPoster(ctx, d.PosterURL, kpID); key != "" {

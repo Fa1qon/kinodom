@@ -121,6 +121,7 @@ func TestPatchRejectsBadFields(t *testing.T) {
 		`{"proxy":{"type":"socks5","address":"h:1","password":"p"}}`: "пароль без логина",
 		`{"catalog":{"sections":{"rutracker":[]}}}`:                  "хотя бы один",
 		`{"catalog":{"sections":{"rutor":["1,2"]}}}`:                 "не понят",
+		`{"catalog":{"preferredFormat":"FLAC"}}`:                     "Формат в приоритете",
 	}
 	for js, want := range cases {
 		n, err := v.With(patch(t, js))
@@ -215,8 +216,8 @@ func TestUpdateSavesOnlyChangedAndApplies(t *testing.T) {
 	}
 }
 
-// GET — с любого устройства (телевизору и kinodom open нужен плеер); PUT — только с этого ПК, форма
-// без JSON отклоняется (основная спека, раздел 13).
+// GET — с любого устройства (телевизору и kinodom open нужен плеер); PUT — из домашней сети (спека
+// этапа 7, раздел 10.1), форма без JSON отклоняется (основная спека, раздел 13).
 func TestRoutesThroughAPIServer(t *testing.T) {
 	db := openDB(t)
 	s := New(db, load(t, db, nil), &fakeApplier{})
@@ -235,8 +236,11 @@ func TestRoutesThroughAPIServer(t *testing.T) {
 	if rec := do("GET", "192.168.0.7:5000", ""); rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), `"player":"auto"`) {
 		t.Fatalf("GET из сети: %d %s", rec.Code, rec.Body)
 	}
-	if rec := do("PUT", "192.168.0.7:5000", `{"player":"vlc"}`); rec.Code != http.StatusForbidden {
-		t.Fatalf("PUT из сети: %d", rec.Code)
+	if rec := do("PUT", "8.8.8.8:5000", `{"player":"vlc"}`); rec.Code != http.StatusForbidden {
+		t.Fatalf("PUT не из домашней сети: %d", rec.Code)
+	}
+	if rec := do("PUT", "192.168.0.7:5000", `{"player":"mpc-hc"}`); rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), `"player":"mpc-hc"`) {
+		t.Fatalf("PUT с телефона: %d %s", rec.Code, rec.Body)
 	}
 	if rec := do("PUT", "127.0.0.1:5000", `{"player":"vlc"}`); rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), `"player":"vlc"`) {
 		t.Fatalf("PUT с ПК: %d %s", rec.Code, rec.Body)
@@ -247,5 +251,26 @@ func TestRoutesThroughAPIServer(t *testing.T) {
 	}
 	if rec := do("PUT", "127.0.0.1:5000", `{"plaeyr":"vlc"}`); rec.Code != http.StatusBadRequest {
 		t.Fatalf("опечатка в поле: %d", rec.Code)
+	}
+}
+
+// Формат в приоритете: по умолчанию нет; MKV, MP4, AVI; неизвестное в базе — нет (спека этапа 7,
+// раздел 10.3).
+func TestPreferredFormatField(t *testing.T) {
+	db := openDB(t)
+	v := load(t, db, nil)
+	if v.PreferredFormat != "" || v.View().Catalog.PreferredFormat != "" {
+		t.Fatalf("по умолчанию: %q", v.PreferredFormat)
+	}
+	n, err := v.With(patch(t, `{"catalog":{"preferredFormat":"MKV"}}`))
+	if b, _ := json.Marshal(n.View()); err != nil || !strings.Contains(string(b), `"preferredFormat":"MKV"`) {
+		t.Fatalf("MKV: %s, %v", b, err)
+	}
+	if n, err = n.With(patch(t, `{"catalog":{"preferredFormat":""}}`)); err != nil || n.PreferredFormat != "" {
+		t.Fatalf("нет: %q, %v", n.PreferredFormat, err)
+	}
+	db.SetSetting(ctx, KeyPreferredFormat, "FLAC")
+	if v = load(t, db, nil); v.PreferredFormat != "" {
+		t.Fatalf("неизвестный формат в базе: %q", v.PreferredFormat)
 	}
 }

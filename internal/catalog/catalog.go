@@ -62,6 +62,10 @@ type Options struct {
 	// KinopoiskPoster — адрес постера Кинопоиска (meta.Kinopoisk.PosterURL): когда на странице
 	// раздачи картинки нет или хостинг не отвечает (спека, раздел 8). nil — без запасного постера.
 	KinopoiskPoster func(id int) string
+	// TorrentFormat — формат раздачи по видеофайлам .torrent (приложение: torrents.PlayableFiles и
+	// meta.Format). nil — формат только по описанию.
+	TorrentFormat   func(torrent []byte) string
+	PreferredFormat string       // формат в приоритете (catalog.preferredFormat); "" — нет
 	Log             *slog.Logger // nil — без журнала
 }
 
@@ -75,6 +79,8 @@ type Catalog struct {
 	kpPoster func(id int) string
 	log      *slog.Logger
 	now      func() time.Time
+
+	torrentFormat func(torrent []byte) string // формат по .torrent; nil — только по описанию
 
 	refreshNow      chan struct{}
 	sectionsChanged chan struct{} // разделы сменили в пульте: пройти по разделам без ожидания
@@ -90,6 +96,7 @@ type Catalog struct {
 	forumPaused map[string]time.Time // трекер → до какого времени не ходить за страницами раздач
 	runCtx      context.Context      // для фонового поиска: живёт, пока работает модуль
 	searches    map[string]*searchRun
+	preferred   string // формат в приоритете
 }
 
 func New(o Options) *Catalog {
@@ -103,7 +110,8 @@ func New(o Options) *Catalog {
 		ratings: o.Ratings, images: o.Images, kpPoster: o.KinopoiskPoster, log: o.Log, now: time.Now,
 		refreshNow: make(chan struct{}, 1), sectionsChanged: make(chan struct{}, 1), enrichWake: map[string]chan struct{}{},
 		postersWake: make(chan struct{}, 1), urgent: map[string][]int64{}, posterTried: map[int64]time.Time{},
-		forumPaused: map[string]time.Time{}, searches: map[string]*searchRun{}}
+		forumPaused: map[string]time.Time{}, searches: map[string]*searchRun{}, torrentFormat: o.TorrentFormat,
+		preferred: o.PreferredFormat}
 	// До первого прохода (там дерево и раскрытие «+») — разделы как записаны, без подразделов.
 	for _, s := range o.Sections {
 		if !strings.HasPrefix(s.ID, "c") {
@@ -137,6 +145,7 @@ func (c *Catalog) Run(ctx context.Context) error {
 	}
 	supervisor.Go(ctx, c.imagesLoop)
 	supervisor.Go(ctx, c.postersLoop)
+	supervisor.Go(ctx, c.fillFormats)
 	supervisor.Ready(ctx)
 	force := false
 	for {

@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/http"
 	"path/filepath"
+	"slices"
 	"sync"
 	"testing"
 	"time"
@@ -526,5 +527,23 @@ func TestYearlessMatchWithForeignYearIsRejected(t *testing.T) {
 	drain(t, r)
 	if f.Hits("search") != 1 {
 		t.Fatalf("поисков %d — второй рип искал снова", f.Hits("search"))
+	}
+}
+
+// Раздачи одного фильма — по номеру Кинопоиска: для карточки фильма и «Других раздач» (спека этапа 7,
+// раздел 10.4).
+func TestReleasesOfFilm(t *testing.T) {
+	f := newFakeKP(t)
+	r, _, _ := newRatings(t, f, testKey)
+	enqueue(t, r, 1, Item{Release: "rutor:2", Title: "Матрица / The Matrix (1999) HDRip от Scarabey"})
+	enqueue(t, r, 2, Item{Release: "rutracker:3", Title: "Матрица / The Matrix (Лана Вачовски) [1999, США, фантастика, BDRip 1080p]"})
+	enqueue(t, r, 3, Item{Release: "rutor:1", KinopoiskID: 301, Title: "Матрица / The Matrix (1999) BDRip"})
+	drain(t, r)
+	got, err := r.Releases(ctx, []int{301, 777})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := []string{"rutor:1", "rutor:2", "rutracker:3"}; !slices.Equal(got[301], want) || len(got[777]) != 0 {
+		t.Fatalf("раздачи фильма: %v", got)
 	}
 }
