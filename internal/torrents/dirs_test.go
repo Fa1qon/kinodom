@@ -66,11 +66,9 @@ func TestTorrentStaysInItsDownloadsDir(t *testing.T) {
 	connect(t, s1, ih, seeder)
 	must(t, s1.Prepare(ctx, ih, 0))
 	tt, _ := e1.Client().Torrent(ih)
-	for deadline := time.Now().Add(15 * time.Second); tt.BytesCompleted() < tt.Length(); time.Sleep(20 * time.Millisecond) {
-		if time.Now().After(deadline) {
-			t.Fatal("файл не скачался")
-		}
-	}
+	// Ждём и проверки кусков по хэшу: BytesCompleted считает и куски, которые ещё проверяются, —
+	// закрыв движок раньше, тест терял отметку последнего куска (плавающее падение, этап 6).
+	waitComplete(t, tt.Files()[0])
 	must(t, s1.reg.SaveMetainfo(ctx, ih, "film.mkv", torrentBytes(t, mi))) // Run не запущен — сохраняем сами
 	e1.Close()
 
@@ -81,12 +79,8 @@ func TestTorrentStaysInItsDownloadsDir(t *testing.T) {
 	runService(t, s2)
 	waitStatus(t, s2, ih, StateReady)
 	tt2, _ := e2.Client().Torrent(ih)
-	// Пиров у второго движка нет: файл может стать полным, только если найден на диске. Ждём, а не
-	// смотрим сразу — под нагрузкой (весь пакет) кусок изредка догонял через доли секунды.
-	for deadline := time.Now().Add(5 * time.Second); tt2.BytesCompleted() < tt2.Length(); time.Sleep(20 * time.Millisecond) {
-		if time.Now().After(deadline) {
-			t.Fatalf("после смены папки скачано %d из %d — файл ищут не там", tt2.BytesCompleted(), tt2.Length())
-		}
+	if got := tt2.BytesCompleted(); got != tt2.Length() {
+		t.Fatalf("после смены папки скачано %d из %d — файл ищут не там", got, tt2.Length())
 	}
 	if e2.TorrentDir(ih) != oldDir {
 		t.Fatalf("папка раздачи %s, ожидалась прежняя %s", e2.TorrentDir(ih), oldDir)
