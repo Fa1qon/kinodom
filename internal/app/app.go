@@ -22,6 +22,7 @@ import (
 	"kinodom/internal/catalog"
 	"kinodom/internal/config"
 	"kinodom/internal/edge"
+	"kinodom/internal/history"
 	"kinodom/internal/httpx"
 	"kinodom/internal/iptv"
 	"kinodom/internal/logx"
@@ -82,6 +83,7 @@ type App struct {
 	Catalog  *catalog.Catalog  // каталог и поиск (модуль catalog)
 	Settings *settings.Service // настройки из пульта: меняются без перезапуска (этап 7)
 	IPTV     *iptv.Module      // каналы (модуль iptv, этап 8)
+	History  *history.Service  // история просмотров по устройствам (этап 8c)
 
 	kp        *meta.Kinopoisk
 	rutracker *rutracker.Rutracker
@@ -235,6 +237,8 @@ func (a *App) initTorrents(ctx context.Context, o Options, v settings.Values) {
 		return nil
 	}))
 	a.Torrents.SetPolicy(policyOf(v))
+	a.initHistory()
+	a.Torrents.SetWatchTracker(a.History) // место по потоку — в историю устройства
 	a.Torrents.UseKeeper(a.Power)
 	a.Torrents.Register(a.API)
 	a.API.Handle("GET /api/v1/downloads", a.Torrents.Name(), http.HandlerFunc(a.handleDownloads))

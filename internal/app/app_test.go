@@ -1053,3 +1053,57 @@ func TestIPTVWithOtherModules(t *testing.T) {
 	}
 	getJSON(t, "http://"+a2.API.Addr()+"/api/v1/downloads", &map[string]any{})
 }
+
+// История просмотров (спека этапа 8, раздел 7.4): место от своего плеера, отметка «просмотрено»,
+// история устройства, убрать раздачу из истории.
+func TestHistoryRoutes(t *testing.T) {
+	a := startApp(t)
+	base := "http://" + a.API.Addr() + "/api/v1/history"
+	const h = "aaaa000000000000000000000000000000000001"
+	if code, body := putJSON(t, base+"/"+h+"/2", map[string]any{"positionSec": 1800, "durationSec": 2400}); code != http.StatusNoContent {
+		t.Fatalf("место: %d %s", code, body)
+	}
+	if code, _ := putJSON(t, base+"/"+h+"/3", map[string]any{"watched": true}); code != http.StatusNoContent {
+		t.Fatalf("отметка: %d", code)
+	}
+	if code, _ := putJSON(t, base+"/"+h+"/3", map[string]any{"positionSec": 10, "durationSec": 5}); code != http.StatusBadRequest {
+		t.Errorf("место больше длительности: %d", code)
+	}
+	if code, _ := putJSON(t, base+"/не-хэш/3", map[string]any{"watched": true}); code != http.StatusBadRequest {
+		t.Errorf("неверный хэш: %d", code)
+	}
+	var files struct {
+		Files []struct {
+			Index       int     `json:"index"`
+			Fraction    float64 `json:"fraction"`
+			PositionSec float64 `json:"positionSec"`
+			Watched     bool    `json:"watched"`
+		} `json:"files"`
+	}
+	getJSON(t, base+"/"+h, &files)
+	if len(files.Files) != 2 || files.Files[0].PositionSec != 1800 || files.Files[0].Fraction != 0.75 || !files.Files[1].Watched {
+		t.Fatalf("файлы: %+v", files)
+	}
+	var list struct {
+		Items []struct {
+			Hash    string `json:"hash"`
+			Watched int    `json:"watched"`
+			Files   int    `json:"files"`
+			Release any    `json:"release"`
+		} `json:"items"`
+	}
+	getJSON(t, base, &list)
+	if len(list.Items) != 1 || list.Items[0].Hash != h || list.Items[0].Watched != 1 || list.Items[0].Files != 2 || list.Items[0].Release != nil {
+		t.Fatalf("история: %+v", list)
+	}
+	req, _ := http.NewRequest(http.MethodDelete, base+"/"+h, nil)
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil || resp.StatusCode != http.StatusNoContent {
+		t.Fatalf("удаление: %v %v", resp, err)
+	}
+	resp.Body.Close()
+	getJSON(t, base, &list)
+	if len(list.Items) != 0 {
+		t.Errorf("после удаления: %+v", list)
+	}
+}
