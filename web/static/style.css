@@ -196,7 +196,7 @@ h2 { margin: 0; font-size: 20px; font-weight: 700; }
 .small-btn { height: 34px; margin-left: 6px; }
 .tag.ok-tag .ic { color: var(--green); }
 .tag.busy-tag .ic { color: var(--muted); }
-.tag.warn-tag { color: var(--warn-text); border-color: var(--warn-line); }
+.tag.warn-tag { color: var(--warn-text); border-color: var(--warn-line); white-space: normal; height: auto; min-height: 28px; padding: 4px 10px; }
 .tag.warn-tag .ic { color: var(--yellow); }
 .results { border: 1px solid var(--line-soft); }
 .results:empty, .results:has(> p) { border: 0; }
@@ -281,3 +281,79 @@ a.res-row:hover { background: var(--hover); }
 .count { margin-left: auto; padding-right: 10px; font-size: 13px; color: var(--dim); white-space: nowrap; }
 .list { display: flex; flex-direction: column; }
 .list .check { min-height: 36px; }
+.search-here { display: none; }
+
+/* Узкий экран — телефон (спека этапа 7, раздел 6.4): до 700 px, кнопки и поля не ниже 44 px, без
+   горизонтальной прокрутки страницы. */
+@media (max-width: 700px) {
+  :root { --pad: 16px; }
+  .top { position: relative; gap: 8px; height: 60px; align-items: center; }
+  .top .narrow-only { display: inline-flex; width: 44px; height: 44px; }
+  .top .search, .nav { display: none; }
+  .top.open .nav { display: flex; flex-direction: column; position: absolute; top: 60px; left: 0; right: 0; z-index: 10; background: var(--bg); border-bottom: 1px solid var(--line); }
+  .top.open .nav a, .top.open .nav .soon { height: 52px; padding: 0 var(--pad); border-bottom: 1px solid var(--line-soft); margin: 0; }
+  .top.open .nav a.on { border-bottom-color: var(--line-soft); box-shadow: inset 3px 0 0 var(--text); }
+  .btn, .page, .field, .input { min-height: 44px; }
+  .sq { width: 44px; height: 44px; }
+  .screen { padding: 16px var(--pad) 32px; gap: 14px; }
+  h1 { font-size: 22px; }
+  .row { flex-wrap: wrap; gap: 10px; }
+
+  /* Каталог */
+  .tabs { display: flex; flex-basis: 100%; }
+  .tabs a { flex: 1; justify-content: center; }
+  .grid { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px 12px; }
+  .poster { padding: 12px; }
+  .ptitle { font-size: 14px; }
+  .etitle { font-size: 14px; -webkit-line-clamp: 1; }
+  .page { width: 44px; }
+
+  /* Раздача: постер сверху, панель «Смотреть» — сразу под описанием, серии — ниже */
+  .rel-grid { display: flex; flex-direction: column; align-items: stretch; gap: 16px; }
+  .rel-main { display: contents; }
+  .rel-cover { order: 1; }
+  .rel-info { order: 2; }
+  .panel { order: 3; position: static; padding: 16px; }
+  .rel-live { order: 4; }
+  .poster.big { aspect-ratio: auto; height: 300px; padding: 16px; }
+  .poster.big img { object-position: top; }
+  .rel-info h1 { font-size: 24px; }
+  .desc { font-size: 15px; }
+  .desc.clamp { -webkit-line-clamp: 4; }
+  .wide-only { display: none; }
+  .ep { gap: 10px; padding: 10px; }
+  .num { width: 18px; }
+  .ep-title { flex-direction: column; gap: 2px; font-size: 15px; }
+  .ep .btn { width: auto; padding: 0 12px; }
+
+  /* Поиск */
+  .search-here { display: block; }
+  .search-here .field { width: 100%; }
+  .res-head { display: none; }
+  .res-row { grid-template-columns: auto minmax(0, 1fr) auto; gap: 4px 12px; padding: 12px; }
+  .res-title { grid-column: 1 / -1; }
+  .res-row > span:nth-child(2), .res-row > span:nth-child(3) { display: none; }
+
+  /* Загрузки */
+  .dl { flex-wrap: wrap; gap: 10px 12px; padding: 12px; }
+  .dl-name { flex: 1 1 0; }
+  .dl.child { padding-left: 12px; }
+  .dl-state { order: 5; width: 100%; }
+  .dl-state .track { width: 100%; }
+  .dl-size { order: 6; width: auto; text-align: left; }
+  .dl-when { order: 7; width: auto; flex-grow: 1; text-align: right; }
+
+  /* Настройки */
+  .set-grid { flex-direction: column; gap: 16px; }
+  .side { width: 100%; flex-direction: row; overflow-x: auto; scrollbar-width: none; }
+  .side a { flex-shrink: 0; height: 44px; }
+  .tiles { flex-wrap: wrap; }
+  .tile { flex-basis: calc(50% - 8px); padding: 14px 16px; }
+  .tile .v { font-size: 22px; }
+  .two-cols, .sections-grid, .two { grid-template-columns: minmax(0, 1fr); }
+  .three { gap: 8px; }
+  .card { padding: 16px; }
+  .mod-name { width: 100px; }
+  .small-field { width: 100%; }
+  .checks { flex-wrap: wrap; gap: 16px; }
+}
