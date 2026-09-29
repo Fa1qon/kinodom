@@ -2,6 +2,7 @@ package torrents
 
 import (
 	"context"
+	"errors"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -163,6 +164,28 @@ func TestPendingDownloadSurvivesRestart(t *testing.T) {
 	waitFor(t, "раздача открыта снова", func() bool { _, ok := s2.Status(ih); return ok })
 	connect(t, s2, ih, seeder)
 	waitFor(t, "файл стал хранимым", func() bool { return len(stored(t, s2, ih)) == 1 })
+}
+
+// «Скачать» у сезона больше свободного места: место проверяется под серию, которая качается
+// первой, как у «Смотреть»; дальше докачка встанет на паузу «Мало места», как на этапе 6 (спека
+// этапа 7, раздел 9). Раньше отказ был сразу — а другой кнопки до «Скачать» у раздачи нет.
+func TestDownloadBiggerThanFreeSpaceStarts(t *testing.T) {
+	ctx := context.Background()
+	s := newTestService(t)
+	s.freeSpace = func(string) (int64, error) { return s.pol().MinFree + mib + mib/2, nil } // одна серия и ещё полсерии
+	ih, ep := archive(t, s)
+	if err := s.Download(ctx, ih, nil); err != nil {
+		t.Fatalf("«Скачать» сезона: %v", err)
+	}
+	st, _ := s.Status(ih)
+	if st.Focus != ep[0] || len(stored(t, s, ih)) != 4 {
+		t.Fatalf("фокус %d, хранятся %v", st.Focus, stored(t, s, ih))
+	}
+	s.freeSpace = func(string) (int64, error) { return s.pol().MinFree + mib/2, nil } // не влезает и одна
+	ih2, _ := archive(t, s)
+	if err := s.Download(ctx, ih2, nil); !errors.Is(err, ErrLowSpace) {
+		t.Fatalf("не влезает даже первая серия: %v", err)
+	}
 }
 
 // «Смотреть» у уже скачанной (зелёной) серии не уводит фокус очереди: дальше качается серия,
