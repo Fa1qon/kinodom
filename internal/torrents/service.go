@@ -504,5 +504,17 @@ func (s *Service) KnownFiles(ctx context.Context, ih metainfo.Hash) ([]FileInfo,
 	return fs, true, nil
 }
 
+// fileName — путь файла внутри открытой раздачи; false — раздача не открыта, списка файлов ещё
+// нет или номера нет.
+func (s *Service) fileName(ih metainfo.Hash, index int) (string, bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	ss, ok := s.sessions[ih]
+	if !ok || ss.t.Info() == nil || index >= len(ss.t.Files()) {
+		return "", false
+	}
+	return ss.t.Files()[index].DisplayPath(), true
+}
+
 // UseKeeper — запрет сна на время потоков (общий для всех модулей); вызывать до Run.
 func (s *Service) UseKeeper(k *power.Keeper) { s.keeper = k }
