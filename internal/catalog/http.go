@@ -24,6 +24,9 @@ func (c *Catalog) Register(r Router) {
 	r.Handle("GET /api/v1/sources/{tracker}/categories", c.Name(), http.HandlerFunc(c.handleTree))
 	r.Handle("GET /api/v1/catalog/sections", c.Name(), http.HandlerFunc(c.handleSections))
 	r.Handle("GET /api/v1/catalog", c.Name(), http.HandlerFunc(c.handleList))
+	r.Handle("GET /api/v1/search", c.Name(), http.HandlerFunc(c.handleSearch))
+	r.Handle("GET /api/v1/search/history", c.Name(), http.HandlerFunc(c.handleHistory))
+	r.Handle("DELETE /api/v1/search/history", c.Name(), http.HandlerFunc(c.handleForget))
 	r.Handle("POST /api/v1/catalog/refresh", c.Name(), http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		c.Refresh()
 		httpx.WriteJSON(w, http.StatusAccepted, struct{}{})
