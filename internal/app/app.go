@@ -298,6 +298,7 @@ func (a *App) initCatalog(ctx context.Context, o Options, v settings.Values) err
 		Ratings: a.Ratings, Images: a.Images, KinopoiskPoster: a.kp.PosterURL, Log: log})
 	a.Catalog.Register(a.API)
 	a.API.Handle("GET /api/v1/releases/{id}", a.Catalog.Name(), http.HandlerFunc(a.handleRelease))
+	a.API.Handle("POST /api/v1/releases/{id}/download", a.Torrents.Name(), http.HandlerFunc(a.handleDownload))
 	a.Sup.Add(a.Catalog, a.ModuleEnabled(ctx, a.Catalog.Name()))
 	return nil
 }
@@ -350,6 +351,56 @@ func (a *App) handleRelease(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	httpx.WriteJSON(w, http.StatusOK, out)
+}
+
+// handleDownload — «Скачать» (спека этапа 7, раздел 5.5): раздача из каталога открывается —
+// Rutor из заранее скачанного .torrent, иначе по magnet — и все её видеофайлы (или один, {"file": N})
+// встают в очередь загрузки. Работает с любого устройства: телевизор тоже нажимает «Скачать».
+func (a *App) handleDownload(w http.ResponseWriter, r *http.Request) {
+	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
+	if err != nil {
+		httpx.WriteError(w, http.StatusBadRequest, "неверный номер раздачи")
+		return
+	}
+	var req struct {
+		File *int `json:"file"`
+	}
+	if !httpx.ReadJSON(w, r, &req) {
+		return
+	}
+	rel, err := a.Catalog.Release(r.Context(), id)
+	switch {
+	case errors.Is(err, catalog.ErrNoRelease):
+		httpx.WriteError(w, http.StatusNotFound, err.Error())
+		return
+	case err != nil:
+		httpx.WriteError(w, http.StatusInternalServerError, "раздача не читается: "+err.Error())
+		return
+	case len(rel.Torrent) == 0 && rel.Magnet == "":
+		httpx.WriteError(w, http.StatusConflict, "у раздачи ещё нет magnet-ссылки — страница раздачи догружается, попробуйте через минуту")
+		return
+	}
+	ih, err := a.Torrents.Open(r.Context(), torrents.Source{Torrent: rel.Torrent, Magnet: rel.Magnet})
+	if err != nil {
+		httpx.WriteError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	var files []int
+	if req.File != nil {
+		files = []int{*req.File}
+	}
+	switch err := a.Torrents.Download(r.Context(), ih, files); {
+	case errors.Is(err, torrents.ErrLowSpace):
+		httpx.WriteError(w, http.StatusInsufficientStorage, err.Error())
+	case errors.Is(err, torrents.ErrNoSuchFile):
+		httpx.WriteError(w, http.StatusNotFound, err.Error())
+	case errors.Is(err, torrents.ErrNoInfo):
+		httpx.WriteError(w, http.StatusConflict, err.Error())
+	case err != nil:
+		httpx.WriteError(w, http.StatusInternalServerError, err.Error())
+	default:
+		httpx.WriteJSON(w, http.StatusOK, map[string]string{"hash": ih.HexString()})
+	}
 }
 
 // ModuleEnabled — модуль включён, если в настройках нет modules.<имя>.enabled = "false".

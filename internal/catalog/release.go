@@ -37,6 +37,12 @@ func (r Release) View() ReleaseView {
 		Hash: r.InfoHash, DetailsPending: r.DetailsPending}
 }
 
+// magnetBuilder — источник собирает magnet из infohash со своими трекерами. У Rutracker без них
+// старт только через DHT — 35 с вместо 6–13 (основная спека, раздел 6).
+type magnetBuilder interface {
+	Magnet(infohash string) string
+}
+
 // topicURLer — источник знает адрес страницы раздачи (ссылка «На трекере»).
 type topicURLer interface {
 	TopicURL(topicID string) string
@@ -60,6 +66,13 @@ func (c *Catalog) Release(ctx context.Context, id int64) (Release, error) {
 	out := Release{Entry: es[0], Description: desc, Magnet: magnet, Torrent: torrent}
 	if tu, ok := c.sources[r.Tracker].(topicURLer); ok {
 		out.TrackerURL = tu.TopicURL(r.TopicID)
+	}
+	// Страницы раздачи ещё нет, а infohash известен из списка — «Скачать» не ждёт догрузки.
+	if out.Magnet == "" && r.InfoHash != "" {
+		out.Magnet = "magnet:?xt=urn:btih:" + r.InfoHash
+		if mb, ok := c.sources[r.Tracker].(magnetBuilder); ok {
+			out.Magnet = mb.Magnet(r.InfoHash)
+		}
 	}
 	if r.DetailsAt.IsZero() && !removed {
 		out.DetailsPending = true

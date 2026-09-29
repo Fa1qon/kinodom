@@ -155,6 +155,10 @@ func parseLogin(body []byte) error {
 
 // buildMagnet — magnet из infohash с трекерами Rutracker: только с DHT старт занимал 35 с, с ними
 // — 6–13 с (исследование, раздел 2). HTTP-анонсы bt4/bt2 идут через прокси движка, UDP — напрямую.
+// Magnet — magnet-ссылка раздачи по infohash с трекерами Rutracker: каталог открывает по ней раздачи,
+// чья страница ещё не загружена.
+func (r *Rutracker) Magnet(infohash string) string { return buildMagnet(infohash) }
+
 func buildMagnet(infohash string) string {
 	return "magnet:?xt=urn:btih:" + infohash +
 		"&tr=" + url.QueryEscape("http://bt4.t-ru.org/ann?magnet") +

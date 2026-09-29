@@ -3,6 +3,7 @@ package httpx
 
 import (
 	"encoding/json"
+	"net"
 	"net/http"
 )
 
@@ -20,6 +21,13 @@ type ErrorBody struct {
 
 func WriteError(w http.ResponseWriter, code int, text string) {
 	WriteJSON(w, code, ErrorBody{Error: text})
+}
+
+// IsLoopback — запрос пришёл с этого же ПК (изменение настроек, удаление, «Открыть в плеере»).
+func IsLoopback(r *http.Request) bool {
+	host, _, err := net.SplitHostPort(r.RemoteAddr)
+	ip := net.ParseIP(host)
+	return err == nil && ip != nil && ip.IsLoopback()
 }
 
 // ReadJSON читает тело запроса (не больше 1 МБ) в v. Неизвестные поля — ошибка:

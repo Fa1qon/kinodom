@@ -3,7 +3,6 @@ package api
 import (
 	"log/slog"
 	"mime"
-	"net"
 	"net/http"
 	"runtime/debug"
 	"strings"
@@ -50,9 +49,7 @@ func jsonGuard(next http.Handler) http.Handler {
 // loopbackOnly пропускает только запросы с этого же ПК.
 func loopbackOnly(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		host, _, err := net.SplitHostPort(r.RemoteAddr)
-		ip := net.ParseIP(host)
-		if err != nil || ip == nil || !ip.IsLoopback() {
+		if !httpx.IsLoopback(r) {
 			httpx.WriteError(w, http.StatusForbidden, "это действие доступно только на компьютере, где работает Kinodom")
 			return
 		}
