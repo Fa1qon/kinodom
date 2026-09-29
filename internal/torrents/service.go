@@ -17,6 +17,7 @@ import (
 	"github.com/anacrolix/torrent/bencode"
 	"github.com/anacrolix/torrent/metainfo"
 
+	"kinodom/internal/power"
 	"kinodom/internal/supervisor"
 )
 
@@ -82,6 +83,7 @@ type Service struct {
 	policy   Policy
 
 	expiredAt time.Time                       // когда последний раз чистили по сроку хранения (только Run)
+	keeper    *power.Keeper                   // запрет сна, пока идёт поток; nil — без него
 	spaceMu   sync.Mutex                      // одна проверка места за раз (Prepare, уборка)
 	freeSpace func(dir string) (int64, error) // свободное место на диске папки; тесты подменяют
 
@@ -387,3 +389,6 @@ func allFiles(t *torrent.Torrent) []FileInfo {
 	}
 	return out
 }
+
+// UseKeeper — запрет сна на время потоков (общий для всех модулей); вызывать до Run.
+func (s *Service) UseKeeper(k *power.Keeper) { s.keeper = k }
