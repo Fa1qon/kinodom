@@ -14,6 +14,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+	"sync"
 	"time"
 
 	"golang.org/x/time/rate"
@@ -40,6 +41,9 @@ type ImagesOptions struct {
 	Timeout  time.Duration // 0 — 60 с
 	MaxBytes int64         // 0 — 10 МБ
 	Log      *slog.Logger  // nil — без журнала
+	// AllowPrivate — тесты: картинки с адресов этого ПК (фейковые хостинги). В работе адреса этого
+	// ПК и домашней сети не скачиваются: они приходят из описаний раздач (ревью 5b, M10).
+	AllowPrivate bool
 }
 
 // Images — картинки, которые сервер скачивает к себе и отдаёт клиентам сам (спека, раздел 8):
@@ -50,7 +54,15 @@ type Images struct {
 	proxied *http.Client
 	direct  *http.Client
 	lim     *rate.Limiter
+
+	mu      sync.Mutex
+	noImage map[string]time.Time // адрес → когда оказалось, что там не картинка
 }
+
+// noImageFor — адрес, где не картинка (заглушка хостинга, страница), не качается снова столько:
+// каталог спрашивает постеры сотен раздач, и та же заглушка не должна скачиваться каждый раз
+// (ревью 5b, M4).
+const noImageFor = 24 * time.Hour
 
 var imageExt = map[string]string{"image/jpeg": ".jpg", "image/png": ".png", "image/gif": ".gif", "image/webp": ".webp"}
 
@@ -76,8 +88,14 @@ func NewImages(o ImagesOptions) (*Images, error) {
 	if err := os.MkdirAll(o.Dir, 0o755); err != nil {
 		return nil, fmt.Errorf("папка картинок: %w", err)
 	}
-	return &Images{o: o, proxied: &http.Client{Transport: netx.NewTransport(o.Proxy), Timeout: o.Timeout},
-		direct: &http.Client{Transport: netx.NewTransport(nil), Timeout: o.Timeout}, lim: rate.NewLimiter(o.Rate, 1)}, nil
+	ptr, dtr := netx.NewTransport(o.Proxy), netx.NewTransport(nil)
+	if !o.AllowPrivate {
+		netx.PublicOnly(ptr, o.Proxy)
+		netx.PublicOnly(dtr, nil)
+	}
+	return &Images{o: o, proxied: &http.Client{Transport: ptr, Timeout: o.Timeout},
+		direct: &http.Client{Transport: dtr, Timeout: o.Timeout}, lim: rate.NewLimiter(o.Rate, 1),
+		noImage: map[string]time.Time{}}, nil
 }
 
 // ImageKey — ключ картинки для адреса: /img/{ключ}.
@@ -90,13 +108,31 @@ func ImageKey(src string) string {
 // Не картинка — ErrNoImage, файл не создаётся.
 func (im *Images) Fetch(ctx context.Context, src string, via Via) (string, error) {
 	u, err := url.Parse(src)
-	if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
+	if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" ||
+		(!im.o.AllowPrivate && netx.PrivateHost(u.Hostname())) {
 		return "", ErrNoImage
 	}
 	key := ImageKey(src)
 	if im.find(key) != "" {
 		return key, nil
 	}
+	im.mu.Lock()
+	at, known := im.noImage[src]
+	im.mu.Unlock()
+	if known && time.Since(at) < noImageFor {
+		return "", ErrNoImage
+	}
+	key, err = im.fetch(ctx, u, src, key, via)
+	if errors.Is(err, ErrNoImage) {
+		im.mu.Lock()
+		im.noImage[src] = time.Now()
+		im.mu.Unlock()
+	}
+	return key, err
+}
+
+// fetch — сама загрузка картинки в кэш.
+func (im *Images) fetch(ctx context.Context, u *url.URL, src, key string, via Via) (string, error) {
 	if err := im.lim.Wait(ctx); err != nil {
 		if ctx.Err() != nil {
 			return "", ctx.Err()
@@ -148,6 +184,11 @@ func (im *Images) Fetch(ctx context.Context, src string, via Via) (string, error
 	}
 	if err := os.Rename(tmp.Name(), filepath.Join(im.o.Dir, key+ext)); err != nil {
 		os.Remove(tmp.Name())
+		// Ту же картинку одновременно скачал другой запрос: на Windows второе переименование в
+		// занятый файл — «Access is denied», хотя картинка уже в кэше (ревью 5b, M4).
+		if im.find(key) != "" {
+			return key, nil
+		}
 		return "", err
 	}
 	return key, nil

@@ -50,6 +50,9 @@ type Options struct {
 	// Rutracker и ключ Кинопоиска — из переменных окружения, не в базу).
 	Settings map[string]string
 	Trackers Trackers // адреса трекеров вместо настоящих (тесты, kinodom catalog)
+	// LocalImages — тесты: картинки с адресов этого ПК (фейковые хостинги). В работе адреса этого ПК
+	// и домашней сети в картинках не скачиваются.
+	LocalImages bool
 }
 
 // Trackers — адреса трекеров вместо встроенных. Пусто — встроенные.
@@ -236,7 +239,8 @@ func (a *App) initTorrents(ctx context.Context, o Options, v settings.Values) {
 // настроек kinopoisk.key (спека, разделы 8 и 15). Без ключа модуль работает: рейтинги по номеру —
 // без ключа (rating.kinopoisk.ru), поиск ждёт ключа.
 func (a *App) initMeta(ctx context.Context, o Options, v settings.Values) error {
-	images, err := meta.NewImages(meta.ImagesOptions{Dir: a.Paths.Images, Proxy: a.proxy, Log: a.Log.With("module", "images")})
+	images, err := meta.NewImages(meta.ImagesOptions{Dir: a.Paths.Images, Proxy: a.proxy, Log: a.Log.With("module", "images"),
+		AllowPrivate: o.LocalImages})
 	if err != nil {
 		return err
 	}

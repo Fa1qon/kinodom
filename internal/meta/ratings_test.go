@@ -509,3 +509,22 @@ func waitFor(t *testing.T, what string, cond func() bool) {
 		time.Sleep(20 * time.Millisecond)
 	}
 }
+
+// Запись без года совпала обоими названиями, но в карточке фильма год чужой — это не тот фильм:
+// рейтинга нет, и другой рип с тем же названием не ищет снова (ревью 5b, M1).
+func TestYearlessMatchWithForeignYearIsRejected(t *testing.T) {
+	f := newFakeKP(t)
+	f.search["The Runner"] = itemsJSON(filmJSON(589920, "Бегущая", "The Runner", 0, nil))
+	f.films[589920] = filmJSON(589920, "Бегущая", "The Runner", 2019, 5.0)
+	r, _, _ := newRatings(t, f, testKey)
+	enqueue(t, r, 1, Item{Release: "rutor:1", Title: "Бегущая / The Runner (2026) WEB-DL 1080p"})
+	drain(t, r)
+	if got, ok := ratingOf(t, r, "rutor:1"); ok {
+		t.Fatalf("чужой фильм: %+v", got)
+	}
+	enqueue(t, r, 2, Item{Release: "rutor:2", Title: "Бегущая / The Runner (2026) WEB-DLRip"})
+	drain(t, r)
+	if f.Hits("search") != 1 {
+		t.Fatalf("поисков %d — второй рип искал снова", f.Hits("search"))
+	}
+}

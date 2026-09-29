@@ -133,7 +133,8 @@ func cmdMeta(args []string, stdout, stderr io.Writer) int {
 		if err != nil {
 			return fail(stderr, err)
 		}
-		im, err := meta.NewImages(meta.ImagesOptions{Dir: dir, Proxy: px})
+		// Команда разработчика проверяет любой адрес, в том числе хостинг на этом ПК.
+		im, err := meta.NewImages(meta.ImagesOptions{Dir: dir, Proxy: px, AllowPrivate: true})
 		if err != nil {
 			return fail(stderr, err)
 		}

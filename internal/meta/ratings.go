@@ -315,7 +315,23 @@ func (r *Ratings) resolve(ctx context.Context, it queued, keyless bool) error {
 	if err != nil {
 		return err
 	}
+	// Фильм нашёлся поиском по названию записью без года, а в карточке год есть и чужой — это не
+	// тот фильм: без рейтинга лучше, чем с чужим (ревью 5b, M1).
+	if t := ParseTitle(it.Title); it.KinopoiskID == 0 && it.IMDbID == "" && t.Year != 0 && f.Year != 0 && abs(f.Year-t.Year) > 1 {
+		if err := r.st.link(ctx, it.Release, 0, now.Add(notFoundRetry)); err != nil {
+			return err
+		}
+		return r.st.setTitle(ctx, titleKey(t), t.Year, 0, now.Add(notFoundRetry))
+	}
 	return r.st.saveFilm(ctx, f, now)
+}
+
+// titleKey — ключ кэша «название и год → фильм»: оригинальное название, если есть, иначе русское.
+func titleKey(t Title) string {
+	if t.Orig != "" {
+		return NormTitle(t.Orig)
+	}
+	return NormTitle(t.Ru)
 }
 
 // findFilm ищет фильм раздачи без номера Кинопоиска: по IMDb (точно, один запрос), иначе по
@@ -364,7 +380,7 @@ func (r *Ratings) findFilm(ctx context.Context, it queued) (int, time.Time, erro
 	if len(keywords) == 0 {
 		return 0, now.Add(notFoundRetry), nil
 	}
-	key := NormTitle(keywords[0])
+	key := titleKey(t)
 	if id, retryAt, found, err := r.st.titleLink(ctx, key, t.Year); err != nil || (found && (id != 0 || now.Before(retryAt))) {
 		return id, retryAt, err
 	}

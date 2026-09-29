@@ -421,7 +421,8 @@ func TestRatingsAndImagesTogether(t *testing.T) {
 	}
 	db.SetSetting(context.Background(), "kinopoisk.key", "k")
 	db.Close()
-	a := startAppWith(t, Options{Home: home, ListenAddr: "127.0.0.1:0", Offline: true, DownloadsDir: t.TempDir(), KinopoiskAPI: kp.URL})
+	a := startAppWith(t, Options{Home: home, ListenAddr: "127.0.0.1:0", Offline: true, DownloadsDir: t.TempDir(), KinopoiskAPI: kp.URL,
+		LocalImages: true})
 
 	ctx := context.Background()
 	if err := a.Ratings.Enqueue(ctx, 1, meta.Item{Release: "rutor:1", KinopoiskID: 301}); err != nil {
