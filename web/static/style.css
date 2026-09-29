@@ -87,8 +87,8 @@ h2 { margin: 0; font-size: 20px; font-weight: 700; }
 .nav a.on { color: var(--text); border-bottom-color: var(--text); }
 .nav .soon { color: var(--faint); cursor: default; }
 .nav .ic { color: var(--yellow); }
-.search { display: flex; align-items: center; }
-.search .field { width: 380px; }
+.search { display: flex; align-items: center; flex: 0 1 380px; min-width: 180px; }
+.search .field { width: 100%; }
 .top .narrow-only { display: none; }
 
 /* Поля и кнопки */
@@ -168,7 +168,7 @@ h2 { margin: 0; font-size: 20px; font-weight: 700; }
 .episodes h2 { margin-bottom: 4px; }
 .others { display: flex; flex-direction: column; gap: 12px; }
 .var-list { border: 1px solid var(--line-soft); }
-.var-row { display: grid; grid-template-columns: minmax(0, 1fr) 80px 100px 70px; gap: 14px; align-items: center; padding: 10px 14px; border-bottom: 1px solid #1E2226; font-size: 15px; }
+.var-row { display: grid; grid-template-columns: minmax(0, 1fr) minmax(56px, max-content) minmax(76px, max-content) minmax(56px, max-content); gap: 14px; align-items: center; padding: 10px 14px; border-bottom: 1px solid #1E2226; font-size: 15px; }
 .var-row:last-child { border-bottom: 0; }
 a.var-row:hover { background: var(--hover); }
 .var-row.on { box-shadow: inset 3px 0 0 var(--text); }
@@ -291,9 +291,28 @@ a.res-row:hover { background: var(--hover); }
 .list .check { min-height: 36px; }
 .search-here { display: none; }
 
-/* Узкий экран — телефон (спека этапа 7, раздел 6.4): до 700 px, кнопки и поля не ниже 44 px, без
-   горизонтальной прокрутки страницы. */
-@media (max-width: 700px) {
+/* Средние ширины — планшет, небольшой ноутбук, веб-вид телевизора (финальное ревью 7b): шапка
+   поджимается, раздача — в две колонки (панель «Смотреть» под постером), каталог — в 4 колонки. */
+@media (max-width: 1200px) {
+  :root { --pad: 24px; }
+  .top { gap: 24px; }
+  .nav a, .nav .soon { padding: 0 10px; }
+  .grid { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+  .rel-grid { grid-template-columns: 240px minmax(0, 1fr); grid-template-rows: auto 1fr; gap: 32px; }
+  .rel-main { grid-column: 2; grid-row: 1 / span 2; }
+  .panel { grid-column: 1; grid-row: 2; padding: 18px; }
+  .pair { flex-wrap: wrap; }
+  .res-row { grid-template-columns: minmax(0, 1fr) 90px 130px 70px 90px 80px; gap: 12px; }
+  .dl { gap: 14px; }
+  .dl-state { width: 180px; }
+  .dl-state .track { width: 160px; }
+  .dl-when { width: 120px; }
+}
+
+/* Узкий экран — телефон и планшет стоя (спека этапа 7, раздел 6.4): до 900 px — спека называет 700,
+   но на 701–900 px шапка с меню и полем поиска не помещается (финальное ревью 7b). Кнопки и поля не
+   ниже 44 px, без горизонтальной прокрутки страницы. */
+@media (max-width: 900px) {
   :root { --pad: 16px; }
   .top { position: relative; gap: 8px; height: 60px; align-items: center; }
   .top .narrow-only { display: inline-flex; width: 44px; height: 44px; }
@@ -367,4 +386,9 @@ a.res-row:hover { background: var(--hover); }
   .mod-name { width: 100px; }
   .small-field { width: 100%; }
   .checks { flex-wrap: wrap; gap: 16px; }
+}
+
+/* Планшет стоя: каталог в 3 колонки, а не в 2, как на телефоне. */
+@media (min-width: 560px) and (max-width: 900px) {
+  .grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
 }
