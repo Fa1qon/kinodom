@@ -906,6 +906,24 @@ func TestDownloadAndWatchThroughAPI(t *testing.T) {
 	if st.Focus != last || !strings.Contains(w.Play.URL, "/stream/"+opened.Hash) || w.LaunchURL == nil {
 		t.Fatalf("«Смотреть»: фокус %d, %+v", st.Focus, w)
 	}
+	var dl struct {
+		Items []struct {
+			State   torrents.DownloadState `json:"state"`
+			Release *catalog.ReleaseRef    `json:"release"`
+		} `json:"items"`
+		FreeBytes int64 `json:"freeBytes"`
+	}
+	getJSON(t, base+"/downloads", &dl)
+	if len(dl.Items) != len(st.Files) || dl.Items[0].State != torrents.DownloadDownloading || dl.Items[0].Release == nil ||
+		!strings.HasPrefix(dl.Items[0].Release.Title, "Динозавры") || dl.FreeBytes <= 0 {
+		t.Fatalf("загрузки: %+v", dl)
+	}
+	if code, body := putJSON(t, base+"/settings", map[string]any{"storage": map[string]any{"uploadLimitMBps": 0}}); code != 200 {
+		t.Fatalf("раздача 0: %d %s", code, body)
+	}
+	if got := a.Torrents.UploadLimit(); got != torrents.NoUpload {
+		t.Fatalf("раздача 0 не применилась: %v", got)
+	}
 	resp, err := http.Post(base+"/releases/999999/download", "application/json", strings.NewReader("{}"))
 	if err != nil {
 		t.Fatal(err)

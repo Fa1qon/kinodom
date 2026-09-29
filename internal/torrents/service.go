@@ -92,13 +92,16 @@ type Service struct {
 	sessions map[metainfo.Hash]*session
 	policy   Policy
 
-	expiredAt time.Time                       // когда последний раз чистили по сроку хранения (только Run)
-	keeper    *power.Keeper                   // запрет сна, пока идёт поток; nil — без него
-	upload    float64                         // лимит отдачи, выставленный сейчас (только Run)
-	toVerify  []pieceRef                      // куски на перепроверку: файл отметок был повреждён
-	verifyNow pieceRef                        // кусок, который проверяется прямо сейчас (без s.mu)
-	spaceMu   sync.Mutex                      // одна проверка места за раз (Prepare, уборка)
-	freeSpace func(dir string) (int64, error) // свободное место на диске папки; тесты подменяют
+	expiredAt  time.Time     // когда последний раз чистили по сроку хранения (только Run)
+	keeper     *power.Keeper // запрет сна, пока идёт поток; nil — без него
+	upload     float64       // лимит отдачи, выставленный сейчас (только Run)
+	uploadBase float64       // лимит отдачи из настроек, заданный на ходу (SetUploadLimit)
+	uploadSet  bool
+	uploadOff  bool                            // «не раздавать»: раздачи не отдают куски
+	toVerify   []pieceRef                      // куски на перепроверку: файл отметок был повреждён
+	verifyNow  pieceRef                        // кусок, который проверяется прямо сейчас (без s.mu)
+	spaceMu    sync.Mutex                      // одна проверка места за раз (Prepare, уборка)
+	freeSpace  func(dir string) (int64, error) // свободное место на диске папки; тесты подменяют
 
 	activeStreams atomic.Int32
 }
@@ -340,6 +343,9 @@ func (s *Service) sessionFor(t *torrent.Torrent) *session {
 	}
 	ss := &session{t: t, prepared: map[int]*prepared{}, storedFiles: map[int]bool{}, readers: map[int]int{},
 		paused: map[int]bool{}, verifyQ: map[int]bool{}, lastSeen: s.now(), focus: -1}
+	if s.uploadOff {
+		t.DisallowDataUpload()
+	}
 	s.sessions[ih] = ss
 	return ss
 }

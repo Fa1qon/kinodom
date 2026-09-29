@@ -133,3 +133,38 @@ func TestPrepareWakesQuietTorrent(t *testing.T) {
 	must(t, s.Prepare(ctx, ih, two))
 	waitComplete(t, tt.Files()[two])
 }
+
+// Раздача 0 — «не раздавать»: чужой клиент не получает от нас ни одного куска; вернули лимит —
+// раздача снова идёт, без перезапуска (спека этапа 7, раздел 5.5).
+func TestUploadOffStopsSeedingOnTheFly(t *testing.T) {
+	ctx := context.Background()
+	s := newTestService(t)
+	src := t.TempDir()
+	mi, _ := torrenttest.MakeTorrent(t, src, "film.mkv", 64<<10, torrenttest.File{Path: "film.mkv", Size: 300_000})
+	seeder, _ := torrenttest.NewSeeder(t, src, mi)
+	ih, err := s.Open(ctx, Source{Torrent: torrentBytes(t, mi)})
+	must(t, err)
+	connect(t, s, ih, seeder)
+	must(t, s.Prepare(ctx, ih, 0))
+	tt, _ := s.Engine().Client().Torrent(ih)
+	waitComplete(t, tt.Files()[0])
+	s.SetUploadLimit(NoUpload)
+	s.shapeUpload()
+	leech := newLeecher(t, mi)
+	leech.AddClientPeer(s.Engine().Client())
+	time.Sleep(time.Second)
+	if n := leech.BytesCompleted(); n != 0 {
+		t.Fatalf("«не раздавать», а отдано %d байт", n)
+	}
+	s.SetUploadLimit(0) // без ограничения
+	s.shapeUpload()
+	leech.AddClientPeer(s.Engine().Client())
+	for deadline := time.Now().Add(10 * time.Second); leech.BytesCompleted() < leech.Length(); time.Sleep(20 * time.Millisecond) {
+		if time.Now().After(deadline) {
+			t.Fatalf("раздачу вернули, а скачано %d из %d", leech.BytesCompleted(), leech.Length())
+		}
+	}
+	if got := s.Engine().up.Limit(); got != rate.Inf {
+		t.Fatalf("без ограничения — а лимит %v", got)
+	}
+}

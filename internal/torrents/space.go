@@ -165,15 +165,15 @@ func (s *Service) checkSpace(ctx context.Context) error {
 		}
 		s.pauseDownloads(volumeOf(dir), short > 0)
 		if short > 0 {
-			low = append(low, fmt.Sprintf("%s (свободно %s)", volumeOf(dir), gb(free)))
+			low = append(low, fmt.Sprintf("на диске %s свободно %s", volumeOf(dir), gb(free)))
 		}
 	}
 	if len(low) == 0 {
 		s.reg.clearProblem(ctx, "torrents.space")
 		return nil
 	}
-	s.reg.setProblem(ctx, "torrents.space", "Мало места на диске "+strings.Join(low, ", ")+
-		" при запасе "+gb(s.pol().MinFree)+": докачки на паузе, новые фильмы не откроются. Удалите лишнее с диска или уменьшите запас в настройках")
+	// Коротко: подробности заказчик в интерфейсе видеть не хочет (спека этапа 7, раздел 2).
+	s.reg.setProblem(ctx, "torrents.space", "Мало места в папке загрузок: "+strings.Join(low, ", "))
 	return nil
 }
 

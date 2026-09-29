@@ -37,6 +37,36 @@ func (r Release) View() ReleaseView {
 		Hash: r.InfoHash, DetailsPending: r.DetailsPending}
 }
 
+// ReleaseRef — раздача, из которой скачан файл: экран «Загрузки» показывает её название и постер.
+type ReleaseRef struct {
+	ID       int64  `json:"id"`
+	Title    string `json:"title"`
+	ImageKey string `json:"imageKey"`
+}
+
+// ReleasesByHash — раздачи каталога по infohash (нижний регистр); одинаковый infohash у двух
+// трекеров — та, где больше раздающих.
+func (c *Catalog) ReleasesByHash(ctx context.Context, hashes []string) (map[string]ReleaseRef, error) {
+	out := map[string]ReleaseRef{}
+	for _, h := range hashes {
+		if _, ok := out[h]; ok || h == "" {
+			continue
+		}
+		var r ReleaseRef
+		err := c.db.R.QueryRowContext(ctx,
+			`SELECT id, title, image_key FROM releases WHERE infohash = ? AND removed = 0 ORDER BY seeders DESC LIMIT 1`, h).
+			Scan(&r.ID, &r.Title, &r.ImageKey)
+		switch {
+		case errors.Is(err, sql.ErrNoRows):
+			continue
+		case err != nil:
+			return nil, err
+		}
+		out[h] = r
+	}
+	return out, nil
+}
+
 // magnetBuilder — источник собирает magnet из infohash со своими трекерами. У Rutracker без них
 // старт только через DHT — 35 с вместо 6–13 (основная спека, раздел 6).
 type magnetBuilder interface {
