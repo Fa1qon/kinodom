@@ -165,6 +165,34 @@ func TestPendingDownloadSurvivesRestart(t *testing.T) {
 	waitFor(t, "файл стал хранимым", func() bool { return len(stored(t, s2, ih)) == 1 })
 }
 
+// «Смотреть» у уже скачанной (зелёной) серии не уводит фокус очереди: дальше качается серия,
+// выбранная жёлтой «Смотреть» (финальное ревью 7a).
+func TestWatchingDownloadedFileKeepsFocus(t *testing.T) {
+	ctx := context.Background()
+	s := newTestService(t)
+	src := t.TempDir()
+	mi, _ := torrenttest.MakeTorrent(t, src, "Сезон", 64<<10,
+		torrenttest.File{Path: "Серия 1.mkv", Size: 256 << 10}, torrenttest.File{Path: "Серия 2.mkv", Size: 256 << 10},
+		torrenttest.File{Path: "Серия 3.mkv", Size: 256 << 10})
+	seeder, seeding := torrenttest.NewSeeder(t, src, mi)
+	ih, err := s.Open(ctx, Source{Torrent: torrentBytes(t, mi)})
+	must(t, err)
+	runService(t, s)
+	connect(t, s, ih, seeder)
+	tt, _ := s.Engine().Client().Torrent(ih)
+	first, third := fileIndex(t, tt, "Серия 1.mkv"), fileIndex(t, tt, "Серия 3.mkv")
+	must(t, s.Download(ctx, ih, []int{first}))
+	waitComplete(t, tt.Files()[first])
+	seeding.Drop() // остальные серии больше не качаются: очередь стоит на месте
+	must(t, s.Download(ctx, ih, nil))
+	must(t, s.Prepare(ctx, ih, third))  // жёлтая «Смотреть» у серии 3
+	must(t, s.Prepare(ctx, ih, first))  // зелёная «Смотреть» у скачанной серии 1
+	time.Sleep(1500 * time.Millisecond) // такт Run: фокус, который докачался, уходит дальше
+	if st, _ := s.Status(ih); st.Focus != third {
+		t.Fatalf("фокус %d, ждали серию 3 (%d)", st.Focus, third)
+	}
+}
+
 // Отложенное «Скачать» упало по месту; место освободили и нажали «Скачать» снова — раздача
 // качается, и прежняя ошибка «мало места» больше не показывается (финальное ревью 7a).
 func TestDownloadClearsOldDownloadError(t *testing.T) {
