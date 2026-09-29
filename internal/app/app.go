@@ -494,7 +494,8 @@ func (a *App) handleDownloads(w http.ResponseWriter, r *http.Request) {
 
 // policyOf — правила хранения из настроек (основная спека, раздел 15).
 func policyOf(v settings.Values) torrents.Policy {
-	return torrents.Policy{KeepFor: time.Duration(v.KeepDays) * 24 * time.Hour, MinFree: int64(v.MinFreeGB) << 30}
+	return torrents.Policy{KeepFor: time.Duration(v.KeepDays) * 24 * time.Hour, MinFree: int64(v.MinFreeGB) << 30,
+		KeepBehind: v.KeepBehind}
 }
 
 func sameUpload(a, b *float64) bool {
@@ -527,7 +528,7 @@ func (a *App) Apply(ctx context.Context, old, n settings.Values) {
 		a.kp.SetKey(n.KinopoiskKey)
 		a.Ratings.KeyChanged(ctx)
 	}
-	if n.KeepDays != old.KeepDays || n.MinFreeGB != old.MinFreeGB {
+	if n.KeepDays != old.KeepDays || n.MinFreeGB != old.MinFreeGB || n.KeepBehind != old.KeepBehind {
 		a.Torrents.SetPolicy(policyOf(n))
 	}
 	if !sameUpload(n.UploadMBps, old.UploadMBps) {

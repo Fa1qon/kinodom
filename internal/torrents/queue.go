@@ -213,19 +213,23 @@ func (s *Service) applyLocked(ss *session) {
 	}
 }
 
-// advanceLocked — фокус докачался: следующий файл очереди. Вызывать под s.mu (раз в секунду).
-func (s *Service) advanceLocked(ss *session) {
+// advanceLocked — фокус докачался: следующий файл очереди. true — фокус перешёл на новый файл:
+// место под него проверяет checkSpace сразу после такта. Вызывать под s.mu (раз в секунду).
+func (s *Service) advanceLocked(ss *session) bool {
 	if ss.t.Info() == nil || len(ss.storedFiles) == 0 {
-		return
+		return false
 	}
 	files := ss.t.Files()
 	if ss.focus >= 0 && ss.storedFiles[ss.focus] && !fileDone(files[ss.focus]) {
-		return
+		return false
 	}
-	if next := s.nextFocusLocked(ss); next != ss.focus {
-		s.setFocusLocked(ss, next)
-		s.applyLocked(ss)
+	next := s.nextFocusLocked(ss)
+	if next == ss.focus {
+		return false
 	}
+	s.setFocusLocked(ss, next)
+	s.applyLocked(ss)
+	return next >= 0
 }
 
 // progressLocked — прогресс видеофайлов раздачи для экрана раздачи. Вызывать под s.mu.

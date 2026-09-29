@@ -132,7 +132,7 @@ func (s *Service) Downloads(ctx context.Context) (DownloadsView, error) {
 	})
 	if eng := s.Engine(); eng != nil {
 		dir := eng.DownloadsDir()
-		if short, free, err := s.shortfall(dir, 0); err == nil {
+		if short, free, err := s.queueShortfall(dir); err == nil {
 			out.FreeBytes, out.LowSpace = free, short > 0
 		}
 	}
