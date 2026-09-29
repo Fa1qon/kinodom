@@ -46,7 +46,8 @@ type StorageView struct {
 }
 
 type CatalogView struct {
-	Sections map[string][]string `json:"sections"`
+	Sections        map[string][]string `json:"sections"`
+	PreferredFormat string              `json:"preferredFormat"` // "" — нет
 }
 
 // View — настройки для пульта.
@@ -58,7 +59,7 @@ func (v Values) View() View {
 		Kinopoisk: KinopoiskView{KeySet: v.KinopoiskKey != ""},
 		Storage:   StorageView{DownloadsDir: v.DownloadsDir, KeepDays: v.KeepDays, KeepBehind: v.KeepBehind, MinFreeGB: v.MinFreeGB, UploadLimitMBps: v.UploadMBps},
 		Player:    v.Player,
-		Catalog:   CatalogView{Sections: splitSections(v.Sections)},
+		Catalog:   CatalogView{Sections: splitSections(v.Sections), PreferredFormat: v.PreferredFormat},
 	}
 }
 
@@ -97,7 +98,8 @@ type StoragePatch struct {
 }
 
 type CatalogPatch struct {
-	Sections map[string][]string `json:"sections"`
+	Sections        map[string][]string `json:"sections"`
+	PreferredFormat *string             `json:"preferredFormat"`
 }
 
 // Optional — число, null или «поля нет в запросе». Отличить null от отсутствия обычный указатель
@@ -179,14 +181,14 @@ func (s *Service) Update(ctx context.Context, p Patch) (Values, error) {
 // Router — то, что пакету нужно от HTTP-сервера; api.Server ему соответствует.
 type Router interface {
 	Handle(pattern, module string, h http.Handler)
-	HandleLocal(pattern, module string, h http.Handler)
+	HandleHome(pattern, module string, h http.Handler)
 }
 
-// Register — GET с любого устройства (телевизору и `kinodom open` нужен плеер), PUT — только с
-// этого ПК (основная спека, раздел 13).
+// Register — GET с любого устройства (телевизору и `kinodom open` нужен плеер), PUT — из домашней
+// сети (спека этапа 7, раздел 10.1).
 func (s *Service) Register(r Router) {
 	r.Handle("GET /api/v1/settings", "", http.HandlerFunc(s.handleGet))
-	r.HandleLocal("PUT /api/v1/settings", "", http.HandlerFunc(s.handlePut))
+	r.HandleHome("PUT /api/v1/settings", "", http.HandlerFunc(s.handlePut))
 }
 
 func (s *Service) handleGet(w http.ResponseWriter, r *http.Request) {

@@ -25,6 +25,10 @@ type Entry struct {
 	InfoHash   string
 	ImageKey   string      // картинка: /img/{ImageKey}; "" — нет
 	Rating     meta.Rating // KinopoiskID = 0 — фильм не найден (или ещё не искали)
+	Format     string      // «MKV», «AVI, MKV»; "" — неизвестен (спека этапа 7, раздел 10.2)
+	Variants   int         // раздач этого фильма на обоих трекерах — у карточки каталога; 0 — не считали
+	// DetailsPending — страницу раздачи ещё не загружали: формата и номера Кинопоиска может не быть.
+	DetailsPending bool
 }
 
 type ListOptions struct {
@@ -36,7 +40,8 @@ type ListOptions struct {
 
 // List — основной каталог: все включённые разделы вместе, по убыванию раздающих, с фильтром по
 // разделу (спека, раздел 7). Одинаковый infohash с двух трекеров — одна карточка с большим числом
-// раздающих. total — сколько всего карточек под фильтром.
+// раздающих; раздачи одного фильма — одна карточка, Variants — сколько их (спека этапа 7, раздел 10.4).
+// total — сколько всего карточек под фильтром.
 func (c *Catalog) List(ctx context.Context, o ListOptions) (entries []Entry, total int, err error) {
 	if o.Limit <= 0 {
 		o.Limit = 50
@@ -53,13 +58,33 @@ func (c *Catalog) List(ctx context.Context, o ListOptions) (entries []Entry, tot
 		}
 	}
 	filtered = collapse(filtered)
+	kp, err := c.kinopoiskIDs(ctx, filtered)
+	if err != nil {
+		return nil, 0, err
+	}
+	filtered = films(filtered, kp, c.PreferredFormat())
 	total = len(filtered)
 	if o.Offset >= total {
 		return []Entry{}, total, nil
 	}
 	page := filtered[o.Offset:min(total, o.Offset+o.Limit)]
-	entries, err = c.entries(ctx, page)
-	return entries, total, err
+	if entries, err = c.entries(ctx, page); err != nil {
+		return nil, 0, err
+	}
+	var ids []int
+	for _, r := range page {
+		if id := kp[r.ID]; id > 0 {
+			ids = append(ids, id)
+		}
+	}
+	vs, err := c.variantRows(ctx, ids)
+	if err != nil {
+		return nil, 0, err
+	}
+	for i, r := range page {
+		entries[i].Variants = max(1, len(vs[kp[r.ID]]))
+	}
+	return entries, total, nil
 }
 
 // collapse — одна карточка на infohash (спека, раздел 7): остаётся запись с большим числом
@@ -106,8 +131,8 @@ func (c *Catalog) entries(ctx context.Context, rs []row) ([]Entry, error) {
 	for i, r := range rs {
 		out[i] = Entry{ID: r.ID, Tracker: r.Tracker, TopicID: r.TopicID, Title: r.Title, Quality: meta.ParseTitle(r.Title).Quality,
 			CategoryID: r.CategoryID, Category: cmp.Or(names[CategoryRef{r.Tracker, r.CategoryID}], r.CategoryID), Seeders: r.Seeders,
-			Leechers: r.Leechers, Size: r.Size, Added: r.Added, InfoHash: r.InfoHash, ImageKey: r.ImageKey,
-			Rating: ratings[r.Tracker+":"+r.TopicID]}
+			Leechers: r.Leechers, Size: r.Size, Added: r.Added, InfoHash: r.InfoHash, ImageKey: r.ImageKey, Format: r.Format,
+			DetailsPending: r.DetailsAt.IsZero(), Rating: ratings[r.Tracker+":"+r.TopicID]}
 	}
 	return out, nil
 }

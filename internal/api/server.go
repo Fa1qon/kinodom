@@ -1,5 +1,5 @@
 // Package api — HTTP-сервер Kinodom: общий для всех модулей API, поток, пульт.
-// Модули регистрируют свои маршруты через Handle / HandleLocal.
+// Модули регистрируют свои маршруты через Handle / HandleHome / HandleLocal.
 package api
 
 import (
@@ -48,7 +48,7 @@ func New(addr string, d Deps) *Server {
 		ready: make(chan struct{}),
 	}
 	s.mux.HandleFunc("GET /api/v1/status", s.handleStatus)
-	s.mux.Handle("GET /", http.FileServerFS(d.Web))
+	s.mux.Handle("GET /", pultHandler(d.Web))
 	return s
 }
 
@@ -60,9 +60,15 @@ func (s *Server) Handle(pattern, module string, h http.Handler) {
 	s.mux.Handle(pattern, s.moduleGuard(module, h))
 }
 
-// HandleLocal — как Handle, но только для запросов с этого ПК (настройки, удаление, правки).
+// HandleHome — как Handle, но только для запросов из домашней сети: изменение настроек, удаление,
+// правки (спека этапа 7, раздел 10.1).
+func (s *Server) HandleHome(pattern, module string, h http.Handler) {
+	s.mux.Handle(pattern, homeOnly(s.moduleGuard(module, h)))
+}
+
+// HandleLocal — как Handle, но только для запросов с этого ПК (открыть раздачу по произвольной ссылке).
 func (s *Server) HandleLocal(pattern, module string, h http.Handler) {
-	s.mux.Handle(pattern, loopbackOnly(s.moduleGuard(module, h)))
+	s.mux.Handle(pattern, thisPCOnly(s.moduleGuard(module, h)))
 }
 
 // Handler — все проверки и маршруты. Порядок важен: сначала ловим панику,

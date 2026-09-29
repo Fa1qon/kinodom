@@ -23,25 +23,28 @@ type Release struct {
 	DetailsPending bool   // страницу раздачи ещё не загружали: она поставлена в догрузку первой
 }
 
-// ReleaseView — раздача для API.
+// ReleaseView — раздача для API; detailsPending — в EntryView.
 type ReleaseView struct {
 	EntryView
-	Description    string `json:"description"`
-	TrackerURL     string `json:"trackerUrl"`
-	Hash           string `json:"hash"` // infohash; "" — ещё неизвестен
-	DetailsPending bool   `json:"detailsPending"`
+	Description string `json:"description"`
+	TrackerURL  string `json:"trackerUrl"`
+	Hash        string `json:"hash"` // infohash; "" — ещё неизвестен
 }
 
 func (r Release) View() ReleaseView {
-	return ReleaseView{EntryView: r.Entry.View(), Description: r.Description, TrackerURL: r.TrackerURL,
-		Hash: r.InfoHash, DetailsPending: r.DetailsPending}
+	ev := r.Entry.View()
+	ev.DetailsPending = r.DetailsPending // снятую с трекера раздачу не догружают — и не ждут
+	return ReleaseView{EntryView: ev, Description: r.Description, TrackerURL: r.TrackerURL, Hash: r.InfoHash}
 }
 
-// ReleaseRef — раздача, из которой скачан файл: экран «Загрузки» показывает её название и постер.
+// ReleaseRef — раздача, из которой скачан файл: экран «Загрузки» показывает её название и постер, а
+// сезон и качество различают раздачи одного сериала (финальное ревью 7b).
 type ReleaseRef struct {
 	ID       int64  `json:"id"`
 	Title    string `json:"title"`
 	ImageKey string `json:"imageKey"`
+	Season   string `json:"season"`  // «S01», «Сезон: 1, Серии: 1-8 из 10»; "" — нет
+	Quality  string `json:"quality"` // «WEB-DL 1080p»; "" — не найдено
 }
 
 // ReleasesByHash — раздачи каталога по infohash (нижний регистр); одинаковый infohash у двух
@@ -62,6 +65,8 @@ func (c *Catalog) ReleasesByHash(ctx context.Context, hashes []string) (map[stri
 		case err != nil:
 			return nil, err
 		}
+		t := meta.ParseTitle(r.Title)
+		r.Season, r.Quality = t.Season, t.Quality
 		out[h] = r
 	}
 	return out, nil
