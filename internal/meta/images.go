@@ -35,7 +35,7 @@ const (
 
 type ImagesOptions struct {
 	Dir      string        // папка кэша (config.Paths.Images)
-	Proxy    string        // прокси для трекеров; пусто — как у системы
+	Proxy    *netx.Proxy   // прокси для трекеров; nil — как у системы
 	Rate     rate.Limit    // 0 — 2 запроса/с на хостинги картинок (спека, раздел 5)
 	Timeout  time.Duration // 0 — 60 с
 	MaxBytes int64         // 0 — 10 МБ
@@ -76,16 +76,8 @@ func NewImages(o ImagesOptions) (*Images, error) {
 	if err := os.MkdirAll(o.Dir, 0o755); err != nil {
 		return nil, fmt.Errorf("папка картинок: %w", err)
 	}
-	ptr, err := netx.NewTransport(o.Proxy)
-	if err != nil {
-		return nil, err
-	}
-	dtr, err := netx.NewTransport("")
-	if err != nil {
-		return nil, err
-	}
-	return &Images{o: o, proxied: &http.Client{Transport: ptr, Timeout: o.Timeout},
-		direct: &http.Client{Transport: dtr, Timeout: o.Timeout}, lim: rate.NewLimiter(o.Rate, 1)}, nil
+	return &Images{o: o, proxied: &http.Client{Transport: netx.NewTransport(o.Proxy), Timeout: o.Timeout},
+		direct: &http.Client{Transport: netx.NewTransport(nil), Timeout: o.Timeout}, lim: rate.NewLimiter(o.Rate, 1)}, nil
 }
 
 // ImageKey — ключ картинки для адреса: /img/{ключ}.

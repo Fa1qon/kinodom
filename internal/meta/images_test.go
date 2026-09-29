@@ -14,6 +14,8 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"kinodom/internal/netx"
 )
 
 // pngBytes — настоящая маленькая картинка PNG.
@@ -55,7 +57,11 @@ func imageSite(t *testing.T, hits *atomic.Int32) *httptest.Server {
 
 func newImages(t *testing.T, proxy string) *Images {
 	t.Helper()
-	im, err := NewImages(ImagesOptions{Dir: t.TempDir(), Proxy: proxy, Rate: 1000})
+	px, err := netx.NewProxy(proxy)
+	if err != nil {
+		t.Fatal(err)
+	}
+	im, err := NewImages(ImagesOptions{Dir: t.TempDir(), Proxy: px, Rate: 1000})
 	if err != nil {
 		t.Fatal(err)
 	}

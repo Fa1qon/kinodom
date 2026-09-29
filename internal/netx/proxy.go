@@ -5,9 +5,73 @@ package netx
 
 import (
 	"fmt"
+	"net/http"
 	"net/url"
+	"slices"
 	"strings"
+	"sync"
 )
+
+// Proxy — прокси для трекеров из настроек, один на приложение: транспорты спрашивают его при
+// каждом новом соединении, поэтому смена в пульте действует сразу, без перезапуска модулей (спека
+// этапа 7, раздел 5.2). nil — напрямую.
+type Proxy struct {
+	mu  sync.Mutex
+	u   *url.URL          // nil — напрямую
+	trs []*http.Transport // при смене прокси их простаивающие соединения закрываются
+}
+
+// NewProxy — прокси по строке из настроек; пусто — напрямую.
+func NewProxy(s string) (*Proxy, error) {
+	u, err := ParseProxy(s)
+	if err != nil {
+		return nil, err
+	}
+	return &Proxy{u: u}, nil
+}
+
+// Set меняет прокси. Неверный адрес — ошибка, прежний прокси остаётся. Простаивающие соединения
+// через старый прокси закрываются: следующий запрос уйдёт уже через новый.
+func (p *Proxy) Set(s string) error {
+	u, err := ParseProxy(s)
+	if err != nil {
+		return err
+	}
+	p.mu.Lock()
+	p.u = u
+	trs := slices.Clone(p.trs)
+	p.mu.Unlock()
+	for _, t := range trs {
+		t.CloseIdleConnections()
+	}
+	return nil
+}
+
+// URL — текущий прокси (копия); nil — напрямую, в том числе у nil-прокси.
+func (p *Proxy) URL() *url.URL {
+	if p == nil {
+		return nil
+	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.u == nil {
+		return nil
+	}
+	c := *p.u
+	return &c
+}
+
+// ForRequest — прокси для запроса: подходит для http.Transport.Proxy и HTTPProxy торрент-движка.
+func (p *Proxy) ForRequest(*http.Request) (*url.URL, error) { return p.URL(), nil }
+
+func (p *Proxy) track(t *http.Transport) {
+	if p == nil {
+		return
+	}
+	p.mu.Lock()
+	p.trs = append(p.trs, t)
+	p.mu.Unlock()
+}
 
 // ParseProxy разбирает адрес прокси. Пустая строка — прокси нет (nil, nil).
 // Без схемы непонятно, SOCKS это или HTTP, поэтому такая строка отклоняется с подсказкой.

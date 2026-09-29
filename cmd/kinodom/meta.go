@@ -13,6 +13,7 @@ import (
 	"strings"
 
 	"kinodom/internal/meta"
+	"kinodom/internal/netx"
 	"kinodom/internal/store"
 )
 
@@ -128,7 +129,11 @@ func cmdMeta(args []string, stdout, stderr io.Writer) int {
 			return fail(stderr, err)
 		}
 		defer os.RemoveAll(dir)
-		im, err := meta.NewImages(meta.ImagesOptions{Dir: dir, Proxy: *proxy})
+		px, err := netx.NewProxy(*proxy)
+		if err != nil {
+			return fail(stderr, err)
+		}
+		im, err := meta.NewImages(meta.ImagesOptions{Dir: dir, Proxy: px})
 		if err != nil {
 			return fail(stderr, err)
 		}
