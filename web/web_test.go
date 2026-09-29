@@ -260,3 +260,49 @@ for (const [got, want] of checks) {
 		t.Errorf("%v\n%s", err, out)
 	}
 }
+
+// Пульт ТВ: кнопка, которую нажали, на время действия отключается («Скачать», «Смотреть», «Искать на
+// трекерах») — фокусу некуда встать, но когда она снова доступна, фокус возвращается на неё, а не
+// теряется до первого элемента экрана. Если человек сам ушёл фокусом в другое место — его не перебивать
+// (финальное ревью 7b).
+func TestPultKeepFocus(t *testing.T) {
+	node := lookNode(t)
+	script := `
+const body = { tag: 'body' };
+globalThis.document = { activeElement: body, body };
+globalThis.CSS = { escape: (s) => s };
+const { keepFocus } = await import('./ui.js');
+const el = (key, disabled = false) => ({ dataset: { key }, disabled, focus() { if (!this.disabled) document.activeElement = this; } });
+let kids = [];
+const root = { contains: (e) => kids.includes(e), querySelector: (sel) => kids.find((k) => sel === '[data-key="' + k.dataset.key + '"]') || null };
+// redraw — перерисовка части экрана: старые элементы уходят, фокус с них — на body.
+const redraw = (...next) => () => { if (kids.includes(document.activeElement) && !next.includes(document.activeElement)) document.activeElement = body; kids = next; };
+const checks = [];
+kids = [el('watch-1')]; kids[0].focus();
+keepFocus(root, redraw(el('watch-1', true)));
+checks.push(['пока кнопка отключена, фокуса на ней нет', document.activeElement === body]);
+const back = el('watch-1');
+keepFocus(root, redraw(back));
+checks.push(['кнопка снова доступна — фокус на ней', document.activeElement === back]);
+kids = [el('watch-2')]; kids[0].focus();
+keepFocus(root, redraw(el('watch-2', true)));
+const other = { dataset: { key: 'elsewhere' }, focus() {} };
+document.activeElement = other;
+keepFocus(root, redraw(el('watch-2')));
+checks.push(['фокус в другом месте не перебит', document.activeElement === other]);
+document.activeElement = body;
+keepFocus(root, redraw(el('watch-2')));
+checks.push(['ушёл сам — старый ключ забыт', document.activeElement === body]);
+for (const [name, ok] of checks) {
+  if (!ok) {
+    console.error('не выполнено:', name);
+    process.exitCode = 1;
+  }
+}
+`
+	cmd := exec.Command(node, "--input-type=module", "--no-warnings", "-e", script)
+	cmd.Dir = "static"
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Errorf("%v\n%s", err, out)
+	}
+}
