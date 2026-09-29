@@ -79,10 +79,13 @@ type Catalog struct {
 	refreshNow      chan struct{}
 	sectionsChanged chan struct{} // разделы сменили в пульте: пройти по разделам без ожидания
 	enrichWake      map[string]chan struct{}
+	postersWake     chan struct{}
 
 	mu          sync.Mutex
 	sections    []Section            // разделы из настроек
 	cats        []CategoryRef        // они же после раскрытия «+» по дереву (enabled)
+	urgent      map[string][]int64   // трекер → раздачи, которые открыли в пульте: догрузить первыми
+	posterTried map[int64]time.Time  // постер Кинопоиска не скачался — когда пробовали
 	failures    int                  // неудачных проходов подряд
 	forumPaused map[string]time.Time // трекер → до какого времени не ходить за страницами раздач
 	runCtx      context.Context      // для фонового поиска: живёт, пока работает модуль
@@ -99,6 +102,7 @@ func New(o Options) *Catalog {
 	c := &Catalog{st: catalogStore{o.DB}, db: o.DB, sources: map[string]source.Source{}, sections: o.Sections,
 		ratings: o.Ratings, images: o.Images, kpPoster: o.KinopoiskPoster, log: o.Log, now: time.Now,
 		refreshNow: make(chan struct{}, 1), sectionsChanged: make(chan struct{}, 1), enrichWake: map[string]chan struct{}{},
+		postersWake: make(chan struct{}, 1), urgent: map[string][]int64{}, posterTried: map[int64]time.Time{},
 		forumPaused: map[string]time.Time{}, searches: map[string]*searchRun{}}
 	// До первого прохода (там дерево и раскрытие «+») — разделы как записаны, без подразделов.
 	for _, s := range o.Sections {
@@ -132,6 +136,7 @@ func (c *Catalog) Run(ctx context.Context) error {
 		supervisor.Go(ctx, func(ctx context.Context) error { return c.enrichLoop(ctx, name) })
 	}
 	supervisor.Go(ctx, c.imagesLoop)
+	supervisor.Go(ctx, c.postersLoop)
 	supervisor.Ready(ctx)
 	force := false
 	for {

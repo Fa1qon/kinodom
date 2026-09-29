@@ -205,6 +205,40 @@ func (s catalogStore) rowsByID(ctx context.Context, ids []int64) (map[int64]row,
 	return out, nil
 }
 
+// release — раздача для экрана раздачи: строка, описание, magnet, .torrent и «удалена с трекера».
+func (s catalogStore) release(ctx context.Context, id int64) (r row, description, magnet string, torrent []byte, removed bool, err error) {
+	r, err = scanRow(s.db.R.QueryRowContext(ctx,
+		`SELECT `+rowColumns+`, r.description, r.magnet, r.torrent, r.removed FROM releases r WHERE r.id = ?`, id),
+		&description, &magnet, &torrent, &removed)
+	return r, description, magnet, torrent, removed, err
+}
+
+// missingPosters — раздачи без картинки со страницей раздачи: в каталоге или тронутые после since.
+func (s catalogStore) missingPosters(ctx context.Context, since time.Time) ([]row, error) {
+	rows, err := s.db.R.QueryContext(ctx,
+		`SELECT `+rowColumns+` FROM releases r
+		 WHERE r.image_key = '' AND r.details_at > 0 AND r.removed = 0
+		   AND (r.updated_at >= ? OR r.id IN (SELECT release_id FROM catalog_entries))`, ms(since))
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []row
+	for rows.Next() {
+		r, err := scanRow(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, r)
+	}
+	return out, rows.Err()
+}
+
+func (s catalogStore) saveImageKey(ctx context.Context, id int64, key string) error {
+	_, err := s.db.W.ExecContext(ctx, `UPDATE releases SET image_key = ? WHERE id = ?`, key, id)
+	return err
+}
+
 // nextToEnrich — первая в порядке каталога раздача трекера без страницы раздачи.
 func (s catalogStore) nextToEnrich(ctx context.Context, tracker string, cats []CategoryRef, now time.Time) (row, bool, error) {
 	rs, err := s.catalogRows(ctx, cats)
