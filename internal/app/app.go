@@ -189,10 +189,6 @@ func (a *App) initProxy(ctx context.Context, s string) *netx.Proxy {
 // загрузок недоступна, сервер работает без торрентов (проблема в «Состоянии», маршруты — 503),
 // а сторож повторяет попытки, пока папка не появится или её не сменят в настройках.
 func (a *App) initTorrents(ctx context.Context, o Options, v settings.Values) {
-	var upMBps float64 // 0 — без ограничения
-	if v.UploadMBps != nil {
-		upMBps = *v.UploadMBps
-	}
 	port := a.Boot.TorrentPort
 	if o.Offline {
 		port = 0
@@ -201,7 +197,7 @@ func (a *App) initTorrents(ctx context.Context, o Options, v settings.Values) {
 	cfg := torrents.Config{
 		StateDir:    a.Paths.Torrent,
 		ListenPort:  port,
-		UploadLimit: upMBps * 1024 * 1024,
+		UploadLimit: uploadBytes(v),
 		Proxy:       a.proxy,
 		Offline:     o.Offline,
 		Log:         log,
@@ -231,6 +227,7 @@ func (a *App) initTorrents(ctx context.Context, o Options, v settings.Values) {
 	a.Torrents.SetPolicy(policyOf(v))
 	a.Torrents.UseKeeper(a.Power)
 	a.Torrents.Register(a.API)
+	a.API.Handle("GET /api/v1/downloads", a.Torrents.Name(), http.HandlerFunc(a.handleDownloads))
 	a.Sup.Add(a.Torrents, a.ModuleEnabled(ctx, a.Torrents.Name()))
 }
 
@@ -444,9 +441,59 @@ type closerFunc func() error
 
 func (f closerFunc) Close() error { return f() }
 
+// uploadBytes — лимит отдачи для движка, байт/с: пустое поле — без ограничения (0), 0 — не раздавать.
+func uploadBytes(v settings.Values) float64 {
+	switch {
+	case v.UploadMBps == nil:
+		return 0
+	case *v.UploadMBps == 0:
+		return torrents.NoUpload
+	}
+	return *v.UploadMBps * 1024 * 1024
+}
+
+// downloadItem — строка «Загрузок»: файл — от торрентов, название и постер раздачи — от каталога.
+type downloadItem struct {
+	torrents.DownloadItem
+	Release *catalog.ReleaseRef `json:"release"` // null — раздача не из каталога
+}
+
+// handleDownloads — экран «Загрузки» (спека этапа 7, раздел 5.5).
+func (a *App) handleDownloads(w http.ResponseWriter, r *http.Request) {
+	v, err := a.Torrents.Downloads(r.Context())
+	if err != nil {
+		httpx.WriteError(w, http.StatusInternalServerError, "загрузки не читаются: "+err.Error())
+		return
+	}
+	hashes := make([]string, len(v.Items))
+	for i, it := range v.Items {
+		hashes[i] = it.Hash
+	}
+	refs, err := a.Catalog.ReleasesByHash(r.Context(), hashes)
+	if err != nil {
+		httpx.WriteError(w, http.StatusInternalServerError, "загрузки не читаются: "+err.Error())
+		return
+	}
+	items := make([]downloadItem, len(v.Items))
+	for i, it := range v.Items {
+		items[i].DownloadItem = it
+		if ref, ok := refs[it.Hash]; ok {
+			items[i].Release = &ref
+		}
+	}
+	httpx.WriteJSON(w, http.StatusOK, struct {
+		torrents.DownloadsView
+		Items []downloadItem `json:"items"`
+	}{v, items})
+}
+
 // policyOf — правила хранения из настроек (основная спека, раздел 15).
 func policyOf(v settings.Values) torrents.Policy {
 	return torrents.Policy{KeepFor: time.Duration(v.KeepDays) * 24 * time.Hour, MinFree: int64(v.MinFreeGB) << 30}
+}
+
+func sameUpload(a, b *float64) bool {
+	return (a == nil) == (b == nil) && (a == nil || *a == *b)
 }
 
 // Check — проверки настроек из пульта, которым нужны модули (settings.Applier). Ошибка — отказ,
@@ -477,6 +524,9 @@ func (a *App) Apply(ctx context.Context, old, n settings.Values) {
 	}
 	if n.KeepDays != old.KeepDays || n.MinFreeGB != old.MinFreeGB {
 		a.Torrents.SetPolicy(policyOf(n))
+	}
+	if !sameUpload(n.UploadMBps, old.UploadMBps) {
+		a.Torrents.SetUploadLimit(uploadBytes(n))
 	}
 	if n.DownloadsDir != old.DownloadsDir {
 		if e := a.Torrents.Engine(); e != nil {
