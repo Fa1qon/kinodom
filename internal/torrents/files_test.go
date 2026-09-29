@@ -5,6 +5,7 @@ import (
 	"slices"
 	"testing"
 
+	"kinodom/internal/meta"
 	"kinodom/internal/torrents/torrenttest"
 )
 
@@ -82,5 +83,14 @@ func TestKnownFilesBeforeOpening(t *testing.T) {
 	fresh := serviceFor(newOfflineEngine(t), s.reg) // после перезапуска: раздача не открыта
 	if fs, ok, _ := fresh.KnownFiles(ctx, ih); !ok || len(fs) != 2 {
 		t.Fatalf("из сохранённой метаинфо: %+v", fs)
+	}
+}
+
+// У каждого видеофайла движка есть формат для пульта (спека этапа 7, раздел 10.2).
+func TestEveryVideoTypeHasFormat(t *testing.T) {
+	for ext := range videoTypes {
+		if meta.FileFormat("film"+ext) == "" {
+			t.Errorf("у %s нет формата", ext)
+		}
 	}
 }

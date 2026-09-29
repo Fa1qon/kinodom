@@ -46,7 +46,8 @@ type StorageView struct {
 }
 
 type CatalogView struct {
-	Sections map[string][]string `json:"sections"`
+	Sections        map[string][]string `json:"sections"`
+	PreferredFormat string              `json:"preferredFormat"` // "" — нет
 }
 
 // View — настройки для пульта.
@@ -58,7 +59,7 @@ func (v Values) View() View {
 		Kinopoisk: KinopoiskView{KeySet: v.KinopoiskKey != ""},
 		Storage:   StorageView{DownloadsDir: v.DownloadsDir, KeepDays: v.KeepDays, KeepBehind: v.KeepBehind, MinFreeGB: v.MinFreeGB, UploadLimitMBps: v.UploadMBps},
 		Player:    v.Player,
-		Catalog:   CatalogView{Sections: splitSections(v.Sections)},
+		Catalog:   CatalogView{Sections: splitSections(v.Sections), PreferredFormat: v.PreferredFormat},
 	}
 }
 
@@ -97,7 +98,8 @@ type StoragePatch struct {
 }
 
 type CatalogPatch struct {
-	Sections map[string][]string `json:"sections"`
+	Sections        map[string][]string `json:"sections"`
+	PreferredFormat *string             `json:"preferredFormat"`
 }
 
 // Optional — число, null или «поля нет в запросе». Отличить null от отсутствия обычный указатель
