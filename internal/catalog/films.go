@@ -120,27 +120,36 @@ func (c *Catalog) variantRows(ctx context.Context, kpIDs []int) (map[int][]row, 
 // Variants — раздачи того же фильма на обоих трекерах, включая эту (спека этапа 7, раздел 10.4). Без
 // номера Кинопоиска — только эта раздача.
 func (c *Catalog) Variants(ctx context.Context, id int64) ([]Entry, error) {
-	byID, err := c.st.rowsByID(ctx, []int64{id})
+	_, rs, err := c.variantsOf(ctx, id)
 	if err != nil {
 		return nil, err
+	}
+	return c.entries(ctx, rs)
+}
+
+// variantsOf — раздача id и раздачи того же фильма, включая её.
+func (c *Catalog) variantsOf(ctx context.Context, id int64) (row, []row, error) {
+	byID, err := c.st.rowsByID(ctx, []int64{id})
+	if err != nil {
+		return row{}, nil, err
 	}
 	r, ok := byID[id]
 	if !ok {
-		return nil, ErrNoRelease
+		return row{}, nil, ErrNoRelease
 	}
 	kp, err := c.kinopoiskIDs(ctx, []row{r})
 	if err != nil {
-		return nil, err
+		return row{}, nil, err
 	}
 	rs := []row{r}
 	if film := kp[r.ID]; film > 0 {
 		vs, err := c.variantRows(ctx, []int{film})
 		if err != nil {
-			return nil, err
+			return row{}, nil, err
 		}
 		rs = withCurrent(vs[film], r, c.PreferredFormat())
 	}
-	return c.entries(ctx, rs)
+	return r, rs, nil
 }
 
 // withCurrent — открытая раздача r в списке раздач фильма: пульт отмечает в нём текущую. Если её
@@ -162,26 +171,46 @@ func withCurrent(rs []row, r row, pref string) []row {
 
 // VariantsView — «Другие раздачи» для API.
 type VariantsView struct {
-	Items []EntryView `json:"items"`
+	Items  []EntryView     `json:"items"`
+	Search *VariantsSearch `json:"search"` // null — на трекерах не искали
 }
 
-// handleVariants — «Другие раздачи» на экране раздачи (спека этапа 7, раздел 10.4).
+// VariantsSearch — поиск других раздач на трекерах: как у GET /search, пульт повторяет запрос, пока
+// complete = false (спека этапа 7, раздел 10.5).
+type VariantsSearch struct {
+	Complete bool              `json:"complete"`
+	Trackers map[string]string `json:"trackers"` // трекер → «ok», «идёт» или текст ошибки
+}
+
+// handleVariants — «Другие раздачи» на экране раздачи (спека этапа 7, раздел 10.4); search=1 — и поиск
+// на трекерах (раздел 10.5), poll=1 — повторный опрос того же поиска.
 func (c *Catalog) handleVariants(w http.ResponseWriter, r *http.Request) {
 	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
 	if err != nil {
 		httpx.WriteError(w, http.StatusBadRequest, "неверный номер раздачи")
 		return
 	}
-	es, err := c.Variants(r.Context(), id)
+	var es []Entry
+	var search *VariantsSearch
+	if r.URL.Query().Get("search") == "1" {
+		var st SearchState
+		es, st, err = c.SearchVariants(r.Context(), id, r.URL.Query().Get("poll") == "1")
+		search = &VariantsSearch{Complete: st.Complete, Trackers: st.Trackers}
+	} else {
+		es, err = c.Variants(r.Context(), id)
+	}
 	switch {
 	case errors.Is(err, ErrNoRelease):
 		httpx.WriteError(w, http.StatusNotFound, err.Error())
+		return
+	case errors.Is(err, errNoTitle):
+		httpx.WriteError(w, http.StatusConflict, err.Error())
 		return
 	case err != nil:
 		httpx.WriteError(w, http.StatusInternalServerError, "раздачи фильма не читаются: "+err.Error())
 		return
 	}
-	out := VariantsView{Items: make([]EntryView, len(es))}
+	out := VariantsView{Items: make([]EntryView, len(es)), Search: search}
 	for i, e := range es {
 		out.Items[i] = e.View()
 	}

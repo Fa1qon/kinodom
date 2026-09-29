@@ -23,18 +23,18 @@ type Release struct {
 	DetailsPending bool   // страницу раздачи ещё не загружали: она поставлена в догрузку первой
 }
 
-// ReleaseView — раздача для API.
+// ReleaseView — раздача для API; detailsPending — в EntryView.
 type ReleaseView struct {
 	EntryView
-	Description    string `json:"description"`
-	TrackerURL     string `json:"trackerUrl"`
-	Hash           string `json:"hash"` // infohash; "" — ещё неизвестен
-	DetailsPending bool   `json:"detailsPending"`
+	Description string `json:"description"`
+	TrackerURL  string `json:"trackerUrl"`
+	Hash        string `json:"hash"` // infohash; "" — ещё неизвестен
 }
 
 func (r Release) View() ReleaseView {
-	return ReleaseView{EntryView: r.Entry.View(), Description: r.Description, TrackerURL: r.TrackerURL,
-		Hash: r.InfoHash, DetailsPending: r.DetailsPending}
+	ev := r.Entry.View()
+	ev.DetailsPending = r.DetailsPending // снятую с трекера раздачу не догружают — и не ждут
+	return ReleaseView{EntryView: ev, Description: r.Description, TrackerURL: r.TrackerURL, Hash: r.InfoHash}
 }
 
 // ReleaseRef — раздача, из которой скачан файл: экран «Загрузки» показывает её название и постер.
