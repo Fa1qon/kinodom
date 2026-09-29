@@ -71,3 +71,21 @@ func allocatedSize(path string) (int64, error) {
 	}
 	return int64(high)<<32 | int64(uint32(low)), nil
 }
+
+// zeroRange освобождает место под байтами [from, to) файла (FSCTL_SET_ZERO_DATA): читаются нули,
+// кластеры возвращаются диску. Файл сначала делается разрежённым (createSparse), а если его нет
+// (удалили руками) — создаётся пустой разрежённый размера size.
+func zeroRange(path string, size, from, to int64) error {
+	if err := createSparse(path, size); err != nil {
+		return err
+	}
+	f, err := os.OpenFile(path, os.O_RDWR, 0)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+	in := struct{ fileOffset, beyondFinalZero int64 }{from, to}
+	var ret uint32
+	return windows.DeviceIoControl(windows.Handle(f.Fd()), windows.FSCTL_SET_ZERO_DATA,
+		(*byte)(unsafe.Pointer(&in)), uint32(unsafe.Sizeof(in)), nil, 0, &ret, nil)
+}

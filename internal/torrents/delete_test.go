@@ -32,9 +32,22 @@ func fileIndex(t *testing.T, tt *torrent.Torrent, name string) int {
 	return -1
 }
 
+// waitComplete ждёт, пока файл скачан и все его куски проверены по хэшу (BytesCompleted
+// считает и куски, которые ещё проверяются).
 func waitComplete(t *testing.T, f *torrent.File) {
 	t.Helper()
-	for deadline := time.Now().Add(15 * time.Second); f.BytesCompleted() < f.Length(); time.Sleep(20 * time.Millisecond) {
+	done := func() bool {
+		if f.BytesCompleted() < f.Length() {
+			return false
+		}
+		for i := f.BeginPieceIndex(); i < f.EndPieceIndex(); i++ {
+			if !f.Torrent().PieceState(i).Complete {
+				return false
+			}
+		}
+		return true
+	}
+	for deadline := time.Now().Add(15 * time.Second); !done(); time.Sleep(20 * time.Millisecond) {
 		if time.Now().After(deadline) {
 			t.Fatalf("%s не докачался: %d из %d", f.DisplayPath(), f.BytesCompleted(), f.Length())
 		}
@@ -188,5 +201,29 @@ func TestDeleteRoute(t *testing.T) {
 	s.reg.db.W.Exec("UPDATE stored_files SET last_stream_at = 0")
 	if code := call(t, "DELETE", url+strconv.Itoa(one), nil, nil); code != http.StatusNoContent {
 		t.Fatalf("удаление: %d", code)
+	}
+}
+
+// Кусок на границе с хранимой соседней серией при удалении не трогается: его байты нужны соседу, а
+// сброс и повторная загрузка общего куска, который как раз качается, давали несошедшийся хэш — и
+// anacrolix банил единственного раздающего (плавающее «не докачался», этап 6). Скачанные куски
+// целиком внутри удалённой серии освобождаются.
+func TestDeleteKeepsPieceSharedWithStoredNeighbour(t *testing.T) {
+	ctx := context.Background()
+	s := newTestService(t)
+	ih, tt, _ := seriesFixture(t, s)
+	one, two := fileIndex(t, tt, "Серия 1.mkv"), fileIndex(t, tt, "Серия 2.mkv")
+	must(t, s.Prepare(ctx, ih, one))
+	must(t, s.Prepare(ctx, ih, two))
+	waitComplete(t, tt.Files()[one])
+	waitComplete(t, tt.Files()[two])
+	f := tt.Files()[one]
+	shared, inner := f.EndPieceIndex()-1, f.BeginPieceIndex()
+	must(t, s.DeleteFile(ctx, ih, one))
+	if !tt.PieceState(shared).Complete {
+		t.Fatalf("общий с соседней серией кусок %d сброшен", shared)
+	}
+	if tt.PieceState(inner).Complete {
+		t.Fatalf("кусок %d удалённой серии всё ещё скачан", inner)
 	}
 }
