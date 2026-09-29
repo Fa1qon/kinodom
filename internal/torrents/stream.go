@@ -38,6 +38,7 @@ func (s *Service) StreamHandler() http.Handler {
 		s.activeStreams.Add(1)
 		defer s.activeStreams.Add(-1)
 		defer s.openReader(ih, index)()
+		defer s.keeper.Acquire()() // ПК не засыпает, пока смотрят (спека, раздел 9)
 		if err := s.reg.TouchStream(r.Context(), ih, index, s.now()); err != nil {
 			s.log.Warn("не удалось отметить просмотр", "err", err)
 		}
