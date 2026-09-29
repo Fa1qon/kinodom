@@ -60,9 +60,25 @@ func (f *fakeWatch) snapshot() []string {
 // quickWatch — отчёты без ожидания 10 с (тесты); сеанс кончается через 300 мс без запросов.
 func quickWatch(t *testing.T, min time.Duration) {
 	t.Helper()
-	was, wasMin, wasGap := watchEvery, watchMin, watchGap
-	watchEvery, watchMin, watchGap = 20*time.Millisecond, min, 300*time.Millisecond
-	t.Cleanup(func() { watchEvery, watchMin, watchGap = was, wasMin, wasGap })
+	was, wasMin, wasGap, wasLead := watchEvery, watchMin, watchGap, streamLead
+	watchEvery, watchMin, watchGap, streamLead = 20*time.Millisecond, min, 300*time.Millisecond, 0
+	t.Cleanup(func() { watchEvery, watchMin, watchGap, streamLead = was, wasMin, wasGap, wasLead })
+}
+
+// Место — с поправкой на то, что плеер читает впереди картинки (streamLead); не меньше нуля.
+func TestWatchLead(t *testing.T) {
+	fw := &fakeWatch{dur: map[string]float64{}}
+	s := &Service{watch: fw}
+	now := time.Now()
+	for i, pos := range []int64{10 << 20, 1 << 20} {
+		tr := &trackedReader{}
+		tr.pos.Store(pos)
+		s.watchSessions = map[watchKey]*watchSession{{device: "pc", index: i}: {size: 100 << 20, started: now.Add(-time.Hour), latest: tr, latestAt: now.Add(-time.Hour)}}
+		s.watchTick(now)
+	}
+	if r := fw.snapshot(); len(r) != 2 || r[0] != fmt.Sprintf("pc 0 %d/%d", 6<<20, 100<<20) || r[1] != fmt.Sprintf("pc 1 0/%d", 100<<20) {
+		t.Errorf("с поправкой: %v", r)
+	}
 }
 
 // get — запрос потока с Range; тело читается целиком.

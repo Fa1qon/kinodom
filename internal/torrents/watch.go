@@ -34,6 +34,11 @@ var (
 	watchGap   = 30 * time.Second
 )
 
+// streamLead — насколько плеер читает поток впереди картинки: VLC 3 — около 3,3 МБ (вживую: сервер
+// видел 114,8 с при картинке на 101-й секунде у AVI 1,9 Мбит/с). Место — с этой поправкой: лучше
+// повторить несколько секунд, чем пропустить.
+var streamLead int64 = 4 << 20
+
 // SetWatchTracker подключает историю просмотров; nil — без неё. Вызывать до Run.
 func (s *Service) SetWatchTracker(t WatchTracker) { s.watch = t }
 
@@ -121,7 +126,7 @@ func (s *Service) watchTick(now time.Time) {
 		}
 		idle := ss.active == 0 && now.Sub(ss.seen) > watchGap
 		if now.Sub(ss.started) >= watchMin && (now.Sub(ss.reported) >= watchEvery || idle) {
-			out = append(out, watchReport{key, ss.pos, ss.size})
+			out = append(out, watchReport{key, max(ss.pos-streamLead, 0), ss.size})
 			ss.reported = now
 		}
 		if idle {
