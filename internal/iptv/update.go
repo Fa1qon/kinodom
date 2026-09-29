@@ -115,13 +115,14 @@ func (m *Module) updateEPG(ctx context.Context, now time.Time) {
 		return
 	}
 	err := m.fetchEPG(ctx, u)
+	done := m.local() // скачивание длится до минут — время обновления по его окончанию
 	m.mu.Lock()
 	src := &m.epgSrc
 	if err == nil {
-		src.at, src.next, src.fails, src.err = now, now.Add(epgEvery), 0, ""
+		src.at, src.next, src.fails, src.err = done, done.Add(epgEvery), 0, ""
 	} else {
 		src.fails++
-		src.next, src.err = now.Add(retryAfter(src.fails)), err.Error()
+		src.next, src.err = done.Add(retryAfter(src.fails)), err.Error()
 	}
 	s := *src
 	m.mu.Unlock()
@@ -166,13 +167,14 @@ func (m *Module) updateOrg(ctx context.Context, now time.Time) {
 		return
 	}
 	err := m.fetchOrg(ctx)
+	done := m.local()
 	m.mu.Lock()
 	src := &m.orgSrc
 	if err == nil {
-		src.at, src.next, src.fails, src.err = now, now.Add(orgEvery), 0, ""
+		src.at, src.next, src.fails, src.err = done, done.Add(orgEvery), 0, ""
 	} else {
 		src.fails++
-		src.next, src.err = now.Add(retryAfter(src.fails)), err.Error()
+		src.next, src.err = done.Add(retryAfter(src.fails)), err.Error()
 	}
 	s := *src
 	m.mu.Unlock()

@@ -9,10 +9,14 @@ import * as downloads from './views/downloads.js';
 import * as settingsStatus from './views/settings-status.js';
 import * as settingsParams from './views/settings-params.js';
 import * as settingsSections from './views/settings-sections.js';
+import * as channels from './views/channels.js';
+import * as channel from './views/channel.js';
+import * as settingsIPTV from './views/settings-iptv.js';
+import * as settingsUnrecognized from './views/settings-unrecognized.js';
 
 // views — экраны по первой части адреса; у «Настроек» — по второй.
-const views = { catalog, release, search, downloads };
-const settingsViews = { status: settingsStatus, params: settingsParams, sections: settingsSections };
+const views = { catalog, release, search, downloads, channels, channel };
+const settingsViews = { status: settingsStatus, params: settingsParams, sections: settingsSections, iptv: settingsIPTV, unrecognized: settingsUnrecognized };
 
 // ctx — общее для экранов: последнее «Состояние» и переходы. local — пульт открыт на ПК с Kinodom
 // (плеер по ссылке kinodom://), canEdit — из домашней сети: можно менять настройки и удалять.
@@ -45,7 +49,7 @@ function defaultRoute() {
 
 const NAV = [
   ['catalog', 'Каталог'],
-  ['channels', 'Каналы', true],
+  ['channels', 'Каналы'],
   ['library', 'Медиатека', true],
   ['downloads', 'Загрузки'],
   ['settings', 'Настройки'],
@@ -56,9 +60,9 @@ const navLinks = {};
 let searchInput;
 let menuButton;
 
-// buildHeader — шапка: логотип, меню, поиск; на узком экране — значки поиска и меню. «Каналы» и
-// «Медиатека» неактивны до своих этапов. Строится один раз: опрос «Состояния» не должен сбивать
-// то, что человек вводит в поиск.
+// buildHeader — шапка: логотип, меню, поиск; на узком экране — значки поиска и меню. «Медиатека»
+// неактивна до своего этапа. Строится один раз: опрос «Состояния» не должен сбивать то, что человек
+// вводит в поиск.
 function buildHeader() {
   const nav = h('nav', { class: 'nav', id: 'nav', 'aria-label': 'Разделы' },
     NAV.map(([id, title, soon]) => {
@@ -92,7 +96,7 @@ function setMenu(open) {
 
 // updateHeader — выбранный раздел и жёлтый значок у «Настроек», если есть хоть одна проблема.
 function updateHeader(r) {
-  const current = r.parts[0] === 'release' ? 'catalog' : r.parts[0];
+  const current = { release: 'catalog', channel: 'channels' }[r.parts[0]] || r.parts[0];
   navLinks.catalog.href = defaultRoute();
   for (const [id, a] of Object.entries(navLinks)) {
     a.classList.toggle('on', id === current);
