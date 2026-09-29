@@ -297,7 +297,8 @@ func (a *App) initCatalog(ctx context.Context, o Options, v settings.Values) err
 	}))
 	a.Sup.Add(edge.NewModule(a.Log.With("module", "edge")), edgeOn)
 	a.Catalog = catalog.New(catalog.Options{DB: a.DB, Sources: []source.Source{rutorSrc, rtSrc}, Sections: sections,
-		Ratings: a.Ratings, Images: a.Images, KinopoiskPoster: a.kp.PosterURL, Log: log})
+		Ratings: a.Ratings, Images: a.Images, KinopoiskPoster: a.kp.PosterURL, TorrentFormat: torrentFormat,
+		PreferredFormat: v.PreferredFormat, Log: log})
 	a.Catalog.Register(a.API)
 	a.API.Handle("GET /api/v1/releases/{id}", a.Catalog.Name(), http.HandlerFunc(a.handleRelease))
 	a.API.Handle("POST /api/v1/releases/{id}/download", a.Torrents.Name(), http.HandlerFunc(a.handleDownload))
@@ -352,7 +353,27 @@ func (a *App) handleRelease(w http.ResponseWriter, r *http.Request) {
 			out.Files = fs
 		}
 	}
+	if len(out.Files) > 0 { // файлы известны — формат по ним, а не по описанию (спека этапа 7, раздел 10.2)
+		out.Format = meta.Format(metaFiles(out.Files))
+	}
 	httpx.WriteJSON(w, http.StatusOK, out)
+}
+
+// torrentFormat — формат раздачи по видеофайлам .torrent (спека этапа 7, раздел 10.2).
+func torrentFormat(b []byte) string {
+	fs, err := torrents.PlayableFiles(b)
+	if err != nil {
+		return ""
+	}
+	return meta.Format(metaFiles(fs))
+}
+
+func metaFiles(fs []torrents.FileInfo) []meta.File {
+	out := make([]meta.File, len(fs))
+	for i, f := range fs {
+		out[i] = meta.File{Name: f.Name, Size: f.Size}
+	}
+	return out
 }
 
 // handleDownload — «Скачать» (спека этапа 7, раздел 5.5): раздача из каталога открывается —
@@ -538,6 +559,9 @@ func (a *App) Apply(ctx context.Context, old, n settings.Values) {
 		if e := a.Torrents.Engine(); e != nil {
 			e.SetDownloadsDir(n.DownloadsDir)
 		}
+	}
+	if n.PreferredFormat != old.PreferredFormat {
+		a.Catalog.SetPreferredFormat(n.PreferredFormat)
 	}
 	if n.Sections != old.Sections {
 		ss, _ := catalog.ParseSections(n.Sections) // проверено в Check

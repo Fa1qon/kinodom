@@ -25,6 +25,7 @@ type Entry struct {
 	InfoHash   string
 	ImageKey   string      // картинка: /img/{ImageKey}; "" — нет
 	Rating     meta.Rating // KinopoiskID = 0 — фильм не найден (или ещё не искали)
+	Format     string      // «MKV», «AVI, MKV»; "" — неизвестен (спека этапа 7, раздел 10.2)
 }
 
 type ListOptions struct {
@@ -106,7 +107,7 @@ func (c *Catalog) entries(ctx context.Context, rs []row) ([]Entry, error) {
 	for i, r := range rs {
 		out[i] = Entry{ID: r.ID, Tracker: r.Tracker, TopicID: r.TopicID, Title: r.Title, Quality: meta.ParseTitle(r.Title).Quality,
 			CategoryID: r.CategoryID, Category: cmp.Or(names[CategoryRef{r.Tracker, r.CategoryID}], r.CategoryID), Seeders: r.Seeders,
-			Leechers: r.Leechers, Size: r.Size, Added: r.Added, InfoHash: r.InfoHash, ImageKey: r.ImageKey,
+			Leechers: r.Leechers, Size: r.Size, Added: r.Added, InfoHash: r.InfoHash, ImageKey: r.ImageKey, Format: r.Format,
 			Rating: ratings[r.Tracker+":"+r.TopicID]}
 	}
 	return out, nil

@@ -121,6 +121,7 @@ func TestPatchRejectsBadFields(t *testing.T) {
 		`{"proxy":{"type":"socks5","address":"h:1","password":"p"}}`: "пароль без логина",
 		`{"catalog":{"sections":{"rutracker":[]}}}`:                  "хотя бы один",
 		`{"catalog":{"sections":{"rutor":["1,2"]}}}`:                 "не понят",
+		`{"catalog":{"preferredFormat":"FLAC"}}`:                     "Формат в приоритете",
 	}
 	for js, want := range cases {
 		n, err := v.With(patch(t, js))
@@ -250,5 +251,26 @@ func TestRoutesThroughAPIServer(t *testing.T) {
 	}
 	if rec := do("PUT", "127.0.0.1:5000", `{"plaeyr":"vlc"}`); rec.Code != http.StatusBadRequest {
 		t.Fatalf("опечатка в поле: %d", rec.Code)
+	}
+}
+
+// Формат в приоритете: по умолчанию нет; MKV, MP4, AVI; неизвестное в базе — нет (спека этапа 7,
+// раздел 10.3).
+func TestPreferredFormatField(t *testing.T) {
+	db := openDB(t)
+	v := load(t, db, nil)
+	if v.PreferredFormat != "" || v.View().Catalog.PreferredFormat != "" {
+		t.Fatalf("по умолчанию: %q", v.PreferredFormat)
+	}
+	n, err := v.With(patch(t, `{"catalog":{"preferredFormat":"MKV"}}`))
+	if b, _ := json.Marshal(n.View()); err != nil || !strings.Contains(string(b), `"preferredFormat":"MKV"`) {
+		t.Fatalf("MKV: %s, %v", b, err)
+	}
+	if n, err = n.With(patch(t, `{"catalog":{"preferredFormat":""}}`)); err != nil || n.PreferredFormat != "" {
+		t.Fatalf("нет: %q, %v", n.PreferredFormat, err)
+	}
+	db.SetSetting(ctx, KeyPreferredFormat, "FLAC")
+	if v = load(t, db, nil); v.PreferredFormat != "" {
+		t.Fatalf("неизвестный формат в базе: %q", v.PreferredFormat)
 	}
 }

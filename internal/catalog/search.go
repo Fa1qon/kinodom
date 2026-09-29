@@ -155,7 +155,9 @@ func (c *Catalog) searchState(ctx context.Context, q string, run *searchRun) (Se
 			rs = append(rs, r)
 		}
 	}
-	entries, err := c.entries(ctx, collapse(rs))
+	rs = collapse(rs)
+	preferFirst(rs, c.PreferredFormat()) // формат в приоритете — первым (спека этапа 7, раздел 10.3)
+	entries, err := c.entries(ctx, rs)
 	if err != nil {
 		return SearchState{}, err
 	}

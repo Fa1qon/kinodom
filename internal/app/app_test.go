@@ -640,10 +640,16 @@ func TestSettingsApplyWithoutRestart(t *testing.T) {
 	if got := a.Torrents.Engine().DownloadsDir(); got != newDir {
 		t.Fatalf("движок качает в %s, а не в %s", got, newDir)
 	}
+	if code, body := putJSON(t, url, map[string]any{"catalog": map[string]any{"preferredFormat": "MKV"}}); code != 200 {
+		t.Fatalf("формат в приоритете: %d %s", code, body)
+	}
+	if got := a.Catalog.PreferredFormat(); got != "MKV" {
+		t.Fatalf("формат в приоритете не дошёл до каталога: %q", got)
+	}
 	var v settings.View
 	getJSON(t, url, &v)
 	if !v.Rutracker.PasswordSet || v.Rutracker.Login != "user" || !v.Kinopoisk.KeySet || v.Storage.KeepDays != 3 ||
-		v.Storage.MinFreeGB != 0 || v.Storage.DownloadsDir != newDir {
+		v.Storage.MinFreeGB != 0 || v.Storage.DownloadsDir != newDir || v.Catalog.PreferredFormat != "MKV" {
 		t.Fatalf("GET /settings: %+v", v)
 	}
 }
@@ -867,8 +873,14 @@ func TestReleaseCardThroughAPI(t *testing.T) {
 		getJSON(t, fmt.Sprintf("%s/releases/%d", base, id), &rel)
 		return !rel.DetailsPending && len(rel.Files) > 0
 	})
-	if rel.Description == "" || !strings.HasSuffix(rel.TrackerURL, "/torrent/1077013") || rel.Name != "Динозавры" || rel.Hash == "" {
+	if rel.Description == "" || !strings.HasSuffix(rel.TrackerURL, "/torrent/1077013") || rel.Name != "Динозавры" || rel.Hash == "" ||
+		rel.Format != "MKV" {
 		t.Fatalf("раздача: %+v", rel.ReleaseView)
+	}
+	// Формат в каталоге — по файлам .torrent, сохранён вместе со страницей (спека этапа 7, раздел 10.2).
+	es, _, err := a.Catalog.List(context.Background(), catalog.ListOptions{Tracker: "rutor", Limit: 200})
+	if i := slices.IndexFunc(es, func(e catalog.Entry) bool { return e.ID == id }); err != nil || i < 0 || es[i].Format != "MKV" {
+		t.Fatalf("формат в каталоге: %v %+v", err, es)
 	}
 	resp, err := http.Get(base + "/releases/999999")
 	if err != nil {

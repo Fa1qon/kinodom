@@ -45,17 +45,18 @@ type row struct {
 	IMDbID      string
 	DetailsAt   time.Time
 	RetryAt     time.Time // страница раздачи не загрузилась — не раньше
+	Format      string    // «MKV», «AVI, MKV»; "" — неизвестен или ещё не определяли
 }
 
 const rowColumns = `r.id, r.tracker, r.topic_id, r.title, r.category_id, r.seeders, r.leechers, r.size,
-	r.added_at, r.infohash, r.image_key, r.kinopoisk_id, r.imdb_id, r.details_at, r.retry_at`
+	r.added_at, r.infohash, r.image_key, r.kinopoisk_id, r.imdb_id, r.details_at, r.retry_at, COALESCE(r.format, '')`
 
 // scanRow читает столбцы rowColumns и, после них, extra.
 func scanRow(sc interface{ Scan(...any) error }, extra ...any) (row, error) {
 	var r row
 	var added, detailsAt, retryAt int64
 	dest := append([]any{&r.ID, &r.Tracker, &r.TopicID, &r.Title, &r.CategoryID, &r.Seeders, &r.Leechers, &r.Size,
-		&added, &r.InfoHash, &r.ImageKey, &r.KinopoiskID, &r.IMDbID, &detailsAt, &retryAt}, extra...)
+		&added, &r.InfoHash, &r.ImageKey, &r.KinopoiskID, &r.IMDbID, &detailsAt, &retryAt, &r.Format}, extra...)
 	err := sc.Scan(dest...)
 	r.Added, r.DetailsAt, r.RetryAt = fromMS(added), fromMS(detailsAt), fromMS(retryAt)
 	return r, err
@@ -255,7 +256,7 @@ func (s catalogStore) nextToEnrich(ctx context.Context, tracker string, cats []C
 
 // saveDetails — страница раздачи. Цифры — только ненулевые: гостю Rutracker не видны раздающие
 // и размер, а свежие цифры и так приходят с топом.
-func (s catalogStore) saveDetails(ctx context.Context, id int64, d source.Details, kpID int, imageKey string, now time.Time) error {
+func (s catalogStore) saveDetails(ctx context.Context, id int64, d source.Details, kpID int, imageKey, format string, now time.Time) error {
 	_, err := s.db.W.ExecContext(ctx,
 		`UPDATE releases SET
 		   title = CASE WHEN ? != '' THEN ? ELSE title END,
@@ -264,10 +265,42 @@ func (s catalogStore) saveDetails(ctx context.Context, id int64, d source.Detail
 		   seeders = CASE WHEN ? > 0 THEN ? ELSE seeders END,
 		   leechers = CASE WHEN ? > 0 THEN ? ELSE leechers END,
 		   size = CASE WHEN ? > 0 THEN ? ELSE size END,
-		   details_at = ?, retry_at = 0
+		   format = ?, details_at = ?, retry_at = 0
 		 WHERE id = ?`,
 		d.Title, d.Title, d.Description, d.PosterURL, imageKey, kpID, d.IMDbID, d.Magnet,
-		d.InfoHash, d.InfoHash, d.Seeders, d.Seeders, d.Leechers, d.Leechers, d.Size, d.Size, ms(now), id)
+		d.InfoHash, d.InfoHash, d.Seeders, d.Seeders, d.Leechers, d.Leechers, d.Size, d.Size, format, ms(now), id)
+	return err
+}
+
+// formatRow — раздача, чей формат ещё не определяли: описание и .torrent, по которым он определяется.
+type formatRow struct {
+	id          int64
+	description string
+	torrent     []byte
+}
+
+// formatless — раздачи с загруженной страницей без определённого формата (загружены до миграции
+// 0008), не больше limit.
+func (s catalogStore) formatless(ctx context.Context, limit int) ([]formatRow, error) {
+	rows, err := s.db.R.QueryContext(ctx,
+		`SELECT id, description, torrent FROM releases WHERE format IS NULL AND details_at > 0 LIMIT ?`, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []formatRow
+	for rows.Next() {
+		var r formatRow
+		if err := rows.Scan(&r.id, &r.description, &r.torrent); err != nil {
+			return nil, err
+		}
+		out = append(out, r)
+	}
+	return out, rows.Err()
+}
+
+func (s catalogStore) saveFormat(ctx context.Context, id int64, format string) error {
+	_, err := s.db.W.ExecContext(ctx, `UPDATE releases SET format = ? WHERE id = ?`, format, id)
 	return err
 }
 

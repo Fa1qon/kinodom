@@ -48,6 +48,7 @@ type EntryView struct {
 	Size      int64   `json:"size"`
 	ImageKey  string  `json:"imageKey"`  // картинка — /img/{imageKey}; "" — нет
 	Kinopoisk float64 `json:"kinopoisk"` // рейтинг Кинопоиска; 0 — нет
+	Format    string  `json:"format"`    // «MKV», «AVI, MKV»; "" — неизвестен
 }
 
 // View — раздача для API.
@@ -55,7 +56,7 @@ func (e Entry) View() EntryView {
 	t := meta.ParseTitle(e.Title)
 	return EntryView{ID: e.ID, Tracker: e.Tracker, Title: e.Title, Name: t.Ru, Original: t.Orig, Year: t.Year,
 		Quality: e.Quality, Category: e.Category, Seeders: e.Seeders, Leechers: e.Leechers, Size: e.Size,
-		ImageKey: e.ImageKey, Kinopoisk: e.Rating.Kinopoisk}
+		ImageKey: e.ImageKey, Kinopoisk: e.Rating.Kinopoisk, Format: e.Format}
 }
 
 // ListView — страница каталога трекера.
