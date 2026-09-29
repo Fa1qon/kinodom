@@ -26,6 +26,11 @@ func TestNorm(t *testing.T) {
 		" 4K UHD релакс":               "релакс",
 		"Звезда orig":                  "звезда",
 		"ТНТ4":                         "тнт4",
+		"Россия 1 (2)":                 "россия 1", // номер дубля в плейлисте
+		"Россия 24 +0 (Липецк)":        "россия 24 липецк",
+		"Первый канал (12)":            "первый канал",
+		"Канал (2024)":                 "канал 2024",
+		"Россия 24 + 0":                "россия 24",
 	}
 	for in, want := range cases {
 		if got := Norm(in); got != want {
@@ -51,6 +56,23 @@ func TestSplitShift(t *testing.T) {
 		base, shift := SplitShift(c.in)
 		if base != c.base || shift != c.shift {
 			t.Errorf("SplitShift(%q) = %q, %d; нужно %q, %d", c.in, base, shift, c.base, c.shift)
+		}
+	}
+}
+
+// WithoutPlace — последняя пометка в скобках, обычно город региональной вставки: «Россия 24 +0 (Липецк)» →
+// «Россия 24 +0». Без скобок — как было.
+func TestWithoutPlace(t *testing.T) {
+	cases := map[string]string{
+		"Россия 24 +0 (Липецк)":       "Россия 24 +0",
+		"Россия 1 (+7) (Владивосток)": "Россия 1 (+7)",
+		"GLN 24":               "GLN 24",
+		"Первый канал (+4)":    "Первый канал (+4)", // сдвиг — не место
+		"Россия 1 (Москва) HD": "Россия 1 (Москва) HD",
+	}
+	for in, want := range cases {
+		if got := WithoutPlace(in); got != want {
+			t.Errorf("WithoutPlace(%q) = %q, нужно %q", in, got, want)
 		}
 	}
 }
