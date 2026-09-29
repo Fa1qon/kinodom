@@ -21,15 +21,19 @@ type Record struct {
 	Name     string
 	Metainfo []byte // bencode
 	Source   string
+	Dir      string // папка загрузок раздачи; пусто — текущая
 }
 
-// Remember запоминает раздачу при открытии; метаинфо может ещё не быть.
-func (r *Registry) Remember(ctx context.Context, ih metainfo.Hash, source string) error {
-	_, err := r.db.W.ExecContext(ctx,
-		`INSERT INTO torrents(infohash, source, added_at) VALUES(?, ?, ?)
-		 ON CONFLICT(infohash) DO NOTHING`,
-		ih.HexString(), source, time.Now().UnixMilli())
-	return err
+// Remember запоминает раздачу при открытии; метаинфо может ещё не быть. Возвращает папку
+// загрузок раздачи: у знакомой — ту, куда она качалась, у новой — dir.
+func (r *Registry) Remember(ctx context.Context, ih metainfo.Hash, source, dir string) (string, error) {
+	var got string
+	err := r.db.W.QueryRowContext(ctx,
+		`INSERT INTO torrents(infohash, source, added_at, dir) VALUES(?, ?, ?, ?)
+		 ON CONFLICT(infohash) DO UPDATE SET dir = CASE WHEN dir = '' THEN excluded.dir ELSE dir END
+		 RETURNING dir`,
+		ih.HexString(), source, time.Now().UnixMilli(), dir).Scan(&got)
+	return got, err
 }
 
 // SaveMetainfo сохраняет метаинфо, когда движок её получил. Источник не меняется.
@@ -61,7 +65,7 @@ func (r *Registry) TouchStream(ctx context.Context, ih metainfo.Hash, index int,
 // Restorable — раздачи с метаинфо и хотя бы одним хранимым файлом.
 func (r *Registry) Restorable(ctx context.Context) ([]Record, error) {
 	rows, err := r.db.R.QueryContext(ctx,
-		`SELECT t.infohash, t.name, t.metainfo, t.source FROM torrents t
+		`SELECT t.infohash, t.name, t.metainfo, t.source, t.dir FROM torrents t
 		 WHERE t.metainfo IS NOT NULL
 		   AND EXISTS (SELECT 1 FROM stored_files f WHERE f.infohash = t.infohash)
 		 ORDER BY t.added_at`)
@@ -73,7 +77,7 @@ func (r *Registry) Restorable(ctx context.Context) ([]Record, error) {
 	for rows.Next() {
 		var rec Record
 		var hexHash string
-		if err := rows.Scan(&hexHash, &rec.Name, &rec.Metainfo, &rec.Source); err != nil {
+		if err := rows.Scan(&hexHash, &rec.Name, &rec.Metainfo, &rec.Source, &rec.Dir); err != nil {
 			return nil, err
 		}
 		if err := rec.InfoHash.FromHexString(hexHash); err != nil {
@@ -101,4 +105,12 @@ func (r *Registry) StoredFiles(ctx context.Context, ih metainfo.Hash) ([]int, er
 		out = append(out, i)
 	}
 	return out, rows.Err()
+}
+
+func (r *Registry) setProblem(ctx context.Context, id, text string) {
+	r.db.SetProblem(context.WithoutCancel(ctx), id, text)
+}
+
+func (r *Registry) clearProblem(ctx context.Context, id string) {
+	r.db.ClearProblem(context.WithoutCancel(ctx), id)
 }

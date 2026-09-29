@@ -6,6 +6,9 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"os"
+	"slices"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -62,9 +65,9 @@ type prepared struct {
 
 // Service — модуль «torrents».
 type Service struct {
-	eng       *Engine                  // nil, пока движок не создан (NewLazyService)
-	newEngine func() (*Engine, error)  // создаёт движок в Run; ошибка — сбой модуля, сторож повторит
-	onEngine  func(err error)          // сообщает, удалось ли создать движок (проблема в «Состоянии»)
+	eng       *Engine                 // nil, пока движок не создан (NewLazyService)
+	newEngine func() (*Engine, error) // создаёт движок в Run; ошибка — сбой модуля, сторож повторит
+	onEngine  func(err error)         // сообщает, удалось ли создать движок (проблема в «Состоянии»)
 	reg       *Registry
 	log       *slog.Logger
 	now       func() time.Time
@@ -140,17 +143,31 @@ func (s *Service) Run(ctx context.Context) error {
 }
 
 // restore добавляет в движок раздачи с хранимыми файлами — из метаинфо в базе, без пиров.
+// Раздачи, которые уже в движке, не трогает: вызывается и повторно — вернуть раздачи с диска,
+// который был недоступен.
 func (s *Service) restore(ctx context.Context) error {
 	recs, err := s.reg.Restorable(ctx)
 	if err != nil {
 		return err
 	}
+	missing := map[string]int{} // недоступная папка → сколько раздач в ней ждут
 	for _, rec := range recs {
+		if _, ok := s.eng.cl.Torrent(rec.InfoHash); ok {
+			continue
+		}
+		if rec.Dir != "" {
+			if _, err := os.Stat(rec.Dir); err != nil {
+				// Диск не подключён: записи не удаляются, раздача вернётся вместе с диском.
+				missing[rec.Dir]++
+				continue
+			}
+		}
 		mi, err := metainfo.Load(bytes.NewReader(rec.Metainfo))
 		if err != nil {
 			s.log.Warn("метаинфо раздачи не читается, пропускаю", "hash", rec.InfoHash.HexString(), "err", err)
 			continue
 		}
+		s.eng.SetTorrentDir(rec.InfoHash, rec.Dir)
 		t, err := s.eng.cl.AddTorrent(mi)
 		if err != nil {
 			s.log.Warn("раздача не восстановилась", "hash", rec.InfoHash.HexString(), "err", err)
@@ -173,6 +190,17 @@ func (s *Service) restore(ctx context.Context) error {
 		}
 		s.mu.Unlock()
 	}
+	if len(missing) == 0 {
+		s.reg.clearProblem(ctx, "torrents.dirs")
+		return nil
+	}
+	var parts []string
+	for dir, n := range missing {
+		parts = append(parts, fmt.Sprintf("%s (раздач: %d)", dir, n))
+	}
+	slices.Sort(parts)
+	s.reg.setProblem(ctx, "torrents.dirs", "Папка загрузок недоступна: "+strings.Join(parts, ", ")+
+		" — эти раздачи не раздаются и не докачиваются, пока диск не вернётся")
 	return nil
 }
 
@@ -180,21 +208,18 @@ func (s *Service) restore(ctx context.Context) error {
 // возвращает её же; после ошибки «нет раздающих» — начинает заново.
 func (s *Service) Open(ctx context.Context, src Source) (metainfo.Hash, error) {
 	var (
-		t      *torrent.Torrent
+		mi     *metainfo.MetaInfo
+		ih     metainfo.Hash
 		raw    []byte
 		source string
-		err    error
 	)
 	switch {
 	case len(src.Torrent) > 0:
-		mi, lerr := metainfo.Load(bytes.NewReader(src.Torrent))
+		m, lerr := metainfo.Load(bytes.NewReader(src.Torrent))
 		if lerr != nil {
 			return metainfo.Hash{}, fmt.Errorf("файл .torrent не читается: %w", lerr)
 		}
-		if t, err = s.eng.cl.AddTorrent(mi); err != nil {
-			return metainfo.Hash{}, fmt.Errorf("файл .torrent не принят: %w", err)
-		}
-		raw, source = src.Torrent, "torrent-file"
+		mi, ih, raw, source = m, m.HashInfoBytes(), src.Torrent, "torrent-file"
 	case src.Magnet != "":
 		// Движок паникует на ссылке без infohash, а не возвращает ошибку — проверяем сами.
 		m, perr := metainfo.ParseMagnetUri(src.Magnet)
@@ -204,16 +229,23 @@ func (s *Service) Open(ctx context.Context, src Source) (metainfo.Hash, error) {
 		if m.InfoHash == (metainfo.Hash{}) {
 			return metainfo.Hash{}, errors.New("magnet-ссылка не читается: infohash раздачи — одни нули")
 		}
-		if t, err = s.eng.cl.AddMagnet(src.Magnet); err != nil {
-			return metainfo.Hash{}, fmt.Errorf("magnet-ссылка не читается: %w", err)
-		}
-		source = src.Magnet
+		ih, source = m.InfoHash, src.Magnet
 	default:
 		return metainfo.Hash{}, errors.New("не указан источник раздачи: нужна magnet-ссылка или .torrent")
 	}
-	ih := t.InfoHash()
-	if err := s.reg.Remember(ctx, ih, source); err != nil {
+	// Папку раздачи движок должен знать до добавления: файлы создаются сразу, как придёт метаинфо.
+	dir, err := s.reg.Remember(ctx, ih, source, s.eng.DownloadsDir())
+	if err != nil {
 		return ih, err
+	}
+	s.eng.SetTorrentDir(ih, dir)
+	var t *torrent.Torrent
+	if mi != nil {
+		if t, err = s.eng.cl.AddTorrent(mi); err != nil {
+			return metainfo.Hash{}, fmt.Errorf("файл .torrent не принят: %w", err)
+		}
+	} else if t, err = s.eng.cl.AddMagnet(src.Magnet); err != nil {
+		return metainfo.Hash{}, fmt.Errorf("magnet-ссылка не читается: %w", err)
 	}
 	s.mu.Lock()
 	s.observe(s.sessionFor(t), s.now())

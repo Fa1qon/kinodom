@@ -19,13 +19,13 @@ import (
 type prepStorage struct {
 	inner storage.ClientImpl
 	pc    storage.PieceCompletion
-	base  string
+	dirs  *torrentDirs
 }
 
 func (s prepStorage) OpenTorrent(ctx context.Context, info *metainfo.Info, ih metainfo.Hash) (storage.TorrentImpl, error) {
 	var off int64
 	for _, fi := range info.UpvertedFiles() {
-		p := enginePath(s.base, info, ih, fi)
+		p := enginePath(s.dirs.get(ih), info, ih, fi)
 		// Файл удалили (почистили папку в Проводнике) или он короче нужного: отметки его
 		// кусков в базе врут. Сбрасываем их до того, как пересоздадим файл, — иначе движок
 		// счёл бы файл скачанным и отдавал бы нули.
