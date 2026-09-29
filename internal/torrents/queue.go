@@ -231,11 +231,7 @@ func (s *Service) progressLocked(ss *session) []FileProgress {
 		done := min(f.BytesCompleted(), f.Length())
 		p := FileProgress{FileInfo: fi, Done: done, Percent: bufferPercent(done, f.Length()), Stored: ss.storedFiles[fi.Index],
 			Watching: ss.readers[fi.Index] > 0}
-		bitrate := estimateBitrate(f.Length(), len(playable) > 1)
-		if pr, ok := ss.prepared[fi.Index]; ok {
-			bitrate = pr.bitrate
-		}
-		p.Readiness, p.WaitSec = readinessOf(p.Stored, done, f.Length(), bitrate, ss.speed)
+		p.Readiness, p.WaitSec = readinessLocked(ss, fi.Index, len(playable) > 1)
 		p.Queued = p.Stored && done < f.Length() && fi.Index != ss.focus && !p.Watching
 		if fi.Index == ss.focus {
 			p.Head, p.Tail = contiguous(t, f)
@@ -243,6 +239,18 @@ func (s *Service) progressLocked(ss *session) []FileProgress {
 		out[k] = p
 	}
 	return out
+}
+
+// readinessLocked — цвет «Смотреть» файла index: один расчёт для экрана раздачи и «Загрузок».
+// Битрейт — из prepare, иначе оценка: серия раздачи из нескольких видеофайлов — 45 минут, фильм —
+// два часа. Вызывать под s.mu.
+func readinessLocked(ss *session, index int, series bool) (Readiness, int) {
+	f := ss.t.Files()[index]
+	bitrate := estimateBitrate(f.Length(), series)
+	if pr, ok := ss.prepared[index]; ok {
+		bitrate = pr.bitrate
+	}
+	return readinessOf(ss.storedFiles[index], min(f.BytesCompleted(), f.Length()), f.Length(), bitrate, ss.speed)
 }
 
 // contiguous — сколько процентов файла скачано подряд с начала и с конца.

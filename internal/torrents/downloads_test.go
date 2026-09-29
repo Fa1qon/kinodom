@@ -6,6 +6,32 @@ import (
 	"time"
 )
 
+// Цвет «Смотреть» у серии одинаковый на экране раздачи и в «Загрузках»: серия — 45 минут, а не
+// два часа фильма (финальное ревью 7a).
+func TestReadinessSameInDownloadsAndRelease(t *testing.T) {
+	ctx := context.Background()
+	s := newTestService(t)
+	s.freeSpace = func(string) (int64, error) { return 50 << 30, nil }
+	ih, ep := archive(t, s)
+	must(t, s.Download(ctx, ih, []int{ep[0]}))
+	s.mu.Lock()
+	ss := s.sessions[ih]
+	size := ss.t.Files()[ep[0]].Length()
+	ss.speed = float64(size) / 4000 // серия докачается за 4000 с: дольше серии, быстрее фильма
+	var screen Readiness
+	for _, p := range s.progressLocked(ss) {
+		if p.Index == ep[0] {
+			screen = p.Readiness
+		}
+	}
+	s.mu.Unlock()
+	v, err := s.Downloads(ctx)
+	must(t, err)
+	if len(v.Items) != 1 || screen != ReadyWait || v.Items[0].Readiness != screen {
+		t.Fatalf("экран раздачи %q, «Загрузки» %+v", screen, v.Items)
+	}
+}
+
 // Экран «Загрузки»: хранимые файлы с состоянием очереди, место на диске, «удалится через N дн.»
 // только когда осталось три дня и меньше; то, что смотрят, — первым и без удаления.
 func TestDownloadsList(t *testing.T) {
