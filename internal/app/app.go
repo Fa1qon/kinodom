@@ -9,7 +9,9 @@ import (
 	"io"
 	"log/slog"
 	"maps"
+	"net/http"
 	"time"
+	"unicode"
 
 	"golang.org/x/time/rate"
 
@@ -17,6 +19,7 @@ import (
 	"kinodom/internal/catalog"
 	"kinodom/internal/config"
 	"kinodom/internal/edge"
+	"kinodom/internal/httpx"
 	"kinodom/internal/logx"
 	"kinodom/internal/meta"
 	"kinodom/internal/netx"
@@ -265,7 +268,7 @@ func (a *App) initCatalog(ctx context.Context, o Options, v settings.Values) err
 	}
 	rto := rutracker.Options{Proxy: a.proxy, Mirrors: o.Trackers.RutrackerMirrors, APIBase: o.Trackers.RutrackerAPI,
 		FeedBase: o.Trackers.RutrackerFeed, Rate: o.Trackers.Rate, Log: log,
-		Login: v.RutrackerLogin, Password: v.RutrackerPassword}
+		Login: v.RutrackerLogin, Password: v.RutrackerPassword, OnLogin: a.rutrackerLogin}
 	edgeOn := !o.Trackers.NoEdge && a.ModuleEnabled(ctx, "edge")
 	if edgeOn {
 		// UA — только начальный: Edge пересчитывает его на каждый проход, и источник переключается
@@ -282,11 +285,30 @@ func (a *App) initCatalog(ctx context.Context, o Options, v settings.Values) err
 		return err
 	}
 	a.rutracker = rtSrc
+	// Проблема входа прошлого запуска в базе: запрет входа живёт в памяти, после перезапуска его нет.
+	a.rutrackerLogin(rtSrc.LoginState())
+	// Кнопка «Войти» в настройках (спека этапа 7, раздел 5.3): только с этого ПК.
+	a.API.HandleLocal("POST /api/v1/sources/rutracker/login", "catalog", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		httpx.WriteJSON(w, http.StatusOK, rtSrc.Relogin(r.Context()))
+	}))
 	a.Sup.Add(edge.NewModule(a.Log.With("module", "edge")), edgeOn)
 	a.Catalog = catalog.New(catalog.Options{DB: a.DB, Sources: []source.Source{rutorSrc, rtSrc}, Categories: cats,
 		Ratings: a.Ratings, Images: a.Images, KinopoiskPoster: a.kp.PosterURL, Log: log})
 	a.Sup.Add(a.Catalog, a.ModuleEnabled(ctx, a.Catalog.Name()))
 	return nil
+}
+
+// rutrackerLogin — проблема rutracker.login, пока вход заблокирован (неверный пароль или капча):
+// её видно баннером во вкладке Rutracker и в «Состоянии» (спека этапа 7, раздел 5.3).
+func (a *App) rutrackerLogin(info rutracker.LoginInfo) {
+	ctx := context.Background()
+	if info.State != rutracker.LoginBlocked {
+		a.clearProblem(ctx, "rutracker.login")
+		return
+	}
+	text := []rune(info.Text)
+	text[0] = unicode.ToLower(text[0])
+	a.setProblem(ctx, "rutracker.login", "Rutracker: "+string(text))
 }
 
 // ModuleEnabled — модуль включён, если в настройках нет modules.<имя>.enabled = "false".

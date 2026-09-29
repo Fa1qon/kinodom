@@ -19,7 +19,8 @@ import (
 // спека, раздел 16). Вход не повторяется до смены логина или пароля.
 var ErrWrongPassword = errors.New("Rutracker: неверное имя пользователя или пароль — проверьте их в настройках")
 
-// CaptchaError — Rutracker просит ввести код с картинки. Картинка и поля — для пульта (этап 7);
+// CaptchaError — Rutracker просит ввести код с картинки. Код не вводится (решение заказчика, спека
+// этапа 7): сервер только предупреждает, картинка и поля остаются для журнала и исследований;
 // до ввода кода автоматический вход не повторяется.
 type CaptchaError struct {
 	ImageURL  string // картинка static.rutracker.cc/captcha/…
@@ -28,7 +29,7 @@ type CaptchaError struct {
 }
 
 func (e *CaptchaError) Error() string {
-	return "Rutracker просит ввести код с картинки — подойдите к компьютеру"
+	return "Rutracker: капча — вход не выполнен"
 }
 
 var (

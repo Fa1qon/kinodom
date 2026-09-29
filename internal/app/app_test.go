@@ -30,6 +30,7 @@ import (
 	"kinodom/internal/meta"
 	"kinodom/internal/settings"
 	"kinodom/internal/source/rutor/rutortest"
+	"kinodom/internal/source/rutracker"
 	"kinodom/internal/source/rutracker/rutrackertest"
 	"kinodom/internal/store"
 	"kinodom/internal/supervisor"
@@ -719,4 +720,37 @@ func closedAddr(t *testing.T) string {
 	addr := ln.Addr().String()
 	ln.Close()
 	return addr
+}
+
+// Вход Rutracker заблокирован (неверный пароль) — проблема rutracker.login; новый пароль в пульте
+// снимает её, «Войти» входит сразу (спека этапа 7, раздел 5.3; хвост 5c).
+func TestRutrackerLoginProblemAndRelogin(t *testing.T) {
+	rt := rutrackertest.NewServer(t)
+	rt.Login, rt.Password = "user", "right"
+	kp := httptest.NewServer(http.NotFoundHandler())
+	t.Cleanup(kp.Close)
+	dead := "http://" + closedAddr(t)
+	a := startAppWith(t, Options{Home: t.TempDir(), ListenAddr: "127.0.0.1:0", Offline: true, DownloadsDir: t.TempDir(), KinopoiskAPI: kp.URL,
+		Settings: map[string]string{"rutracker.login": "user", "rutracker.password": "wrong", "catalog.categories": "rutor:12"},
+		Trackers: Trackers{RutorMirrors: []string{dead}, RutorDownload: dead, RutrackerMirrors: []string{rt.Forum.URL},
+			RutrackerAPI: rt.API.URL, RutrackerFeed: rt.Feed.URL, NoEdge: true, Rate: 1000}})
+	login := "http://" + a.API.Addr() + "/api/v1/sources/rutracker/login"
+	var st rutracker.LoginInfo
+	postJSON(t, login, struct{}{}, &st)
+	if st.State != rutracker.LoginBlocked {
+		t.Fatalf("неверный пароль: %+v", st)
+	}
+	if p := problemsOf(t, a); !strings.Contains(p, "Rutracker: неверный логин или пароль") {
+		t.Fatalf("нет проблемы входа: %q", p)
+	}
+	if code, body := putJSON(t, "http://"+a.API.Addr()+"/api/v1/settings", map[string]any{"rutracker": map[string]any{"password": "right"}}); code != 200 {
+		t.Fatalf("новый пароль: %d %s", code, body)
+	}
+	if p := problemsOf(t, a); strings.Contains(p, "Rutracker: неверный") {
+		t.Fatalf("проблема не снята после смены пароля: %q", p)
+	}
+	postJSON(t, login, struct{}{}, &st)
+	if st.State != rutracker.LoginOK {
+		t.Fatalf("«Войти» с верным паролем: %+v", st)
+	}
 }

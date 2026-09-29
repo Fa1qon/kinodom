@@ -55,13 +55,18 @@ type Options struct {
 	Rate            rate.Limit    // 0 — 1 запрос/с на весь Rutracker (тесты ускоряют)
 	Timeout         time.Duration // 0 — 90 с
 	Log             *slog.Logger  // nil — без журнала
+	// OnLogin — состояние входа изменилось (приложение ставит и снимает проблему rutracker.login).
+	// Вызывается без блокировок источника; nil — не сообщать.
+	OnLogin func(LoginInfo)
 }
 
 type Rutracker struct {
 	forum    *netx.Client // сайт: зеркала, cookie, признаки ответа форума
 	api      *netx.Client // api.rutracker.cc и лента feed.rutracker.cc
 	feedBase string
+	mirrors  []string // все зеркала: при смене учётной записи сессия сбрасывается на каждом
 	jar      http.CookieJar
+	onLogin  func(LoginInfo)
 	passer   Passer
 	passes   singleflight.Group
 	log      *slog.Logger
@@ -80,6 +85,7 @@ type Rutracker struct {
 	loginRetryErr   error     // временная неудача входа, из-за которой стоит пауза
 	loginWarned     string    // неудача входа, о которой журнал уже знает
 	treeRetryAt     time.Time // до этого времени не пробовать снова обновить дерево разделов
+	loginSeen       LoginInfo // о каком состоянии входа уже сообщили OnLogin
 }
 
 func New(o Options) (*Rutracker, error) {
@@ -120,8 +126,8 @@ func New(o Options) (*Rutracker, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &Rutracker{forum: forum, api: api, feedBase: strings.TrimRight(o.FeedBase, "/"), jar: jar,
-		passer: o.Passer, log: o.Log, now: time.Now, login: o.Login, password: o.Password}, nil
+	return &Rutracker{forum: forum, api: api, feedBase: strings.TrimRight(o.FeedBase, "/"), mirrors: mirrors, jar: jar,
+		onLogin: o.OnLogin, passer: o.Passer, log: o.Log, now: time.Now, login: o.Login, password: o.Password}, nil
 }
 
 func (r *Rutracker) Name() string { return Name }

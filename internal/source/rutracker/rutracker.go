@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"maps"
+	"net/http"
 	"net/url"
 	"slices"
 	"strings"
@@ -24,13 +25,102 @@ var ErrNoCredentials = errors.New("Rutracker: не заданы логин и п
 // «Сериалы», «Документалистика и юмор», «Обучающие видео».
 var searchCats = []string{"2", "18", "20", "10"}
 
-// SetCredentials — логин и пароль из настроек. Снимает запрет на вход после неудачи.
+// SetCredentials — логин и пароль из настроек. Новая пара снимает запрет на вход после неудачи; те
+// же значения не меняют ничего — иначе пульт, сохраняя любые настройки, снимал бы запрет, и форум
+// снова получал бы неверный пароль (хвост этапа 4). Сменили логин — сессия прежней учётной записи
+// сбрасывается на всех зеркалах: иначе источник продолжил бы работать под старым пользователем.
 func (r *Rutracker) SetCredentials(login, password string) {
 	r.mu.Lock()
-	defer r.mu.Unlock()
+	if login == r.login && password == r.password {
+		r.mu.Unlock()
+		return
+	}
+	userChanged := login != r.login
 	r.login, r.password, r.loginBlock = login, password, nil
 	r.loginRetryAt, r.loginRetryErr, r.loginWarned = time.Time{}, nil, ""
 	r.credGen++
+	r.mu.Unlock()
+	if userChanged {
+		r.dropSessions()
+	}
+	r.noteLoginState()
+}
+
+// Relogin — кнопка «Войти» в пульте: снять запрет после неудачи и один раз войти прямо сейчас.
+// Возвращает состояние после попытки (спека этапа 7, раздел 5.3).
+func (r *Rutracker) Relogin(ctx context.Context) LoginInfo {
+	r.mu.Lock()
+	r.loginBlock, r.loginRetryAt, r.loginRetryErr = nil, time.Time{}, nil
+	r.credGen++
+	r.mu.Unlock()
+	r.Login(ctx) // неудача — в состоянии входа
+	return r.LoginState()
+}
+
+// LoginState — состояние входа для пульта.
+type LoginState string
+
+const (
+	LoginNone    LoginState = "none"    // логин не задан
+	LoginUnknown LoginState = "unknown" // ещё не входили
+	LoginOK      LoginState = "ok"
+	LoginBlocked LoginState = "blocked" // неверный пароль или капча: без попыток до новой пары или «Войти»
+	LoginFailing LoginState = "failing" // временная неудача: сеть, форум
+)
+
+// LoginInfo — состояние входа и его причина для человека.
+type LoginInfo struct {
+	State LoginState `json:"state"`
+	Text  string     `json:"text,omitempty"`
+}
+
+// LoginState — состояние входа сейчас.
+func (r *Rutracker) LoginState() LoginInfo {
+	r.mu.Lock()
+	login, password, block, retryErr := r.login, r.password, r.loginBlock, r.loginRetryErr
+	r.mu.Unlock()
+	var ce *CaptchaError
+	switch {
+	case login == "" || password == "":
+		return LoginInfo{State: LoginNone}
+	case errors.As(block, &ce):
+		return LoginInfo{State: LoginBlocked, Text: "Капча — вход не выполнен"}
+	case block != nil:
+		return LoginInfo{State: LoginBlocked, Text: "Неверный логин или пароль"}
+	case r.loggedIn():
+		return LoginInfo{State: LoginOK}
+	case retryErr != nil:
+		return LoginInfo{State: LoginFailing, Text: retryErr.Error()}
+	}
+	return LoginInfo{State: LoginUnknown}
+}
+
+// noteLoginState сообщает OnLogin новое состояние входа — только если оно изменилось.
+func (r *Rutracker) noteLoginState() {
+	info := r.LoginState()
+	r.mu.Lock()
+	changed := info != r.loginSeen
+	r.loginSeen = info
+	r.mu.Unlock()
+	if changed && r.onLogin != nil {
+		r.onLogin(info)
+	}
+}
+
+// dropSessions удаляет cookie сессии на всех зеркалах: и привязанную к хосту, и к домену.
+func (r *Rutracker) dropSessions() {
+	for _, m := range r.mirrors {
+		u, err := url.Parse(m + "/forum/")
+		if err != nil {
+			continue
+		}
+		var gone []*http.Cookie
+		for _, path := range []string{"/forum/", "/"} {
+			gone = append(gone, &http.Cookie{Name: "bb_session", Path: path, MaxAge: -1},
+				&http.Cookie{Name: "bb_session", Path: path, Domain: u.Hostname(), MaxAge: -1})
+		}
+		r.jar.SetCookies(u, gone)
+	}
 }
 
 func (r *Rutracker) hasCredentials() bool {
@@ -78,6 +168,7 @@ func (r *Rutracker) ensureLogin(ctx context.Context, stale string) error {
 
 // doLogin — сам вход; вызывается под loginMu.
 func (r *Rutracker) doLogin(ctx context.Context) error {
+	defer r.noteLoginState() // после снятия r.mu: отложен раньше блокировки ниже
 	r.mu.Lock()
 	login, password, block, gen := r.login, r.password, r.loginBlock, r.credGen
 	r.mu.Unlock()
