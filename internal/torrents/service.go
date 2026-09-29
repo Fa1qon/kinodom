@@ -2,6 +2,7 @@ package torrents
 
 import (
 	"bytes"
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
@@ -35,12 +36,14 @@ type Source struct {
 
 // TorrentStatus — состояние открытой раздачи для клиента.
 type TorrentStatus struct {
-	Hash  string       `json:"hash"`
-	Name  string       `json:"name"`
-	State TorrentState `json:"state"`
-	Peers int          `json:"peers"`
-	Files []FileInfo   `json:"files"`
-	Error string       `json:"error,omitempty"`
+	Hash  string         `json:"hash"`
+	Name  string         `json:"name"`
+	State TorrentState   `json:"state"`
+	Peers int            `json:"peers"`
+	Speed int64          `json:"speed"` // байт/с, полезные данные
+	Focus int            `json:"focus"` // файл, который качается сейчас; −1 — никакой
+	Files []FileProgress `json:"files"`
+	Error string         `json:"error,omitempty"`
 }
 
 // session — всё, что сервис знает об открытой раздаче.
@@ -63,6 +66,9 @@ type session struct {
 	raw          []byte       // содержимое .torrent, пока метаинфо не сохранена
 	metaSaved    bool         // метаинфо в базе
 	lastSeen     time.Time    // когда раздачу последний раз открывали или спрашивали о ней
+	focus        int          // файл, который качается сейчас (очередь загрузки, этап 7); −1 — никакой
+	wantAll      bool         // «Скачать» до получения списка файлов: скачать всё, когда он придёт
+	downloadErr  string       // отложенное «Скачать» не удалось (мало места)
 }
 
 // prepared — файл, выбранный для просмотра.
@@ -209,17 +215,51 @@ func (s *Service) restore(ctx context.Context) error {
 		s.mu.Lock()
 		ss := s.sessionFor(t)
 		ss.stored, ss.metaSaved = true, true
-		// Хранимые файлы докачиваются дальше (и раздаются), остальные не нужны.
+		// Хранимые файлы докачиваются дальше (и раздаются) по очереди, остальные не нужны.
 		files := t.Files()
 		for _, i := range idxs {
 			if i >= 0 && i < len(files) {
 				ss.storedFiles[i] = true
-				files[i].SetPriority(torrent.PiecePriorityNormal)
 			}
 		}
+		ss.focus = rec.Focus
 		if s.eng.recreated {
 			s.queueVerify(ss)
 		}
+		if ss.focus < 0 || !ss.storedFiles[ss.focus] {
+			s.setFocusLocked(ss, s.nextFocusLocked(ss))
+		}
+		s.applyLocked(ss)
+		s.mu.Unlock()
+	}
+	// «Скачать» без списка файлов — раздача снова открывается и ждёт метаинфо от пиров.
+	pending, err := s.reg.Pending(ctx)
+	if err != nil {
+		return err
+	}
+	for _, rec := range pending {
+		if t, ok := s.eng.cl.Torrent(rec.InfoHash); ok {
+			s.mu.Lock()
+			s.sessionFor(t).wantAll = true // уже восстановлена с хранимыми файлами — применить остальное
+			s.mu.Unlock()
+			continue
+		}
+		s.eng.SetTorrentDir(rec.InfoHash, rec.Dir)
+		var t *torrent.Torrent
+		if rec.Metainfo != nil {
+			if mi, lerr := metainfo.Load(bytes.NewReader(rec.Metainfo)); lerr == nil {
+				t, err = s.eng.cl.AddTorrent(mi)
+			}
+		} else if strings.HasPrefix(rec.Source, "magnet:") {
+			t, err = s.eng.cl.AddMagnet(rec.Source)
+		}
+		if t == nil || err != nil {
+			s.log.Warn("отложенное «Скачать» не восстановилось", "hash", rec.InfoHash.HexString(), "err", err)
+			continue
+		}
+		s.mu.Lock()
+		ss := s.sessionFor(t)
+		ss.wantAll = true
 		s.mu.Unlock()
 	}
 	if len(missing) == 0 {
@@ -299,7 +339,7 @@ func (s *Service) sessionFor(t *torrent.Torrent) *session {
 		return ss
 	}
 	ss := &session{t: t, prepared: map[int]*prepared{}, storedFiles: map[int]bool{}, readers: map[int]int{},
-		paused: map[int]bool{}, verifyQ: map[int]bool{}, lastSeen: s.now()}
+		paused: map[int]bool{}, verifyQ: map[int]bool{}, lastSeen: s.now(), focus: -1}
 	s.sessions[ih] = ss
 	return ss
 }
@@ -341,11 +381,13 @@ func (s *Service) Status(ih metainfo.Hash) (TorrentStatus, bool) {
 		Name:  ss.t.Name(),
 		State: ss.state,
 		Peers: ss.t.Stats().ActivePeers,
-		Files: []FileInfo{},
-		Error: ss.errText,
+		Speed: int64(ss.speed),
+		Focus: ss.focus,
+		Files: []FileProgress{},
+		Error: cmp.Or(ss.errText, ss.downloadErr),
 	}
 	if ss.state == StateReady {
-		st.Files = playableFiles(allFiles(ss.t))
+		st.Files = s.progressLocked(ss)
 	}
 	return st, true
 }
@@ -376,17 +418,27 @@ func (s *Service) observe(ss *session, now time.Time) {
 	}, s.noPeersAfter, s.noMetaAfter)
 	if ss.state == StateError {
 		ss.t.Drop() // без хранимых файлов раздача больше не нужна
+		if ss.wantAll {
+			// Отложенное «Скачать» не вернётся после перезапуска: раздачу откроют снова кнопкой.
+			ss.wantAll = false
+			if err := s.reg.SetDownloadAll(context.Background(), ss.t.InfoHash(), false); err != nil {
+				s.log.Warn("отложенное «Скачать» не снялось", "err", err)
+			}
+		}
 	}
 }
 
-// sample раз в секунду обновляет сглаженную скорость и состояния всех раздач.
+// sample раз в секунду обновляет сглаженную скорость и состояния всех раздач, переводит фокус
+// загрузки на следующий файл и применяет отложенное «Скачать», когда пришёл список файлов.
 func (s *Service) sample() {
 	now := s.now()
 	var unsaved []*session
+	var want []metainfo.Hash
 	s.mu.Lock()
-	for _, ss := range s.sessions {
+	for ih, ss := range s.sessions {
 		st := ss.t.Stats()
-		b := st.BytesReadData.Int64()
+		// Полезные байты: без повторов, отброшенных кусков и служебного (хвост этапа 2).
+		b := st.BytesReadUsefulData.Int64()
 		if !ss.lastSample.IsZero() {
 			if dt := now.Sub(ss.lastSample).Seconds(); dt > 0 {
 				ss.speed = 0.5*ss.speed + 0.5*float64(b-ss.lastBytes)/dt
@@ -397,10 +449,27 @@ func (s *Service) sample() {
 		if !ss.metaSaved && ss.t.Info() != nil {
 			unsaved = append(unsaved, ss)
 		}
+		if ss.wantAll && ss.t.Info() != nil {
+			want = append(want, ih)
+		}
+		s.advanceLocked(ss)
 	}
 	s.mu.Unlock()
 	for _, ss := range unsaved { // запись в базу — без s.mu
 		s.saveMetainfo(ss)
+	}
+	for _, ih := range want {
+		if err := s.Download(context.Background(), ih, nil); err != nil {
+			s.log.Warn("отложенное «Скачать» не удалось", "hash", ih.HexString(), "err", err)
+			s.mu.Lock()
+			if ss, ok := s.sessions[ih]; ok {
+				ss.wantAll, ss.downloadErr = false, err.Error()
+			}
+			s.mu.Unlock()
+			if err := s.reg.SetDownloadAll(context.Background(), ih, false); err != nil {
+				s.log.Warn("отложенное «Скачать» не снялось", "err", err)
+			}
+		}
 	}
 }
 
