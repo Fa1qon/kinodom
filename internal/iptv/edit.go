@@ -71,6 +71,8 @@ func (m *Module) Override(key string) Override {
 
 // SetOverride — правки канала: скрыть, метки, закреплённый источник.
 func (m *Module) SetOverride(ctx context.Context, key string, o Override) error {
+	m.plMu.Lock()
+	defer m.plMu.Unlock()
 	if !m.knownKey(key) {
 		return ErrNoChannel
 	}
@@ -108,6 +110,8 @@ func (m *Module) SetNameRule(ctx context.Context, name, channel string, hidden b
 	if name == "" {
 		return &FieldError{"пустое название"}
 	}
+	m.plMu.Lock()
+	defer m.plMu.Unlock()
 	var r *Rule
 	switch {
 	case hidden:
@@ -134,6 +138,8 @@ func (m *Module) SetNameRule(ctx context.Context, name, channel string, hidden b
 
 // SetStreamRule — «это другой канал» для одного источника (по ссылке).
 func (m *Module) SetStreamRule(ctx context.Context, id int64, channel string, hidden bool) error {
+	m.plMu.Lock()
+	defer m.plMu.Unlock()
 	m.mu.Lock()
 	s := m.pool.streams[id]
 	url := ""

@@ -163,3 +163,65 @@ func TestUnlimitingPlaylistChecksNow(t *testing.T) {
 	}
 	waitFor(t, "проверка после снятия «ограничено»", func() bool { return f.limited.Load() > 0 })
 }
+
+// Плейлисты добавляются одновременно с разных устройств, а рядом правят каналы: после этого в
+// памяти модуля все плейлисты и все правки — перечитывание пула не теряет чужое.
+func TestConcurrentPlaylistsAndEdits(t *testing.T) {
+	f := newFakeNet(t)
+	m, _ := startModule(t, f)
+	waitFor(t, "телепрограмма", func() bool { return m.Guide() != nil })
+	const n = 8
+	var wg sync.WaitGroup
+	for i := range n {
+		wg.Add(2)
+		go func() {
+			defer wg.Done()
+			data := fmt.Sprintf("#EXTM3U\n#EXTINF:-1,НТВ\n%s/s/ok.m3u8?p=%d\n", f.srv.URL, i)
+			if _, err := m.AddPlaylist(context.Background(), PlaylistInput{Name: fmt.Sprintf("п%d", i), Data: []byte(data)}); err != nil {
+				t.Error(err)
+			}
+		}()
+		go func() {
+			defer wg.Done()
+			cat := "news"
+			if err := m.SetOverride(context.Background(), []string{"pervy", "rossia1", "match-tv", "ntv", "spas", "tet-ua", "bbc", "kino1"}[i], Override{Category: &cat}); err != nil {
+				t.Error(err)
+			}
+		}()
+	}
+	wg.Wait()
+	if got := len(m.Playlists().Items); got != n {
+		t.Errorf("плейлистов в памяти %d, нужно %d", got, n)
+	}
+	m.mu.Lock()
+	got := len(m.pool.overrides)
+	m.mu.Unlock()
+	if got != n {
+		t.Errorf("правок в памяти %d, нужно %d", got, n)
+	}
+}
+
+// Гонка наверняка: правка канала приходит, пока перечитанный пул ещё не заменил старый.
+func TestEditDuringReloadNotLost(t *testing.T) {
+	f := newFakeNet(t)
+	m, _ := startModule(t, f)
+	waitFor(t, "телепрограмма", func() bool { return m.Guide() != nil })
+	cat := "news"
+	var once sync.Once
+	done := make(chan error, 1)
+	m.afterLoad = func() {
+		once.Do(func() {
+			go func() { done <- m.SetOverride(context.Background(), "ntv", Override{Category: &cat}) }()
+			time.Sleep(100 * time.Millisecond)
+		})
+	}
+	if _, err := m.AddPlaylist(context.Background(), PlaylistInput{Data: []byte("#EXTM3U\n#EXTINF:-1,НТВ\n" + f.srv.URL + "/s/ok.m3u8\n")}); err != nil {
+		t.Fatal(err)
+	}
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+	if o := m.Override("ntv"); o.Category == nil || *o.Category != "news" {
+		t.Errorf("правка, сделанная во время перечитывания пула, потерялась: %+v", o)
+	}
+}

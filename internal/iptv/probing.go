@@ -243,6 +243,8 @@ func (m *Module) checkOne(ctx context.Context, id int64, level string) {
 	if ctx.Err() != nil {
 		return
 	}
+	m.plMu.RLock() // пул не перечитывается, пока результат пишется в память и в базу
+	defer m.plMu.RUnlock()
 	now := m.now()
 	m.mu.Lock()
 	s = m.pool.streams[id]
