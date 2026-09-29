@@ -285,3 +285,34 @@ func (s catalogStore) categoryName(ctx context.Context, tracker, id string) stri
 	}
 	return name
 }
+
+// imageKeysInUse — картинки, которые каталог показывает или скоро может показать: у раздач в
+// каталоге и у тронутых после since (найденные поиском, недавно выпавшие из топа).
+func (st *catalogStore) imageKeysInUse(ctx context.Context, since time.Time) (map[string]bool, error) {
+	rows, err := st.db.R.QueryContext(ctx,
+		`SELECT DISTINCT image_key FROM releases WHERE image_key != ''
+		   AND (updated_at >= ? OR id IN (SELECT release_id FROM catalog_entries))`, since.UnixMilli())
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	keep := map[string]bool{}
+	for rows.Next() {
+		var k string
+		if err := rows.Scan(&k); err != nil {
+			return nil, err
+		}
+		keep[k] = true
+	}
+	return keep, rows.Err()
+}
+
+// forgetImages — этих картинок больше нет в кэше: у раздач — без постера.
+func (st *catalogStore) forgetImages(ctx context.Context, keys []string) error {
+	for _, k := range keys {
+		if _, err := st.db.W.ExecContext(ctx, `UPDATE releases SET image_key = '' WHERE image_key = ?`, k); err != nil {
+			return err
+		}
+	}
+	return nil
+}

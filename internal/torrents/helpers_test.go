@@ -4,6 +4,7 @@ import (
 	"context"
 	"io"
 	"log/slog"
+	"sync"
 	"testing"
 	"time"
 
@@ -11,6 +12,7 @@ import (
 	"github.com/anacrolix/torrent/bencode"
 	"github.com/anacrolix/torrent/metainfo"
 
+	"kinodom/internal/store"
 	"kinodom/internal/torrents/torrenttest"
 )
 
@@ -30,7 +32,15 @@ func newOfflineEngine(t *testing.T) *Engine {
 func newTestService(t *testing.T) *Service {
 	t.Helper()
 	db := newTestDB(t)
-	return NewService(newOfflineEngine(t), NewRegistry(db), quiet())
+	return serviceFor(newOfflineEngine(t), NewRegistry(db))
+}
+
+// serviceFor — сервис для тестов: места на диске «сколько угодно», чтобы уборка по расписанию
+// не ставила докачки на паузу на машине, где свободно меньше 20 ГБ.
+func serviceFor(eng *Engine, reg *Registry) *Service {
+	s := NewService(eng, reg, quiet())
+	s.freeSpace = func(string) (int64, error) { return 1 << 50, nil }
+	return s
 }
 
 // runService запускает Run сервиса; останавливается раньше, чем закрываются движок и база.
@@ -77,4 +87,47 @@ func torrentBytes(t *testing.T, mi metainfo.MetaInfo) []byte {
 
 func magnetOf(mi metainfo.MetaInfo) string {
 	return "magnet:?xt=urn:btih:" + mi.HashInfoBytes().HexString()
+}
+
+// problemText — текст проблемы в «Состоянии» или "".
+func problemText(t *testing.T, db *store.DB, id string) string {
+	t.Helper()
+	ps, err := db.Problems(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, p := range ps {
+		if p.ID == id {
+			return p.Text
+		}
+	}
+	return ""
+}
+
+// testClock — часы теста: сервис смотрит на них вместо настоящих.
+type testClock struct {
+	mu sync.Mutex
+	t  time.Time
+}
+
+func (c *testClock) now() time.Time {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.t
+}
+
+func (c *testClock) add(d time.Duration) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.t = c.t.Add(d)
+}
+
+// readersOf — сколько потоков открыто к файлу.
+func (s *Service) readersOf(ih metainfo.Hash, index int) int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if ss, ok := s.sessions[ih]; ok {
+		return ss.readers[index]
+	}
+	return 0
 }

@@ -9,6 +9,7 @@ import (
 	"io"
 	"log/slog"
 	"strconv"
+	"time"
 
 	"golang.org/x/time/rate"
 
@@ -19,6 +20,7 @@ import (
 	"kinodom/internal/logx"
 	"kinodom/internal/meta"
 	"kinodom/internal/netx"
+	"kinodom/internal/power"
 	"kinodom/internal/source"
 	"kinodom/internal/source/rutor"
 	"kinodom/internal/source/rutracker"
@@ -62,6 +64,7 @@ type App struct {
 	DB       *store.DB
 	Sup      *supervisor.Supervisor
 	API      *api.Server
+	Power    *power.Keeper     // запрет сна, пока идёт поток любого модуля (спека, раздел 9)
 	Torrents *torrents.Service // nil, если движок не запустился (см. проблему torrents.engine)
 	Ratings  *meta.Ratings     // рейтинги Кинопоиска (модуль ratings)
 	Images   *meta.Images      // картинки, которые сервер отдаёт по /img/{key}
@@ -126,6 +129,8 @@ func New(ctx context.Context, o Options) (*App, error) {
 	}
 	a.Sup.Add(a.API, true) // API выключать нельзя: без него нет ни пульта, ни телевизоров
 
+	a.Power = power.New(log.With("module", "power"))
+	a.closers = append(a.closers, closerFunc(a.Power.Close))
 	a.initTorrents(ctx, o)
 	if err := a.initMeta(ctx, o); err != nil {
 		return fail(err)
@@ -187,6 +192,12 @@ func (a *App) initTorrents(ctx context.Context, o Options) {
 		}
 		return nil
 	}))
+	// Правила хранения (спека, раздел 15): срок после последнего открытия и запас места.
+	a.Torrents.SetPolicy(torrents.Policy{
+		KeepFor: time.Duration(a.intSetting(ctx, "torrents.keepDays", 14)) * 24 * time.Hour,
+		MinFree: int64(a.intSetting(ctx, "torrents.minFreeGB", 20)) << 30,
+	})
+	a.Torrents.UseKeeper(a.Power)
 	a.Torrents.Register(a.API)
 	a.Sup.Add(a.Torrents, a.ModuleEnabled(ctx, a.Torrents.Name()))
 }
@@ -313,3 +324,12 @@ func (a *App) Close() error {
 type closerFunc func() error
 
 func (f closerFunc) Close() error { return f() }
+
+// intSetting — целая настройка; нет, не число или меньше 1 — значение по умолчанию.
+func (a *App) intSetting(ctx context.Context, key string, def int) int {
+	n, err := strconv.Atoi(a.setting(ctx, key, strconv.Itoa(def)))
+	if err != nil || n < 1 {
+		return def
+	}
+	return n
+}

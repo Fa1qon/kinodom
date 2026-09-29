@@ -15,6 +15,7 @@ import (
 
 	"github.com/anacrolix/torrent/metainfo"
 
+	"kinodom/internal/power"
 	"kinodom/internal/torrents/torrenttest"
 )
 
@@ -28,7 +29,16 @@ func streamFixture(t *testing.T, name string, size int) (srv *httptest.Server, i
 // streamFixtureService — то же, что streamFixture, плюс сам сервис (чтобы дотянуться до движка).
 func streamFixtureService(t *testing.T, name string, size int) (s *Service, srv *httptest.Server, ih metainfo.Hash, want []byte) {
 	t.Helper()
+	return streamFixtureWith(t, name, size, nil)
+}
+
+// streamFixtureWith — то же, но setup настраивает сервис до запуска Run.
+func streamFixtureWith(t *testing.T, name string, size int, setup func(*Service)) (s *Service, srv *httptest.Server, ih metainfo.Hash, want []byte) {
+	t.Helper()
 	s = newTestService(t)
+	if setup != nil {
+		setup(s)
+	}
 	runService(t, s)
 	src := t.TempDir()
 	mi, root := torrenttest.MakeTorrent(t, src, "Космос", 64<<10, torrenttest.File{Path: name, Size: size})
@@ -144,5 +154,27 @@ func TestStreamResumesAfterOnlyPeerReconnects(t *testing.T) {
 	code, _, body := get(t, u, fmt.Sprintf("bytes=%d-%d", from, from+99_999))
 	if code != http.StatusPartialContent || !bytes.Equal(body, want[from:from+100_000]) {
 		t.Fatalf("после обрыва: код %d, байты совпадают %v", code, bytes.Equal(body, want[from:from+100_000]))
+	}
+}
+
+// Пока идёт поток, ПК не засыпает; поток закрыт — счётчики потоков возвращаются к нулю (хвост
+// этапа 2), а запрет сна держится ещё 10 минут.
+func TestStreamHoldsPowerAndCountsBackToZero(t *testing.T) {
+	k := power.New(quiet())
+	t.Cleanup(func() { k.Close() })
+	s, srv, ih, _ := streamFixtureWith(t, "film.mkv", 2<<20, func(s *Service) { s.UseKeeper(k) })
+	resp, err := http.Get(srv.URL + "/stream/" + ih.HexString() + "/0/film.mkv")
+	if err != nil {
+		t.Fatal(err)
+	}
+	io.ReadFull(resp.Body, make([]byte, 64<<10))
+	if k.Active() != 1 || s.ActiveStreams() != 1 {
+		t.Fatalf("потоков: у запрета сна %d, у сервиса %d", k.Active(), s.ActiveStreams())
+	}
+	resp.Body.Close()
+	for deadline := time.Now().Add(5 * time.Second); k.Active() != 0 || s.ActiveStreams() != 0; time.Sleep(20 * time.Millisecond) {
+		if time.Now().After(deadline) {
+			t.Fatalf("поток закрыт, а потоков: у запрета сна %d, у сервиса %d", k.Active(), s.ActiveStreams())
+		}
 	}
 }
