@@ -343,10 +343,10 @@ func build(in buildInput) *Lineup {
 	var fed, rest []*Channel
 	for _, k := range keys {
 		c := l.ByKey[k]
+		c.Hidden = hiddenBy(c, p.overrides[k], in) // и у каналов без источников: их молчащие источники проверяются
 		if !c.Offered() {
 			continue
 		}
-		c.Hidden = hiddenBy(c, p.overrides[k], in)
 		if c.Federal > 0 {
 			fed = append(fed, c)
 		} else {

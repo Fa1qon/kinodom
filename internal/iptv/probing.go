@@ -2,6 +2,7 @@ package iptv
 
 import (
 	"context"
+	"slices"
 	"sync"
 	"time"
 
@@ -34,7 +35,7 @@ func (m *Module) lightLoop(ctx context.Context) error {
 			// Каналы, которые только что появились, сразу получают оценку: полная проверка их
 			// источников, если её ещё не было.
 			m.rebuild(ctx)
-			m.runFull(ctx, m.fullTargets(true))
+			m.runFull(ctx, m.fullTargets(true, m.favoriteKeys(ctx)))
 			continue
 		}
 		wait := time.Until(nextAt(m.local(), []int{lightHour}))
@@ -56,7 +57,7 @@ func (m *Module) fullLoop(ctx context.Context) error {
 		case <-ctx.Done():
 			return nil
 		case <-time.After(wait):
-			m.runFull(ctx, m.fullTargets(false))
+			m.runFull(ctx, m.fullTargets(false, m.favoriteKeys(ctx)))
 		}
 	}
 }
@@ -96,9 +97,20 @@ func (m *Module) lightTargets() []int64 {
 	return ids
 }
 
-// fullTargets — первые fullPerChannel источников каждого видимого канала и закреплённый; мёртвые и
-// «ограниченные» — нет. onlyNew — только те, у кого полной проверки ещё не было.
-func (m *Module) fullTargets(onlyNew bool) []int64 {
+// favoriteKeys — каналы в избранном хоть одного устройства: их проверяем, даже если категория скрыта.
+func (m *Module) favoriteKeys(ctx context.Context) map[string]bool {
+	keys, err := m.d.allFavorites(ctx)
+	if err != nil {
+		m.log.Warn("iptv: избранное не читается", "err", err)
+	}
+	return keys
+}
+
+// fullTargets — у каждого видимого канала (или в избранном хоть одного устройства): первые
+// fullPerChannel предлагаемых источников, закреплённый и молчащие — иначе канал, у которого источник
+// раз не ответил, пропал бы с экрана до лёгкой проверки в 4:00. Мёртвые и «ограниченные» — нет.
+// onlyNew — только те, у кого полной проверки ещё не было.
+func (m *Module) fullTargets(onlyNew bool, favorites map[string]bool) []int64 {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	seen := map[int64]bool{}
@@ -110,12 +122,23 @@ func (m *Module) fullTargets(onlyNew bool) []int64 {
 		seen[s.ID] = true
 		ids = append(ids, s.ID)
 	}
-	for _, c := range m.lineup.Order {
-		if c.Hidden != "" {
+	keys := make([]string, 0, len(m.lineup.ByKey))
+	for k := range m.lineup.ByKey {
+		keys = append(keys, k)
+	}
+	slices.Sort(keys)
+	for _, k := range keys {
+		c := m.lineup.ByKey[k]
+		if c.Hidden != "" && !favorites[k] {
 			continue
 		}
 		for i, s := range c.Sources {
 			if i < fullPerChannel || s.URL == c.Pinned {
+				add(s)
+			}
+		}
+		for _, s := range c.Others {
+			if s.State == StateSilent {
 				add(s)
 			}
 		}
@@ -179,8 +202,24 @@ func (m *Module) check(ctx context.Context, ids []int64, level string, parallel 
 	wg.Wait()
 }
 
-// checkOne — проверка одного источника и запись результата.
+// checkOne — проверка одного источника и запись результата. Не больше lightParallel / fullParallel
+// одновременно на весь модуль; паника проверки — в журнал, а не падение процесса.
 func (m *Module) checkOne(ctx context.Context, id int64, level string) {
+	sem := m.lightSem
+	if level == "full" {
+		sem = m.fullSem
+	}
+	select {
+	case sem <- struct{}{}:
+	case <-ctx.Done():
+		return
+	}
+	defer func() { <-sem }()
+	defer func() {
+		if v := recover(); v != nil {
+			m.log.Error("iptv: проверка источника упала", "stream", id, "panic", v)
+		}
+	}()
 	m.mu.Lock()
 	s := m.pool.streams[id]
 	if s == nil {

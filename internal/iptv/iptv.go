@@ -67,7 +67,13 @@ type Options struct {
 	Location *time.Location
 	Log      *slog.Logger
 	Now      func() time.Time // тесты
-	Prober   *probe.Prober    // тесты; nil — по спеке
+	Prober   Checker          // тесты; nil — по спеке
+}
+
+// Checker — проверка источника; *probe.Prober ему соответствует (тесты подменяют).
+type Checker interface {
+	Light(ctx context.Context, t probe.Target) probe.Result
+	Full(ctx context.Context, t probe.Target) probe.Result
 }
 
 // Progress — ход прохода проверок для пульта.
@@ -93,7 +99,12 @@ type Module struct {
 	log    *slog.Logger
 	now    func() time.Time // без пояса; местное время — m.local()
 	client *http.Client
-	prober *probe.Prober
+	prober Checker
+
+	// Пределы одновременных проверок — на весь модуль: плановый проход и кнопки «Проверить» делят их
+	// (спека этапа 8, раздел 5.8, критерий 7).
+	lightSem chan struct{}
+	fullSem  chan struct{}
 
 	dirty    chan struct{} // пересобрать состав
 	wake     chan struct{} // проверить, не пора ли что-то скачать
@@ -138,6 +149,7 @@ func New(o Options) *Module {
 	}
 	m := &Module{o: o, d: db{o.DB}, log: o.Log, now: o.Now, loc: o.Location, client: o.Client, prober: o.Prober,
 		dirty: make(chan struct{}, 1), wake: make(chan struct{}, 1), lightNew: make(chan struct{}, 1),
+		lightSem: make(chan struct{}, lightParallel), fullSem: make(chan struct{}, fullParallel),
 		pool: newPool(), epg: newEPGIndex(nil), hidden: o.Hidden, epgURL: o.EPGURL,
 		plFails: map[int64]int{}, plNext: map[int64]time.Time{}}
 	if m.client == nil {
