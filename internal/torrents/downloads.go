@@ -102,7 +102,7 @@ func (s *Service) Downloads(ctx context.Context) (DownloadsView, error) {
 		if ss != nil && ss.t.Info() != nil && f.Index < len(ss.t.Files()) {
 			tf := ss.t.Files()[f.Index]
 			it.Done = min(tf.BytesCompleted(), tf.Length())
-			it.Readiness, _ = readinessOf(true, it.Done, tf.Length(), estimateBitrate(tf.Length(), false), ss.speed)
+			it.Readiness, _ = readinessLocked(ss, f.Index, len(playableFiles(allFiles(ss.t))) > 1)
 			switch {
 			case watching:
 				it.State = DownloadWatching
