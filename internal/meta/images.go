@@ -89,13 +89,28 @@ func NewImages(o ImagesOptions) (*Images, error) {
 		return nil, fmt.Errorf("папка картинок: %w", err)
 	}
 	ptr, dtr := netx.NewTransport(o.Proxy), netx.NewTransport(nil)
+	proxied := &http.Client{Transport: ptr, Timeout: o.Timeout}
+	direct := &http.Client{Transport: dtr, Timeout: o.Timeout}
 	if !o.AllowPrivate {
 		netx.PublicOnly(ptr, o.Proxy)
 		netx.PublicOnly(dtr, nil)
+		// Через прокси соединение идёт только с прокси, и PublicOnly не видит, куда ведёт редирект.
+		proxied.CheckRedirect, direct.CheckRedirect = publicRedirect, publicRedirect
 	}
-	return &Images{o: o, proxied: &http.Client{Transport: ptr, Timeout: o.Timeout},
-		direct: &http.Client{Transport: dtr, Timeout: o.Timeout}, lim: rate.NewLimiter(o.Rate, 1),
+	return &Images{o: o, proxied: proxied, direct: direct, lim: rate.NewLimiter(o.Rate, 1),
 		noImage: map[string]time.Time{}}, nil
+}
+
+// publicRedirect — редирект картинки на адрес этого ПК или домашней сети не выполняется (M10);
+// остальное — как у http.Client по умолчанию (не больше 10 переходов).
+func publicRedirect(req *http.Request, via []*http.Request) error {
+	if netx.PrivateHost(req.URL.Hostname()) {
+		return fmt.Errorf("%w: редирект на %s", ErrNoImage, req.URL.Hostname())
+	}
+	if len(via) >= 10 {
+		return errors.New("больше 10 редиректов")
+	}
+	return nil
 }
 
 // ImageKey — ключ картинки для адреса: /img/{ключ}.
