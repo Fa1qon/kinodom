@@ -109,6 +109,37 @@ export function baseName(p) {
   return dot > 0 ? name.slice(0, dot) : name;
 }
 
+// plural — «1 пир», «3 пира», «12 пиров».
+export function plural(n, one, few, many) {
+  const d = n % 10;
+  const dd = n % 100;
+  if (d === 1 && dd !== 11) return `${n} ${one}`;
+  if (d >= 2 && d <= 4 && (dd < 12 || dd > 14)) return `${n} ${few}`;
+  return `${n} ${many}`;
+}
+
+// shortNames — имена серий без общего начала и конца: «The.Dinosaurs.S01E01.720p.NF…» → «S01E01».
+// Слова — части имени между точками, пробелами, «_» и «-». Если у какой-то серии ничего не
+// остаётся — полные имена.
+export function shortNames(names) {
+  const full = names.map(baseName);
+  if (full.length < 2) return full;
+  const words = full.map((n) => n.split(/[\s._-]+/).filter(Boolean));
+  const minLen = Math.min(...words.map((w) => w.length));
+  let pre = 0;
+  while (pre < minLen && words.every((w) => w[pre] === words[0][pre])) pre++;
+  let post = 0;
+  while (post < minLen - pre && words.every((w) => w[w.length - 1 - post] === words[0][words[0].length - 1 - post])) post++;
+  const short = words.map((w) => w.slice(pre, w.length - post).join(' '));
+  return short.every(Boolean) ? short : full;
+}
+
+// fileFormat — формат файла по расширению: «MKV»; без расширения — "" (спека этапа 7, раздел 10.7).
+export function fileFormat(name) {
+  const m = /\.([a-z0-9]{2,4})$/i.exec(name.split(/[\\/]/).pop());
+  return m ? m[1].toUpperCase() : '';
+}
+
 // ready — цвет и подпись кнопки «Смотреть» по готовности файла (цвет считает сервер).
 export const ready = {
   none: { color: '', label: '' },
