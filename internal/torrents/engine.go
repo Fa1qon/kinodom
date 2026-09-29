@@ -128,6 +128,11 @@ func buildClientConfig(c Config, st storage.ClientImpl, up *rate.Limiter) (*torr
 	// Общего лимита соединений в движке нет — только на раздачу (проверено).
 	cfg.EstablishedConnsPerTorrent = cmp.Or(c.ConnsPerTorrent, 20)
 	cfg.TotalHalfOpenConns = 100
+	// В anacrolix v1.61 пробуждение горутины записи теряется (гонка Broadcast и Signaled):
+	// соединение перестаёт запрашивать куски и оживает только по таймеру keepalive — по умолчанию
+	// через минуту. С 5 с простой пира не дольше; цена — 4 байта keepalive на простаивающее
+	// соединение раз в 5 с (этап 6, найдено по стекам зависших тестов).
+	cfg.KeepAliveTimeout = 5 * time.Second
 	cfg.DhtStartingNodes = fastBootstrap
 	if c.Offline {
 		cfg.NoDHT = true
@@ -138,6 +143,7 @@ func buildClientConfig(c Config, st storage.ClientImpl, up *rate.Limiter) (*torr
 		// Только TCP: uTP через loopback под нагрузкой теряет пакеты, и anacrolix/utp (чистый Go,
 		// CGO выключен) после потери не восстанавливается — загрузка в тестах вставала посреди куска.
 		cfg.DisableUTP = true
+		cfg.KeepAliveTimeout = 100 * time.Millisecond // тесты: простой из-за потерянного пробуждения — доли секунды
 	}
 	u, err := netx.ParseProxy(c.TrackerProxy)
 	if err != nil {

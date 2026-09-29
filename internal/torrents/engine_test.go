@@ -4,6 +4,7 @@ import (
 	"net/http"
 	"strings"
 	"testing"
+	"time"
 
 	"golang.org/x/time/rate"
 
@@ -109,5 +110,25 @@ func TestOfflineEngineUsesTCPOnly(t *testing.T) {
 	}
 	if !torrenttest.OfflineConfig(t.TempDir()).DisableUTP {
 		t.Fatal("тестовые клиенты — тоже только TCP")
+	}
+}
+
+// Пробуждение горутины записи в anacrolix v1.61 теряется (гонка Broadcast и Signaled): соединение
+// перестаёт запрашивать куски и оживает только по таймеру keepalive — по умолчанию через минуту.
+// В службе таймер — 5 с (простой пира не дольше), в тестах — 100 мс (этап 6).
+func TestKeepAliveBoundsRequestStalls(t *testing.T) {
+	on, err := buildClientConfig(Config{ListenPort: 42000, Log: quiet()}, nil, rate.NewLimiter(rate.Inf, 0))
+	if err != nil {
+		t.Fatal(err)
+	}
+	off, err := buildClientConfig(Config{Offline: true, Log: quiet()}, nil, rate.NewLimiter(rate.Inf, 0))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if on.KeepAliveTimeout != 5*time.Second || off.KeepAliveTimeout != 100*time.Millisecond {
+		t.Fatalf("keepalive: служба %v, тесты %v", on.KeepAliveTimeout, off.KeepAliveTimeout)
+	}
+	if got := torrenttest.OfflineConfig(t.TempDir()).KeepAliveTimeout; got != 100*time.Millisecond {
+		t.Fatalf("keepalive тестовых клиентов %v", got)
 	}
 }
