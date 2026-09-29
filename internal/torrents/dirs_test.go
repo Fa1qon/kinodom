@@ -129,6 +129,36 @@ func TestUnavailableDirKeepsRecords(t *testing.T) {
 	}
 }
 
+// Раздача из базы до этапа 6 (папка не записана) после смены папки загрузок в пульте остаётся в
+// прежней папке — и в движке, и в базе: иначе удаление обнуляло бы файл в новой папке, а место в
+// старой не освобождалось, после перезапуска раздача качалась бы заново (финальное ревью 7a).
+func TestOldTorrentWithoutDirStaysAfterDirChange(t *testing.T) {
+	ctx := context.Background()
+	oldDir, newDir := t.TempDir(), t.TempDir()
+	reg := NewRegistry(newTestDB(t))
+	mi, _ := torrenttest.MakeTorrent(t, t.TempDir(), "film.mkv", 64<<10, torrenttest.File{Path: "film.mkv", Size: 300_000})
+	ih := mi.HashInfoBytes()
+	if _, err := reg.Remember(ctx, ih, "torrent-file", ""); err != nil {
+		t.Fatal(err)
+	}
+	must(t, reg.SaveMetainfo(ctx, ih, "film.mkv", torrentBytes(t, mi)))
+	must(t, reg.MarkStored(ctx, ih, 0, filepath.Join(oldDir, "film.mkv"), 300_000, time.Now()))
+	e, err := NewEngine(Config{DownloadsDir: oldDir, StateDir: t.TempDir(), Offline: true, Log: quiet()})
+	must(t, err)
+	t.Cleanup(func() { e.Close() })
+	s := serviceFor(e, reg)
+	must(t, s.restore(ctx))
+	e.SetDownloadsDir(newDir)
+	if got := e.TorrentDir(ih); got != oldDir {
+		t.Fatalf("после смены папки раздача в %s, а файлы в %s", got, oldDir)
+	}
+	recs, err := reg.Restorable(ctx)
+	must(t, err)
+	if len(recs) != 1 || recs[0].Dir != oldDir {
+		t.Fatalf("в базе папка раздачи %+v, ожидалась %s", recs, oldDir)
+	}
+}
+
 // Папку загрузок сменили в пульте: новые раздачи — сразу в новую папку, без перезапуска; открытые
 // раньше остаются на прежнем месте (спека этапа 7, раздел 5.1).
 func TestDownloadsDirChangesOnTheFly(t *testing.T) {
