@@ -46,11 +46,22 @@ func jsonGuard(next http.Handler) http.Handler {
 	})
 }
 
-// loopbackOnly пропускает только запросы с этого же ПК.
-func loopbackOnly(next http.Handler) http.Handler {
+// thisPCOnly пропускает только запросы с этого же ПК — по loopback или по его адресу в сети.
+func thisPCOnly(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if !httpx.IsLoopback(r) {
+		if !httpx.FromThisPC(r) {
 			httpx.WriteError(w, http.StatusForbidden, "это действие доступно только на компьютере, где работает Kinodom")
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
+// homeOnly пропускает только запросы из домашней сети (спека этапа 7, раздел 10.1).
+func homeOnly(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !httpx.FromHome(r) {
+			httpx.WriteError(w, http.StatusForbidden, "Изменить можно только из домашней сети")
 			return
 		}
 		next.ServeHTTP(w, r)

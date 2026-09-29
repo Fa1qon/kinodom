@@ -179,14 +179,14 @@ func (s *Service) Update(ctx context.Context, p Patch) (Values, error) {
 // Router — то, что пакету нужно от HTTP-сервера; api.Server ему соответствует.
 type Router interface {
 	Handle(pattern, module string, h http.Handler)
-	HandleLocal(pattern, module string, h http.Handler)
+	HandleHome(pattern, module string, h http.Handler)
 }
 
-// Register — GET с любого устройства (телевизору и `kinodom open` нужен плеер), PUT — только с
-// этого ПК (основная спека, раздел 13).
+// Register — GET с любого устройства (телевизору и `kinodom open` нужен плеер), PUT — из домашней
+// сети (спека этапа 7, раздел 10.1).
 func (s *Service) Register(r Router) {
 	r.Handle("GET /api/v1/settings", "", http.HandlerFunc(s.handleGet))
-	r.HandleLocal("PUT /api/v1/settings", "", http.HandlerFunc(s.handlePut))
+	r.HandleHome("PUT /api/v1/settings", "", http.HandlerFunc(s.handlePut))
 }
 
 func (s *Service) handleGet(w http.ResponseWriter, r *http.Request) {

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"io"
 	"log/slog"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
@@ -116,18 +117,54 @@ func TestMutatingRequestNeedsJSON(t *testing.T) {
 	}
 }
 
+// ownAddr — сетевой (не loopback) адрес этого ПК: пульт, открытый на ПК по адресу в сети. "" — адресов
+// в сети нет.
+func ownAddr(t *testing.T) string {
+	t.Helper()
+	addrs, err := net.InterfaceAddrs()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, a := range addrs {
+		if n, ok := a.(*net.IPNet); ok && n.IP.To4() != nil && !n.IP.IsLoopback() {
+			return n.IP.String()
+		}
+	}
+	return ""
+}
+
 func TestLocalOnlyRoute(t *testing.T) {
 	s, _ := newTestServer(t)
 	s.HandleLocal("GET /api/v1/local", "", okHandler())
-	req := httptest.NewRequest("GET", "/api/v1/local", nil)
-	req.RemoteAddr = "192.168.0.7:50000"
-	if rec := do(s.Handler(), req); rec.Code != http.StatusForbidden {
-		t.Fatalf("из сети: код %d", rec.Code)
+	remotes := map[string]int{"192.168.0.7:50000": http.StatusForbidden, "127.0.0.1:50000": http.StatusOK}
+	if a := ownAddr(t); a != "" {
+		remotes[net.JoinHostPort(a, "50000")] = http.StatusOK // этот ПК по адресу в сети
 	}
-	req = httptest.NewRequest("GET", "/api/v1/local", nil)
-	req.RemoteAddr = "127.0.0.1:50000"
-	if rec := do(s.Handler(), req); rec.Code != http.StatusOK {
-		t.Fatalf("с этого ПК: код %d", rec.Code)
+	for remote, want := range remotes {
+		req := httptest.NewRequest("GET", "/api/v1/local", nil)
+		req.RemoteAddr = remote
+		if rec := do(s.Handler(), req); rec.Code != want {
+			t.Fatalf("%s: код %d", remote, rec.Code)
+		}
+	}
+}
+
+// Изменения — из домашней сети; с других адресов — 403 с понятным текстом (спека этапа 7, раздел 10.1).
+func TestHomeOnlyRoute(t *testing.T) {
+	s, _ := newTestServer(t)
+	s.HandleHome("PUT /api/v1/home", "", okHandler())
+	for remote, want := range map[string]int{"192.168.0.7:50000": http.StatusOK, "127.0.0.1:50000": http.StatusOK,
+		"[fe80::5%eth0]:50000": http.StatusOK, "8.8.8.8:50000": http.StatusForbidden} {
+		req := httptest.NewRequest("PUT", "/api/v1/home", strings.NewReader("{}"))
+		req.Header.Set("Content-Type", "application/json")
+		req.RemoteAddr = remote
+		rec := do(s.Handler(), req)
+		if rec.Code != want {
+			t.Fatalf("%s: код %d", remote, rec.Code)
+		}
+		if want == http.StatusForbidden && !strings.Contains(rec.Body.String(), "Изменить можно только из домашней сети") {
+			t.Fatalf("%s: %s", remote, rec.Body)
+		}
 	}
 }
 
@@ -181,22 +218,29 @@ func TestRunListensAndStops(t *testing.T) {
 	}
 }
 
-// «Состояние»: поля приложения добавляются к проблемам и модулям; local — запрос с этого ПК.
+// «Состояние»: поля приложения добавляются к проблемам и модулям; local — запрос с этого ПК, canEdit —
+// из домашней сети (спека этапа 7, раздел 10.1).
 func TestStatusAddsAppFieldsAndLocal(t *testing.T) {
 	s, _ := newTestServer(t)
 	s.SetStatus(func(context.Context) (map[string]any, error) {
 		return map[string]any{"disk": map[string]int{"freeBytes": 7}}, nil
 	})
-	for remote, want := range map[string]bool{"192.168.0.7:5000": false, "127.0.0.1:5000": true} {
+	type who struct{ local, canEdit bool }
+	remotes := map[string]who{"192.168.0.7:5000": {false, true}, "127.0.0.1:5000": {true, true}, "8.8.8.8:5000": {false, false}}
+	if a := ownAddr(t); a != "" {
+		remotes[net.JoinHostPort(a, "5000")] = who{true, true}
+	}
+	for remote, want := range remotes {
 		req := httptest.NewRequest("GET", "/api/v1/status", nil)
 		req.RemoteAddr = remote
 		rec := do(s.Handler(), req)
 		var st struct {
 			Local    bool                    `json:"local"`
+			CanEdit  bool                    `json:"canEdit"`
 			Problems []store.Problem         `json:"problems"`
 			Disk     struct{ FreeBytes int } `json:"disk"`
 		}
-		if err := json.Unmarshal(rec.Body.Bytes(), &st); err != nil || st.Local != want || st.Disk.FreeBytes != 7 || st.Problems == nil {
+		if err := json.Unmarshal(rec.Body.Bytes(), &st); err != nil || (who{st.Local, st.CanEdit}) != want || st.Disk.FreeBytes != 7 || st.Problems == nil {
 			t.Fatalf("%s: %s", remote, rec.Body)
 		}
 	}

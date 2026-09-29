@@ -291,8 +291,8 @@ func (a *App) initCatalog(ctx context.Context, o Options, v settings.Values) err
 	a.rutracker = rtSrc
 	// Проблема входа прошлого запуска в базе: запрет входа живёт в памяти, после перезапуска его нет.
 	a.rutrackerLogin(rtSrc.LoginState())
-	// Кнопка «Войти» в настройках (спека этапа 7, раздел 5.3): только с этого ПК.
-	a.API.HandleLocal("POST /api/v1/sources/rutracker/login", "catalog", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	// Кнопка «Войти» в настройках (спека этапа 7, раздел 5.3): из домашней сети.
+	a.API.HandleHome("POST /api/v1/sources/rutracker/login", "catalog", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		httpx.WriteJSON(w, http.StatusOK, rtSrc.Relogin(r.Context()))
 	}))
 	a.Sup.Add(edge.NewModule(a.Log.With("module", "edge")), edgeOn)
