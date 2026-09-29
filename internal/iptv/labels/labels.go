@@ -88,24 +88,30 @@ func (b *Base) ByID(id string) *OrgChannel {
 // Names — названия канала iptv-org для моста (раздел 5.3): название и синонимы.
 func (c *OrgChannel) Names() []string { return append([]string{c.Name}, c.AltNames...) }
 
-// Find — канал iptv-org: по id из tvg-id потоков канала, если среди известных id ровно один; иначе
+// Find — канал iptv-org: по id из tvg-id потоков канала — тот, что встречается чаще других; иначе
 // по названиям канала телепрограммы, если подходит ровно один канал. nil — не найден.
 func (b *Base) Find(ids []string, names []string) *OrgChannel {
 	if b == nil {
 		return nil
 	}
-	var byID *OrgChannel
+	// По tvg-id — большинством: в плейлистах бывает поток, подписанный чужим id.
+	votes := map[*OrgChannel]int{}
 	for _, id := range ids {
-		c := b.byID[id]
-		switch {
-		case c == nil:
-		case byID == nil:
-			byID = c
-		case byID != c:
-			return nil
+		if c := b.byID[id]; c != nil {
+			votes[c]++
 		}
 	}
-	if byID != nil {
+	var byID *OrgChannel
+	top, tie := 0, false
+	for c, n := range votes {
+		switch {
+		case n > top:
+			byID, top, tie = c, n, false
+		case n == top:
+			tie = true
+		}
+	}
+	if byID != nil && !tie {
 		return byID
 	}
 	var found *OrgChannel
@@ -175,10 +181,11 @@ var orgCategories = map[string]string{
 	"sports":      "sports",
 	"documentary": "science", "science": "science", "education": "science", "travel": "science", "outdoor": "science", "culture": "science",
 	"news": "news", "business": "news", "weather": "news", "legislative": "news",
-	"kids": "kids", "animation": "kids", "family": "kids",
+	"kids": "kids", "animation": "kids",
 	"music":         "music",
 	"entertainment": "entertainment", "comedy": "entertainment", "lifestyle": "entertainment", "cooking": "entertainment",
 	"auto": "entertainment", "relax": "entertainment", "shop": "entertainment", "interactive": "entertainment",
+	"family":  "entertainment", // у iptv-org «family» — семейные развлекательные (СТС); детские помечены kids
 	"general": "general", "public": "general",
 	"religious": "religious",
 	"xxx":       "adult",
@@ -233,13 +240,15 @@ func FromID(id string, names []string) Source {
 	return Source{}
 }
 
-func knownCountry(code string) bool {
-	if code == "UK" {
-		return false // у iptvx.one «-uk» бывает и словом; Великобританию берём из iptv-org
-	}
-	r, err := language.ParseRegion(code)
-	return err == nil && r.IsCountry()
+// idCountries — коды стран, которые iptvx.one пишет в конце id («tet-ua»). Список явный: «-tv» в
+// «match-tv» — не Тувалу (исследование, раздел 18).
+var idCountries = map[string]bool{
+	"UA": true, "BY": true, "KZ": true, "MD": true, "BG": true, "RU": true, "UZ": true, "AM": true, "GE": true,
+	"AZ": true, "LV": true, "LT": true, "EE": true, "TR": true, "DE": true, "FR": true, "PL": true, "IT": true,
+	"ES": true, "RS": true, "HR": true, "RO": true, "CZ": true, "IL": true, "KG": true, "TJ": true, "US": true,
 }
+
+func knownCountry(code string) bool { return idCountries[code] }
 
 type rule struct {
 	value string

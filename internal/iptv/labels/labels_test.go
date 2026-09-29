@@ -13,6 +13,7 @@ const channelsJSON = `[
 {"id":"RossiyaK.ru","name":"Rossiya K","alt_names":["Россия К","Культура"],"country":"RU","categories":["culture"],"is_nsfw":false},
 {"id":"Rossiya24.ru","name":"Rossiya 24","alt_names":["Россия 24"],"country":"RU","categories":["general","news"],"is_nsfw":false},
 {"id":"Karusel.ru","name":"Karusel","alt_names":["Карусель"],"country":"RU","categories":["kids","entertainment"],"is_nsfw":false},
+{"id":"STS.ru","name":"STS","alt_names":["СТС"],"country":"RU","categories":["family"],"is_nsfw":false},
 {"id":"Blue.ru","name":"Blue Hustler","alt_names":[],"country":"RU","categories":[],"is_nsfw":true},
 {"id":"BBCNews.uk","name":"BBC News","alt_names":[],"country":"UK","categories":["news"],"is_nsfw":false},
 {"id":"AlJazeera.qa","name":"Al Jazeera","alt_names":["الجزيرة"],"country":"QA","categories":["news"],"is_nsfw":false},
@@ -52,6 +53,8 @@ func TestFind(t *testing.T) {
 		{nil, []string{"культура"}, "RossiyaK.ru"},
 		{nil, []string{"Близнец"}, ""}, // два канала с таким названием
 		{[]string{"MatchTV.ru", "Karusel.ru"}, nil, ""},
+		{[]string{"MatchTV.ru", "Karusel.ru", "MatchTV.ru"}, []string{"Карусель"}, "MatchTV.ru"}, // большинство
+		{[]string{"MatchTV.ru", "Karusel.ru"}, []string{"Карусель"}, "Karusel.ru"},               // поровну — по названию
 		{[]string{"Нет.такого"}, []string{"Карусель"}, "Karusel.ru"},
 		{nil, []string{"Неизвестный"}, ""},
 	}
@@ -74,6 +77,7 @@ func TestFromOrg(t *testing.T) {
 		"RossiyaK.ru":    {Category: "science", Country: "RU"},
 		"Rossiya24.ru":   {Category: "news", Country: "RU"},
 		"Karusel.ru":     {Category: "kids", Country: "RU"},
+		"STS.ru":         {Category: "entertainment", Country: "RU"},
 		"Blue.ru":        {Category: "adult", Country: "RU"},
 		"BBCNews.uk":     {Category: "news", Country: "GB", Languages: []string{"eng"}},
 		"AlJazeera.qa":   {Category: "news", Country: "QA", Languages: []string{"ara", "eng"}},
@@ -98,6 +102,7 @@ func TestFallbacks(t *testing.T) {
 		{"tet-ua", nil, "UA"},
 		{"city-tv-bg", nil, "BG"},
 		{"btvmd", nil, ""},
+		{"match-tv", nil, ""}, // «-tv» — не страна
 		{"pervy-pl4", nil, ""},
 		{"rtl2", []string{"RTL 2 [HR]"}, "HR"},
 		{"x", []string{"Канал [Not 24/7]"}, ""},
