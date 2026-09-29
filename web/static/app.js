@@ -1,6 +1,7 @@
 // Пульт Kinodom: маршруты по адресу после «#», шапка, отметка проблем в меню (спека этапа 7, раздел 6).
 import { h, icon, clear, poll, store } from './ui.js';
 import { get } from './api.js';
+import { initNav } from './nav.js';
 import * as catalog from './views/catalog.js';
 import * as release from './views/release.js';
 import * as search from './views/search.js';
@@ -126,6 +127,7 @@ function render() {
 }
 
 buildHeader();
+initNav();
 window.addEventListener('hashchange', () => {
   setMenu(false);
   render();

@@ -1,6 +1,6 @@
 // Поиск: недавние запросы, состояние каждого трекера, таблица найденного (спека этапа 7, разделы
 // 5.4 и 6.3).
-import { h, icon, size, poll } from '../ui.js';
+import { h, icon, size, poll, keepFocus } from '../ui.js';
 import { get, del } from '../api.js';
 
 const TRACKER = { rutor: 'Rutor', rutracker: 'Rutracker' };
@@ -25,9 +25,9 @@ export function render(root, r, ctx) {
     history.replaceChildren(...(items.length ? [
       icon('history', 20, 'Недавние запросы'),
       ...items.map((it) => h('span', { class: it.query.toLowerCase() === q.toLowerCase() ? 'hist on' : 'hist' },
-        h('a', { href: '#/search?q=' + encodeURIComponent(it.query) }, it.query),
+        h('a', { href: '#/search?q=' + encodeURIComponent(it.query), 'data-key': `hist-${it.query}` }, it.query),
         h('button', { type: 'button', 'aria-label': `Убрать «${it.query}» из истории`, onclick: () => forget(it.query) }, icon('close', 16)))),
-      h('button', { class: 'btn small-btn', type: 'button', onclick: () => forget('') }, 'Очистить'),
+      h('button', { class: 'btn small-btn', type: 'button', 'data-key': 'hist-clear', onclick: () => forget('') }, 'Очистить'),
     ] : []));
   };
 
@@ -62,7 +62,7 @@ export function render(root, r, ctx) {
     if (!alive) return;
     if (first) loadHistory();
     first = false;
-    draw(res);
+    keepFocus(table, () => draw(res));
     if (res.complete || Date.now() - started > SEARCH_FOR) search.stop();
   }, 1000);
 
@@ -81,7 +81,7 @@ export function render(root, r, ctx) {
     }
     table.replaceChildren(
       h('div', { class: 'res-row res-head', 'aria-hidden': 'true' }, h('span', null, 'Раздача'), h('span', null, 'Трекер'), h('span', null, 'Качество'), h('span', null, 'Формат'), h('span', null, 'Размер'), h('span', null, 'Раздают')),
-      ...res.results.map((e) => h('a', { class: 'res-row', href: `#/release/${e.id}` },
+      ...res.results.map((e) => h('a', { class: 'res-row', href: `#/release/${e.id}`, 'data-key': `res-${e.id}` },
         h('span', { class: 'res-title' }, h('span', { class: 'strong ellipsis' }, e.name || e.title), h('span', { class: 'muted small ellipsis' }, e.title)),
         h('span', { class: 'muted' }, TRACKER[e.tracker] || e.tracker),
         h('span', { class: 'muted' }, e.quality || ''),
