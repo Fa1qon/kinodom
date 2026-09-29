@@ -124,6 +124,16 @@ func TestSpaceWindowSlidesPastWatchedEpisodes(t *testing.T) {
 	if tt.Files()[idx[3]].BytesCompleted() == ep {
 		t.Fatal("четвёртая серия скачалась сверх запаса")
 	}
+	// В «Загрузках» на паузе — только серия, до которой дошла очередь; дальние ждут очереди.
+	v, err := s.Downloads(ctx)
+	must(t, err)
+	byIndex := map[int]DownloadState{}
+	for _, it := range v.Items {
+		byIndex[it.Index] = it.State
+	}
+	if byIndex[idx[3]] != DownloadPaused || byIndex[idx[4]] != DownloadQueued || !v.LowSpace {
+		t.Fatalf("«Загрузки»: четвёртая %q, пятая %q, мало места %v", byIndex[idx[3]], byIndex[idx[4]], v.LowSpace)
+	}
 	// Досмотрели до третьей; первые две смотрели два и час назад.
 	now := s.now()
 	must(t, s.reg.TouchStream(ctx, ih, idx[0], now.Add(-2*time.Hour)))
