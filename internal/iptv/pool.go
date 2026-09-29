@@ -118,10 +118,16 @@ func fromMS(v int64) time.Time {
 	return time.UnixMilli(v)
 }
 
-// load читает пул из базы.
+// load читает пул из базы одной транзакцией.
 func (d db) load(ctx context.Context) (*pool, error) {
+	// Одна транзакция чтения: плейлисты, источники, записи и правки — из одного состояния базы.
+	tx, err := d.R.BeginTx(ctx, nil)
+	if err != nil {
+		return nil, err
+	}
+	defer tx.Rollback()
 	p := newPool()
-	rows, err := d.R.QueryContext(ctx, `SELECT id, name, url, limited, added_at, updated_at, tried_at, error, unsupported FROM iptv_playlists`)
+	rows, err := tx.QueryContext(ctx, `SELECT id, name, url, limited, added_at, updated_at, tried_at, error, unsupported FROM iptv_playlists`)
 	if err != nil {
 		return nil, err
 	}
@@ -136,7 +142,7 @@ func (d db) load(ctx context.Context) (*pool, error) {
 		p.playlists[pl.ID] = &pl
 	}
 	rows.Close()
-	rows, err = d.R.QueryContext(ctx, `SELECT id, url, kind, quality, state, fails, grade, light_at, full_at, ttfb_ms, ratio, mbps, error FROM iptv_streams`)
+	rows, err = tx.QueryContext(ctx, `SELECT id, url, kind, quality, state, fails, grade, light_at, full_at, ttfb_ms, ratio, mbps, error FROM iptv_streams`)
 	if err != nil {
 		return nil, err
 	}
@@ -152,7 +158,7 @@ func (d db) load(ctx context.Context) (*pool, error) {
 		p.byURL[s.URL] = &s
 	}
 	rows.Close()
-	rows, err = d.R.QueryContext(ctx, `SELECT playlist_id, stream_id, name, tvg_id, tvg_name, tvg_shift, logo, grp, user_agent, referrer
+	rows, err = tx.QueryContext(ctx, `SELECT playlist_id, stream_id, name, tvg_id, tvg_name, tvg_shift, logo, grp, user_agent, referrer
 		FROM iptv_entries ORDER BY playlist_id, position`)
 	if err != nil {
 		return nil, err
@@ -178,7 +184,7 @@ func (d db) load(ctx context.Context) (*pool, error) {
 		if t.table == "iptv_name_rules" {
 			key = "name"
 		}
-		rows, err := d.R.QueryContext(ctx, `SELECT `+key+`, channel, hidden FROM `+t.table)
+		rows, err := tx.QueryContext(ctx, `SELECT `+key+`, channel, hidden FROM `+t.table)
 		if err != nil {
 			return nil, err
 		}
@@ -193,7 +199,7 @@ func (d db) load(ctx context.Context) (*pool, error) {
 		}
 		rows.Close()
 	}
-	rows, err = d.R.QueryContext(ctx, `SELECT channel, hidden, category, country, languages, pinned_url FROM iptv_channel_overrides`)
+	rows, err = tx.QueryContext(ctx, `SELECT channel, hidden, category, country, languages, pinned_url FROM iptv_channel_overrides`)
 	if err != nil {
 		return nil, err
 	}

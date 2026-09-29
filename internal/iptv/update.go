@@ -299,6 +299,8 @@ func (m *Module) AddPlaylist(ctx context.Context, in PlaylistInput) (PlaylistRes
 	}
 	now := m.now()
 	pl := &Playlist{Name: name, URL: in.URL, Limited: in.Limited, AddedAt: now}
+	m.plMu.Lock()
+	defer m.plMu.Unlock()
 	if err := m.d.insertPlaylist(ctx, pl); err != nil {
 		return PlaylistResult{}, err
 	}
@@ -342,10 +344,14 @@ func (m *Module) apply(ctx context.Context, pl *Playlist, parsed m3u.Playlist, n
 }
 
 // reload — пул заново из базы (после изменения плейлистов). Состояния источников в базе те же.
+// Вызывать под plMu.
 func (m *Module) reload(ctx context.Context) error {
 	p, err := m.d.load(ctx)
 	if err != nil {
 		return err
+	}
+	if m.afterLoad != nil {
+		m.afterLoad()
 	}
 	m.mu.Lock()
 	m.pool = p
@@ -393,6 +399,18 @@ func (m *Module) refresh(ctx context.Context, id int64, data []byte) error {
 			err = ErrBadPlaylist
 		}
 	}
+	// Скачивание — без замка (до минуты); запись — под ним, со свежими именем и «ограничено».
+	m.plMu.Lock()
+	defer m.plMu.Unlock()
+	m.mu.Lock()
+	cur, ok = m.pool.playlists[id]
+	if ok {
+		pl.Name, pl.Limited, pl.UpdatedAt = cur.Name, cur.Limited, cur.UpdatedAt
+	}
+	m.mu.Unlock()
+	if !ok {
+		return errNoPlaylist
+	}
 	if err != nil {
 		pl.TriedAt, pl.Error = now, err.Error()
 		m.mu.Lock()
@@ -439,6 +457,8 @@ type PlaylistPatch struct {
 
 // UpdatePlaylist — имя, «ограничено», новый файл.
 func (m *Module) UpdatePlaylist(ctx context.Context, id int64, p PlaylistPatch) (PlaylistResult, error) {
+	m.plMu.Lock()
+	defer m.plMu.Unlock()
 	m.mu.Lock()
 	cur, ok := m.pool.playlists[id]
 	var pl Playlist
@@ -482,6 +502,8 @@ func (m *Module) UpdatePlaylist(ctx context.Context, id int64, p PlaylistPatch) 
 
 // DeletePlaylist — удалить плейлист; источники без записей уходят.
 func (m *Module) DeletePlaylist(ctx context.Context, id int64) error {
+	m.plMu.Lock()
+	defer m.plMu.Unlock()
 	if _, err := m.d.deletePlaylist(ctx, id); err != nil {
 		return err
 	}
