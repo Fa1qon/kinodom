@@ -215,8 +215,8 @@ func TestUpdateSavesOnlyChangedAndApplies(t *testing.T) {
 	}
 }
 
-// GET — с любого устройства (телевизору и kinodom open нужен плеер); PUT — только с этого ПК, форма
-// без JSON отклоняется (основная спека, раздел 13).
+// GET — с любого устройства (телевизору и kinodom open нужен плеер); PUT — из домашней сети (спека
+// этапа 7, раздел 10.1), форма без JSON отклоняется (основная спека, раздел 13).
 func TestRoutesThroughAPIServer(t *testing.T) {
 	db := openDB(t)
 	s := New(db, load(t, db, nil), &fakeApplier{})
@@ -235,8 +235,11 @@ func TestRoutesThroughAPIServer(t *testing.T) {
 	if rec := do("GET", "192.168.0.7:5000", ""); rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), `"player":"auto"`) {
 		t.Fatalf("GET из сети: %d %s", rec.Code, rec.Body)
 	}
-	if rec := do("PUT", "192.168.0.7:5000", `{"player":"vlc"}`); rec.Code != http.StatusForbidden {
-		t.Fatalf("PUT из сети: %d", rec.Code)
+	if rec := do("PUT", "8.8.8.8:5000", `{"player":"vlc"}`); rec.Code != http.StatusForbidden {
+		t.Fatalf("PUT не из домашней сети: %d", rec.Code)
+	}
+	if rec := do("PUT", "192.168.0.7:5000", `{"player":"mpc-hc"}`); rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), `"player":"mpc-hc"`) {
+		t.Fatalf("PUT с телефона: %d %s", rec.Code, rec.Body)
 	}
 	if rec := do("PUT", "127.0.0.1:5000", `{"player":"vlc"}`); rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), `"player":"vlc"`) {
 		t.Fatalf("PUT с ПК: %d %s", rec.Code, rec.Body)

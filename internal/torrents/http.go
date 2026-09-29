@@ -15,6 +15,7 @@ import (
 // Router — то, что модулю нужно от HTTP-сервера; api.Server ему соответствует.
 type Router interface {
 	Handle(pattern, module string, h http.Handler)
+	HandleHome(pattern, module string, h http.Handler)
 	HandleLocal(pattern, module string, h http.Handler)
 }
 
@@ -28,8 +29,8 @@ func (s *Service) Register(r Router) {
 	r.Handle("GET /stream/{hash}/{index}/{name}", s.Name(), s.StreamHandler())
 	r.Handle("GET /m3u/{hash}/{file}", s.Name(), http.HandlerFunc(s.handleM3U))
 	r.Handle("POST /api/v1/torrents/{hash}/files/{index}/watch", s.Name(), http.HandlerFunc(s.handleWatch))
-	// Удалять скачанное — только с этого ПК (спека, раздел 13).
-	r.HandleLocal("DELETE /api/v1/downloads/{hash}/{index}", s.Name(), http.HandlerFunc(s.handleDelete))
+	// Удалять скачанное — из домашней сети (спека этапа 7, раздел 10.1).
+	r.HandleHome("DELETE /api/v1/downloads/{hash}/{index}", s.Name(), http.HandlerFunc(s.handleDelete))
 }
 
 type openRequest struct {
@@ -140,7 +141,7 @@ func (s *Service) handleWatch(w http.ResponseWriter, r *http.Request) {
 	path := streamPath(ih, index, name)
 	out := watchResponse{Play: Play{URL: "http://" + r.Host + path, Title: title, Kind: "video"},
 		M3UURL: fmt.Sprintf("http://%s/m3u/%s/%d.m3u8", r.Host, ih.HexString(), index)}
-	if httpx.IsLoopback(r) {
+	if httpx.FromThisPC(r) {
 		// Ссылка для kinodom open — строго на 127.0.0.1 и порт API, как бы ни открыли пульт.
 		if _, port, err := net.SplitHostPort(r.Host); err == nil {
 			l := player.LaunchURL("http://127.0.0.1:"+port+path, title)

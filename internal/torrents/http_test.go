@@ -18,6 +18,7 @@ type testRouter struct{ mux *http.ServeMux }
 
 func (r testRouter) Handle(p, _ string, h http.Handler)      { r.mux.Handle(p, h) }
 func (r testRouter) HandleLocal(p, _ string, h http.Handler) { r.mux.Handle(p, h) }
+func (r testRouter) HandleHome(p, _ string, h http.Handler)  { r.mux.Handle(p, h) }
 
 func apiFixture(t *testing.T) (*Service, *httptest.Server) {
 	t.Helper()
