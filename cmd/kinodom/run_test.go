@@ -10,9 +10,19 @@ import (
 )
 
 func TestRunRejectsArgs(t *testing.T) {
-	var out, errOut strings.Builder
-	if code := runCLI([]string{"run", "лишнее"}, &out, &errOut); code != 2 {
-		t.Fatalf("код %d", code)
+	for _, args := range [][]string{{"run", "лишнее"}, {"run", "--port", "1"}} {
+		var out, errOut strings.Builder
+		if code := runCLI(args, &out, &errOut); code != 2 || !strings.Contains(errOut.String(), "использование") {
+			t.Fatalf("%v: код %d, %q", args, code, errOut.String())
+		}
+	}
+}
+
+// --downloads — папка загрузок для проверки вживую, мимо настройки службы.
+func TestRunDownloadsFlag(t *testing.T) {
+	o, err := runOptions([]string{"--downloads", `D:\Проверка`})
+	if err != nil || o.DownloadsDir != `D:\Проверка` || !o.Console {
+		t.Fatalf("%+v, %v", o, err)
 	}
 }
 

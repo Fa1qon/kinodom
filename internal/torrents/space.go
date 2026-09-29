@@ -45,6 +45,9 @@ func (s *Service) SetPolicy(p Policy) {
 	s.policy = p
 }
 
+// Policy — действующие правила хранения.
+func (s *Service) Policy() Policy { return s.pol() }
+
 func (s *Service) pol() Policy {
 	s.mu.Lock()
 	defer s.mu.Unlock()
