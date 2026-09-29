@@ -302,5 +302,5 @@ func openVLC(streamURL string) error {
 	if err != nil {
 		return err
 	}
-	return player.Launch(p, streamURL, "")
+	return player.Launch(p, streamURL, "", 0)
 }

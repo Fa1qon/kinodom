@@ -37,7 +37,7 @@ func cmdOpen(args []string, stdout, stderr io.Writer) int {
 	if err != nil {
 		return fail(stderr, err)
 	}
-	if err := launchPlayer(p, stream, title); err != nil {
+	if err := launchPlayer(p, stream, title, player.LaunchStart(args[0])); err != nil {
 		return fail(stderr, fmt.Errorf("%s не запустился: %w", p.Name, err))
 	}
 	fmt.Fprintf(stdout, "%s: %s\n", p.Name, title)
