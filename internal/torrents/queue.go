@@ -57,7 +57,7 @@ type FileProgress struct {
 // Download — «Скачать»: файлы хранятся и докачиваются по одному, в порядке серий. files == nil —
 // все видеофайлы раздачи. Списка файлов ещё нет (magnet) — намерение «скачать всё» запоминается и
 // применится, когда метаинфо придёт, в том числе после перезапуска. Повторный вызов ничего не
-// меняет. Места не хватит даже после очистки — ErrLowSpace.
+// меняет. Места не хватит под файл, который начнёт качаться первым, даже после очистки — ErrLowSpace.
 func (s *Service) Download(ctx context.Context, ih metainfo.Hash, files []int) error {
 	s.spaceMu.Lock()
 	defer s.spaceMu.Unlock()
@@ -83,15 +83,22 @@ func (s *Service) Download(ctx context.Context, ih metainfo.Hash, files []int) e
 			files = append(files, f.Index)
 		}
 	}
-	var need int64
+	first := -1 // новый файл, который начнёт качаться первым
 	for _, i := range files {
 		if i < 0 || i >= len(all) {
 			s.mu.Unlock()
 			return ErrNoSuchFile
 		}
-		if !ss.storedFiles[i] {
-			need += all[i].Length() - all[i].BytesCompleted()
+		if !ss.storedFiles[i] && !fileDone(all[i]) && (first < 0 || naturalLess(all[i].DisplayPath(), all[first].DisplayPath())) {
+			first = i
 		}
+	}
+	// Место — под этот файл, как у «Смотреть»: сезон больше свободного места не получает отказ
+	// целиком — докачка встанет на паузу «Мало места» при проверке места, как на этапе 6, а лишнее
+	// удаляют в «Загрузках» (спека этапа 7, раздел 9).
+	var need int64
+	if first >= 0 {
+		need = all[first].Length() - all[first].BytesCompleted()
 	}
 	dir := s.eng.TorrentDir(ih)
 	s.mu.Unlock()
