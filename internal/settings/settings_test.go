@@ -54,21 +54,36 @@ func patch(t *testing.T, js string) Patch {
 func TestLoadDefaultsAndOverrides(t *testing.T) {
 	db := openDB(t)
 	v := load(t, db, nil)
-	if v.KeepDays != 14 || v.MinFreeGB != 20 || v.UploadMBps == nil || *v.UploadMBps != 2 || v.Player != "auto" ||
+	if v.KeepDays != 14 || v.KeepBehind != 1 || v.MinFreeGB != 20 || v.UploadMBps == nil || *v.UploadMBps != 2 || v.Player != "auto" ||
 		v.DownloadsDir != `C:\Kinodom` || v.Sections != "rutracker:2110,rutor:12" || v.Proxy != "" {
 		t.Fatalf("по умолчанию: %+v", v)
 	}
 	db.SetSetting(ctx, KeyMinFreeGB, "0")
+	db.SetSetting(ctx, KeyKeepBehind, "0")
 	db.SetSetting(ctx, KeyKeepDays, "abc")
 	db.SetSetting(ctx, KeyUploadLimit, "")
 	db.SetSetting(ctx, KeyPlayer, "winamp")
 	v = load(t, db, map[string]string{KeyRutrackerLogin: "user"})
-	if v.MinFreeGB != 0 || v.KeepDays != 14 || v.UploadMBps != nil || v.Player != "auto" || v.RutrackerLogin != "user" {
+	if v.MinFreeGB != 0 || v.KeepBehind != 0 || v.KeepDays != 14 || v.UploadMBps != nil || v.Player != "auto" || v.RutrackerLogin != "user" {
 		t.Fatalf("из базы: %+v", v)
 	}
 	db.SetSetting(ctx, KeyUploadLimit, "0")
 	if v = load(t, db, nil); v.UploadMBps == nil || *v.UploadMBps != 0 {
 		t.Fatalf("0 — не раздавать: %+v", v.UploadMBps)
+	}
+}
+
+// Сколько серий позади просмотренной оставлять при нехватке места: 0 разрешён, в ответе пульту —
+// storage.keepBehind.
+func TestKeepBehindField(t *testing.T) {
+	v := load(t, openDB(t), nil)
+	n, err := v.With(patch(t, `{"storage":{"keepBehind":0}}`))
+	if err != nil || n.KeepBehind != 0 || n.View().Storage.KeepBehind != 0 {
+		t.Fatalf("0: %+v, %v", n, err)
+	}
+	n, err = v.With(patch(t, `{"storage":{"keepBehind":3}}`))
+	if b, _ := json.Marshal(n.View()); err != nil || !strings.Contains(string(b), `"keepBehind":3`) {
+		t.Fatalf("3: %s, %v", b, err)
 	}
 }
 
@@ -96,6 +111,7 @@ func TestPatchRejectsBadFields(t *testing.T) {
 	cases := map[string]string{
 		`{"storage":{"keepDays":0}}`:                                 "Хранить, дней",
 		`{"storage":{"minFreeGB":-1}}`:                               "Запас места",
+		`{"storage":{"keepBehind":-1}}`:                              "Серий позади",
 		`{"storage":{"uploadLimitMBps":-2}}`:                         "Раздача",
 		`{"storage":{"downloadsDir":"Kinodom"}}`:                     "полный путь",
 		`{"player":"winamp"}`:                                        "Плеер",

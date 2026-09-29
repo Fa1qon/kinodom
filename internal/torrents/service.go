@@ -119,7 +119,7 @@ func NewService(eng *Engine, reg *Registry, log *slog.Logger) *Service {
 		noPeersAfter: noPeersAfter,
 		noMetaAfter:  noMetadataAfter,
 		sessions:     map[metainfo.Hash]*session{},
-		policy:       Policy{KeepFor: defaultKeepFor, MinFree: defaultMinFree, MaxSeeding: defaultMaxSeeding},
+		policy:       Policy{KeepFor: defaultKeepFor, MinFree: defaultMinFree, MaxSeeding: defaultMaxSeeding, KeepBehind: defaultKeepBehind},
 		upload:       -1,
 		freeSpace:    diskFree,
 		totalSpace:   diskTotal,
@@ -453,6 +453,7 @@ func (s *Service) sample() {
 	now := s.now()
 	var unsaved []*session
 	var want []metainfo.Hash
+	advanced := false
 	s.mu.Lock()
 	for ih, ss := range s.sessions {
 		st := ss.t.Stats()
@@ -472,11 +473,20 @@ func (s *Service) sample() {
 		if ss.wantAll && ss.t.Info() != nil {
 			want = append(want, ih)
 		}
-		s.advanceLocked(ss)
+		if s.advanceLocked(ss) {
+			advanced = true
+		}
 	}
 	s.mu.Unlock()
 	for _, ss := range unsaved { // запись в базу — без s.mu
 		s.saveMetainfo(ss)
+	}
+	// Очередь перешла к следующему файлу — влезет ли он: при нехватке места удаляются серии позади,
+	// не помогло — пауза и «Мало места» (решение заказчика, этап 7a).
+	if advanced {
+		if err := s.checkSpace(context.Background()); err != nil {
+			s.log.Warn("проверка места не удалась", "err", err)
+		}
 	}
 	for _, ih := range want {
 		if err := s.Download(context.Background(), ih, nil); err != nil {

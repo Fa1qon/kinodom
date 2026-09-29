@@ -27,6 +27,7 @@ const (
 	KeyKinopoisk         = "kinopoisk.key"
 	KeyDownloadsDir      = "downloads.dir"
 	KeyKeepDays          = "torrents.keepDays"
+	KeyKeepBehind        = "torrents.keepBehind"
 	KeyMinFreeGB         = "torrents.minFreeGB"
 	KeyUploadLimit       = "torrents.uploadLimitMBps"
 	KeyPlayer            = "player"
@@ -36,6 +37,7 @@ const (
 // Значения по умолчанию (основная спека, раздел 15).
 const (
 	DefaultKeepDays   = 14
+	DefaultKeepBehind = 1
 	DefaultMinFreeGB  = 20
 	DefaultUploadMBps = 2
 	DefaultPlayer     = "auto"
@@ -52,6 +54,7 @@ type Values struct {
 	KinopoiskKey      string
 	DownloadsDir      string
 	KeepDays          int
+	KeepBehind        int // серий позади просмотренной оставлять, когда места не хватает
 	MinFreeGB         int
 	UploadMBps        *float64 // nil — без ограничения; 0 — не раздавать
 	Player            string
@@ -108,6 +111,8 @@ func Load(ctx context.Context, db *store.DB, def Defaults, overrides map[string]
 	collect(err)
 	v.KeepDays, err = num(KeyKeepDays, DefaultKeepDays, 1)
 	collect(err)
+	v.KeepBehind, err = num(KeyKeepBehind, DefaultKeepBehind, 0)
+	collect(err)
 	v.MinFreeGB, err = num(KeyMinFreeGB, DefaultMinFreeGB, 0)
 	collect(err)
 	v.Player, err = str(KeyPlayer, DefaultPlayer)
@@ -148,6 +153,7 @@ func (v Values) entries() map[string]string {
 		KeyKinopoisk:         v.KinopoiskKey,
 		KeyDownloadsDir:      v.DownloadsDir,
 		KeyKeepDays:          strconv.Itoa(v.KeepDays),
+		KeyKeepBehind:        strconv.Itoa(v.KeepBehind),
 		KeyMinFreeGB:         strconv.Itoa(v.MinFreeGB),
 		KeyUploadLimit:       up,
 		KeyPlayer:            v.Player,
@@ -222,6 +228,12 @@ func (v Values) With(p Patch) (Values, error) {
 				return v, fieldErr("Хранить, дней", "нужно целое число от 1")
 			}
 			n.KeepDays = *s.KeepDays
+		}
+		if s.KeepBehind != nil {
+			if *s.KeepBehind < 0 {
+				return v, fieldErr("Серий позади при нехватке места", "нужно целое число от 0")
+			}
+			n.KeepBehind = *s.KeepBehind
 		}
 		if s.MinFreeGB != nil {
 			if *s.MinFreeGB < 0 {

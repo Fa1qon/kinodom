@@ -40,6 +40,7 @@ type KinopoiskView struct {
 type StorageView struct {
 	DownloadsDir    string   `json:"downloadsDir"`
 	KeepDays        int      `json:"keepDays"`
+	KeepBehind      int      `json:"keepBehind"` // серий позади просмотренной оставлять при нехватке места
 	MinFreeGB       int      `json:"minFreeGB"`
 	UploadLimitMBps *float64 `json:"uploadLimitMBps"` // null — без ограничения; 0 — не раздавать
 }
@@ -55,7 +56,7 @@ func (v Values) View() View {
 		Rutracker: RutrackerView{Login: v.RutrackerLogin, PasswordSet: v.RutrackerPassword != ""},
 		Proxy:     ProxyView{Type: p.Type, Address: p.Address, Login: p.Login, PasswordSet: p.password != ""},
 		Kinopoisk: KinopoiskView{KeySet: v.KinopoiskKey != ""},
-		Storage:   StorageView{DownloadsDir: v.DownloadsDir, KeepDays: v.KeepDays, MinFreeGB: v.MinFreeGB, UploadLimitMBps: v.UploadMBps},
+		Storage:   StorageView{DownloadsDir: v.DownloadsDir, KeepDays: v.KeepDays, KeepBehind: v.KeepBehind, MinFreeGB: v.MinFreeGB, UploadLimitMBps: v.UploadMBps},
 		Player:    v.Player,
 		Catalog:   CatalogView{Sections: splitSections(v.Sections)},
 	}
@@ -90,6 +91,7 @@ type KinopoiskPatch struct {
 type StoragePatch struct {
 	DownloadsDir    *string  `json:"downloadsDir"`
 	KeepDays        *int     `json:"keepDays"`
+	KeepBehind      *int     `json:"keepBehind"`
 	MinFreeGB       *int     `json:"minFreeGB"`
 	UploadLimitMBps Optional `json:"uploadLimitMBps"`
 }

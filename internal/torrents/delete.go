@@ -30,10 +30,20 @@ const watchingFor = 6 * time.Hour
 func (s *Service) DeleteFile(ctx context.Context, ih metainfo.Hash, index int) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return s.deleteLocked(ctx, ih, index)
+	return s.deleteLocked(ctx, ih, index, true)
 }
 
-func (s *Service) deleteLocked(ctx context.Context, ih metainfo.Hash, index int) error {
+// deleteBehind — удаление просмотренной серии позади, когда места не хватает: правила 6 часов нет,
+// не удаляется только файл с открытым потоком (решение заказчика, этап 7a).
+func (s *Service) deleteBehind(ctx context.Context, ih metainfo.Hash, index int) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.deleteLocked(ctx, ih, index, false)
+}
+
+// deleteLocked — удаление файла. recent — «сейчас смотрят» и поток за последние 6 часов, иначе
+// только открытый поток. Вызывать под s.mu.
+func (s *Service) deleteLocked(ctx context.Context, ih metainfo.Hash, index int, recent bool) error {
 	sf, ok, err := s.reg.StoredFile(ctx, ih, index)
 	if err != nil {
 		return err
@@ -42,7 +52,7 @@ func (s *Service) deleteLocked(ctx context.Context, ih metainfo.Hash, index int)
 		return ErrNotStored
 	}
 	ss := s.sessions[ih]
-	if s.watching(ss, index, sf.LastStream) {
+	if (recent && s.watching(ss, index, sf.LastStream)) || (ss != nil && ss.readers[index] > 0) {
 		return ErrWatching
 	}
 	t, found := s.eng.cl.Torrent(ih)
