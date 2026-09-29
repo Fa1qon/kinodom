@@ -135,6 +135,9 @@ func buildClientConfig(c Config, st storage.ClientImpl, up *rate.Limiter) (*torr
 		cfg.NoDefaultPortForwarding = true
 		cfg.ListenHost = func(string) string { return "127.0.0.1" }
 		cfg.DisableIPv6 = true
+		// Только TCP: uTP через loopback под нагрузкой теряет пакеты, и anacrolix/utp (чистый Go,
+		// CGO выключен) после потери не восстанавливается — загрузка в тестах вставала посреди куска.
+		cfg.DisableUTP = true
 	}
 	u, err := netx.ParseProxy(c.TrackerProxy)
 	if err != nil {
