@@ -28,6 +28,15 @@ function append(el, kids) {
   }
 }
 
+// keepFocus — перерисовать часть экрана, не сбив фокус пульта: элемент с тем же data-key снова в
+// фокусе. Экраны, которые опрашивают сервер, перерисовываются раз в 1–2 с.
+export function keepFocus(root, draw) {
+  const active = document.activeElement;
+  const key = active && root.contains(active) && active.dataset ? active.dataset.key : null;
+  draw();
+  if (key) root.querySelector(`[data-key="${CSS.escape(key)}"]`)?.focus({ preventScroll: true });
+}
+
 // clear — убрать всё содержимое элемента.
 export function clear(el) {
   el.replaceChildren();

@@ -1,7 +1,7 @@
 // Раздача: постер, название, теги, описание; до «Скачать» — одна светлая кнопка, после — у каждого
 // файла прогресс и «Смотреть» цвета готовности, справа — панель файла в фокусе (спека этапа 7,
 // разделы 5.4, 5.5 и 6.3).
-import { h, icon, size, speed, rating, minutes, ready, poll, copyText, store, plural, shortNames, fileFormat } from '../ui.js';
+import { h, icon, size, speed, rating, minutes, ready, poll, copyText, store, plural, shortNames, keepFocus, fileFormat } from '../ui.js';
 import { get, post } from '../api.js';
 import { poster } from './catalog.js';
 
@@ -102,14 +102,14 @@ export function render(root, r, ctx) {
 
   function drawLive() {
     if (!rel) return;
-    const key = document.activeElement && document.activeElement.dataset ? document.activeElement.dataset.key : null;
     const fs = files();
     const series = fs.length > 1;
     const names = new Map(shortNames(fs.map((f) => f.name)).map((n, k) => [fs[k].index, n]));
     const label = (f) => (series ? names.get(f.index) : rel.name || rel.title);
-    live.replaceChildren(series ? episodes(fs, label) : '');
-    side.replaceChildren(...panel(fs, label));
-    if (key) root.querySelector(`[data-key="${key}"]`)?.focus();
+    keepFocus(root, () => {
+      live.replaceChildren(series ? episodes(fs, label) : '');
+      side.replaceChildren(...panel(fs, label));
+    });
   }
 
   function episodes(fs, label) {

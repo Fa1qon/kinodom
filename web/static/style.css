@@ -68,7 +68,11 @@ body { margin: 0; background: var(--bg); color: var(--text); font: 15px/1.4 var(
 a { color: var(--text); text-decoration: none; }
 a:hover { color: #FFFFFF; }
 button, input { font: inherit; color: inherit; }
-:focus-visible { outline: 2px solid var(--text); outline-offset: 2px; }
+/* Фокус пульта ТВ и клавиатуры виден издалека: светлая рамка с тёмным зазором — на любом фоне,
+   в том числе на светлой выбранной кнопке. */
+:focus-visible { outline: none; box-shadow: 0 0 0 3px var(--bg), 0 0 0 6px var(--text); }
+.field:focus-within { box-shadow: 0 0 0 3px var(--bg), 0 0 0 6px var(--text); }
+.field input:focus-visible { box-shadow: none; }
 .ic { display: inline-block; flex-shrink: 0; }
 .muted { color: var(--muted); }
 .grow { flex-grow: 1; }
@@ -124,7 +128,7 @@ h2 { margin: 0; font-size: 20px; font-weight: 700; }
 .small { font-size: 13px; }
 
 /* Каталог */
-.filters { display: flex; gap: 6px; overflow-x: auto; scrollbar-width: thin; scrollbar-color: var(--line-strong) transparent; padding-bottom: 4px; }
+.filters { display: flex; gap: 6px; overflow-x: auto; scrollbar-width: thin; scrollbar-color: var(--line-strong) transparent; margin: -8px; padding: 8px 8px 10px; }
 .fil { display: inline-flex; align-items: center; height: 36px; padding: 0 14px; border: 1px solid var(--line); color: var(--muted); font-size: 14px; white-space: nowrap; }
 .fil.on { background: var(--inv-bg); border-color: var(--inv-bg); color: var(--inv-text); font-weight: 600; }
 .grid { display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); gap: 28px 20px; padding-top: 8px; }

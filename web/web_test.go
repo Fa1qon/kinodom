@@ -12,7 +12,7 @@ import (
 
 // required — файлы пульта, без которых он не работает (спека этапа 7, раздел 6.1).
 var required = []string{
-	"index.html", "style.css", "app.js", "api.js", "ui.js", "icons.js",
+	"index.html", "style.css", "app.js", "api.js", "ui.js", "icons.js", "nav.js",
 	"fonts/golos-text-cyrillic.woff2", "fonts/golos-text-latin.woff2",
 	"fonts/unbounded-cyrillic.woff2", "fonts/unbounded-latin.woff2",
 	"fonts/OFL-golos-text.txt", "fonts/OFL-unbounded.txt",
@@ -133,6 +133,48 @@ const checks = [
 for (const [got, want] of checks) {
   if (got !== want) {
     console.error(JSON.stringify(got), '≠', JSON.stringify(want));
+    process.exitCode = 1;
+  }
+}
+`
+	cmd := exec.Command(node, "--input-type=module", "--no-warnings", "-e", script)
+	cmd.Dir = "static"
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Errorf("%v\n%s", err, out)
+	}
+}
+
+// Пульт телевизора: стрелка переводит фокус на ближайший элемент в эту сторону; элемент на одной
+// линии важнее более близкого наискосок; в сторону, где ничего нет, фокус не уходит; влево и
+// вправо — только в своём ряду (с единственного раздела вправо — не в сетку наискосок).
+func TestPultSpatialNav(t *testing.T) {
+	node := lookNode(t)
+	script := `
+import { pick } from './nav.js';
+const r = (left, top, w = 100, hh = 150) => ({ left, top, right: left + w, bottom: top + hh });
+// Шапка: логотип, «Каталог», поиск над правыми карточками; под ней сетка 3×2 карточек.
+const logo = r(0, 0, 80, 40), menu = r(120, 0, 80, 40), search = r(260, 0, 200, 40);
+const grid = [r(0, 100), r(120, 100), r(240, 100), r(0, 280), r(120, 280), r(240, 280)];
+const chip = r(0, 60, 90, 30); // единственный раздел над сеткой
+const all = [logo, menu, search, chip, ...grid];
+const at = (from, dir) => { const i = pick(from, all.filter((x) => x !== from), dir); return i < 0 ? -1 : all.indexOf(all.filter((x) => x !== from)[i]); };
+const checks = [
+  [at(grid[0], 'right'), all.indexOf(grid[1])],
+  [at(grid[0], 'down'), all.indexOf(grid[3])],
+  [at(grid[4], 'up'), all.indexOf(grid[1])],
+  [at(grid[2], 'right'), -1],
+  [at(grid[5], 'down'), -1],
+  [at(grid[0], 'up'), all.indexOf(chip)],
+  [at(chip, 'up'), all.indexOf(logo)],
+  [at(grid[2], 'up'), all.indexOf(search)],
+  [at(logo, 'right'), all.indexOf(menu)],
+  [at(grid[3], 'left'), -1],
+  [at(chip, 'right'), -1],
+  [at(chip, 'down'), all.indexOf(grid[0])],
+];
+for (const [got, want] of checks) {
+  if (got !== want) {
+    console.error('получили', got, 'ждали', want);
     process.exitCode = 1;
   }
 }
