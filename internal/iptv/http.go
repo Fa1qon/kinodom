@@ -37,6 +37,28 @@ func (m *Module) Register(r Router, logo func(w http.ResponseWriter, r *http.Req
 	r.Handle("GET /api/v1/channels/{key}/play", n, http.HandlerFunc(m.handlePlay))
 	r.HandleHome("PUT /api/v1/channels/{key}", n, http.HandlerFunc(m.handleOverride))
 	r.HandleHome("PUT /api/v1/iptv/favorites", n, http.HandlerFunc(m.handleFavorites))
+	r.Handle("GET /api/v1/iptv/favorites", n, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		keys, err := m.Favorites(r.Context(), httpx.Device(r))
+		if err != nil {
+			httpx.WriteError(w, http.StatusInternalServerError, "избранное не читается: "+err.Error())
+			return
+		}
+		httpx.WriteJSON(w, http.StatusOK, map[string]any{"keys": keys})
+	}))
+	r.HandleHome("PUT /api/v1/iptv/favorites/{key}", n, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if err := m.AddFavorite(r.Context(), httpx.Device(r), r.PathValue("key")); err != nil {
+			writeEditError(w, err)
+			return
+		}
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	r.HandleHome("DELETE /api/v1/iptv/favorites/{key}", n, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if err := m.RemoveFavorite(r.Context(), httpx.Device(r), r.PathValue("key")); err != nil {
+			writeEditError(w, err)
+			return
+		}
+		w.WriteHeader(http.StatusNoContent)
+	}))
 	r.Handle("GET /api/v1/iptv/playlists", n, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		httpx.WriteJSON(w, http.StatusOK, m.Playlists())
 	}))

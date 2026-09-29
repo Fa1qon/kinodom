@@ -33,6 +33,7 @@ export function render(root, r, ctx) {
   let adding = false;
   let confirm = 0; // плейлист, у которого корзина просит подтверждения
   let hidden = null; // черновик скрытия: {categories, countries, languages, otherZones}
+  let favKeys = null; // /iptv/favorites — избранное этого устройства как сохранено
   // Поля ввода создаются один раз: опрос перерисовывает экран, а набранное не должно пропадать.
   const url = h('input', { class: 'input', name: 'url', placeholder: 'https://…/playlist.m3u', 'aria-label': 'Ссылка на плейлист', 'data-key': 'pl-url' });
   const limited = h('input', { type: 'checkbox', name: 'limited', 'data-key': 'pl-limited' });
@@ -41,7 +42,7 @@ export function render(root, r, ctx) {
 
   const listPoll = poll(async () => {
     try {
-      [pls, settings] = await Promise.all([get('/iptv/playlists'), get('/settings')]);
+      [pls, settings, favKeys] = await Promise.all([get('/iptv/playlists'), get('/settings'), get('/iptv/favorites').then((r) => r.keys)]);
       if (!all) [all, mine] = await Promise.all([get('/channels?all=1'), get('/channels')]);
       error = '';
     } catch (e) {
@@ -212,11 +213,13 @@ export function render(root, r, ctx) {
         }) }, icon('visibility'), 'Вернуть') : null)));
   }
 
+  // favoritesCard — избранное этого устройства как сохранено (и каналы без живых источников); порядок
+  // меняется всем списком, прочитанным с сервера: не прочитался — кнопок нет.
   function favoritesCard() {
-    if (!mine) return null;
-    const favs = mine.channels.filter((c) => c.block === 'favorite');
-    if (!favs.length) return null;
-    const keys = favs.map((c) => c.key);
+    if (!favKeys || !favKeys.length) return null;
+    const names = new Map([...(all ? all.channels : []), ...(mine ? mine.channels : [])].map((c) => [c.key, c.name]));
+    const keys = favKeys;
+    const favs = keys.map((key) => ({ key, name: names.get(key) || key }));
     const save = (next) => act(async () => {
       await put('/iptv/favorites', { keys: next });
       await reloadChannels();

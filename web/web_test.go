@@ -202,7 +202,7 @@ func TestPultChannelsFilter(t *testing.T) {
 	script := `
 import { filterChannels, sections, UNKNOWN } from './views/channels.js';
 import { progressOf } from './views/tvkit.js';
-import { dateStr } from './views/channel.js';
+import { dateStr, labelPatch } from './views/channel.js';
 const c = (key, block, category, categoryName, country, languages) => ({ key, block, category, categoryName, country, languages });
 const all = [
   c('bbc', 'favorite', 'news', 'Новости', 'GB', ['eng']),
@@ -228,6 +228,11 @@ const checks = [
   [progressOf({ start: '2026-09-29T19:00:00+07:00', stop: '2026-09-29T20:00:00+07:00' }, Date.parse('2026-09-29T19:15:00+07:00')), 25],
   [progressOf({ start: '2026-09-29T19:00:00+07:00', stop: '2026-09-29T20:00:00+07:00' }, Date.parse('2026-09-29T21:00:00+07:00')), 100],
   [dateStr(1, new Date(2026, 8, 30, 23, 30)), '2026-10-01'],
+  // Правка меток — только изменённые поля (финальное ревью этапа 8).
+  [JSON.stringify(labelPatch({ category: 'news', country: 'RU', languages: ['rus'] }, { category: 'news', country: 'RU', lang: 'rus' })), '{}'],
+  [JSON.stringify(labelPatch({ category: 'news', country: 'RU', languages: ['rus'] }, { category: '', country: 'RU', lang: 'rus' })), '{"category":""}'],
+  [JSON.stringify(labelPatch({ category: 'news', country: 'RU', languages: [] }, { category: 'news', country: 'UA', lang: 'ukr' })), '{"country":"UA","languages":["ukr"]}'],
+  [JSON.stringify(labelPatch({ category: 'news', country: 'RU', languages: ['rus', 'eng'] }, { category: 'news', country: 'RU', lang: '' })), '{"languages":[]}'],
 ];
 for (const [got, want] of checks) {
   if (got !== want) {

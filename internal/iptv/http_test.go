@@ -267,3 +267,32 @@ func TestHTTPPlaylists(t *testing.T) {
 		t.Errorf("проверка несуществующего: %d", code)
 	}
 }
+
+// Избранное — как сохранено, и каналы без живого источника тоже; ★ добавляет и убирает по одному
+// каналу и не трогает остальные (финальное ревью этапа 8).
+func TestHTTPFavoritesKeepsOffline(t *testing.T) {
+	_, c, _ := startHTTP(t)
+	if code := c.json("PUT", "/api/v1/iptv/favorites", fromPhone, map[string]any{"keys": []string{"pervy", "bbc"}}, nil); code != 204 {
+		t.Fatalf("список: %d", code)
+	}
+	if code := c.json("PUT", "/api/v1/iptv/favorites/ntv", fromPhone, map[string]any{}, nil); code != 204 {
+		t.Fatalf("добавить: %d", code)
+	}
+	if code := c.json("DELETE", "/api/v1/iptv/favorites/bbc", fromPhone, nil, nil); code != 204 {
+		t.Fatalf("убрать: %d", code)
+	}
+	var got struct {
+		Keys []string `json:"keys"`
+	}
+	c.json("GET", "/api/v1/iptv/favorites", fromPhone, nil, &got)
+	if strings.Join(got.Keys, ",") != "pervy,ntv" { // pervy без живого источника — на месте
+		t.Errorf("избранное: %v", got.Keys)
+	}
+	c.json("GET", "/api/v1/iptv/favorites", fromTV, nil, &got)
+	if len(got.Keys) != 0 {
+		t.Errorf("у телевизора: %v", got.Keys)
+	}
+	if code := c.json("PUT", "/api/v1/iptv/favorites/ntv", fromOutside, map[string]any{}, nil); code != 403 {
+		t.Errorf("снаружи: %d", code)
+	}
+}
