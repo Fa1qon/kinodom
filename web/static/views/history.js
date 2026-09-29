@@ -108,9 +108,14 @@ export function render(root, r, ctx) {
         } }, icon('close'), conf ? 'Убрать?' : null) : null);
   }
 
+  const onStatus = () => {
+    if (alive && data) draw();
+  };
+  ctx.listeners.add(onStatus); // canEdit пришёл позже истории — крестики появляются
   return () => {
     alive = false;
     listPoll.stop();
+    ctx.listeners.delete(onStatus);
   };
 }
 

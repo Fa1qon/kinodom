@@ -97,7 +97,12 @@ export function render(root, r, ctx) {
     });
   }
 
+  const onStatus = () => {
+    if (alive && data) draw();
+  };
+  ctx.listeners.add(onStatus); // canEdit пришёл позже списка — кнопки появляются
   return () => {
     alive = false;
+    ctx.listeners.delete(onStatus);
   };
 }
