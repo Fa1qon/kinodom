@@ -370,3 +370,16 @@ func TestExpireForgetsRecordsOnMissingDisk(t *testing.T) {
 		t.Fatalf("баннер остался: %q", p)
 	}
 }
+
+// Запас места 0 — разрешён (хвост этапа 6: раньше 0 превращался в 20 ГБ); меньше 0 — по умолчанию.
+func TestZeroReserveIsAllowed(t *testing.T) {
+	s := newTestService(t)
+	s.SetPolicy(Policy{MinFree: 0})
+	if got := s.Policy().MinFree; got != 0 {
+		t.Fatalf("запас 0 стал %d", got)
+	}
+	s.SetPolicy(Policy{MinFree: -1})
+	if got := s.Policy().MinFree; got != 20<<30 {
+		t.Fatalf("по умолчанию %d", got)
+	}
+}

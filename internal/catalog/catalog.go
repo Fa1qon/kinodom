@@ -44,6 +44,15 @@ var DefaultCategories = []CategoryRef{
 	{"t1", "12"},
 }
 
+// FormatCategories — список разделов строкой настройки catalog.categories.
+func FormatCategories(cs []CategoryRef) string {
+	parts := make([]string, len(cs))
+	for i, c := range cs {
+		parts[i] = c.String()
+	}
+	return strings.Join(parts, ",")
+}
+
 // ParseCategories — настройка catalog.categories: «t2:2110, t1:12». Пусто — по умолчанию.
 func ParseCategories(s string) ([]CategoryRef, error) {
 	if strings.TrimSpace(s) == "" {

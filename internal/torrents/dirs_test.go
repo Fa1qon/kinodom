@@ -128,3 +128,24 @@ func TestUnavailableDirKeepsRecords(t *testing.T) {
 		t.Fatalf("проблема не снята: %q", p)
 	}
 }
+
+// Папку загрузок сменили в пульте: новые раздачи — сразу в новую папку, без перезапуска; открытые
+// раньше остаются на прежнем месте (спека этапа 7, раздел 5.1).
+func TestDownloadsDirChangesOnTheFly(t *testing.T) {
+	ctx := context.Background()
+	oldDir, newDir := t.TempDir(), t.TempDir()
+	e, err := NewEngine(Config{DownloadsDir: oldDir, StateDir: t.TempDir(), Offline: true, Log: quiet()})
+	must(t, err)
+	t.Cleanup(func() { e.Close() })
+	s := serviceFor(e, NewRegistry(newTestDB(t)))
+	first, _ := torrenttest.MakeTorrent(t, t.TempDir(), "a.mkv", 64<<10, torrenttest.File{Path: "a.mkv", Size: 100_000})
+	ih1, err := s.Open(ctx, Source{Torrent: torrentBytes(t, first)})
+	must(t, err)
+	e.SetDownloadsDir(newDir)
+	second, _ := torrenttest.MakeTorrent(t, t.TempDir(), "b.mkv", 64<<10, torrenttest.File{Path: "b.mkv", Size: 100_000})
+	ih2, err := s.Open(ctx, Source{Torrent: torrentBytes(t, second)})
+	must(t, err)
+	if e.TorrentDir(ih1) != oldDir || e.TorrentDir(ih2) != newDir || e.DownloadsDir() != newDir {
+		t.Fatalf("папки: первая %s, вторая %s, текущая %s", e.TorrentDir(ih1), e.TorrentDir(ih2), e.DownloadsDir())
+	}
+}

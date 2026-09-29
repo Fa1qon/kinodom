@@ -43,14 +43,28 @@ func (d *torrentDirs) get(ih metainfo.Hash) string {
 	return d.def
 }
 
+// setDefault — папка для новых раздач (смена в настройках, этап 7).
+func (d *torrentDirs) setDefault(dir string) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	d.def = dir
+}
+
+func (d *torrentDirs) defaultDir() string {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	return d.def
+}
+
 // sameVolume — две папки на одном диске: место считается по диску.
 func sameVolume(a, b string) bool {
 	return strings.EqualFold(filepath.VolumeName(a), filepath.VolumeName(b))
 }
 
-// checkDownloadsDir проверяет папку загрузок до запуска движка и объясняет отказ человеческим
-// языком (хвост этапа 2): сетевой диск, нет папки, нет права записи, диск без разрежённых файлов.
-func checkDownloadsDir(dir string) error {
+// CheckDownloadsDir проверяет папку загрузок до запуска движка и при смене в настройках, объясняя
+// отказ человеческим языком (хвост этапа 2): сетевой диск, нет папки, нет права записи, диск без
+// разрежённых файлов.
+func CheckDownloadsDir(dir string) error {
 	return checkDownloadsDirWith(dir, createSparse)
 }
 

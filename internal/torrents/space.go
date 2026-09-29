@@ -20,7 +20,7 @@ var ErrLowSpace = errors.New("мало места на диске")
 // Policy — правила хранения из настроек (спека, раздел 15).
 type Policy struct {
 	KeepFor    time.Duration // хранить после последнего открытия; 0 — 14 дней
-	MinFree    int64         // минимум свободного места, байт; 0 — 20 ГБ
+	MinFree    int64         // минимум свободного места, байт; 0 — без запаса; меньше 0 — 20 ГБ
 	MaxSeeding int           // раздавать не больше стольких раздач; 0 — 10
 }
 
@@ -29,14 +29,14 @@ const (
 	defaultMinFree = 20 << 30
 )
 
-// SetPolicy задаёт правила хранения; вызывать до Run.
+// SetPolicy задаёт правила хранения — и до Run, и на ходу (настройки из пульта, этап 7).
 func (s *Service) SetPolicy(p Policy) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if p.KeepFor <= 0 {
 		p.KeepFor = defaultKeepFor
 	}
-	if p.MinFree <= 0 {
+	if p.MinFree < 0 {
 		p.MinFree = defaultMinFree
 	}
 	if p.MaxSeeding <= 0 {
