@@ -60,6 +60,8 @@ type session struct {
 	paused       map[int]bool // докачка на паузе: мало места (этап 6)
 	quiet        bool         // раздача молчит: не входит в раздаваемые (этап 6)
 	verifying    int          // сколько её кусков ждут перепроверки по хэшу
+	raw          []byte       // содержимое .torrent, пока метаинфо не сохранена
+	metaSaved    bool         // метаинфо в базе
 	lastSeen     time.Time    // когда раздачу последний раз открывали или спрашивали о ней
 }
 
@@ -205,7 +207,7 @@ func (s *Service) restore(ctx context.Context) error {
 		}
 		s.mu.Lock()
 		ss := s.sessionFor(t)
-		ss.stored = true
+		ss.stored, ss.metaSaved = true, true
 		// Хранимые файлы докачиваются дальше (и раздаются), остальные не нужны.
 		files := t.Files()
 		for _, i := range idxs {
@@ -282,7 +284,9 @@ func (s *Service) Open(ctx context.Context, src Source) (metainfo.Hash, error) {
 	ss := s.sessionFor(t)
 	ss.lastSeen = s.now()
 	s.observe(ss, s.now())
-	go s.saveMetainfoWhenReady(t, raw)
+	if ss.raw == nil {
+		ss.raw = raw
+	}
 	return ih, nil
 }
 
@@ -299,24 +303,26 @@ func (s *Service) sessionFor(t *torrent.Torrent) *session {
 	return ss
 }
 
-// saveMetainfoWhenReady сохраняет метаинфо, как только движок её получил.
-func (s *Service) saveMetainfoWhenReady(t *torrent.Torrent, raw []byte) {
-	select {
-	case <-t.GotInfo():
-	case <-t.Closed():
-		return
-	}
+// saveMetainfo сохраняет метаинфо раздачи, которую движок уже получил: после перезапуска её не
+// придётся ждать от пиров. Зовётся из цикла Run (хвост этапа 2: раньше — горутина на каждое
+// открытие, висевшая, пока сеть не готова).
+func (s *Service) saveMetainfo(ss *session) {
+	raw := ss.raw
 	if raw == nil {
-		b, err := bencode.Marshal(t.Metainfo())
+		b, err := bencode.Marshal(ss.t.Metainfo())
 		if err != nil {
 			s.log.Warn("метаинфо не сериализуется", "err", err)
 			return
 		}
 		raw = b
 	}
-	if err := s.reg.SaveMetainfo(context.Background(), t.InfoHash(), t.Name(), raw); err != nil {
-		s.log.Warn("метаинфо не сохранилась", "hash", t.InfoHash().HexString(), "err", err)
+	if err := s.reg.SaveMetainfo(context.Background(), ss.t.InfoHash(), ss.t.Name(), raw); err != nil {
+		s.log.Warn("метаинфо не сохранилась", "hash", ss.t.InfoHash().HexString(), "err", err)
+		return
 	}
+	s.mu.Lock()
+	ss.metaSaved, ss.raw = true, nil
+	s.mu.Unlock()
 }
 
 // Status — состояние раздачи; false, если её не открывали.
@@ -375,8 +381,8 @@ func (s *Service) observe(ss *session, now time.Time) {
 // sample раз в секунду обновляет сглаженную скорость и состояния всех раздач.
 func (s *Service) sample() {
 	now := s.now()
+	var unsaved []*session
 	s.mu.Lock()
-	defer s.mu.Unlock()
 	for _, ss := range s.sessions {
 		st := ss.t.Stats()
 		b := st.BytesReadData.Int64()
@@ -387,6 +393,13 @@ func (s *Service) sample() {
 		}
 		ss.lastBytes, ss.lastSample = b, now
 		s.observe(ss, now)
+		if !ss.metaSaved && ss.t.Info() != nil {
+			unsaved = append(unsaved, ss)
+		}
+	}
+	s.mu.Unlock()
+	for _, ss := range unsaved { // запись в базу — без s.mu
+		s.saveMetainfo(ss)
 	}
 }
 

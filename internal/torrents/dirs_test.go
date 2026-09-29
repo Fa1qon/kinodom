@@ -71,6 +71,7 @@ func TestTorrentStaysInItsDownloadsDir(t *testing.T) {
 			t.Fatal("файл не скачался")
 		}
 	}
+	must(t, s1.reg.SaveMetainfo(ctx, ih, "film.mkv", torrentBytes(t, mi))) // Run не запущен — сохраняем сами
 	e1.Close()
 
 	e2, err := NewEngine(Config{DownloadsDir: newDir, StateDir: state, Offline: true, Log: quiet()})
