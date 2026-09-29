@@ -16,7 +16,7 @@ var required = []string{
 	"fonts/golos-text-cyrillic.woff2", "fonts/golos-text-latin.woff2",
 	"fonts/unbounded-cyrillic.woff2", "fonts/unbounded-latin.woff2",
 	"fonts/OFL-golos-text.txt", "fonts/OFL-unbounded.txt",
-	"views/catalog.js",
+	"views/catalog.js", "views/release.js",
 }
 
 // scripts — все модули пульта.
@@ -90,18 +90,56 @@ func TestPultIconsExist(t *testing.T) {
 	}
 }
 
-// Модули разбираются как JavaScript (Node на этом ПК; без Node — пропуск): синтаксическая ошибка
-// в модуле — белый экран, а серверные тесты её не видят.
-func TestPultModulesParse(t *testing.T) {
+// lookNode — Node на этом ПК; без него проверка JavaScript пропускается.
+func lookNode(t *testing.T) string {
+	t.Helper()
 	node, err := exec.LookPath("node")
 	if err != nil {
-		t.Skip("Node не установлен — синтаксис модулей не проверяется")
+		t.Skip("Node не установлен — JavaScript пульта не проверяется")
 	}
+	return node
+}
+
+// Модули разбираются как JavaScript: синтаксическая ошибка в модуле — белый экран, а серверные
+// тесты её не видят.
+func TestPultModulesParse(t *testing.T) {
+	node := lookNode(t)
 	for file, src := range scripts(t) {
 		cmd := exec.Command(node, "--input-type=module", "--check")
 		cmd.Stdin = strings.NewReader(src)
 		if out, err := cmd.CombinedOutput(); err != nil {
 			t.Errorf("%s: %v\n%s", file, err, out)
 		}
+	}
+}
+
+// Числа и имена в пульте — по-русски и коротко: размеры, скорость, склонение, имена серий без
+// общего начала и конца.
+func TestPultFormatting(t *testing.T) {
+	node := lookNode(t)
+	script := `
+import { size, speed, plural, shortNames, fileFormat } from './ui.js';
+const checks = [
+  [size(18683035238), '17,4 ГБ'], [size(1034944512), '987 МБ'], [size(0), '0 МБ'],
+  [speed(3250586), '3,1 МБ/с'], [speed(870400), '850 КБ/с'],
+  [plural(1, 'пир', 'пира', 'пиров'), '1 пир'], [plural(3, 'пир', 'пира', 'пиров'), '3 пира'],
+  [plural(12, 'пир', 'пира', 'пиров'), '12 пиров'], [plural(22, 'пир', 'пира', 'пиров'), '22 пира'],
+  [shortNames(['The.Dinosaurs.S01E01.720p.NF.WEB-DL.mkv', 'The.Dinosaurs.S01E02.720p.NF.WEB-DL.mkv']).join('|'), 'S01E01|S01E02'],
+  [shortNames(['Сезон 1/01. Начало.mkv', 'Сезон 1/02. Финал.mkv']).join('|'), '01 Начало|02 Финал'],
+  [shortNames(['film.mkv']).join('|'), 'film'],
+  [shortNames(['a.mkv', 'a.mkv']).join('|'), 'a|a'],
+  [fileFormat('Сезон 1/01. Начало.mkv'), 'MKV'], [fileFormat('film.m4v'), 'M4V'], [fileFormat('Сезон\\01.avi'), 'AVI'], [fileFormat('README'), ''],
+];
+for (const [got, want] of checks) {
+  if (got !== want) {
+    console.error(JSON.stringify(got), '≠', JSON.stringify(want));
+    process.exitCode = 1;
+  }
+}
+`
+	cmd := exec.Command(node, "--input-type=module", "--no-warnings", "-e", script)
+	cmd.Dir = "static"
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Errorf("%v\n%s", err, out)
 	}
 }

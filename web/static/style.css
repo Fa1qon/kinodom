@@ -142,3 +142,42 @@ h2 { margin: 0; font-size: 20px; font-weight: 700; }
 .pages { display: flex; justify-content: center; gap: 6px; padding-top: 16px; }
 .page { display: inline-flex; align-items: center; justify-content: center; width: 40px; height: 40px; border: 1px solid var(--line); font-size: 15px; color: var(--soft); }
 .page.on { background: var(--inv-bg); border-color: var(--inv-bg); color: var(--inv-text); font-weight: 700; }
+
+/* Раздача */
+.back { display: inline-flex; align-items: center; gap: 4px; font-size: 14px; color: var(--muted); align-self: flex-start; }
+.release { gap: 18px; }
+.rel-grid { display: grid; grid-template-columns: 280px minmax(0, 1fr) 360px; gap: 40px; align-items: start; }
+.poster.big { padding: 20px; }
+.poster.big .ptitle { font-size: 24px; }
+.rel-main { display: flex; flex-direction: column; gap: 28px; min-width: 0; }
+.rel-info { display: flex; flex-direction: column; gap: 16px; }
+.rel-info h1 { font-size: 32px; }
+.sub { font-size: 16px; margin-top: -8px; }
+.sub:empty { display: none; }
+.tags { display: flex; flex-wrap: wrap; gap: 6px; }
+.tag.strong { font-weight: 700; color: var(--text); }
+.desc { margin: 0; max-width: 760px; font-size: 16px; line-height: 1.6; color: var(--prose); white-space: pre-line; overflow-wrap: anywhere; }
+.desc.clamp { display: -webkit-box; -webkit-line-clamp: 8; -webkit-box-orient: vertical; overflow: hidden; }
+.link { align-self: flex-start; margin-top: -8px; padding: 0; background: transparent; border: 0; color: var(--muted); text-decoration: underline; cursor: pointer; }
+.rel-live:empty { display: none; }
+.episodes { display: flex; flex-direction: column; gap: 8px; }
+.episodes h2 { margin-bottom: 4px; }
+.ep { display: flex; align-items: center; gap: 16px; padding: 10px 14px; border: 1px solid var(--line-soft); }
+.ep.on { background: var(--bg-raised); }
+.num { width: 26px; font: 700 14px var(--display); color: var(--dim); flex-shrink: 0; }
+.ep-main { flex-grow: 1; min-width: 0; display: flex; flex-direction: column; gap: 8px; padding: 4px 0; background: transparent; border: 0; text-align: left; cursor: pointer; }
+.ep-title { display: flex; align-items: baseline; gap: 12px; min-width: 0; font-size: 16px; font-weight: 600; }
+.ep-name { flex-grow: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ep-title .small { flex-shrink: 0; font-weight: 400; white-space: nowrap; }
+.ep .btn { width: 140px; flex-shrink: 0; }
+.panel { position: sticky; top: 16px; display: flex; flex-direction: column; gap: 16px; padding: 22px; border: 1px solid var(--line); background: var(--bg-raised); }
+.panel:empty { display: none; }
+.panel-title { font-size: 18px; font-weight: 700; overflow-wrap: anywhere; }
+.buffer { position: relative; height: 10px; background: var(--track); }
+.buffer > div { position: absolute; top: 0; height: 100%; }
+.buffer .got { left: 0; background: var(--buffer); }
+.buffer .head { left: 0; }
+.buffer .tail { right: 0; }
+.eta { font-size: 17px; font-weight: 700; color: var(--yellow); }
+.wide { width: 100%; }
+.pair { gap: 8px; }
