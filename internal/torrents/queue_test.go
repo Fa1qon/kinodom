@@ -165,6 +165,31 @@ func TestPendingDownloadSurvivesRestart(t *testing.T) {
 	waitFor(t, "файл стал хранимым", func() bool { return len(stored(t, s2, ih)) == 1 })
 }
 
+// Перезапуск посреди сериала: фокус остаётся на серии, которую выбрали жёлтой «Смотреть», а не
+// возвращается к первой недокачанной (Review Focus 3 плана 7a).
+func TestFocusSurvivesRestart(t *testing.T) {
+	ctx := context.Background()
+	reg := NewRegistry(newTestDB(t))
+	mi, _ := torrenttest.MakeTorrent(t, t.TempDir(), "Сериал", 64<<10,
+		torrenttest.File{Path: "Серия 1.mkv", Size: 300_000},
+		torrenttest.File{Path: "Серия 2.mkv", Size: 300_000},
+		torrenttest.File{Path: "Серия 3.mkv", Size: 300_000})
+	ih := mi.HashInfoBytes()
+	must(t, reg.SaveMetainfo(ctx, ih, "Сериал", torrentBytes(t, mi)))
+	for i := range 3 {
+		must(t, reg.MarkStored(ctx, ih, i, filepath.Join(`D:\K`, "Серия.mkv"), 300_000, time.Now()))
+	}
+	must(t, reg.SetFocus(ctx, ih, 2))
+
+	s := serviceFor(newOfflineEngine(t), reg)
+	must(t, s.restore(ctx))
+	st, ok := s.Status(ih)
+	tt, _ := s.Engine().Client().Torrent(ih)
+	if !ok || st.Focus != 2 || tt.Files()[2].Priority() != torrent.PiecePriorityNormal || tt.Files()[0].Priority() != torrent.PiecePriorityNone {
+		t.Fatalf("после перезапуска фокус %d, приоритеты серий 1 и 3: %v, %v", st.Focus, tt.Files()[0].Priority(), tt.Files()[2].Priority())
+	}
+}
+
 func waitFor(t *testing.T, what string, cond func() bool) {
 	t.Helper()
 	deadline := time.Now().Add(15 * time.Second)
