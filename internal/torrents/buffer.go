@@ -75,6 +75,7 @@ func (s *Service) prepare(ctx context.Context, ih metainfo.Hash, index int) erro
 		// Файл уже выбран (второй телевизор или «Смотреть» снова): только фокус — на него.
 		s.setFocusLocked(ss, index)
 		s.applyLocked(ss)
+		ss.downloadErr = "" // прежняя неудача отложенного «Скачать» больше не про эту раздачу
 		return nil
 	}
 	f := files[index]
@@ -95,6 +96,7 @@ func (s *Service) prepare(ctx context.Context, ih metainfo.Hash, index int) erro
 	// Выбранный файл — в фокус очереди: качается он, остальные хранимые ждут (этап 7).
 	s.setFocusLocked(ss, index)
 	s.applyLocked(ss)
+	ss.downloadErr = ""
 	// Начало и конец — первыми: без конца файла MKV/AVI/MP4 плеер не может перематывать.
 	for _, sp := range []pieceSpan{p.head, p.tail} {
 		for i := sp.begin; i < sp.end; i++ {
