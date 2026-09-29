@@ -101,9 +101,10 @@ func (f *fakeSource) Recent(_ context.Context, cat string) ([]source.Release, er
 	return f.recent[cat], nil
 }
 
-func (f *fakeSource) Search(ctx context.Context, _ string) ([]source.Release, error) {
+func (f *fakeSource) Search(ctx context.Context, q string) ([]source.Release, error) {
 	f.mu.Lock()
 	f.calls["search"]++
+	f.calls["search:"+q]++
 	block, rs, err := f.searchBlock, f.search, f.searchErr
 	f.mu.Unlock()
 	if block != nil {

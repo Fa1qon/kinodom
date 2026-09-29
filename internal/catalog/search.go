@@ -50,9 +50,20 @@ type searchRun struct {
 // ошибок) и сразу отвечает тем, что уже есть. Найденное сохраняется в базе: карточку можно
 // открыть (этап 7).
 func (c *Catalog) Search(ctx context.Context, query string) (SearchState, error) {
+	run, q, err := c.startSearch(query, false)
+	if err != nil {
+		return SearchState{}, err
+	}
+	return c.searchState(ctx, q, run)
+}
+
+// startSearch запускает поиск или берёт идущий (законченный без ошибок — не раньше 30 минут назад).
+// poll — повторный опрос того же поиска: законченный с ошибкой трекера поиск он не запускает заново.
+// Возвращает и запрос без лишних пробелов.
+func (c *Catalog) startSearch(query string, poll bool) (*searchRun, string, error) {
 	q := strings.Join(strings.Fields(query), " ")
 	if q == "" {
-		return SearchState{}, errors.New("пустой поисковый запрос")
+		return nil, "", errors.New("пустой поисковый запрос")
 	}
 	key := strings.ToLower(q)
 	now := c.now()
@@ -63,8 +74,8 @@ func (c *Catalog) Search(ctx context.Context, query string) (SearchState, error)
 		}
 	}
 	run, ok := c.searches[key]
-	if ok && run.staleWithErrors(now) {
-		ok = false // поиск с ошибками не кэшируется: новый запрос ищет заново
+	if ok && !poll && run.staleWithErrors(now) {
+		ok = false // поиск с ошибками не кэшируется: новый запрос ищет заново, повторный опрос — нет
 	}
 	if !ok {
 		run = &searchRun{started: now, status: map[string]string{}}
@@ -80,7 +91,7 @@ func (c *Catalog) Search(ctx context.Context, query string) (SearchState, error)
 		go c.runSearch(sctx, cancel, run, q)
 	}
 	c.mu.Unlock()
-	return c.searchState(ctx, q, run)
+	return run, q, nil
 }
 
 // runSearch — все трекеры одновременно; каждый результат — в базу и в поиск сразу, как пришёл.
@@ -135,6 +146,22 @@ func (s *searchRun) staleWithErrors(now time.Time) bool {
 }
 
 func (c *Catalog) searchState(ctx context.Context, q string, run *searchRun) (SearchState, error) {
+	rs, st, err := c.runRows(ctx, run)
+	if err != nil {
+		return SearchState{}, err
+	}
+	rs = collapse(rs)
+	preferFirst(rs, c.PreferredFormat()) // формат в приоритете — первым (спека этапа 7, раздел 10.3)
+	if st.Results, err = c.entries(ctx, rs); err != nil {
+		return SearchState{}, err
+	}
+	st.Query = q
+	return st, nil
+}
+
+// runRows — найденное к этому моменту: раздачи без повторов в порядке прихода, состояние трекеров и
+// «поиск закончен» (Query и Results не заполнены).
+func (c *Catalog) runRows(ctx context.Context, run *searchRun) ([]row, SearchState, error) {
 	run.mu.Lock()
 	ids := append([]int64(nil), run.ids...)
 	status := make(map[string]string, len(run.status))
@@ -145,7 +172,7 @@ func (c *Catalog) searchState(ctx context.Context, q string, run *searchRun) (Se
 	run.mu.Unlock()
 	byID, err := c.st.rowsByID(ctx, ids)
 	if err != nil {
-		return SearchState{}, err
+		return nil, SearchState{}, err
 	}
 	rs := make([]row, 0, len(ids))
 	seen := map[int64]bool{}
@@ -155,11 +182,5 @@ func (c *Catalog) searchState(ctx context.Context, q string, run *searchRun) (Se
 			rs = append(rs, r)
 		}
 	}
-	rs = collapse(rs)
-	preferFirst(rs, c.PreferredFormat()) // формат в приоритете — первым (спека этапа 7, раздел 10.3)
-	entries, err := c.entries(ctx, rs)
-	if err != nil {
-		return SearchState{}, err
-	}
-	return SearchState{Query: q, Results: entries, Complete: done, Trackers: status}, nil
+	return rs, SearchState{Complete: done, Trackers: status}, nil
 }

@@ -27,6 +27,8 @@ type Entry struct {
 	Rating     meta.Rating // KinopoiskID = 0 — фильм не найден (или ещё не искали)
 	Format     string      // «MKV», «AVI, MKV»; "" — неизвестен (спека этапа 7, раздел 10.2)
 	Variants   int         // раздач этого фильма на обоих трекерах — у карточки каталога; 0 — не считали
+	// DetailsPending — страницу раздачи ещё не загружали: формата и номера Кинопоиска может не быть.
+	DetailsPending bool
 }
 
 type ListOptions struct {
@@ -130,7 +132,7 @@ func (c *Catalog) entries(ctx context.Context, rs []row) ([]Entry, error) {
 		out[i] = Entry{ID: r.ID, Tracker: r.Tracker, TopicID: r.TopicID, Title: r.Title, Quality: meta.ParseTitle(r.Title).Quality,
 			CategoryID: r.CategoryID, Category: cmp.Or(names[CategoryRef{r.Tracker, r.CategoryID}], r.CategoryID), Seeders: r.Seeders,
 			Leechers: r.Leechers, Size: r.Size, Added: r.Added, InfoHash: r.InfoHash, ImageKey: r.ImageKey, Format: r.Format,
-			Rating: ratings[r.Tracker+":"+r.TopicID]}
+			DetailsPending: r.DetailsAt.IsZero(), Rating: ratings[r.Tracker+":"+r.TopicID]}
 	}
 	return out, nil
 }

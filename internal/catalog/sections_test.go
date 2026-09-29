@@ -135,6 +135,17 @@ type muxRouter struct{ *http.ServeMux }
 
 func (m muxRouter) Handle(pattern, _ string, h http.Handler) { m.ServeMux.Handle(pattern, h) }
 
+// getJSONErr — как getJSON, но разбирает и ответ с ошибкой.
+func getJSONErr(t *testing.T, h http.Handler, url string, v any) int {
+	t.Helper()
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, httptest.NewRequest("GET", url, nil))
+	if err := json.Unmarshal(rec.Body.Bytes(), v); err != nil {
+		t.Fatal(err)
+	}
+	return rec.Code
+}
+
 func getJSON(t *testing.T, h http.Handler, url string, v any) int {
 	t.Helper()
 	rec := httptest.NewRecorder()

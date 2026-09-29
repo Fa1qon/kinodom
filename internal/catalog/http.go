@@ -52,6 +52,9 @@ type EntryView struct {
 	Format    string  `json:"format"`             // «MKV», «AVI, MKV»; "" — неизвестен
 	Season    string  `json:"season"`             // сезон и серии из заголовка: «S01»; "" — нет
 	Variants  int     `json:"variants,omitempty"` // раздач фильма на обоих трекерах — у карточки каталога
+	// DetailsPending — страницу раздачи ещё не загружали (найдено поиском): формат и номер Кинопоиска
+	// появятся после догрузки.
+	DetailsPending bool `json:"detailsPending"`
 }
 
 // View — раздача для API.
@@ -59,7 +62,8 @@ func (e Entry) View() EntryView {
 	t := meta.ParseTitle(e.Title)
 	return EntryView{ID: e.ID, Tracker: e.Tracker, Title: e.Title, Name: t.Ru, Original: t.Orig, Year: t.Year,
 		Quality: e.Quality, Category: e.Category, Seeders: e.Seeders, Leechers: e.Leechers, Size: e.Size,
-		ImageKey: e.ImageKey, Kinopoisk: e.Rating.Kinopoisk, Format: e.Format, Season: t.Season, Variants: e.Variants}
+		ImageKey: e.ImageKey, Kinopoisk: e.Rating.Kinopoisk, Format: e.Format, Season: t.Season, Variants: e.Variants,
+		DetailsPending: e.DetailsPending}
 }
 
 // ListView — страница каталога трекера.
