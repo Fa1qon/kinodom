@@ -17,7 +17,7 @@ var required = []string{
 	"fonts/unbounded-cyrillic.woff2", "fonts/unbounded-latin.woff2",
 	"fonts/OFL-golos-text.txt", "fonts/OFL-unbounded.txt",
 	"views/catalog.js", "views/release.js", "views/search.js", "views/downloads.js",
-	"views/settings-layout.js", "views/settings-status.js",
+	"views/settings-layout.js", "views/settings-status.js", "views/settings-params.js",
 }
 
 // scripts — все модули пульта.
