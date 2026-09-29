@@ -24,6 +24,7 @@ func (c *Catalog) Register(r Router) {
 	r.Handle("GET /api/v1/sources/{tracker}/categories", c.Name(), http.HandlerFunc(c.handleTree))
 	r.Handle("GET /api/v1/catalog/sections", c.Name(), http.HandlerFunc(c.handleSections))
 	r.Handle("GET /api/v1/catalog", c.Name(), http.HandlerFunc(c.handleList))
+	r.Handle("GET /api/v1/releases/{id}/variants", c.Name(), http.HandlerFunc(c.handleVariants))
 	r.Handle("GET /api/v1/search", c.Name(), http.HandlerFunc(c.handleSearch))
 	r.Handle("GET /api/v1/search/history", c.Name(), http.HandlerFunc(c.handleHistory))
 	r.Handle("DELETE /api/v1/search/history", c.Name(), http.HandlerFunc(c.handleForget))
@@ -46,9 +47,11 @@ type EntryView struct {
 	Seeders   int     `json:"seeders"`
 	Leechers  int     `json:"leechers"`
 	Size      int64   `json:"size"`
-	ImageKey  string  `json:"imageKey"`  // картинка — /img/{imageKey}; "" — нет
-	Kinopoisk float64 `json:"kinopoisk"` // рейтинг Кинопоиска; 0 — нет
-	Format    string  `json:"format"`    // «MKV», «AVI, MKV»; "" — неизвестен
+	ImageKey  string  `json:"imageKey"`           // картинка — /img/{imageKey}; "" — нет
+	Kinopoisk float64 `json:"kinopoisk"`          // рейтинг Кинопоиска; 0 — нет
+	Format    string  `json:"format"`             // «MKV», «AVI, MKV»; "" — неизвестен
+	Season    string  `json:"season"`             // сезон и серии из заголовка: «S01»; "" — нет
+	Variants  int     `json:"variants,omitempty"` // раздач фильма на обоих трекерах — у карточки каталога
 }
 
 // View — раздача для API.
@@ -56,7 +59,7 @@ func (e Entry) View() EntryView {
 	t := meta.ParseTitle(e.Title)
 	return EntryView{ID: e.ID, Tracker: e.Tracker, Title: e.Title, Name: t.Ru, Original: t.Orig, Year: t.Year,
 		Quality: e.Quality, Category: e.Category, Seeders: e.Seeders, Leechers: e.Leechers, Size: e.Size,
-		ImageKey: e.ImageKey, Kinopoisk: e.Rating.Kinopoisk, Format: e.Format}
+		ImageKey: e.ImageKey, Kinopoisk: e.Rating.Kinopoisk, Format: e.Format, Season: t.Season, Variants: e.Variants}
 }
 
 // ListView — страница каталога трекера.

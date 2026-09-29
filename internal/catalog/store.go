@@ -206,6 +206,75 @@ func (s catalogStore) rowsByID(ctx context.Context, ids []int64) (map[int64]row,
 	return out, nil
 }
 
+// rowsWhere — живые раздачи по условию (часть после WHERE), по убыванию раздающих.
+func (s catalogStore) rowsWhere(ctx context.Context, where string, args ...any) ([]row, error) {
+	rows, err := s.db.R.QueryContext(ctx,
+		`SELECT `+rowColumns+` FROM releases r WHERE r.removed = 0 AND `+where+` ORDER BY r.seeders DESC, r.id`, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []row
+	for rows.Next() {
+		r, err := scanRow(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, r)
+	}
+	return out, rows.Err()
+}
+
+// rowsByKinopoisk — живые раздачи с номером Кинопоиска из описания.
+func (s catalogStore) rowsByKinopoisk(ctx context.Context, ids []int) ([]row, error) {
+	var out []row
+	for len(ids) > 0 {
+		chunk := ids[:min(len(ids), 500)]
+		ids = ids[len(chunk):]
+		args := make([]any, len(chunk))
+		for i, id := range chunk {
+			args[i] = id
+		}
+		rs, err := s.rowsWhere(ctx, `r.kinopoisk_id IN (?`+strings.Repeat(", ?", len(chunk)-1)+`)`, args...)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, rs...)
+	}
+	return out, nil
+}
+
+// rowsByKeys — живые раздачи по «трекер:номер на трекере».
+func (s catalogStore) rowsByKeys(ctx context.Context, keys []string) ([]row, error) {
+	topics := map[string][]any{}
+	var trackers []string
+	for _, k := range keys {
+		tracker, topic, ok := strings.Cut(k, ":")
+		if !ok {
+			continue
+		}
+		if _, seen := topics[tracker]; !seen {
+			trackers = append(trackers, tracker)
+		}
+		topics[tracker] = append(topics[tracker], topic)
+	}
+	var out []row
+	for _, tracker := range trackers {
+		ts := topics[tracker]
+		for len(ts) > 0 {
+			chunk := ts[:min(len(ts), 500)]
+			ts = ts[len(chunk):]
+			rs, err := s.rowsWhere(ctx, `r.tracker = ? AND r.topic_id IN (?`+strings.Repeat(", ?", len(chunk)-1)+`)`,
+				append([]any{tracker}, chunk...)...)
+			if err != nil {
+				return nil, err
+			}
+			out = append(out, rs...)
+		}
+	}
+	return out, nil
+}
+
 // release — раздача для экрана раздачи: строка, описание, magnet, .torrent и «удалена с трекера».
 func (s catalogStore) release(ctx context.Context, id int64) (r row, description, magnet string, torrent []byte, removed bool, err error) {
 	r, err = scanRow(s.db.R.QueryRowContext(ctx,
