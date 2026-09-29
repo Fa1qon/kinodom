@@ -209,3 +209,22 @@ a.res-row:hover { background: var(--hover); }
 .ellipsis { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .seeders { display: inline-flex; align-items: center; gap: 4px; font-weight: 600; }
 .seeders .ic { color: var(--muted); }
+
+/* Загрузки */
+.total { font-size: 15px; }
+.dl-list { border: 1px solid var(--line-soft); }
+.dl-list:has(> p) { border: 0; }
+.dl { display: flex; align-items: center; gap: 18px; padding: 14px 18px; border-bottom: 1px solid #1E2226; }
+.dl:last-child { border-bottom: 0; }
+.thumb { position: relative; width: 44px; height: 64px; flex-shrink: 0; overflow: hidden; background: #1A1D21; }
+.thumb img { width: 100%; height: 100%; object-fit: cover; }
+.dl-name { flex-grow: 1; min-width: 0; display: flex; flex-direction: column; gap: 4px; }
+.dl-name .strong { font-size: 16px; }
+.dl-state { width: 240px; flex-shrink: 0; display: flex; flex-direction: column; gap: 8px; }
+.state { display: inline-flex; align-items: center; gap: 6px; align-self: flex-start; height: 28px; padding: 0 10px; border: 1px solid; font-size: 13px; font-weight: 600; white-space: nowrap; }
+.dl-state .track { width: 200px; }
+.dl-size { width: 90px; flex-shrink: 0; text-align: right; }
+.dl-when { width: 190px; flex-shrink: 0; line-height: 1.4; }
+.btn.danger { border-color: var(--yellow); color: var(--yellow); width: 96px; }
+.dl-actions { display: flex; justify-content: flex-end; gap: 8px; min-width: 96px; flex-shrink: 0; }
+.dl.child { padding-left: 80px; background: #121417; }
