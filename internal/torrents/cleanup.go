@@ -28,6 +28,9 @@ func (s *Service) maintain(ctx context.Context) error {
 	if err := s.sweep(ctx); err != nil {
 		return err
 	}
+	if err := s.limitSeeding(ctx); err != nil {
+		return err
+	}
 	if s.now().Sub(s.expiredAt) < expireEvery {
 		return nil
 	}

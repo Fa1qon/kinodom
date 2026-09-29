@@ -216,3 +216,26 @@ func (r *Registry) Unstored(ctx context.Context, before time.Time) ([]Record, er
 	}
 	return out, rows.Err()
 }
+
+// TorrentsByOpened — раздачи с хранимыми файлами, самые недавно открытые — первыми (раздача).
+func (r *Registry) TorrentsByOpened(ctx context.Context) ([]metainfo.Hash, error) {
+	rows, err := r.db.R.QueryContext(ctx,
+		`SELECT infohash FROM stored_files GROUP BY infohash ORDER BY MAX(last_opened_at) DESC, infohash`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []metainfo.Hash
+	for rows.Next() {
+		var hexHash string
+		var ih metainfo.Hash
+		if err := rows.Scan(&hexHash); err != nil {
+			return nil, err
+		}
+		if err := ih.FromHexString(hexHash); err != nil {
+			return nil, err
+		}
+		out = append(out, ih)
+	}
+	return out, rows.Err()
+}

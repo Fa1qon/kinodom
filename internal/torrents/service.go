@@ -58,6 +58,7 @@ type session struct {
 	storedFiles  map[int]bool // файлы, которые хранятся и докачиваются (в том числе до перезапуска)
 	readers      map[int]int  // открытые потоки по файлам: такой файл «сейчас смотрят»
 	paused       map[int]bool // докачка на паузе: мало места (этап 6)
+	quiet        bool         // раздача молчит: не входит в раздаваемые (этап 6)
 	lastSeen     time.Time    // когда раздачу последний раз открывали или спрашивали о ней
 }
 
@@ -84,6 +85,7 @@ type Service struct {
 
 	expiredAt time.Time                       // когда последний раз чистили по сроку хранения (только Run)
 	keeper    *power.Keeper                   // запрет сна, пока идёт поток; nil — без него
+	upload    float64                         // лимит отдачи, выставленный сейчас (только Run)
 	spaceMu   sync.Mutex                      // одна проверка места за раз (Prepare, уборка)
 	freeSpace func(dir string) (int64, error) // свободное место на диске папки; тесты подменяют
 
@@ -99,7 +101,8 @@ func NewService(eng *Engine, reg *Registry, log *slog.Logger) *Service {
 		noPeersAfter: noPeersAfter,
 		noMetaAfter:  noMetadataAfter,
 		sessions:     map[metainfo.Hash]*session{},
-		policy:       Policy{KeepFor: defaultKeepFor, MinFree: defaultMinFree},
+		policy:       Policy{KeepFor: defaultKeepFor, MinFree: defaultMinFree, MaxSeeding: defaultMaxSeeding},
+		upload:       -1,
 		freeSpace:    diskFree,
 	}
 }
@@ -152,6 +155,7 @@ func (s *Service) Run(ctx context.Context) error {
 			return nil
 		case <-tick.C:
 			s.sample()
+			s.shapeUpload()
 		case <-maint.C:
 			if err := s.maintain(ctx); err != nil {
 				return fmt.Errorf("уборка: %w", err)
