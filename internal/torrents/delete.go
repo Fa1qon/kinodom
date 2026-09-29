@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"io/fs"
 	"os"
 	"time"
 
@@ -59,19 +58,33 @@ func (s *Service) deleteLocked(ctx context.Context, ih metainfo.Hash, index int)
 		t.Piece(i).SetPriority(torrent.PiecePriorityNone)
 	}
 	path := enginePath(s.eng.TorrentDir(ih), info, ih, info.UpvertedFiles()[index])
-	if err := removeRetry(path); err != nil {
-		return fmt.Errorf("файл %s не удаляется: %w", path, err)
-	}
-	// Пустой разрежённый файл — сразу, до сброса отметок: кусок на границе общий с соседним
-	// файлом, движок докачает его для соседа и иначе создал бы удалённый файл полного размера.
-	if err := createSparse(path, f.Length()); err != nil {
-		return fmt.Errorf("файл %s: %w", path, err)
-	}
+	// Освобождаются только скачанные куски целиком внутри файла: сначала отметка «не скачан»
+	// (движок перестаёт их раздавать), потом обнуление на диске. Кусок на границе с соседним файлом
+	// и недокачанные куски не трогаются: их байты нужны соседу или в них идёт приём, и сброс дал бы
+	// несошедшийся хэш — за него anacrolix банит раздающего. Файл остаётся на месте разрежённым:
+	// удалять и создавать его заново не нужно, и движок его не «воскресит».
+	var free []pieceSpan
 	for i := f.BeginPieceIndex(); i < f.EndPieceIndex(); i++ {
+		p := info.Piece(i)
+		if p.Offset() < f.Offset() || p.Offset()+p.Length() > f.Offset()+f.Length() || !t.PieceState(i).Complete {
+			continue
+		}
 		if err := s.eng.pc.Set(metainfo.PieceKey{InfoHash: ih, Index: i}, false); err != nil {
 			return fmt.Errorf("отметки кусков: %w", err)
 		}
 		t.Piece(i).UpdateCompletion()
+		if n := len(free); n > 0 && free[n-1].end == i {
+			free[n-1].end = i + 1
+		} else {
+			free = append(free, pieceSpan{i, i + 1})
+		}
+	}
+	for _, sp := range free {
+		from := info.Piece(sp.begin).Offset() - f.Offset()
+		to := info.Piece(sp.end-1).Offset() + info.Piece(sp.end-1).Length() - f.Offset()
+		if err := zeroRange(path, f.Length(), from, to); err != nil {
+			return fmt.Errorf("файл %s: место не освободилось: %w", path, err)
+		}
 	}
 	if err := s.reg.Unstore(ctx, ih, index); err != nil {
 		return err
@@ -121,17 +134,6 @@ func (s *Service) forgetLocked(ctx context.Context, ih metainfo.Hash, dir string
 	if err := s.reg.Forget(ctx, ih); err != nil {
 		s.log.Warn("запись о раздаче не удалилась", "hash", ih.HexString(), "err", err)
 	}
-}
-
-// removeRetry удаляет файл. Windows может ещё мгновение держать только что закрытый файл
-// (антивирус, движок дочитывает кусок) — повтор до 3 с.
-func removeRetry(path string) error {
-	return retry(func() error {
-		if err := os.Remove(path); err != nil && !errors.Is(err, fs.ErrNotExist) {
-			return err
-		}
-		return nil
-	})
 }
 
 func removeAllRetry(dir string) error { return retry(func() error { return os.RemoveAll(dir) }) }
