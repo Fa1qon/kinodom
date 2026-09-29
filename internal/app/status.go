@@ -89,5 +89,6 @@ func (a *App) statusFields(ctx context.Context) (map[string]any, error) {
 			DailyLimit: rs.Quota.DailyLimit, TotalLimit: rs.Quota.TotalLimit},
 		"disk":    disk,
 		"streams": streamsStatus{Count: a.Power.Active(), DownloadSpeed: down, UploadSpeed: up},
+		"iptv":    a.IPTV.Status(),
 	}, nil
 }

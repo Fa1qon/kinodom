@@ -5,16 +5,19 @@ package settings
 import (
 	"cmp"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"math"
 	"net"
 	"net/url"
 	"path/filepath"
+	"regexp"
 	"slices"
 	"strconv"
 	"strings"
 
+	"kinodom/internal/iptv/labels"
 	"kinodom/internal/netx"
 	"kinodom/internal/store"
 )
@@ -33,6 +36,13 @@ const (
 	KeyPlayer            = "player"
 	KeySections          = "catalog.categories"
 	KeyPreferredFormat   = "catalog.preferredFormat"
+	// Каналы (спека этапа 8, раздел 5.6); списки — JSON.
+	KeyEPGURL           = "iptv.epgUrl"
+	KeyHiddenCategories = "iptv.hiddenCategories"
+	KeyHiddenCountries  = "iptv.hiddenCountries"
+	KeyHiddenLanguages  = "iptv.hiddenLanguages"
+	KeyHideOtherZones   = "iptv.hideOtherZones"
+	KeyUTCOffset        = "iptv.utcOffset"
 )
 
 // Значения по умолчанию (основная спека, раздел 15).
@@ -42,6 +52,7 @@ const (
 	DefaultMinFreeGB  = 20
 	DefaultUploadMBps = 2
 	DefaultPlayer     = "auto"
+	DefaultUTCOffset  = 7 // часовой пояс каналов: UTC+7, как у заказчика
 )
 
 // Players — плееры на этом ПК: auto — VLC, если нет — MPC-HC.
@@ -64,6 +75,12 @@ type Values struct {
 	Player            string
 	Sections          string // «rutracker:2110,rutracker:46+,rutor:12» (формат — пакет catalog)
 	PreferredFormat   string // формат в приоритете: "", MKV, MP4, AVI
+	EPGURL            string // телепрограмма; "" — по умолчанию
+	HiddenCategories  []string
+	HiddenCountries   []string
+	HiddenLanguages   []string
+	HideOtherZones    bool
+	UTCOffset         int // часовой пояс каналов, часы от UTC
 }
 
 // Defaults — то, чего пакет не знает сам: папка загрузок по умолчанию и разделы каталога по умолчанию.
@@ -132,6 +149,30 @@ func Load(ctx context.Context, db *store.DB, def Defaults, overrides map[string]
 	if !slices.Contains(Formats, v.PreferredFormat) {
 		v.PreferredFormat = ""
 	}
+	v.EPGURL, err = str(KeyEPGURL, "")
+	collect(err)
+	list := func(key string, fallback []string) ([]string, error) {
+		s, ok, err := get(key)
+		var out []string
+		if err != nil || !ok || json.Unmarshal([]byte(s), &out) != nil || out == nil {
+			return fallback, err
+		}
+		return out, nil
+	}
+	v.HiddenCategories, err = list(KeyHiddenCategories, []string{"adult"})
+	collect(err)
+	v.HiddenCountries, err = list(KeyHiddenCountries, []string{})
+	collect(err)
+	v.HiddenLanguages, err = list(KeyHiddenLanguages, []string{})
+	collect(err)
+	zones, err := str(KeyHideOtherZones, "true")
+	collect(err)
+	v.HideOtherZones = zones != "false"
+	v.UTCOffset, err = num(KeyUTCOffset, DefaultUTCOffset, -12)
+	collect(err)
+	if v.UTCOffset > 14 {
+		v.UTCOffset = DefaultUTCOffset
+	}
 	// Лимит отдачи: строки нет — 2 МБ/с; пустая строка — без ограничения (так её пишет пульт).
 	up, ok, err := get(KeyUploadLimit)
 	collect(err)
@@ -149,6 +190,14 @@ func Load(ctx context.Context, db *store.DB, def Defaults, overrides map[string]
 }
 
 func ptr[T any](v T) *T { return &v }
+
+func jsonList(l []string) string {
+	if l == nil {
+		l = []string{}
+	}
+	b, _ := json.Marshal(l)
+	return string(b)
+}
 
 // entries — настройки в виде строк базы.
 func (v Values) entries() map[string]string {
@@ -169,6 +218,12 @@ func (v Values) entries() map[string]string {
 		KeyPlayer:            v.Player,
 		KeySections:          v.Sections,
 		KeyPreferredFormat:   v.PreferredFormat,
+		KeyEPGURL:            v.EPGURL,
+		KeyHiddenCategories:  jsonList(v.HiddenCategories),
+		KeyHiddenCountries:   jsonList(v.HiddenCountries),
+		KeyHiddenLanguages:   jsonList(v.HiddenLanguages),
+		KeyHideOtherZones:    strconv.FormatBool(v.HideOtherZones),
+		KeyUTCOffset:         strconv.Itoa(v.UTCOffset),
 	}
 }
 
@@ -270,6 +325,11 @@ func (v Values) With(p Patch) (Values, error) {
 			return v, fieldErr("Формат в приоритете", "нужно «нет», MKV, MP4 или AVI")
 		}
 		n.PreferredFormat = *c.PreferredFormat
+	}
+	if i := p.IPTV; i != nil {
+		if err := i.apply(&n); err != nil {
+			return v, err
+		}
 	}
 	if c := p.Catalog; c != nil && c.Sections != nil {
 		s, err := joinSections(c.Sections)
@@ -383,4 +443,65 @@ func joinSections(m map[string][]string) (string, error) {
 		return "", fieldErr("Разделы каталога", "выберите хотя бы один раздел")
 	}
 	return strings.Join(parts, ","), nil
+}
+
+var (
+	reCountry  = regexp.MustCompile(`^[A-Z]{2}$`)
+	reLanguage = regexp.MustCompile(`^[a-z]{3}$`)
+)
+
+// apply — поля каналов: проверка и перенос в n.
+func (i *IPTVPatch) apply(n *Values) error {
+	if i.EPGURL != nil {
+		u := strings.TrimSpace(*i.EPGURL)
+		if pu, err := url.Parse(u); u != "" && (err != nil || (pu.Scheme != "http" && pu.Scheme != "https") || pu.Host == "") {
+			return fieldErr("Телепрограмма", "нужна ссылка http(s) или пустое поле")
+		}
+		n.EPGURL = u
+	}
+	if i.HiddenCategories != nil {
+		for _, c := range *i.HiddenCategories {
+			if !slices.Contains(labels.CategoryOrder, c) {
+				return fieldErr("Скрытые категории", "неизвестная категория %q", c)
+			}
+		}
+		n.HiddenCategories = clean(*i.HiddenCategories)
+	}
+	if i.HiddenCountries != nil {
+		for _, c := range *i.HiddenCountries {
+			if c != "" && !reCountry.MatchString(c) {
+				return fieldErr("Скрытые страны", "страна — код из двух заглавных латинских букв, например UA")
+			}
+		}
+		n.HiddenCountries = clean(*i.HiddenCountries)
+	}
+	if i.HiddenLanguages != nil {
+		for _, l := range *i.HiddenLanguages {
+			if l != "" && !reLanguage.MatchString(l) {
+				return fieldErr("Скрытые языки", "язык — код из трёх строчных латинских букв, например ara")
+			}
+		}
+		n.HiddenLanguages = clean(*i.HiddenLanguages)
+	}
+	if i.HideOtherZones != nil {
+		n.HideOtherZones = *i.HideOtherZones
+	}
+	if i.UTCOffset != nil {
+		if *i.UTCOffset < -12 || *i.UTCOffset > 14 {
+			return fieldErr("Часовой пояс каналов", "нужно целое число часов от −12 до 14")
+		}
+		n.UTCOffset = *i.UTCOffset
+	}
+	return nil
+}
+
+// clean — без повторов, по порядку.
+func clean(l []string) []string {
+	out := []string{}
+	for _, v := range l {
+		if !slices.Contains(out, v) {
+			out = append(out, v)
+		}
+	}
+	return out
 }

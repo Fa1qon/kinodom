@@ -994,3 +994,116 @@ func TestStatusThroughAPI(t *testing.T) {
 		t.Fatalf("состояние: %+v", st)
 	}
 }
+
+// Каналы работают вместе с остальными модулями (спека этапа 8): маршруты отвечают, настройки скрытия и
+// часового пояса действуют без перезапуска, «Состояние» показывает модуль; выключенный модуль —
+// 503 только у его маршрутов, остальные работают.
+func TestIPTVWithOtherModules(t *testing.T) {
+	a := startApp(t)
+	base := "http://" + a.API.Addr()
+	var ch struct {
+		Channels []any `json:"channels"`
+	}
+	getJSON(t, base+"/api/v1/channels", &ch)
+	if ch.Channels == nil {
+		t.Fatal("каналы — null вместо []")
+	}
+	var pls struct {
+		Items []any `json:"items"`
+	}
+	getJSON(t, base+"/api/v1/iptv/playlists", &pls)
+	code, body := putJSON(t, base+"/api/v1/settings", map[string]any{"iptv": map[string]any{"hiddenCategories": []string{"sports"}, "utcOffset": 3}})
+	if code != http.StatusOK || !strings.Contains(body, `"hiddenCategories":["sports"]`) {
+		t.Fatalf("настройки каналов: %d %s", code, body)
+	}
+	if l := a.IPTV.Lineup(); l.LocalShift != 0 {
+		t.Errorf("пояс каналов UTC+3 не применился: сдвиг %d", l.LocalShift)
+	}
+	var st struct {
+		IPTV map[string]any `json:"iptv"`
+	}
+	getJSON(t, base+"/api/v1/status", &st)
+	if _, ok := st.IPTV["channels"]; !ok {
+		t.Errorf("в «Состоянии» нет каналов: %v", st.IPTV)
+	}
+
+	// Модуль выключен настройкой разработчика: маршруты каналов — 503, загрузки работают.
+	a2home := t.TempDir()
+	paths := config.NewPaths(a2home)
+	if err := paths.Ensure(); err != nil {
+		t.Fatal(err)
+	}
+	db, err := store.Open(context.Background(), paths.DB)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := db.SetSetting(context.Background(), "modules.iptv.enabled", "false"); err != nil {
+		t.Fatal(err)
+	}
+	db.Close()
+	a2 := startAppWith(t, Options{Home: a2home, ListenAddr: "127.0.0.1:0", Offline: true, DownloadsDir: t.TempDir()})
+	resp, err := http.Get("http://" + a2.API.Addr() + "/api/v1/channels")
+	if err != nil {
+		t.Fatal(err)
+	}
+	b, _ := io.ReadAll(resp.Body)
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusServiceUnavailable || !strings.Contains(string(b), "Каналы") {
+		t.Errorf("выключенный модуль: %d %s", resp.StatusCode, b)
+	}
+	getJSON(t, "http://"+a2.API.Addr()+"/api/v1/downloads", &map[string]any{})
+}
+
+// История просмотров (спека этапа 8, раздел 7.4): место от своего плеера, отметка «просмотрено»,
+// история устройства, убрать раздачу из истории.
+func TestHistoryRoutes(t *testing.T) {
+	a := startApp(t)
+	base := "http://" + a.API.Addr() + "/api/v1/history"
+	const h = "aaaa000000000000000000000000000000000001"
+	if code, body := putJSON(t, base+"/"+h+"/2", map[string]any{"positionSec": 1800, "durationSec": 2400}); code != http.StatusNoContent {
+		t.Fatalf("место: %d %s", code, body)
+	}
+	if code, _ := putJSON(t, base+"/"+h+"/3", map[string]any{"watched": true}); code != http.StatusNoContent {
+		t.Fatalf("отметка: %d", code)
+	}
+	if code, _ := putJSON(t, base+"/"+h+"/3", map[string]any{"positionSec": 10, "durationSec": 5}); code != http.StatusBadRequest {
+		t.Errorf("место больше длительности: %d", code)
+	}
+	if code, _ := putJSON(t, base+"/не-хэш/3", map[string]any{"watched": true}); code != http.StatusBadRequest {
+		t.Errorf("неверный хэш: %d", code)
+	}
+	var files struct {
+		Files []struct {
+			Index       int     `json:"index"`
+			Fraction    float64 `json:"fraction"`
+			PositionSec float64 `json:"positionSec"`
+			Watched     bool    `json:"watched"`
+		} `json:"files"`
+	}
+	getJSON(t, base+"/"+h, &files)
+	if len(files.Files) != 2 || files.Files[0].PositionSec != 1800 || files.Files[0].Fraction != 0.75 || !files.Files[1].Watched {
+		t.Fatalf("файлы: %+v", files)
+	}
+	var list struct {
+		Items []struct {
+			Hash    string `json:"hash"`
+			Watched int    `json:"watched"`
+			Files   int    `json:"files"`
+			Release any    `json:"release"`
+		} `json:"items"`
+	}
+	getJSON(t, base, &list)
+	if len(list.Items) != 1 || list.Items[0].Hash != h || list.Items[0].Watched != 1 || list.Items[0].Files != 2 || list.Items[0].Release != nil {
+		t.Fatalf("история: %+v", list)
+	}
+	req, _ := http.NewRequest(http.MethodDelete, base+"/"+h, nil)
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil || resp.StatusCode != http.StatusNoContent {
+		t.Fatalf("удаление: %v %v", resp, err)
+	}
+	resp.Body.Close()
+	getJSON(t, base, &list)
+	if len(list.Items) != 0 {
+		t.Errorf("после удаления: %+v", list)
+	}
+}
