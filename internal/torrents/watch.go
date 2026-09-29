@@ -22,12 +22,16 @@ type WatchTracker interface {
 	StartSec(ctx context.Context, device, hash string, index int) int
 }
 
-// Место по чтению потока: запрос, который идёт дольше watchMin, раз в watchEvery и в конце сообщает,
-// докуда дочитан файл. Короткие запросы (индекс в конце файла при открытии) не считаются.
+// Место по чтению потока (спека этапа 8, раздел 7.2). VLC читает поток короткими запросами (новое
+// соединение каждые пару секунд — проверено вживую), поэтому место считается по сеансу: запросы одного
+// устройства к одному файлу с перерывами меньше watchGap. Место — докуда дочитал самый свежий запрос;
+// сеанс короче watchMin места не сообщает (плеер только открыл файл); прыжок в самый конец файла,
+// который продержался меньше watchMin, не место (плеер читает индекс в конце при открытии).
 // Переменные — тесты их ускоряют.
 var (
 	watchEvery = 10 * time.Second
 	watchMin   = 10 * time.Second
+	watchGap   = 30 * time.Second
 )
 
 // SetWatchTracker подключает историю просмотров; nil — без неё. Вызывать до Run.
@@ -53,31 +57,80 @@ func (t *trackedReader) Seek(off int64, whence int) (int64, error) {
 	return n, err
 }
 
-// trackWatch сообщает место, пока идёт запрос; возвращает «запрос закончился».
-func (s *Service) trackWatch(device string, ih metainfo.Hash, index int, size int64, tr *trackedReader) func() {
-	start := time.Now()
-	done := make(chan struct{})
-	hash := ih.HexString()
-	report := func() {
-		if time.Since(start) >= watchMin {
-			s.watch.Report(context.Background(), device, hash, index, tr.pos.Load(), size)
-		}
+type watchKey struct {
+	device string
+	ih     metainfo.Hash
+	index  int
+}
+
+// watchSession — сеанс просмотра файла на устройстве.
+type watchSession struct {
+	size     int64
+	started  time.Time
+	seen     time.Time // последний запрос начался или закончился
+	active   int       // запросов идёт
+	latest   *trackedReader
+	latestAt time.Time
+	pos      int64 // принятое место
+	reported time.Time
+}
+
+// watchBegin — запрос потока начался; возвращает «запрос закончился».
+func (s *Service) watchBegin(key watchKey, size int64, tr *trackedReader) func() {
+	now := s.now()
+	s.watchMu.Lock()
+	defer s.watchMu.Unlock()
+	if s.watchSessions == nil {
+		s.watchSessions = map[watchKey]*watchSession{}
 	}
-	go func() {
-		t := time.NewTicker(watchEvery)
-		defer t.Stop()
-		for {
-			select {
-			case <-done:
-				return
-			case <-t.C:
-				report()
+	ss := s.watchSessions[key]
+	if ss == nil {
+		ss = &watchSession{size: size, started: now}
+		s.watchSessions[key] = ss
+	}
+	ss.active++
+	ss.latest, ss.latestAt, ss.seen = tr, now, now
+	return func() {
+		s.watchMu.Lock()
+		defer s.watchMu.Unlock()
+		ss.active--
+		ss.seen = s.now()
+	}
+}
+
+type watchReport struct {
+	key    watchKey
+	offset int64
+	size   int64
+}
+
+// watchTick — раз в секунду из Run: принять место, сообщить его раз в watchEvery и в конце сеанса.
+func (s *Service) watchTick(now time.Time) {
+	if s.watch == nil {
+		return
+	}
+	var out []watchReport
+	s.watchMu.Lock()
+	for key, ss := range s.watchSessions {
+		if ss.latest != nil {
+			p := ss.latest.pos.Load()
+			jump := p >= ss.size*98/100 && ss.pos < ss.size*90/100 && now.Sub(ss.latestAt) < watchMin
+			if !jump {
+				ss.pos = p
 			}
 		}
-	}()
-	return func() {
-		close(done)
-		report()
+		idle := ss.active == 0 && now.Sub(ss.seen) > watchGap
+		if now.Sub(ss.started) >= watchMin && (now.Sub(ss.reported) >= watchEvery || idle) {
+			out = append(out, watchReport{key, ss.pos, ss.size})
+			ss.reported = now
+		}
+		if idle {
+			delete(s.watchSessions, key)
+		}
+	}
+	s.watchMu.Unlock()
+	for _, r := range out {
+		s.watch.Report(context.Background(), r.key.device, r.key.ih.HexString(), r.key.index, r.offset, r.size)
 	}
 }
 

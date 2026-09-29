@@ -110,6 +110,8 @@ type Service struct {
 	activeStreams atomic.Int32
 	watch         WatchTracker // история просмотров; nil — без неё (этап 8c)
 	durTried      sync.Map     // durationKey → длительность уже пробовали узнать
+	watchMu       sync.Mutex
+	watchSessions map[watchKey]*watchSession // сеансы просмотра для истории
 }
 
 func NewService(eng *Engine, reg *Registry, log *slog.Logger) *Service {
@@ -177,6 +179,7 @@ func (s *Service) Run(ctx context.Context) error {
 		case <-tick.C:
 			s.sample()
 			s.shapeUpload()
+			s.watchTick(s.now())
 			s.verifySome(500 * time.Millisecond)
 		case <-maint.C:
 			if err := s.maintain(ctx); err != nil {
