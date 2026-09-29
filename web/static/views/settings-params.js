@@ -31,6 +31,7 @@ export function render(root, r, ctx) {
   let alive = true;
   let view = null; // /settings — что сейчас сохранено
   let status = null; // /status — вход t2, квота Кинопоиска, canEdit
+  let loginEl = null; // строка состояния входа t2: «Войти» меняет только её
   const inputs = {};
   const errs = {};
 
@@ -96,7 +97,7 @@ export function render(root, r, ctx) {
         h('div', { class: 'col' },
           h('div', { class: 'card' }, h('div', { class: 'h' }, 't2'),
             h('div', { class: 'two' }, field('Логин', 'rtLogin', input('rtLogin', v.t2.login, { autocomplete: 'off' })), field('Пароль', 'rtPassword', secret('rtPassword', v.t2.passwordSet))),
-            h('div', { class: 'row gap10' }, loginLine(login), loginBtn)),
+            h('div', { class: 'row gap10' }, (loginEl = loginLine(login)), loginBtn)),
           h('div', { class: 'card' }, h('div', { class: 'h' }, 'Прокси для трекеров'), proxyType,
             field('Адрес', 'proxyAddress', input('proxyAddress', v.proxy.address, { placeholder: '192.168.1.20:3128' })),
             h('div', { class: 'two' }, field('Логин', 'proxyLogin', input('proxyLogin', v.proxy.login, { autocomplete: 'off' })), field('Пароль', 'proxyPassword', secret('proxyPassword', v.proxy.passwordSet)))),
@@ -199,16 +200,34 @@ export function render(root, r, ctx) {
   }
 
   // relogin — «Войти»: снять запрет входа и попробовать ещё раз (спека этапа 7, раздел 5.3).
+  // Логин или пароль изменили на форме — сначала они сохраняются, иначе вход шёл бы со старой парой.
+  // Перерисовывается только строка входа: остальное введённое на форме не теряется.
   async function relogin(e) {
     const btn = e.currentTarget;
+    const hadFocus = document.activeElement === btn;
     btn.disabled = true;
+    errs.general.textContent = '';
     try {
+      const creds = {};
+      if (inputs.rtLogin.value.trim() !== view.t2.login) creds.login = inputs.rtLogin.value.trim();
+      if (inputs.rtPassword.value) creds.password = inputs.rtPassword.value;
+      if (Object.keys(creds).length > 0) {
+        view = await put('/settings', { t2: creds });
+        inputs.rtLogin.value = view.t2.login;
+        inputs.rtPassword.value = '';
+        inputs.rtPassword.placeholder = view.t2.passwordSet ? 'задан' : '';
+      }
       await post('/sources/t2/login');
       status = await get('/status');
     } catch (err) {
       errs.general.textContent = err.message;
     }
-    if (alive) draw();
+    if (!alive) return;
+    const next = loginLine(status.trackers.t2 && status.trackers.t2.login);
+    loginEl.replaceWith(next);
+    loginEl = next;
+    btn.disabled = !status.canEdit;
+    if (hadFocus && document.activeElement === document.body) btn.focus({ preventScroll: true });
     ctx.refreshStatus();
   }
 
