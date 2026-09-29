@@ -24,18 +24,33 @@ type FileStatus struct {
 	State         FileState `json:"state"`
 	BufferPercent int       `json:"bufferPercent"`
 	Peers         int       `json:"peers"`
-	Speed         int64     `json:"speed"` // байт/с
+	Speed         int64     `json:"speed"`       // байт/с
 	SmoothInSec   int       `json:"smoothInSec"` // −1 — скорость нулевая, оценить нельзя
-	StreamPath    string    `json:"streamPath"` // адрес сервера подставляет API
+	StreamPath    string    `json:"streamPath"`  // адрес сервера подставляет API
 	Error         string    `json:"error,omitempty"`
 }
 
 // Prepare выбирает файл для просмотра: он качается целиком и хранится, а начало и конец —
-// в первую очередь. Повторный вызов (второй телевизор) ничего не меняет.
-//
-// Всё делается под s.mu: иначе два телевизора, готовящие разные серии одновременно, могли бы
-// сбросить друг другу докачку. Порядок блокировок тот же, что везде: s.mu, затем движок.
+// в первую очередь. Повторный вызов (второй телевизор) ничего не меняет. Места не хватает —
+// сначала очистка самых давно открытых, потом ErrLowSpace (спека, раздел 9).
 func (s *Service) Prepare(ctx context.Context, ih metainfo.Hash, index int) error {
+	// Одна проверка места за раз: две серии, выбранные одновременно, не займут одно место дважды.
+	s.spaceMu.Lock()
+	defer s.spaceMu.Unlock()
+	dir, need, done, err := s.fileNeed(ih, index)
+	if err != nil || done {
+		return err
+	}
+	if err := s.ensureSpace(ctx, dir, need); err != nil {
+		return err
+	}
+	return s.prepare(ctx, ih, index)
+}
+
+// prepare — выбор файла. Всё делается под s.mu: иначе два телевизора, готовящие разные серии
+// одновременно, могли бы сбросить друг другу докачку. Порядок блокировок тот же, что везде: s.mu,
+// затем движок.
+func (s *Service) prepare(ctx context.Context, ih metainfo.Hash, index int) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	ss, ok := s.sessions[ih]
@@ -51,6 +66,7 @@ func (s *Service) Prepare(ctx context.Context, ih metainfo.Hash, index int) erro
 	if index < 0 || index >= len(files) {
 		return ErrNoSuchFile
 	}
+	ss.lastSeen = s.now()
 	if _, done := ss.prepared[index]; done {
 		return nil
 	}
@@ -103,6 +119,7 @@ func (s *Service) FileStatus(ih metainfo.Hash, index int) (FileStatus, bool) {
 		return FileStatus{}, false
 	}
 	now := s.now()
+	ss.lastSeen = now
 	s.observe(ss, now) // обновить «с какого момента нет пиров»
 	t := ss.t
 	info := t.Info()

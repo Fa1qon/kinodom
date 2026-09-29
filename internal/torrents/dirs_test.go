@@ -60,7 +60,7 @@ func TestTorrentStaysInItsDownloadsDir(t *testing.T) {
 
 	e1, err := NewEngine(Config{DownloadsDir: oldDir, StateDir: state, Offline: true, Log: quiet()})
 	must(t, err)
-	s1 := NewService(e1, NewRegistry(db), quiet())
+	s1 := serviceFor(e1, NewRegistry(db))
 	ih, err := s1.Open(ctx, Source{Torrent: torrentBytes(t, mi)})
 	must(t, err)
 	connect(t, s1, ih, seeder)
@@ -76,7 +76,7 @@ func TestTorrentStaysInItsDownloadsDir(t *testing.T) {
 	e2, err := NewEngine(Config{DownloadsDir: newDir, StateDir: state, Offline: true, Log: quiet()})
 	must(t, err)
 	t.Cleanup(func() { e2.Close() })
-	s2 := NewService(e2, NewRegistry(db), quiet())
+	s2 := serviceFor(e2, NewRegistry(db))
 	runService(t, s2)
 	waitStatus(t, s2, ih, StateReady)
 	tt2, _ := e2.Client().Torrent(ih)
@@ -109,7 +109,7 @@ func TestUnavailableDirKeepsRecords(t *testing.T) {
 	must(t, reg.SaveMetainfo(ctx, ih, "film.mkv", torrentBytes(t, mi)))
 	must(t, reg.MarkStored(ctx, ih, 0, filepath.Join(usb, "film.mkv"), 300_000, time.Now()))
 
-	s := NewService(newOfflineEngine(t), reg, quiet())
+	s := serviceFor(newOfflineEngine(t), reg)
 	must(t, s.restore(ctx))
 	if _, ok := s.Engine().Client().Torrent(ih); ok {
 		t.Fatal("раздача с недоступного диска добавлена в движок")

@@ -56,6 +56,8 @@ type session struct {
 	prepared     map[int]*prepared
 	storedFiles  map[int]bool // файлы, которые хранятся и докачиваются (в том числе до перезапуска)
 	readers      map[int]int  // открытые потоки по файлам: такой файл «сейчас смотрят»
+	paused       map[int]bool // докачка на паузе: мало места (этап 6)
+	lastSeen     time.Time    // когда раздачу последний раз открывали или спрашивали о ней
 }
 
 // prepared — файл, выбранный для просмотра.
@@ -77,6 +79,11 @@ type Service struct {
 
 	mu       sync.Mutex
 	sessions map[metainfo.Hash]*session
+	policy   Policy
+
+	expiredAt time.Time                       // когда последний раз чистили по сроку хранения (только Run)
+	spaceMu   sync.Mutex                      // одна проверка места за раз (Prepare, уборка)
+	freeSpace func(dir string) (int64, error) // свободное место на диске папки; тесты подменяют
 
 	activeStreams atomic.Int32
 }
@@ -90,6 +97,8 @@ func NewService(eng *Engine, reg *Registry, log *slog.Logger) *Service {
 		noPeersAfter: noPeersAfter,
 		noMetaAfter:  noMetadataAfter,
 		sessions:     map[metainfo.Hash]*session{},
+		policy:       Policy{KeepFor: defaultKeepFor, MinFree: defaultMinFree},
+		freeSpace:    diskFree,
 	}
 }
 
@@ -133,12 +142,19 @@ func (s *Service) Run(ctx context.Context) error {
 	supervisor.Ready(ctx) // хранимые раздачи на месте — маршруты модуля можно обслуживать
 	tick := time.NewTicker(time.Second)
 	defer tick.Stop()
+	maint := time.NewTimer(0) // уборка — сразу после старта, дальше раз в 5 минут
+	defer maint.Stop()
 	for {
 		select {
 		case <-ctx.Done():
 			return nil
 		case <-tick.C:
 			s.sample()
+		case <-maint.C:
+			if err := s.maintain(ctx); err != nil {
+				return fmt.Errorf("уборка: %w", err)
+			}
+			maint.Reset(maintainEvery)
 		}
 	}
 }
@@ -234,6 +250,9 @@ func (s *Service) Open(ctx context.Context, src Source) (metainfo.Hash, error) {
 	default:
 		return metainfo.Hash{}, errors.New("не указан источник раздачи: нужна magnet-ссылка или .torrent")
 	}
+	// Под s.mu: уборка не должна убрать запись о раздаче между Remember и появлением сессии.
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	// Папку раздачи движок должен знать до добавления: файлы создаются сразу, как придёт метаинфо.
 	dir, err := s.reg.Remember(ctx, ih, source, s.eng.DownloadsDir())
 	if err != nil {
@@ -248,9 +267,9 @@ func (s *Service) Open(ctx context.Context, src Source) (metainfo.Hash, error) {
 	} else if t, err = s.eng.cl.AddMagnet(src.Magnet); err != nil {
 		return metainfo.Hash{}, fmt.Errorf("magnet-ссылка не читается: %w", err)
 	}
-	s.mu.Lock()
-	s.observe(s.sessionFor(t), s.now())
-	s.mu.Unlock()
+	ss := s.sessionFor(t)
+	ss.lastSeen = s.now()
+	s.observe(ss, s.now())
 	go s.saveMetainfoWhenReady(t, raw)
 	return ih, nil
 }
@@ -262,7 +281,8 @@ func (s *Service) sessionFor(t *torrent.Torrent) *session {
 	if ss, ok := s.sessions[ih]; ok && ss.t == t {
 		return ss
 	}
-	ss := &session{t: t, prepared: map[int]*prepared{}, storedFiles: map[int]bool{}, readers: map[int]int{}}
+	ss := &session{t: t, prepared: map[int]*prepared{}, storedFiles: map[int]bool{}, readers: map[int]int{},
+		paused: map[int]bool{}, lastSeen: s.now()}
 	s.sessions[ih] = ss
 	return ss
 }
@@ -295,6 +315,7 @@ func (s *Service) Status(ih metainfo.Hash) (TorrentStatus, bool) {
 	if !ok {
 		return TorrentStatus{}, false
 	}
+	ss.lastSeen = s.now()
 	s.observe(ss, s.now())
 	st := TorrentStatus{
 		Hash:  ih.HexString(),

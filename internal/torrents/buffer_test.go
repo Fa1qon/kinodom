@@ -118,7 +118,7 @@ func TestPrepareAfterRestartKeepsDownloadingStoredEpisode(t *testing.T) {
 	must(t, reg.SaveMetainfo(ctx, ih, "Сериал", torrentBytes(t, mi)))
 	must(t, reg.MarkStored(ctx, ih, 0, `D:\K\1.mkv`, 300_000, time.Now()))
 
-	s := NewService(newOfflineEngine(t), reg, quiet())
+	s := serviceFor(newOfflineEngine(t), reg)
 	runService(t, s)
 	waitStatus(t, s, ih, StateReady)
 	tt, _ := s.Engine().Client().Torrent(ih)

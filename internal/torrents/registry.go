@@ -56,10 +56,13 @@ func (r *Registry) MarkStored(ctx context.Context, ih metainfo.Hash, index int, 
 	return err
 }
 
-// TouchStream — к файлу подключился плеер («сейчас смотрят», этап 6).
+// TouchStream — к файлу подключился плеер: «сейчас смотрят». Заодно это открытие файла (срок
+// хранения считается от него) — не чаще раза в минуту (спека, раздел 9).
 func (r *Registry) TouchStream(ctx context.Context, ih metainfo.Hash, index int, now time.Time) error {
 	_, err := r.db.W.ExecContext(ctx,
-		`UPDATE stored_files SET last_stream_at = ? WHERE infohash = ? AND file_index = ?`,
+		`UPDATE stored_files SET last_stream_at = ?1,
+		   last_opened_at = CASE WHEN ?1 - last_opened_at >= 60000 THEN ?1 ELSE last_opened_at END
+		 WHERE infohash = ?2 AND file_index = ?3`,
 		now.UnixMilli(), ih.HexString(), index)
 	return err
 }
@@ -168,4 +171,48 @@ func (r *Registry) Unstore(ctx context.Context, ih metainfo.Hash, index int) err
 func (r *Registry) Forget(ctx context.Context, ih metainfo.Hash) error {
 	_, err := r.db.W.ExecContext(ctx, `DELETE FROM torrents WHERE infohash = ?`, ih.HexString())
 	return err
+}
+
+// StoredByAge — хранимые файлы, самые давно открытые — первыми (очистка).
+func (r *Registry) StoredByAge(ctx context.Context) ([]StoredFile, error) {
+	rows, err := r.db.R.QueryContext(ctx,
+		`SELECT `+storedFileColumns+` FROM stored_files ORDER BY last_opened_at, infohash, file_index`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []StoredFile
+	for rows.Next() {
+		f, err := scanStoredFile(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, f)
+	}
+	return out, rows.Err()
+}
+
+// Unstored — раздачи без хранимых файлов, открытые раньше before (уборка).
+func (r *Registry) Unstored(ctx context.Context, before time.Time) ([]Record, error) {
+	rows, err := r.db.R.QueryContext(ctx,
+		`SELECT t.infohash, t.name, t.metainfo, t.source, t.dir FROM torrents t
+		 WHERE t.added_at < ? AND NOT EXISTS (SELECT 1 FROM stored_files f WHERE f.infohash = t.infohash)`,
+		before.UnixMilli())
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []Record
+	for rows.Next() {
+		var rec Record
+		var hexHash string
+		if err := rows.Scan(&hexHash, &rec.Name, &rec.Metainfo, &rec.Source, &rec.Dir); err != nil {
+			return nil, err
+		}
+		if err := rec.InfoHash.FromHexString(hexHash); err != nil {
+			return nil, err
+		}
+		out = append(out, rec)
+	}
+	return out, rows.Err()
 }
