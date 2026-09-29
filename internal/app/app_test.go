@@ -994,3 +994,62 @@ func TestStatusThroughAPI(t *testing.T) {
 		t.Fatalf("состояние: %+v", st)
 	}
 }
+
+// Каналы работают вместе с остальными модулями (спека этапа 8): маршруты отвечают, настройки скрытия и
+// часового пояса действуют без перезапуска, «Состояние» показывает модуль; выключенный модуль —
+// 503 только у его маршрутов, остальные работают.
+func TestIPTVWithOtherModules(t *testing.T) {
+	a := startApp(t)
+	base := "http://" + a.API.Addr()
+	var ch struct {
+		Channels []any `json:"channels"`
+	}
+	getJSON(t, base+"/api/v1/channels", &ch)
+	if ch.Channels == nil {
+		t.Fatal("каналы — null вместо []")
+	}
+	var pls struct {
+		Items []any `json:"items"`
+	}
+	getJSON(t, base+"/api/v1/iptv/playlists", &pls)
+	code, body := putJSON(t, base+"/api/v1/settings", map[string]any{"iptv": map[string]any{"hiddenCategories": []string{"sports"}, "utcOffset": 3}})
+	if code != http.StatusOK || !strings.Contains(body, `"hiddenCategories":["sports"]`) {
+		t.Fatalf("настройки каналов: %d %s", code, body)
+	}
+	if l := a.IPTV.Lineup(); l.LocalShift != 0 {
+		t.Errorf("пояс каналов UTC+3 не применился: сдвиг %d", l.LocalShift)
+	}
+	var st struct {
+		IPTV map[string]any `json:"iptv"`
+	}
+	getJSON(t, base+"/api/v1/status", &st)
+	if _, ok := st.IPTV["channels"]; !ok {
+		t.Errorf("в «Состоянии» нет каналов: %v", st.IPTV)
+	}
+
+	// Модуль выключен настройкой разработчика: маршруты каналов — 503, загрузки работают.
+	a2home := t.TempDir()
+	paths := config.NewPaths(a2home)
+	if err := paths.Ensure(); err != nil {
+		t.Fatal(err)
+	}
+	db, err := store.Open(context.Background(), paths.DB)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := db.SetSetting(context.Background(), "modules.iptv.enabled", "false"); err != nil {
+		t.Fatal(err)
+	}
+	db.Close()
+	a2 := startAppWith(t, Options{Home: a2home, ListenAddr: "127.0.0.1:0", Offline: true, DownloadsDir: t.TempDir()})
+	resp, err := http.Get("http://" + a2.API.Addr() + "/api/v1/channels")
+	if err != nil {
+		t.Fatal(err)
+	}
+	b, _ := io.ReadAll(resp.Body)
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusServiceUnavailable || !strings.Contains(string(b), "Каналы") {
+		t.Errorf("выключенный модуль: %d %s", resp.StatusCode, b)
+	}
+	getJSON(t, "http://"+a2.API.Addr()+"/api/v1/downloads", &map[string]any{})
+}
