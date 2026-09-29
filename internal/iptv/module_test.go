@@ -25,6 +25,7 @@ type fakeNet struct {
 	mu       sync.Mutex
 	playlist string
 	epgCode  int
+	epg      string       // "" — testEPG
 	limited  atomic.Int32 // запросов к источнику «ограниченного» плейлиста
 }
 
@@ -38,6 +39,10 @@ func newFakeNet(t *testing.T) *fakeNet {
 		f.mu.Unlock()
 		if code != http.StatusOK {
 			w.WriteHeader(code)
+			return
+		}
+		if f.epg != "" {
+			io.WriteString(w, f.epg)
 			return
 		}
 		io.WriteString(w, testEPG)
