@@ -31,6 +31,7 @@ func (s *Service) Register(r Router) {
 	r.Handle("POST /api/v1/torrents/{hash}/files/{index}/watch", s.Name(), http.HandlerFunc(s.handleWatch))
 	// Удалять скачанное — из домашней сети (спека этапа 7, раздел 10.1).
 	r.HandleHome("DELETE /api/v1/downloads/{hash}/{index}", s.Name(), http.HandlerFunc(s.handleDelete))
+	r.HandleHome("DELETE /api/v1/downloads/{hash}", s.Name(), http.HandlerFunc(s.handleDeleteRelease))
 }
 
 type openRequest struct {
@@ -198,6 +199,25 @@ func parseIndex(w http.ResponseWriter, r *http.Request) (int, bool) {
 		return 0, false
 	}
 	return i, true
+}
+
+// handleDeleteRelease — корзина раздачи: {deleted, skipped} (спека этапа 7, раздел 10.6).
+func (s *Service) handleDeleteRelease(w http.ResponseWriter, r *http.Request) {
+	ih, ok := parseHash(w, r)
+	if !ok {
+		return
+	}
+	deleted, skipped, err := s.DeleteRelease(r.Context(), ih)
+	switch {
+	case err == nil:
+		httpx.WriteJSON(w, http.StatusOK, map[string]int{"deleted": deleted, "skipped": skipped})
+	case errors.Is(err, ErrNotStored):
+		httpx.WriteError(w, http.StatusNotFound, err.Error())
+	case errors.Is(err, errDirMissing):
+		httpx.WriteError(w, http.StatusConflict, err.Error())
+	default:
+		httpx.WriteError(w, http.StatusInternalServerError, err.Error())
+	}
 }
 
 func (s *Service) handleDelete(w http.ResponseWriter, r *http.Request) {

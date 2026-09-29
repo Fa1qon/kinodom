@@ -33,6 +33,31 @@ func (s *Service) DeleteFile(ctx context.Context, ih metainfo.Hash, index int) e
 	return s.deleteLocked(ctx, ih, index, true)
 }
 
+// DeleteRelease — корзина раздачи в «Загрузках»: удаляются все хранимые файлы раздачи, файл, который
+// сейчас смотрят, пропускается (спека этапа 7, раздел 10.6). Ничего не хранится — ErrNotStored.
+func (s *Service) DeleteRelease(ctx context.Context, ih metainfo.Hash) (deleted, skipped int, err error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	files, err := s.reg.StoredFiles(ctx, ih)
+	if err != nil {
+		return 0, 0, err
+	}
+	if len(files) == 0 {
+		return 0, 0, ErrNotStored
+	}
+	for _, i := range files {
+		switch err := s.deleteLocked(ctx, ih, i, true); {
+		case errors.Is(err, ErrWatching):
+			skipped++
+		case err != nil:
+			return deleted, skipped, err
+		default:
+			deleted++
+		}
+	}
+	return deleted, skipped, nil
+}
+
 // deleteBehind — удаление просмотренной серии позади, когда места не хватает: правила 6 часов нет,
 // не удаляется только файл с открытым потоком (решение заказчика, этап 7a).
 func (s *Service) deleteBehind(ctx context.Context, ih metainfo.Hash, index int) error {
