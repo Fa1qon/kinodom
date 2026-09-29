@@ -21,6 +21,7 @@ export function render(root, r, ctx) {
   let busy = false;
   let torrentPoll = null;
   let descOpen = false; // описание развёрнуто
+  let focusNext = ''; // после «Скачать» с пульта ТВ — куда перевести фокус, когда появится «Смотреть»
   const started = Date.now();
   let variants = null; // /releases/{id}/variants — «Другие раздачи»
   let searchPoll = null; // «Искать на трекерах» идёт
@@ -125,6 +126,14 @@ export function render(root, r, ctx) {
       live.replaceChildren(series ? episodes(fs, label) : '');
       side.replaceChildren(...panel(fs, label));
     });
+    // Кнопки «Скачать» после удачного нажатия больше нет — фокус пульта ТВ на появившуюся «Смотреть».
+    if (focusNext && (!document.activeElement || document.activeElement === document.body)) {
+      const el = focusNext === 'watch' ? side.querySelector('[data-key^="watch-"]') : root.querySelector(`[data-key="${focusNext}"]`);
+      if (el && !el.disabled) {
+        el.focus({ preventScroll: true });
+        focusNext = '';
+      }
+    }
   }
 
   function episodes(fs, label) {
@@ -202,12 +211,14 @@ export function render(root, r, ctx) {
   // download — «Скачать»: раздача открывается и становится в очередь (спека этапа 7, раздел 5.5).
   // file — одна серия: удалённую (например, при нехватке места) можно скачать снова.
   async function download(file) {
+    const fromHere = root.contains(document.activeElement);
     busy = true;
     actionError = '';
     drawLive();
     try {
       const res = await post(`/releases/${id}/download`, typeof file === 'number' ? { file } : {});
       rel.hash = res.hash;
+      if (fromHere) focusNext = typeof file === 'number' ? `watch-row-${file}` : 'watch';
     } catch (e) {
       actionError = e.message;
     }

@@ -28,13 +28,28 @@ function append(el, kids) {
   }
 }
 
+// pendingFocus — часть экрана → data-key элемента, на который фокус вернуть не удалось: кнопку на время
+// действия отключили («Скачать», «Смотреть»). Фокус вернётся при следующей перерисовке, когда она
+// снова доступна.
+const pendingFocus = new WeakMap();
+
 // keepFocus — перерисовать часть экрана, не сбив фокус пульта: элемент с тем же data-key снова в
-// фокусе. Экраны, которые опрашивают сервер, перерисовываются раз в 1–2 с.
+// фокусе. Экраны, которые опрашивают сервер, перерисовываются раз в 1–2 с. Фокус ни на чём (body) —
+// пробуем отложенный ключ; человек сам ушёл фокусом в другое место — отложенный ключ забыт.
 export function keepFocus(root, draw) {
   const active = document.activeElement;
-  const key = active && root.contains(active) && active.dataset ? active.dataset.key : null;
+  let key = active && root.contains(active) && active.dataset ? active.dataset.key : null;
+  if (!key && (!active || active === document.body)) key = pendingFocus.get(root) || null;
+  else if (!key) pendingFocus.delete(root);
   draw();
-  if (key) root.querySelector(`[data-key="${CSS.escape(key)}"]`)?.focus({ preventScroll: true });
+  if (!key) return;
+  const el = root.querySelector(`[data-key="${CSS.escape(key)}"]`);
+  if (el && !el.disabled) {
+    el.focus({ preventScroll: true });
+    pendingFocus.delete(root);
+  } else {
+    pendingFocus.set(root, key);
+  }
 }
 
 // clear — убрать всё содержимое элемента.

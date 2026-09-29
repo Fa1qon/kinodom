@@ -1,6 +1,6 @@
 // Каталог трекера: вкладки Rutracker и Rutor, раздел, сетка постеров по раздающим, страницы
 // (спека этапа 7, разделы 5.4 и 6.3).
-import { h, icon, ago, size, rating, store, plural } from '../ui.js';
+import { h, icon, ago, size, rating, store, plural, keepFocus } from '../ui.js';
 import { get } from '../api.js';
 
 export const TRACKERS = [['rutracker', 'Rutracker'], ['rutor', 'Rutor']];
@@ -22,11 +22,11 @@ export function render(root, r, ctx) {
   // Вкладки и предупреждение трекера — из «Состояния»: у вкладки со значком есть проблемы.
   const onStatus = (status) => {
     const trackers = (status && status.trackers) || {};
-    tabs.replaceChildren(...TRACKERS.map(([id, title]) => {
+    keepFocus(tabs, () => tabs.replaceChildren(...TRACKERS.map(([id, title]) => {
       const bad = trackers[id] && trackers[id].state !== 'ok';
-      return h('a', { href: `#/catalog/${id}`, class: id === tracker ? 'on' : null, 'aria-current': id === tracker ? 'page' : null },
+      return h('a', { href: `#/catalog/${id}`, class: id === tracker ? 'on' : null, 'aria-current': id === tracker ? 'page' : null, 'data-key': `tab-${id}` },
         title, bad ? icon('warning', 18, 'Есть проблемы') : null);
-    }));
+    })));
     const t = trackers[tracker];
     warn.replaceChildren(t && t.state !== 'ok' && t.text ? h('div', { class: 'warn' }, icon('warning'), t.text) : '');
   };

@@ -33,7 +33,7 @@ export function render(root, r, ctx) {
       icon('history', 20, 'Недавние запросы'),
       ...items.map((it) => h('span', { class: it.query.toLowerCase() === q.toLowerCase() ? 'hist on' : 'hist' },
         h('a', { href: '#/search?q=' + encodeURIComponent(it.query), 'data-key': `hist-${it.query}` }, it.query),
-        h('button', { type: 'button', 'aria-label': `Убрать «${it.query}» из истории`, onclick: () => forget(it.query) }, icon('close', 16)))),
+        h('button', { type: 'button', 'data-key': `forget-${it.query}`, 'aria-label': `Убрать «${it.query}» из истории`, onclick: () => forget(it.query) }, icon('close', 16)))),
       h('button', { class: 'btn small-btn', type: 'button', 'data-key': 'hist-clear', onclick: () => forget('') }, 'Очистить'),
     ] : []));
   };
