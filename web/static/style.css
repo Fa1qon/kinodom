@@ -166,6 +166,14 @@ h2 { margin: 0; font-size: 20px; font-weight: 700; }
 .rel-live:empty { display: none; }
 .episodes { display: flex; flex-direction: column; gap: 8px; }
 .episodes h2 { margin-bottom: 4px; }
+.others { display: flex; flex-direction: column; gap: 12px; }
+.var-list { border: 1px solid var(--line-soft); }
+.var-row { display: grid; grid-template-columns: minmax(0, 1fr) 80px 100px 70px; gap: 14px; align-items: center; padding: 10px 14px; border-bottom: 1px solid #1E2226; font-size: 15px; }
+.var-row:last-child { border-bottom: 0; }
+a.var-row:hover { background: var(--hover); }
+.var-row.on { box-shadow: inset 3px 0 0 var(--text); }
+.var-what { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.vars { position: absolute; top: 0; left: 0; z-index: 1; padding: 5px 8px; background: var(--bg); font-size: 12px; font-weight: 600; }
 .ep { display: flex; align-items: center; gap: 16px; padding: 10px 14px; border: 1px solid var(--line-soft); }
 .ep.on { background: var(--bg-raised); }
 .num { width: 26px; font: 700 14px var(--display); color: var(--dim); flex-shrink: 0; }
@@ -315,6 +323,9 @@ a.res-row:hover { background: var(--hover); }
   .rel-info { order: 2; }
   .panel { order: 3; position: static; padding: 16px; }
   .rel-live { order: 4; }
+  .others { order: 5; }
+  .var-row { grid-template-columns: minmax(0, 1fr) auto auto auto; gap: 8px; padding: 10px 12px; }
+  .var-what .ellipsis { white-space: normal; } /* качество — то, чем раздачи различаются: не обрезать */
   .poster.big { aspect-ratio: auto; height: 300px; padding: 16px; }
   .poster.big img { object-position: top; }
   .rel-info h1 { font-size: 24px; }
