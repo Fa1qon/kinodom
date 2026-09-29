@@ -1,7 +1,7 @@
 // «Настройки → Каналы» (спека этапа 8, раздел 6.2): плейлисты (ссылкой и файлом, «ограничено»,
 // «Обновить», «Проверить», корзина), телепрограмма, ход проверок, часовой пояс каналов, скрытие
 // категорий, стран и языков, скрытые поштучно каналы, избранное этого устройства.
-import { h, icon, poll, keepFocus, ago, plural } from '../ui.js';
+import { h, fill, icon, poll, keepFocus, ago, plural } from '../ui.js';
 import { get, put, post, del } from '../api.js';
 import { layout, remoteNote } from './settings-layout.js';
 import { CATEGORIES } from './channel.js';
@@ -35,8 +35,8 @@ export function render(root, r, ctx) {
   let hidden = null; // черновик скрытия: {categories, countries, languages, otherZones}
   // Поля ввода создаются один раз: опрос перерисовывает экран, а набранное не должно пропадать.
   const url = h('input', { class: 'input', name: 'url', placeholder: 'https://…/playlist.m3u', 'aria-label': 'Ссылка на плейлист', 'data-key': 'pl-url' });
-  const limited = h('input', { type: 'checkbox', 'data-key': 'pl-limited' });
-  const epgUrl = h('input', { class: 'input', 'aria-label': 'Ссылка на телепрограмму', 'data-key': 'epg-url' });
+  const limited = h('input', { type: 'checkbox', name: 'limited', 'data-key': 'pl-limited' });
+  const epgUrl = h('input', { class: 'input', name: 'epg', 'aria-label': 'Ссылка на телепрограмму', 'data-key': 'epg-url' });
   let epgFilled = false;
 
   const listPoll = poll(async () => {
@@ -72,10 +72,10 @@ export function render(root, r, ctx) {
 
   function draw() {
     if (!pls || !settings) {
-      content.replaceChildren(error ? h('p', { class: 'error' }, error) : h('p', { class: 'muted' }, 'Загружается…'));
+      fill(content, error ? h('p', { class: 'error' }, error) : h('p', { class: 'muted' }, 'Загружается…'));
       return;
     }
-    keepFocus(root, () => content.replaceChildren(
+    keepFocus(root, () => fill(content, 
       canEdit() ? null : remoteNote(),
       error ? h('p', { class: 'error' }, error) : null,
       playlistsCard(), epgCard(), hideCard(), hiddenChannelsCard(), favoritesCard()));
@@ -159,7 +159,7 @@ export function render(root, r, ctx) {
     epgUrl.disabled = !canEdit();
     const zones = [];
     for (let z = -12; z <= 14; z++) zones.push(h('option', { value: String(z), selected: z === settings.iptv.utcOffset }, `UTC${z >= 0 ? '+' : '−'}${Math.abs(z)}`));
-    const zone = h('select', { class: 'input sel', disabled: !canEdit(), 'aria-label': 'Часовой пояс каналов', 'data-key': 'utc',
+    const zone = h('select', { class: 'input sel', name: 'utc', disabled: !canEdit(), 'aria-label': 'Часовой пояс каналов', 'data-key': 'utc',
       onchange: () => act(() => put('/settings', { iptv: { utcOffset: Number(zone.value) } })) }, zones);
     return h('div', { class: 'card' }, h('div', { class: 'h' }, 'Телепрограмма и проверки'),
       h('label', { class: 'fld' }, 'Телепрограмма', h('div', { class: 'row gap10' }, h('div', { class: 'grow' }, epgUrl),

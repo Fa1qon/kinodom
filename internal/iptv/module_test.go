@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -14,6 +15,7 @@ import (
 	"testing"
 	"time"
 
+	"kinodom/internal/iptv/m3u"
 	"kinodom/internal/iptv/probe"
 	"kinodom/internal/store"
 	"kinodom/internal/supervisor"
@@ -255,5 +257,53 @@ func TestNextAt(t *testing.T) {
 		if got := nextAt(c.now, c.hours); !got.Equal(c.want) {
 			t.Errorf("после %v: %v, нужно %v", c.now, got, c.want)
 		}
+	}
+}
+
+// Телепрограмма уже скачана: как только модуль готов, каналы в составе — без секунд пустоты после
+// перезапуска (иначе карточка канала на ТВ показала бы «Такого канала нет»).
+func TestModuleReadyWithChannels(t *testing.T) {
+	f := newFakeNet(t)
+	dir := t.TempDir()
+	d, err := store.Open(context.Background(), filepath.Join(dir, "k.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { d.Close() })
+	pl := &Playlist{Name: "a", AddedAt: time.Now()}
+	if err := (db{d}).insertPlaylist(context.Background(), pl); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := (db{d}).replaceEntries(context.Background(), pl.ID, []m3u.Entry{{Name: "НТВ", URL: f.srv.URL + "/s/ok.m3u8"}}); err != nil {
+		t.Fatal(err)
+	}
+	// Большая программа: разбор занимает заметное время, и «готов раньше, чем прочитал» было бы видно.
+	var big strings.Builder
+	start := time.Now().Add(-time.Hour)
+	for i := range 150000 {
+		at := start.Add(time.Duration(i) * time.Second)
+		fmt.Fprintf(&big, `<programme start="%s" stop="%s" channel="ntv"><title>П%d</title></programme>`,
+			at.Format("20060102150405 -0700"), at.Add(time.Second).Format("20060102150405 -0700"), i)
+	}
+	epg := strings.Replace(testEPG, "</tv>", big.String()+"</tv>", 1)
+	if err := os.WriteFile(filepath.Join(dir, "epg.xml.gz"), []byte(epg), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	m := New(Options{DB: d, Dir: dir, EPGURL: f.srv.URL + "/epg.xml", OrgBase: f.srv.URL + "/api"})
+	sup := supervisor.New(slog.New(slog.DiscardHandler))
+	sup.Add(m, true)
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() { sup.Run(ctx); close(done) }()
+	t.Cleanup(func() { cancel(); <-done })
+	deadline := time.Now().Add(15 * time.Second)
+	for !sup.IsRunning("iptv") {
+		if time.Now().After(deadline) {
+			t.Fatal("модуль не стал работать")
+		}
+		time.Sleep(time.Millisecond)
+	}
+	if _, ok := m.Lineup().ByKey["ntv"]; !ok {
+		t.Fatal("модуль готов, а канала из сохранённой телепрограммы нет")
 	}
 }
