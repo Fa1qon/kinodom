@@ -30,6 +30,11 @@ func (m idleModule) Run(ctx context.Context) error {
 
 func newTestServer(t *testing.T, mods ...supervisor.Module) (*Server, *store.DB) {
 	t.Helper()
+	return newTestServerWeb(t, fstest.MapFS{"index.html": {Data: []byte("<h1>Kinodom</h1>")}}, mods...)
+}
+
+func newTestServerWeb(t *testing.T, web fstest.MapFS, mods ...supervisor.Module) (*Server, *store.DB) {
+	t.Helper()
 	db, err := store.Open(context.Background(), filepath.Join(t.TempDir(), "k.db"))
 	if err != nil {
 		t.Fatal(err)
@@ -39,7 +44,6 @@ func newTestServer(t *testing.T, mods ...supervisor.Module) (*Server, *store.DB)
 	for _, m := range mods {
 		sup.Add(m, true) // зарегистрированы, но Run не вызван — состояние stopped
 	}
-	web := fstest.MapFS{"index.html": {Data: []byte("<h1>Kinodom</h1>")}}
 	return New("127.0.0.1:0", Deps{Log: quiet(), DB: db, Sup: sup, Web: web}), db
 }
 
@@ -191,6 +195,34 @@ func TestServesPultRoot(t *testing.T) {
 	rec := do(s.Handler(), httptest.NewRequest("GET", "/", nil))
 	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), "Kinodom") {
 		t.Fatalf("код %d: %s", rec.Code, rec.Body)
+	}
+}
+
+// Файлы пульта — с типами, которые понимает браузер: на Windows mime берёт типы из реестра, и .js
+// там бывает text/plain — тогда ES-модули пульта не загрузятся (этап 7b). Кэш — с перепроверкой:
+// после обновления kinodom.exe пульт сразу новый.
+func TestPultFileTypes(t *testing.T) {
+	web := fstest.MapFS{
+		"index.html":        {Data: []byte("<!doctype html><title>Kinodom</title>")},
+		"app.js":            {Data: []byte("export {}")},
+		"views/catalog.js":  {Data: []byte("export {}")},
+		"style.css":         {Data: []byte("body{}")},
+		"fonts/golos.woff2": {Data: []byte("wOF2")},
+		"fonts/OFL.txt":     {Data: []byte("SIL Open Font License")},
+	}
+	s, _ := newTestServerWeb(t, web)
+	for path, want := range map[string]string{
+		"/":                  "text/html; charset=utf-8",
+		"/app.js":            "text/javascript; charset=utf-8",
+		"/views/catalog.js":  "text/javascript; charset=utf-8",
+		"/style.css":         "text/css; charset=utf-8",
+		"/fonts/golos.woff2": "font/woff2",
+		"/fonts/OFL.txt":     "text/plain; charset=utf-8",
+	} {
+		rec := do(s.Handler(), httptest.NewRequest("GET", path, nil))
+		if rec.Code != http.StatusOK || rec.Header().Get("Content-Type") != want || rec.Header().Get("Cache-Control") != "no-cache" {
+			t.Errorf("%s: код %d, тип %q, кэш %q", path, rec.Code, rec.Header().Get("Content-Type"), rec.Header().Get("Cache-Control"))
+		}
 	}
 }
 
