@@ -73,13 +73,11 @@ export function render(root, r, ctx) {
     if (alive) draw();
   }, 60000);
 
-  const favorites = () => (data ? data.channels.filter((c) => c.block === 'favorite').map((c) => c.key) : []);
-
-  async function star(key) {
+  async function star(key, isFavorite) {
     busy = key;
     draw();
     try {
-      await toggleFavorite(favorites(), key);
+      await toggleFavorite(isFavorite, key);
     } catch (e) {
       error = e.message;
     }
@@ -145,15 +143,21 @@ export function render(root, r, ctx) {
           now ? h('div', { class: 'track ch-track' }, h('div', { style: { width: `${progressOf(now)}%`, background: 'var(--buffer)' } })) : null,
           next ? h('span', { class: 'ch-next muted small' }, `${hhmm(next.start)} ${next.title}`) : null)),
       gradeMark(c.grade),
-      ctx.canEdit ? starButton(c.block === 'favorite', () => star(c.key), `star-${c.key}`) : null,
+      ctx.canEdit ? starButton(c.block === 'favorite', () => star(c.key, c.block === 'favorite'), `star-${c.key}`) : null,
       h('button', { class: 'btn', type: 'button', disabled: busy === c.key, 'data-key': `watch-${c.key}`, 'aria-label': `Смотреть ${c.name}`,
         onclick: () => watch(c.key) }, icon('play_arrow'), h('span', { class: 'wide-only' }, 'Смотреть')));
   }
 
+  // canEdit пришёл позже списка — ★ появляется. Только при смене canEdit: «Состояние» опрашивается раз в
+  // 15 с, а список на ТВ — около тысячи строк.
+  let shownCanEdit = ctx.canEdit;
   const onStatus = () => {
-    if (alive && data) draw();
+    if (alive && data && ctx.canEdit !== shownCanEdit) {
+      shownCanEdit = ctx.canEdit;
+      draw();
+    }
   };
-  ctx.listeners.add(onStatus); // canEdit пришёл позже списка — ★ появляется
+  ctx.listeners.add(onStatus);
   return () => {
     alive = false;
     pollList.stop();

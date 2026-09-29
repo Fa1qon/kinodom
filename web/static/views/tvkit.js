@@ -1,7 +1,7 @@
 // Общее для экранов каналов (спека этапа 8, раздел 6): оценка проверки, время передач, «Смотреть»,
 // избранное устройства, логотип.
 import { h, icon } from '../ui.js';
-import { get, put } from '../api.js';
+import { get, put, del } from '../api.js';
 
 // GRADE — оценка первого источника канала: цвет и подпись (цвет считает сервер).
 export const GRADE = {
@@ -61,11 +61,12 @@ export function channelPlayerLink(res) {
     + `S.title=${encodeURIComponent(res.title)};S.browser_fallback_url=${encodeURIComponent(res.m3uUrl)};end`;
 }
 
-// toggleFavorite — добавить канал в избранное этого устройства или убрать; favorites — текущий список.
-export async function toggleFavorite(favorites, key) {
-  const next = favorites.includes(key) ? favorites.filter((k) => k !== key) : [...favorites, key];
-  await put('/iptv/favorites', { keys: next });
-  return next;
+// toggleFavorite — ★: добавить канал в избранное этого устройства или убрать; остальное избранное
+// (и каналы без живых источников в нём) сервер не трогает.
+export async function toggleFavorite(isFavorite, key) {
+  const path = `/iptv/favorites/${encodeURIComponent(key)}`;
+  if (isFavorite) await del(path);
+  else await put(path, {});
 }
 
 // starButton — ★ в строке и карточке канала.

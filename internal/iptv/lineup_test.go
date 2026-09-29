@@ -108,6 +108,7 @@ func TestMatch(t *testing.T) {
 		{src{name: "Россия 1 (+7) (Владивосток)"}, "rossia1+7"}, // город в скобках — последней попыткой
 		{src{name: "НТВ +0 (Липецк)"}, "ntv"},
 		{src{name: "НТВ (2)"}, "ntv"},
+		{src{name: "Первый", tvgID: "pervy", shift: -1}, ""}, // Калининград: отрицательный сдвиг не распознаётся (спека, 5.3)
 	}
 	for _, c := range cases {
 		p := testPool(c.s)
@@ -282,4 +283,20 @@ func equal(a, b []int64) bool {
 		}
 	}
 	return true
+}
+
+// Правка «Без категории», «Страна не указана», «Язык не указан» — тоже правка: она сильнее меток
+// iptv-org (финальное ревью этапа 8).
+func TestOverrideToEmpty(t *testing.T) {
+	p := testPool(src{name: "Матч ТВ"}, src{name: "BBC News"})
+	empty := ""
+	p.overrides["match-tv"] = Override{Category: &empty, Country: &empty}
+	p.overrides["bbc"] = Override{Languages: []string{}}
+	l := buildTest(t, p, Hidden{}, 4)
+	if c := l.ByKey["match-tv"].Labels; c.Category != "" || c.Country != "" {
+		t.Errorf("Матч ТВ: %+v, нужно без категории и страны", c)
+	}
+	if c := l.ByKey["bbc"].Labels; len(c.Languages) != 0 || c.Languages == nil {
+		t.Errorf("BBC: языки %v, нужно пусто", c.Languages)
+	}
 }

@@ -13,6 +13,16 @@ export const CATEGORIES = [
 
 const STATE = { new: 'ещё не проверен', alive: 'работает', silent: 'не отвечает', dead: 'не отвечает давно' };
 
+// labelPatch — правка меток из черновика: только поля, которые отличаются от меток канала (остальные
+// метки не замораживаются правкой).
+export function labelPatch(c, d) {
+  const p = {};
+  if (d.category !== c.category) p.category = d.category;
+  if (d.country !== c.country) p.country = d.country;
+  if (d.lang !== (c.languages[0] || '')) p.languages = d.lang ? [d.lang] : [];
+  return p;
+}
+
 // dateStr — «2026-09-30» по местному времени устройства, через days дней.
 export function dateStr(days, now = new Date()) {
   const d = new Date(now.getFullYear(), now.getMonth(), now.getDate() + days);
@@ -28,7 +38,7 @@ export function render(root, r, ctx) {
   let day = 0; // 0 — сегодня, 1 — завтра
   let tomorrow = null;
   let facets = null; // страны и языки для правки меток — из /channels?all=1
-  let favorites = [];
+  let draft = null; // черновик меток: {category, country, lang}; null — как у канала
   let reassign = 0; // источник, для которого открыт поиск «Это другой канал»
   let found = [];
   let probing = 0; // время нажатия «Проверить»
@@ -61,15 +71,6 @@ export function render(root, r, ctx) {
     if (probing && Date.now() - probing > 60000) probing = 0;
   }, 5000);
 
-  async function refreshFavorites() {
-    try {
-      const list = await get('/channels');
-      favorites = list.channels.filter((c) => c.block === 'favorite').map((c) => c.key);
-    } catch {
-      favorites = [];
-    }
-  }
-
   async function act(fn) {
     try {
       await fn();
@@ -97,10 +98,7 @@ export function render(root, r, ctx) {
       fill(actions, 
         h('button', { class: 'btn inv big', type: 'button', 'data-key': 'watch', onclick: () => act(() => watchChannel(key, ctx)) }, icon('play_arrow'), 'Смотреть'),
         h('a', { class: 'btn big wide-only', href: `/m3u/channel/${enc}.m3u8`, download: '', 'data-key': 'm3u' }, icon('playlist_play'), '.m3u8'),
-        ctx.canEdit ? starButton(c.favorite, () => act(async () => {
-          await refreshFavorites();
-          await toggleFavorite(favorites, key);
-        }), 'star') : null,
+        ctx.canEdit ? starButton(c.favorite, () => act(() => toggleFavorite(c.favorite, key)), 'star') : null,
         ctx.canEdit ? h('button', { class: 'btn', type: 'button', 'data-key': 'hide', onclick: () => act(() => put(`/channels/${enc}`, { hidden: !c.override.hidden })) },
           icon(c.override.hidden ? 'visibility' : 'visibility_off'), c.override.hidden ? 'Вернуть канал' : 'Скрыть канал') : null,
         h('button', { class: 'btn', type: 'button', disabled: !!probing, 'data-key': 'probe', onclick: () => act(async () => {
@@ -213,24 +211,36 @@ export function render(root, r, ctx) {
       }, () => {});
     }
     const c = card;
+    // Черновик переживает опрос раз в 5 с: выбор в списке не сбрасывается, пока не сохранили.
+    if (!draft) draft = { category: c.category, country: c.country, lang: c.languages[0] || '' };
+    const d = draft;
     const opt = (v, t, cur) => h('option', { value: v, selected: v === cur }, t);
-    const cat = h('select', { class: 'input', name: 'category', 'data-key': 'cat', 'aria-label': 'Категория' }, CATEGORIES.map(([v, t]) => opt(v, t, c.category)));
+    const pick = (field) => (e) => {
+      d[field] = e.target.value;
+    };
+    const cat = h('select', { class: 'input', name: 'category', 'data-key': 'cat', 'aria-label': 'Категория', onchange: pick('category') },
+      CATEGORIES.map(([v, t]) => opt(v, t, d.category)));
     const countries = facets.countries.filter((x) => x.id);
-    if (c.country && !countries.some((x) => x.id === c.country)) countries.push({ id: c.country, name: c.countryName });
-    const country = h('select', { class: 'input', name: 'country', 'data-key': 'country', 'aria-label': 'Страна' },
-      opt('', 'Страна не указана', c.country), countries.map((x) => opt(x.id, x.name, c.country)));
+    if (d.country && !countries.some((x) => x.id === d.country)) countries.push({ id: d.country, name: d.country === c.country ? c.countryName : d.country });
+    const country = h('select', { class: 'input', name: 'country', 'data-key': 'country', 'aria-label': 'Страна', onchange: pick('country') },
+      opt('', 'Страна не указана', d.country), countries.map((x) => opt(x.id, x.name, d.country)));
     const langs = facets.languages.filter((x) => x.id);
     for (const [i, l] of c.languages.entries()) if (!langs.some((x) => x.id === l)) langs.push({ id: l, name: c.languageNames[i] });
-    const lang = h('select', { class: 'input', name: 'language', 'data-key': 'lang', 'aria-label': 'Язык' },
-      opt('', 'Язык не указан', c.languages[0] || ''), langs.map((x) => opt(x.id, x.name, c.languages[0] || '')));
+    const lang = h('select', { class: 'input', name: 'language', 'data-key': 'lang', 'aria-label': 'Язык', onchange: pick('lang') },
+      opt('', 'Язык не указан', d.lang), langs.map((x) => opt(x.id, x.name, d.lang)));
     const overridden = c.override.category !== null || c.override.country !== null || c.override.languages !== null;
     fill(edit, h('div', { class: 'h' }, 'Метки'),
       h('label', { class: 'fld' }, 'Категория', cat), h('label', { class: 'fld' }, 'Страна', country), h('label', { class: 'fld' }, 'Язык', lang),
       h('div', { class: 'row gap10' },
-        h('button', { class: 'btn inv', type: 'button', 'data-key': 'save-labels', onclick: () => act(() => put(`/channels/${enc}`,
-          { category: cat.value, country: country.value, languages: lang.value ? [lang.value] : [] })) }, icon('save'), 'Сохранить'),
-        overridden ? h('button', { class: 'btn', type: 'button', 'data-key': 'reset-labels', onclick: () => act(() => put(`/channels/${enc}`,
-          { category: null, country: null, languages: null })) }, 'Как было') : null));
+        h('button', { class: 'btn inv', type: 'button', 'data-key': 'save-labels', onclick: () => act(async () => {
+          const p = labelPatch(card, draft);
+          if (Object.keys(p).length) await put(`/channels/${enc}`, p);
+          draft = null;
+        }) }, icon('save'), 'Сохранить'),
+        overridden ? h('button', { class: 'btn', type: 'button', 'data-key': 'reset-labels', onclick: () => act(async () => {
+          await put(`/channels/${enc}`, { category: null, country: null, languages: null });
+          draft = null;
+        }) }, 'Как было') : null));
   }
 
   return () => {

@@ -173,13 +173,16 @@ func match(s *Stream, p *pool, ix *epgIndex, base *labels.Base) matchResult {
 		}
 	}
 	for _, e := range s.Entries {
+		if e.Shift < 0 { // отрицательный сдвиг (Калининград) не распознаётся — в «Не распознано» (спека, 5.3)
+			continue
+		}
 		if e.TvgID != "" && ix.has(e.TvgID) {
 			return matchResult{key: ix.regional(e.TvgID, entryShift(e)), by: "tvg-id"}
 		}
 	}
 	for _, e := range s.Entries {
 		oc := base.ByID(orgID(e.TvgID))
-		if oc == nil {
+		if oc == nil || e.Shift < 0 {
 			continue
 		}
 		found, ambiguous := "", false
@@ -202,6 +205,9 @@ func match(s *Stream, p *pool, ix *epgIndex, base *labels.Base) matchResult {
 	// Название; последней попыткой — без города в скобках («Россия 24 +0 (Липецк)»).
 	for _, strip := range []bool{false, true} {
 		for _, e := range s.Entries {
+			if e.Shift < 0 {
+				continue
+			}
 			for _, name := range []string{e.Name, e.TvgName} {
 				if strip {
 					if name = m3u.WithoutPlace(name); name == e.Name || name == e.TvgName {
@@ -449,7 +455,18 @@ func channelLabels(c *Channel, o Override, in buildInput, l *Lineup, resolved ma
 		}
 	}
 	sources = append(sources, labels.FromID(c.EPGID, names), labels.FromGroups(groups))
-	return labels.Merge(sources...)
+	res := labels.Merge(sources...)
+	// Ручная правка — окончательно, даже пустая: «Без категории», «Страна не указана», «Язык не указан».
+	if o.Category != nil {
+		res.Category = *o.Category
+	}
+	if o.Country != nil {
+		res.Country = *o.Country
+	}
+	if o.Languages != nil {
+		res.Languages = append([]string{}, o.Languages...)
+	}
+	return res
 }
 
 var qualityRank = map[string]int{"4K": 4, "FHD": 3, "HD": 2, "SD": 1}

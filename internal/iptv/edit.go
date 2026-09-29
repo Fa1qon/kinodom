@@ -103,6 +103,22 @@ func (m *Module) SetFavorites(ctx context.Context, device string, keys []string)
 	return m.d.setFavorites(ctx, device, keys)
 }
 
+// AddFavorite / RemoveFavorite — ★ у канала: один канал, остальное избранное не трогается (и каналы
+// без живых источников в нём остаются).
+func (m *Module) AddFavorite(ctx context.Context, device, key string) error {
+	if device == "" {
+		return &FieldError{"устройство не определилось"}
+	}
+	if !m.knownKey(key) {
+		return ErrNoChannel
+	}
+	return m.d.addFavorite(ctx, device, key)
+}
+
+func (m *Module) RemoveFavorite(ctx context.Context, device, key string) error {
+	return m.d.removeFavorite(ctx, device, key)
+}
+
 // SetNameRule — назначение из «Не распознано»: нормализованное название → канал; hidden — скрыть;
 // channel == "" и !hidden — снять правку.
 func (m *Module) SetNameRule(ctx context.Context, name, channel string, hidden bool) error {

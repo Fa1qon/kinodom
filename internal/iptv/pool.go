@@ -520,6 +520,20 @@ func (d db) allFavorites(ctx context.Context) (map[string]bool, error) {
 	return out, rows.Err()
 }
 
+// addFavorite — канал в конец избранного устройства (если его там нет).
+func (d db) addFavorite(ctx context.Context, device, key string) error {
+	_, err := d.W.ExecContext(ctx, `INSERT INTO iptv_favorites (device, channel, position)
+		SELECT ?, ?, COALESCE(MAX(position), -1) + 1 FROM iptv_favorites WHERE device = ?
+		ON CONFLICT(device, channel) DO NOTHING`, device, key, device)
+	return err
+}
+
+// removeFavorite — убрать канал из избранного устройства.
+func (d db) removeFavorite(ctx context.Context, device, key string) error {
+	_, err := d.W.ExecContext(ctx, `DELETE FROM iptv_favorites WHERE device = ? AND channel = ?`, device, key)
+	return err
+}
+
 // setFavorites заменяет избранное устройства; повторы убираются.
 func (d db) setFavorites(ctx context.Context, device string, keys []string) error {
 	tx, err := d.W.BeginTx(ctx, nil)
