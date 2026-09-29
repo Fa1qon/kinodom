@@ -80,8 +80,12 @@ func TestTorrentStaysInItsDownloadsDir(t *testing.T) {
 	runService(t, s2)
 	waitStatus(t, s2, ih, StateReady)
 	tt2, _ := e2.Client().Torrent(ih)
-	if got := tt2.BytesCompleted(); got != tt2.Length() {
-		t.Fatalf("после смены папки скачано %d из %d — файл ищут не там", got, tt2.Length())
+	// Пиров у второго движка нет: файл может стать полным, только если найден на диске. Ждём, а не
+	// смотрим сразу — под нагрузкой (весь пакет) кусок изредка догонял через доли секунды.
+	for deadline := time.Now().Add(5 * time.Second); tt2.BytesCompleted() < tt2.Length(); time.Sleep(20 * time.Millisecond) {
+		if time.Now().After(deadline) {
+			t.Fatalf("после смены папки скачано %d из %d — файл ищут не там", tt2.BytesCompleted(), tt2.Length())
+		}
 	}
 	if e2.TorrentDir(ih) != oldDir {
 		t.Fatalf("папка раздачи %s, ожидалась прежняя %s", e2.TorrentDir(ih), oldDir)
