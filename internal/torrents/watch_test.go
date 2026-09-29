@@ -57,55 +57,57 @@ func (f *fakeWatch) snapshot() []string {
 	return append([]string(nil), f.reports...)
 }
 
-// quickWatch — отчёты без ожидания 10 с (тесты).
+// quickWatch — отчёты без ожидания 10 с (тесты); сеанс кончается через 300 мс без запросов.
 func quickWatch(t *testing.T, min time.Duration) {
 	t.Helper()
-	was, wasMin := watchEvery, watchMin
-	watchEvery, watchMin = 20*time.Millisecond, min
-	t.Cleanup(func() { watchEvery, watchMin = was, wasMin })
+	was, wasMin, wasGap := watchEvery, watchMin, watchGap
+	watchEvery, watchMin, watchGap = 20*time.Millisecond, min, 300*time.Millisecond
+	t.Cleanup(func() { watchEvery, watchMin, watchGap = was, wasMin, wasGap })
 }
 
-// Место по чтению потока (спека этапа 8, раздел 7.2): запрос, который шёл дольше watchMin, в конце
-// сообщает, докуда дочитан файл; устройство — адрес запроса (этот ПК — «pc»).
-func TestStreamReportsWatchPosition(t *testing.T) {
-	quickWatch(t, 0)
-	fw := &fakeWatch{dur: map[string]float64{}}
-	_, srv, ih, want := streamFixtureWith(t, "film.mkv", 300_000, func(s *Service) { s.SetWatchTracker(fw) })
-	resp, err := http.Get(srv.URL + "/stream/" + ih.HexString() + "/0/film.mkv")
-	if err != nil {
-		t.Fatal(err)
+// get — запрос потока с Range; тело читается целиком.
+func getRange(t *testing.T, url, rng string) {
+	t.Helper()
+	req, _ := http.NewRequest("GET", url, nil)
+	if rng != "" {
+		req.Header.Set("Range", rng)
 	}
-	got, _ := io.ReadAll(resp.Body)
-	resp.Body.Close()
-	if !bytes.Equal(got, want) {
-		t.Fatal("поток испорчен")
-	}
-	waitUntil(t, "отчёт о месте", func() bool {
-		for _, r := range fw.snapshot() {
-			if r == "pc 0 300000/300000" {
-				return true
-			}
-		}
-		return false
-	})
-}
-
-// Короткий запрос (плеер при открытии читает индекс в конце файла) места не сообщает.
-func TestShortStreamNotReported(t *testing.T) {
-	quickWatch(t, time.Hour)
-	fw := &fakeWatch{dur: map[string]float64{}}
-	_, srv, ih, _ := streamFixtureWith(t, "film.mkv", 300_000, func(s *Service) { s.SetWatchTracker(fw) })
-	req, _ := http.NewRequest("GET", srv.URL+"/stream/"+ih.HexString()+"/0/film.mkv", nil)
-	req.Header.Set("Range", "bytes=-4096")
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		t.Fatal(err)
 	}
 	io.ReadAll(resp.Body)
 	resp.Body.Close()
-	time.Sleep(100 * time.Millisecond)
-	if r := fw.snapshot(); len(r) != 0 {
-		t.Errorf("короткий запрос сообщил место: %v", r)
+}
+
+// Как VLC: поток — короткими запросами по очереди, каждый короче watchMin; место всё равно
+// записывается — по сеансу. Прыжок в конец файла посреди сеанса (плеер читает индекс), который
+// держится меньше watchMin, — не место, даже если отчёт пришёлся на него.
+func TestShortRequestsLikeVLC(t *testing.T) {
+	quickWatch(t, 1500*time.Millisecond)
+	watchGap = 5 * time.Second // паузы между запросами короче конца сеанса, как у VLC (2 с против 30)
+	fw := &fakeWatch{dur: map[string]float64{}}
+	_, srv, ih, _ := streamFixtureWith(t, "film.avi", 300_000, func(s *Service) { s.SetWatchTracker(fw) })
+	url := srv.URL + "/stream/" + ih.HexString() + "/0/film.avi"
+	getRange(t, url, "bytes=0-19999")
+	time.Sleep(1700 * time.Millisecond) // сеанс старше watchMin — место уже сообщается
+	getRange(t, url, "bytes=-4096")     // индекс в конце файла
+	time.Sleep(1200 * time.Millisecond) // отчёт приходится на чтение индекса
+	for _, r := range []string{"bytes=20000-59999", "bytes=60000-99999", "bytes=100000-119999"} {
+		time.Sleep(100 * time.Millisecond)
+		getRange(t, url, r)
+	}
+	waitUntil(t, "место по сеансу", func() bool {
+		r := fw.snapshot()
+		return len(r) > 0 && r[len(r)-1] == "pc 0 120000/300000"
+	})
+	for _, r := range fw.snapshot() {
+		if strings.HasSuffix(r, " 300000/300000") {
+			t.Errorf("чтение индекса в конце записано как место: %v", fw.snapshot())
+		}
+	}
+	if r := fw.snapshot(); len(r) == 0 || r[0] != "pc 0 20000/300000" {
+		t.Errorf("первое место: %v", r)
 	}
 }
 

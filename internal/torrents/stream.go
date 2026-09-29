@@ -64,7 +64,7 @@ func (s *Service) StreamHandler() http.Handler {
 		if s.watch != nil { // место по чтению — в историю устройства (спека этапа 8, раздел 7.2)
 			tr := &trackedReader{rs: rd}
 			body = tr
-			defer s.trackWatch(httpx.Device(r), ih, index, f.Length(), tr)()
+			defer s.watchBegin(watchKey{httpx.Device(r), ih, index}, f.Length(), tr)()
 			s.learnDuration(ih, index, f)
 		}
 		http.ServeContent(w, r, "", time.Time{}, body)
