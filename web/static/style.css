@@ -117,3 +117,28 @@ h2 { margin: 0; font-size: 20px; font-weight: 700; }
 .skel { height: 12px; background: var(--skel); }
 .track { position: relative; height: 4px; background: var(--track); }
 .track > div { position: absolute; left: 0; top: 0; height: 100%; }
+
+/* Экран */
+.screen { display: flex; flex-direction: column; gap: 16px; padding: 24px var(--pad) 48px; }
+.row { display: flex; align-items: center; gap: 20px; }
+.small { font-size: 13px; }
+
+/* Каталог */
+.filters { display: flex; gap: 6px; overflow-x: auto; scrollbar-width: thin; scrollbar-color: var(--line-strong) transparent; padding-bottom: 4px; }
+.fil { display: inline-flex; align-items: center; height: 36px; padding: 0 14px; border: 1px solid var(--line); color: var(--muted); font-size: 14px; white-space: nowrap; }
+.fil.on { background: var(--inv-bg); border-color: var(--inv-bg); color: var(--inv-text); font-weight: 600; }
+.grid { display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); gap: 28px 20px; padding-top: 8px; }
+.entry { display: flex; flex-direction: column; gap: 8px; min-width: 0; }
+.poster { position: relative; aspect-ratio: 2 / 3; overflow: hidden; background: #1A1D21; display: flex; flex-direction: column; justify-content: flex-end; padding: 14px; }
+.poster img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; }
+.poster.has-img .ptitle { display: none; }
+.ptitle { position: relative; font: 700 16px/1.2 var(--display); color: #F4F1EC; overflow-wrap: anywhere; }
+.kp { position: absolute; top: 0; right: 0; z-index: 1; padding: 5px 8px; background: var(--bg); font-size: 12px; font-weight: 700; }
+.etitle { font-size: 15px; font-weight: 600; line-height: 1.3; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+.lines { display: flex; flex-direction: column; gap: 8px; height: 40px; justify-content: center; }
+.stats { display: flex; gap: 14px; }
+.stat { display: inline-flex; align-items: center; gap: 4px; font-size: 14px; color: var(--soft); }
+.stat .ic { color: var(--muted); }
+.pages { display: flex; justify-content: center; gap: 6px; padding-top: 16px; }
+.page { display: inline-flex; align-items: center; justify-content: center; width: 40px; height: 40px; border: 1px solid var(--line); font-size: 15px; color: var(--soft); }
+.page.on { background: var(--inv-bg); border-color: var(--inv-bg); color: var(--inv-text); font-weight: 700; }

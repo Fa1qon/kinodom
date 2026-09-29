@@ -1,9 +1,10 @@
 // Пульт Kinodom: маршруты по адресу после «#», шапка, отметка проблем в меню (спека этапа 7, раздел 6).
 import { h, icon, clear, poll, store } from './ui.js';
 import { get } from './api.js';
+import * as catalog from './views/catalog.js';
 
 // views — экраны по первой части адреса; у «Настроек» — по второй.
-const views = {};
+const views = { catalog };
 const settingsViews = {};
 
 // ctx — общее для экранов: последнее «Состояние» и переходы. local — пульт открыт на ПК с Kinodom
