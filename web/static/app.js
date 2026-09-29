@@ -7,10 +7,11 @@ import * as release from './views/release.js';
 import * as search from './views/search.js';
 import * as downloads from './views/downloads.js';
 import * as settingsStatus from './views/settings-status.js';
+import * as settingsParams from './views/settings-params.js';
 
 // views — экраны по первой части адреса; у «Настроек» — по второй.
 const views = { catalog, release, search, downloads };
-const settingsViews = { status: settingsStatus };
+const settingsViews = { status: settingsStatus, params: settingsParams };
 
 // ctx — общее для экранов: последнее «Состояние» и переходы. local — пульт открыт на ПК с Kinodom
 // (плеер по ссылке kinodom://), canEdit — из домашней сети: можно менять настройки и удалять.
