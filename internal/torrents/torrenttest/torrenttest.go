@@ -71,6 +71,9 @@ func OfflineConfig(dataDir string) *torrent.ClientConfig {
 	// Только TCP: uTP через loopback под нагрузкой теряет пакеты, и anacrolix/utp (чистый Go)
 	// после потери не восстанавливается — загрузка вставала посреди куска (этап 6).
 	cfg.DisableUTP = true
+	// Пробуждение горутины записи в anacrolix теряется, и соединение стоит до таймера keepalive
+	// (минута по умолчанию) — в тестах таймер короткий.
+	cfg.KeepAliveTimeout = 100 * time.Millisecond
 	return cfg
 }
 
