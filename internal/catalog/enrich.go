@@ -103,10 +103,9 @@ func (c *Catalog) enrichStep(ctx context.Context, tracker string) (bool, error) 
 	c.clearProblem(ctx, "catalog."+tracker+".forum")
 	c.clearProblem(ctx, "catalog."+tracker+".parse")
 	kpID, _ := strconv.Atoi(d.KinopoiskID)
-	imageKey := c.fetchPoster(ctx, d.PosterURL, kpID)
-	if err := c.st.saveDetails(ctx, r.ID, d, kpID, imageKey, now); err != nil {
-		return false, err
-	}
+	// .torrent — до отметки «страница загружена»: экран раздачи перестаёт ждать догрузку и сразу
+	// показывает серии Rutor. Постер — после: медленный хостинг не держит экран раздачи
+	// (финальное ревью 7a).
 	if tf, ok := src.(torrentFetcher); ok {
 		if b, err := tf.Torrent(ctx, r.TopicID); err == nil {
 			if err := c.st.saveTorrent(ctx, r.ID, b); err != nil {
@@ -114,6 +113,14 @@ func (c *Catalog) enrichStep(ctx context.Context, tracker string) (bool, error) 
 			}
 		} else if ctx.Err() == nil {
 			c.log.Warn("каталог: .torrent не скачался — раздача откроется по magnet", "tracker", tracker, "topic", r.TopicID, "err", err)
+		}
+	}
+	if err := c.st.saveDetails(ctx, r.ID, d, kpID, "", now); err != nil {
+		return false, err
+	}
+	if key := c.fetchPoster(ctx, d.PosterURL, kpID); key != "" {
+		if err := c.st.saveImageKey(ctx, r.ID, key); err != nil {
+			return false, err
 		}
 	}
 	if c.ratings != nil {

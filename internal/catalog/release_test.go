@@ -44,6 +44,57 @@ func TestOpenedReleaseIsEnrichedFirst(t *testing.T) {
 	}
 }
 
+// Открытую раздачу не держит её постер с медленного хостинга, а «догружена» она только вместе со
+// списком серий из .torrent Rutor: иначе пульт перестал бы опрашивать и показал сериал без серий
+// (финальное ревью 7a).
+func TestReleaseReadyBeforeItsPoster(t *testing.T) {
+	pic := pngBytes(t)
+	entered, release := make(chan struct{}), make(chan struct{})
+	host := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		close(entered)
+		<-release
+		w.Write(pic)
+	}))
+	t.Cleanup(host.Close)
+	t.Cleanup(func() {
+		select {
+		case <-release:
+		default:
+			close(release)
+		}
+	})
+	im, err := meta.NewImages(meta.ImagesOptions{Dir: t.TempDir(), Rate: 1000, AllowPrivate: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	rutor := newFake("rutor")
+	found := rel("rutor", "77", "Сериал [S01] (2025) WEB-DL", 5, 1<<30, "77aa")
+	rutor.details["77"] = source.Details{Release: found, Description: "Описание", PosterURL: host.URL + "/p.jpg"}
+	rutor.torrents["77"] = []byte("d4:infoe")
+	c, _ := newCatalog(t, openDB(t), func(o *Options) { o.Images = im }, rutor)
+	ids, err := c.st.saveFound(ctx, []source.Release{found}, c.now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := c.Release(ctx, ids[0]); err != nil {
+		t.Fatal(err)
+	}
+	done := make(chan error, 1)
+	go func() { _, err := c.enrichStep(ctx, "rutor"); done <- err }()
+	<-entered
+	r, err := c.Release(ctx, ids[0])
+	if err != nil || r.DetailsPending || r.Torrent == nil || r.Description != "Описание" {
+		t.Fatalf("пока качается постер: pending=%v, .torrent %d байт, описание %q, %v", r.DetailsPending, len(r.Torrent), r.Description, err)
+	}
+	close(release)
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+	if r, _ = c.Release(ctx, ids[0]); r.ImageKey == "" {
+		t.Fatal("постер не записался после догрузки")
+	}
+}
+
 // Хостинг постера мёртв, и Кинопоиск в момент догрузки тоже не отдал постер: постер Кинопоиска
 // догружается позже; открытие раздачи без картинки будит догрузку сразу (хвост 5c).
 func TestKinopoiskPosterIsFetchedLater(t *testing.T) {
