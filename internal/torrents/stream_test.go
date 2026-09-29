@@ -52,6 +52,9 @@ func streamFixtureWith(t *testing.T, name string, size int, setup func(*Service)
 		t.Fatal(err)
 	}
 	connect(t, s, ih, seeder)
+	if err := s.Prepare(context.Background(), ih, 0); err != nil { // поток — только хранимого файла
+		t.Fatal(err)
+	}
 	mux := http.NewServeMux()
 	mux.Handle("GET /stream/{hash}/{index}/{name}", s.StreamHandler())
 	srv = httptest.NewServer(mux)
@@ -176,5 +179,45 @@ func TestStreamHoldsPowerAndCountsBackToZero(t *testing.T) {
 		if time.Now().After(deadline) {
 			t.Fatalf("поток закрыт, а потоков: у запрета сна %d, у сервиса %d", k.Active(), s.ActiveStreams())
 		}
+	}
+}
+
+// Поток по старой ссылке к удалённому (нехранимому) файлу — 410 и без докачки (ревью этапа 6).
+func TestStreamOfDeletedFileIsGone(t *testing.T) {
+	s, srv, ih, _ := streamFixtureService(t, "film.mkv", 300_000)
+	tt, _ := s.Engine().Client().Torrent(ih)
+	waitComplete(t, tt.Files()[0])
+	must(t, s.DeleteFile(context.Background(), ih, 0))
+	code, _, _ := get(t, fmt.Sprintf("%s/stream/%s/0/film.mkv", srv.URL, ih.HexString()), "bytes=0-99")
+	if code != http.StatusGone {
+		t.Fatalf("код %d", code)
+	}
+	if p := tt.Files()[0].Priority(); p != 0 {
+		t.Fatalf("удалённый файл снова качается: приоритет %v", p)
+	}
+}
+
+// «Сейчас смотрят» пишется в базу не чаще раза в минуту на файл: Range-запросов у плеера десятки
+// в минуту, а пишущее соединение с базой одно (хвост этапа 2).
+func TestStreamTouchesDatabaseOncePerMinute(t *testing.T) {
+	clk := &testClock{t: time.Now()}
+	s, srv, ih, _ := streamFixtureWith(t, "film.mkv", 300_000, func(s *Service) { s.now = clk.now })
+	url := fmt.Sprintf("%s/stream/%s/0/film.mkv", srv.URL, ih.HexString())
+	lastStream := func() time.Time {
+		f, _, err := s.reg.StoredFile(context.Background(), ih, 0)
+		must(t, err)
+		return f.LastStream
+	}
+	get(t, url, "bytes=0-99")
+	first := lastStream()
+	clk.add(10 * time.Second)
+	get(t, url, "bytes=100-199")
+	if !lastStream().Equal(first) {
+		t.Fatal("через 10 секунд просмотр записан в базу снова")
+	}
+	clk.add(time.Minute)
+	get(t, url, "bytes=200-299")
+	if !lastStream().After(first) {
+		t.Fatal("через минуту просмотр не записан")
 	}
 }

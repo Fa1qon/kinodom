@@ -23,7 +23,6 @@ import (
 
 var (
 	ErrNotPassed = errors.New("Edge не прошёл проверку Cloudflare")
-	ErrProxyAuth = errors.New("Edge не умеет прокси с логином и паролем — пропуск Cloudflare добыть нельзя")
 	// ErrProfileBusy — папку профиля держит другой Edge: второй на том же профиле не запустится.
 	// Совет — перезапуск, а не «снять msedge.exe»: под службой у пользователя свой Edge с тем же
 	// именем процесса (ревью этапа 5a).
@@ -32,7 +31,7 @@ var (
 
 type Options struct {
 	ProfileDir string        // постоянный профиль (data\edge-profile): повторный проход ~1 с вместо 16–20 с
-	Proxy      string        // прокси для трекеров из настроек; с логином и паролем Edge не умеет
+	Proxy      *netx.Proxy   // прокси для трекеров из настроек; nil — напрямую
 	ExecPath   string        // "" — установленный Edge (ExecPath)
 	UserAgent  string        // "" — UserAgent()
 	Timeout    time.Duration // на проход проверки; 0 — 45 с
@@ -66,12 +65,17 @@ func (f *Fetcher) Pass(ctx context.Context, pageURL string) ([]*http.Cookie, str
 	if err != nil || u.Host == "" {
 		return nil, "", fmt.Errorf("Edge: %q — не адрес страницы", pageURL)
 	}
-	opts, ua, err := f.options()
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	proxy, closeProxy, err := f.proxyServer()
 	if err != nil {
 		return nil, "", err
 	}
-	f.mu.Lock()
-	defer f.mu.Unlock()
+	defer closeProxy() // после выхода Edge: отложено раньше, выполнится позже cancelAlloc
+	opts, ua, err := f.options(proxy)
+	if err != nil {
+		return nil, "", err
+	}
 	if err := BindChildren(); err != nil {
 		f.o.Log.Warn("Edge: не удалось привязать к процессу kinodom — после аварии Edge может остаться", "err", err)
 	}
@@ -126,10 +130,28 @@ func (f *Fetcher) chromedpLogf(format string, args ...any) {
 	f.o.Log.Debug("chromedp: " + fmt.Sprintf(format, args...))
 }
 
+// proxyServer — значение флага --proxy-server ("" — без прокси) и чем его закрыть после прохода.
+// Логин и пароль прокси Edge передать не умеет, поэтому для такого прокси на время прохода
+// поднимается локальный переходник без пароля (спека этапа 7, раздел 5.2).
+func (f *Fetcher) proxyServer() (string, func(), error) {
+	u := f.o.Proxy.URL()
+	switch {
+	case u == nil:
+		return "", func() {}, nil
+	case u.User == nil:
+		return u.Scheme + "://" + u.Host, func() {}, nil
+	}
+	fw, err := netx.Forward(u)
+	if err != nil {
+		return "", nil, fmt.Errorf("Edge: %w", err)
+	}
+	return "http://" + fw.Addr(), func() { fw.Close() }, nil
+}
+
 // options — флаги варианта «a» из исследования (раздел 1). Флаги chromedp по умолчанию не берём:
 // с ними (--enable-automation, HeadlessChrome в UA) Cloudflare показывает галочку
-// «Подтвердите, что вы человек».
-func (f *Fetcher) options() ([]chromedp.ExecAllocatorOption, string, error) {
+// «Подтвердите, что вы человек». proxy — значение --proxy-server, "" — без прокси.
+func (f *Fetcher) options(proxy string) ([]chromedp.ExecAllocatorOption, string, error) {
 	if f.o.ProfileDir == "" {
 		return nil, "", errors.New("Edge: не задана папка профиля")
 	}
@@ -162,15 +184,8 @@ func (f *Fetcher) options() ([]chromedp.ExecAllocatorOption, string, error) {
 		chromedp.Flag("no-default-browser-check", true),
 		chromedp.Flag("disable-sync", true),
 	}
-	if f.o.Proxy != "" {
-		p, err := netx.ParseProxy(f.o.Proxy)
-		if err != nil {
-			return nil, "", err
-		}
-		if p.User != nil {
-			return nil, "", ErrProxyAuth
-		}
-		opts = append(opts, chromedp.ProxyServer(p.Scheme+"://"+p.Host))
+	if proxy != "" {
+		opts = append(opts, chromedp.ProxyServer(proxy))
 	}
 	return opts, ua, nil
 }

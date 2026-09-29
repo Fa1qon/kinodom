@@ -128,7 +128,7 @@ func TestPosterFallsBackToKinopoisk(t *testing.T) {
 		w.Write(pic)
 	}))
 	t.Cleanup(host.Close)
-	im, err := meta.NewImages(meta.ImagesOptions{Dir: t.TempDir(), Rate: 1000})
+	im, err := meta.NewImages(meta.ImagesOptions{Dir: t.TempDir(), Rate: 1000, AllowPrivate: true})
 	if err != nil {
 		t.Fatal(err)
 	}

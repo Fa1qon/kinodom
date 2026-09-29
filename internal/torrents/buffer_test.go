@@ -106,8 +106,9 @@ func TestPrepareTwiceFromTwoTVs(t *testing.T) {
 	}
 }
 
-// Серия 1 хранилась до перезапуска и докачивается дальше; выбор серии 2 не должен это остановить.
-func TestPrepareAfterRestartKeepsDownloadingStoredEpisode(t *testing.T) {
+// Серия 1 хранилась до перезапуска и докачивается дальше; выбор серии 2 переносит на неё фокус
+// очереди, но серию 1 с хранения не снимает: она ждёт очереди и докачается следом (этап 7).
+func TestPrepareAfterRestartKeepsStoredEpisodeQueued(t *testing.T) {
 	ctx := context.Background()
 	db := newTestDB(t)
 	reg := NewRegistry(db)
@@ -128,8 +129,12 @@ func TestPrepareAfterRestartKeepsDownloadingStoredEpisode(t *testing.T) {
 	if err := s.Prepare(ctx, ih, 1); err != nil {
 		t.Fatal(err)
 	}
-	if p := tt.Files()[0].Priority(); p != torrent.PiecePriorityNormal {
-		t.Fatalf("выбор серии 2 остановил докачку серии 1: приоритет %v", p)
+	if p := tt.Files()[1].Priority(); p != torrent.PiecePriorityNormal {
+		t.Fatalf("выбранная серия 2 не качается: приоритет %v", p)
+	}
+	st, _ := s.Status(ih)
+	if st.Focus != 1 || !st.Files[0].Stored || !st.Files[0].Queued || tt.Files()[0].Priority() != torrent.PiecePriorityNone {
+		t.Fatalf("серия 1 должна ждать очереди: фокус %d, %+v", st.Focus, st.Files[0])
 	}
 }
 

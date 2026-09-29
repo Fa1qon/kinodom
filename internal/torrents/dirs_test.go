@@ -128,3 +128,54 @@ func TestUnavailableDirKeepsRecords(t *testing.T) {
 		t.Fatalf("проблема не снята: %q", p)
 	}
 }
+
+// Раздача из базы до этапа 6 (папка не записана) после смены папки загрузок в пульте остаётся в
+// прежней папке — и в движке, и в базе: иначе удаление обнуляло бы файл в новой папке, а место в
+// старой не освобождалось, после перезапуска раздача качалась бы заново (финальное ревью 7a).
+func TestOldTorrentWithoutDirStaysAfterDirChange(t *testing.T) {
+	ctx := context.Background()
+	oldDir, newDir := t.TempDir(), t.TempDir()
+	reg := NewRegistry(newTestDB(t))
+	mi, _ := torrenttest.MakeTorrent(t, t.TempDir(), "film.mkv", 64<<10, torrenttest.File{Path: "film.mkv", Size: 300_000})
+	ih := mi.HashInfoBytes()
+	if _, err := reg.Remember(ctx, ih, "torrent-file", ""); err != nil {
+		t.Fatal(err)
+	}
+	must(t, reg.SaveMetainfo(ctx, ih, "film.mkv", torrentBytes(t, mi)))
+	must(t, reg.MarkStored(ctx, ih, 0, filepath.Join(oldDir, "film.mkv"), 300_000, time.Now()))
+	e, err := NewEngine(Config{DownloadsDir: oldDir, StateDir: t.TempDir(), Offline: true, Log: quiet()})
+	must(t, err)
+	t.Cleanup(func() { e.Close() })
+	s := serviceFor(e, reg)
+	must(t, s.restore(ctx))
+	e.SetDownloadsDir(newDir)
+	if got := e.TorrentDir(ih); got != oldDir {
+		t.Fatalf("после смены папки раздача в %s, а файлы в %s", got, oldDir)
+	}
+	recs, err := reg.Restorable(ctx)
+	must(t, err)
+	if len(recs) != 1 || recs[0].Dir != oldDir {
+		t.Fatalf("в базе папка раздачи %+v, ожидалась %s", recs, oldDir)
+	}
+}
+
+// Папку загрузок сменили в пульте: новые раздачи — сразу в новую папку, без перезапуска; открытые
+// раньше остаются на прежнем месте (спека этапа 7, раздел 5.1).
+func TestDownloadsDirChangesOnTheFly(t *testing.T) {
+	ctx := context.Background()
+	oldDir, newDir := t.TempDir(), t.TempDir()
+	e, err := NewEngine(Config{DownloadsDir: oldDir, StateDir: t.TempDir(), Offline: true, Log: quiet()})
+	must(t, err)
+	t.Cleanup(func() { e.Close() })
+	s := serviceFor(e, NewRegistry(newTestDB(t)))
+	first, _ := torrenttest.MakeTorrent(t, t.TempDir(), "a.mkv", 64<<10, torrenttest.File{Path: "a.mkv", Size: 100_000})
+	ih1, err := s.Open(ctx, Source{Torrent: torrentBytes(t, first)})
+	must(t, err)
+	e.SetDownloadsDir(newDir)
+	second, _ := torrenttest.MakeTorrent(t, t.TempDir(), "b.mkv", 64<<10, torrenttest.File{Path: "b.mkv", Size: 100_000})
+	ih2, err := s.Open(ctx, Source{Torrent: torrentBytes(t, second)})
+	must(t, err)
+	if e.TorrentDir(ih1) != oldDir || e.TorrentDir(ih2) != newDir || e.DownloadsDir() != newDir {
+		t.Fatalf("папки: первая %s, вторая %s, текущая %s", e.TorrentDir(ih1), e.TorrentDir(ih2), e.DownloadsDir())
+	}
+}

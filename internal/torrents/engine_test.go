@@ -1,6 +1,7 @@
 package torrents
 
 import (
+	"log/slog"
 	"net/http"
 	"strings"
 	"testing"
@@ -8,11 +9,16 @@ import (
 
 	"golang.org/x/time/rate"
 
+	"kinodom/internal/netx"
 	"kinodom/internal/torrents/torrenttest"
 )
 
 func TestBuildConfigSendsOnlyHTTPAnnouncesThroughProxy(t *testing.T) {
-	c := Config{TrackerProxy: "socks5://127.0.0.1:1080", Log: quiet()}
+	px, err := netx.NewProxy("socks5://127.0.0.1:1080")
+	if err != nil {
+		t.Fatal(err)
+	}
+	c := Config{Proxy: px, Log: quiet()}
 	cfg, err := buildClientConfig(c, nil, rate.NewLimiter(rate.Inf, 0))
 	if err != nil {
 		t.Fatal(err)
@@ -22,19 +28,17 @@ func TestBuildConfigSendsOnlyHTTPAnnouncesThroughProxy(t *testing.T) {
 	if err != nil || u == nil || u.String() != "socks5://127.0.0.1:1080" {
 		t.Fatalf("анонс не идёт через прокси: %v, %v", u, err)
 	}
+	// Прокси сменили в настройках — следующий анонс идёт через новый, без перезапуска движка.
+	px.Set("http://user:pw@127.0.0.1:3128")
+	if u, _ := cfg.HTTPProxy(req); u == nil || u.String() != "http://user:pw@127.0.0.1:3128" {
+		t.Fatalf("после смены прокси анонс идёт через %v", u)
+	}
 	tr, ok := cfg.WebTransport.(*http.Transport)
 	if !ok || tr.Proxy != nil {
 		t.Fatal("внутренний HTTP-клиент движка (веб-сиды — это данные) не должен ходить через прокси")
 	}
 	if cfg.TrackerListenPacket != nil {
 		t.Fatal("UDP-анонсы должны идти напрямую")
-	}
-}
-
-func TestBuildConfigRejectsBadProxy(t *testing.T) {
-	_, err := buildClientConfig(Config{TrackerProxy: "127.0.0.1:1080", Log: quiet()}, nil, rate.NewLimiter(rate.Inf, 0))
-	if err == nil || !strings.Contains(err.Error(), "socks5://") {
-		t.Fatalf("ожидалась подсказка про формат прокси, получено %v", err)
 	}
 }
 
@@ -130,5 +134,21 @@ func TestKeepAliveBoundsRequestStalls(t *testing.T) {
 	}
 	if got := torrenttest.OfflineConfig(t.TempDir()).KeepAliveTimeout; got != 100*time.Millisecond {
 		t.Fatalf("keepalive тестовых клиентов %v", got)
+	}
+}
+
+// Шум anacrolix (на каждый кусок и каждого ушедшего зрителя) — на уровне Debug; остальное — как есть
+// (хвост этапа 2).
+func TestQuietLogLowersAnacrolixNoise(t *testing.T) {
+	var buf strings.Builder
+	log := slog.New(quietLog{slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelInfo})})
+	log.Warn("finished hashing piece", "piece", 18, "err", "short write")
+	log.Warn("error flushing file before promotion", "file", `C:\K\film.mkv.part`)
+	log.With("torrent", "Космос").Info("reader initial read failed", "err", "context canceled")
+	log.Warn("tracker announce failed", "err", "timeout")
+	out := buf.String()
+	if strings.Contains(out, "short write") || strings.Contains(out, "flushing") || strings.Contains(out, "initial read") ||
+		!strings.Contains(out, "tracker announce failed") {
+		t.Fatalf("журнал: %s", out)
 	}
 }

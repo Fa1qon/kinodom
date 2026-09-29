@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"kinodom/internal/player"
 	"kinodom/internal/torrents/torrenttest"
 )
 
@@ -111,5 +112,74 @@ func TestAPIErrors(t *testing.T) {
 	}
 	if code := call(t, "GET", srv.URL+"/api/v1/torrents/"+ih.HexString()+"/files/0", nil, nil); code != 404 {
 		t.Errorf("состояние файла без prepare: %d", code)
+	}
+}
+
+// Плейлист файла для плеера на другом устройстве: название — имя файла, адрес потока — с хостом, по
+// которому спросили; файл сохраняется как «<название>.m3u8» (основная спека, раздел 14).
+func TestM3URoute(t *testing.T) {
+	s, srv := apiFixture(t)
+	mi, _ := torrenttest.MakeTorrent(t, t.TempDir(), "Сезон", 64<<10,
+		torrenttest.File{Path: "Серия 1.mkv", Size: 100_000}, torrenttest.File{Path: "Серия 2.mkv", Size: 100_000})
+	ih, err := s.Open(t.Context(), Source{Torrent: torrentBytes(t, mi)})
+	must(t, err)
+	tt, _ := s.Engine().Client().Torrent(ih)
+	i := fileIndex(t, tt, "Серия 2.mkv")
+	resp, err := http.Get(fmt.Sprintf("%s/m3u/%s/%d.m3u8", srv.URL, ih.HexString(), i))
+	must(t, err)
+	defer resp.Body.Close()
+	var body bytes.Buffer
+	body.ReadFrom(resp.Body)
+	want := fmt.Sprintf("#EXTM3U\n#EXTINF:-1,Серия 2\n%s/stream/%s/%d/", srv.URL, ih.HexString(), i)
+	if resp.StatusCode != 200 || !strings.HasPrefix(body.String(), want) ||
+		!strings.Contains(resp.Header.Get("Content-Disposition"), ".m3u8") {
+		t.Fatalf("%d %q %s", resp.StatusCode, body.String(), resp.Header.Get("Content-Disposition"))
+	}
+	resp2, err := http.Get(fmt.Sprintf("%s/m3u/%s/99.m3u8", srv.URL, ih.HexString()))
+	must(t, err)
+	resp2.Body.Close()
+	if resp2.StatusCode != http.StatusNotFound {
+		t.Fatalf("нет файла: %d", resp2.StatusCode)
+	}
+}
+
+// «Смотреть» через API: файл хранится и в фокусе; в ответе — поток, .m3u8 и, только запросу с этого
+// ПК, ссылка kinodom:// на 127.0.0.1 и порт API (спека этапа 7, раздел 5.5).
+func TestWatchRoute(t *testing.T) {
+	s := newTestService(t)
+	mux := http.NewServeMux()
+	s.Register(testRouter{mux})
+	mi, _ := torrenttest.MakeTorrent(t, t.TempDir(), "Сезон", 64<<10,
+		torrenttest.File{Path: "Серия 1.mkv", Size: 100_000}, torrenttest.File{Path: "Серия 2.mkv", Size: 100_000})
+	ih, err := s.Open(t.Context(), Source{Torrent: torrentBytes(t, mi)})
+	must(t, err)
+	tt, _ := s.Engine().Client().Torrent(ih)
+	i := fileIndex(t, tt, "Серия 2.mkv")
+	watch := func(remote string) watchResponse {
+		req := httptest.NewRequest("POST", fmt.Sprintf("/api/v1/torrents/%s/files/%d/watch", ih.HexString(), i), nil)
+		req.Host, req.RemoteAddr = "192.168.1.20:8090", remote
+		rec := httptest.NewRecorder()
+		mux.ServeHTTP(rec, req)
+		var out watchResponse
+		if rec.Code != 200 || json.Unmarshal(rec.Body.Bytes(), &out) != nil {
+			t.Fatalf("%d %s", rec.Code, rec.Body)
+		}
+		return out
+	}
+	out := watch("192.168.1.30:50000") // телефон
+	if !strings.HasPrefix(out.Play.URL, "http://192.168.1.20:8090/stream/"+ih.HexString()) || out.Play.Title != "Серия 2" ||
+		out.M3UURL != fmt.Sprintf("http://192.168.1.20:8090/m3u/%s/%d.m3u8", ih.HexString(), i) || out.LaunchURL != nil {
+		t.Fatalf("с телефона: %+v", out)
+	}
+	if st, _ := s.Status(ih); st.Focus != i {
+		t.Fatalf("фокус %d", st.Focus)
+	}
+	out = watch("127.0.0.1:50000") // браузер на этом ПК
+	if out.LaunchURL == nil {
+		t.Fatal("с этого ПК нет ссылки kinodom://")
+	}
+	stream, title, err := player.ParseLaunch(*out.LaunchURL, 8090)
+	if err != nil || !strings.HasPrefix(stream, "http://127.0.0.1:8090/stream/") || title != "Серия 2" {
+		t.Fatalf("kinodom://: %q, %q, %v", stream, title, err)
 	}
 }

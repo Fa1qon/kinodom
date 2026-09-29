@@ -102,7 +102,11 @@ func (s *Service) deleteLocked(ctx context.Context, ih metainfo.Hash, index int)
 		delete(ss.paused, index)
 		ss.stored = len(ss.storedFiles) > 0
 		if hadQueue && len(ss.verifyQ) == 0 {
-			ss.verifyDone()
+			s.verifyDone(ss)
+		}
+		if ss.focus == index { // удалили файл в фокусе — качается следующий
+			s.setFocusLocked(ss, s.nextFocusLocked(ss))
+			s.applyLocked(ss)
 		}
 	}
 	left, err := s.reg.StoredFiles(ctx, ih)
