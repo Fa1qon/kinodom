@@ -17,7 +17,7 @@ var (
 	// ErrNotStored — файл не скачан: его не выбирали для просмотра или уже удалили.
 	ErrNotStored = errors.New("этот файл не скачан")
 	// errDirMissing — раздачи нет в движке: её папка загрузок недоступна (диск не подключён).
-	errDirMissing = errors.New("папка загрузок раздачи недоступна — файл удалится, когда диск вернётся")
+	errDirMissing = errors.New("папка загрузок раздачи недоступна — подключите диск и удалите снова")
 )
 
 // watchingFor — «сейчас смотрят»: было потоковое подключение к файлу за последние 6 часов.
@@ -63,11 +63,18 @@ func (s *Service) deleteLocked(ctx context.Context, ih metainfo.Hash, index int)
 	// и недокачанные куски не трогаются: их байты нужны соседу или в них идёт приём, и сброс дал бы
 	// несошедшийся хэш — за него anacrolix банит раздающего. Файл остаётся на месте разрежённым:
 	// удалять и создавать его заново не нужно, и движок его не «воскресит».
+	// Куски, ждущие перепроверки (повреждённый файл отметок), на диске почти наверняка есть —
+	// они освобождаются так же и снимаются с очереди; проверяемый прямо сейчас — не трогается.
 	var free []pieceSpan
+	hadQueue := ss != nil && len(ss.verifyQ) > 0
 	for i := f.BeginPieceIndex(); i < f.EndPieceIndex(); i++ {
 		p := info.Piece(i)
-		if p.Offset() < f.Offset() || p.Offset()+p.Length() > f.Offset()+f.Length() || !t.PieceState(i).Complete {
+		queued := ss != nil && ss.verifyQ[i] && s.verifyNow != (pieceRef{ih, i})
+		if p.Offset() < f.Offset() || p.Offset()+p.Length() > f.Offset()+f.Length() || !(t.PieceState(i).Complete || queued) {
 			continue
+		}
+		if queued {
+			delete(ss.verifyQ, i)
 		}
 		if err := s.eng.pc.Set(metainfo.PieceKey{InfoHash: ih, Index: i}, false); err != nil {
 			return fmt.Errorf("отметки кусков: %w", err)
@@ -92,16 +99,31 @@ func (s *Service) deleteLocked(ctx context.Context, ih metainfo.Hash, index int)
 	if ss != nil {
 		delete(ss.prepared, index)
 		delete(ss.storedFiles, index)
+		delete(ss.paused, index)
 		ss.stored = len(ss.storedFiles) > 0
+		if hadQueue && len(ss.verifyQ) == 0 {
+			ss.verifyDone()
+		}
 	}
 	left, err := s.reg.StoredFiles(ctx, ih)
 	if err != nil {
 		return err
 	}
-	if len(left) == 0 {
+	// Раздачу без хранимых файлов выгружаем сразу, только если она без дела: иначе её листает
+	// телевизор (или для неё идёт Prepare, ради которого чистили место) — её уберёт уборка позже.
+	if len(left) == 0 && s.idle(ih, ss) {
 		s.forgetLocked(ctx, ih, torrentDir(s.eng.TorrentDir(ih), info, ih))
 	}
 	return nil
+}
+
+// idle — раздачу можно выгрузить: о ней не спрашивали дольше часа, потоков нет, перепроверка её
+// кусков не идёт. Вызывать под s.mu.
+func (s *Service) idle(ih metainfo.Hash, ss *session) bool {
+	if ss == nil {
+		return true
+	}
+	return s.now().Sub(ss.lastSeen) >= idleFor && !ss.streaming() && len(ss.verifyQ) == 0 && s.verifyNow.ih != ih
 }
 
 // watching — файл сейчас смотрят: открыт поток или поток был за последние 6 часов.

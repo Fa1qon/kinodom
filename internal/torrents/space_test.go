@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"path/filepath"
 	"slices"
 	"strconv"
 	"strings"
@@ -302,5 +303,70 @@ func TestCleanupSparesJustChosenFile(t *testing.T) {
 	must(t, s.Prepare(ctx, ih, ep[2]))
 	if got := stored(t, s, ih); !slices.Equal(got, sorted(ep[0], ep[2])) {
 		t.Fatalf("хранятся %v — удалить нужно было давно открытую серию, а не только что выбранную", got)
+	}
+}
+
+// Уже скачанный (хранимый) файл после перезапуска открывается и при малом месте: ему не нужно
+// ни байта, очистка и отказ «мало места» к нему не относятся (ревью этапа 6, I1).
+func TestPrepareStoredFileIgnoresLowSpace(t *testing.T) {
+	ctx := context.Background()
+	s := newTestService(t)
+	ih, ep := archive(t, s)
+	must(t, s.Prepare(ctx, ih, ep[0]))
+	s.mu.Lock()
+	delete(s.sessions[ih].prepared, ep[0]) // как после перезапуска: хранится, но не выбран
+	s.mu.Unlock()
+	fakeDisk(s, 10*mib)
+	s.SetPolicy(Policy{MinFree: 100 * mib})
+	if err := s.Prepare(ctx, ih, ep[0]); err != nil {
+		t.Fatalf("хранимый файл не открылся: %v", err)
+	}
+}
+
+// Очистка ради новой серии удаляет последнюю хранимую серию той же раздачи — раздачу при этом не
+// выгружают: её листает телевизор, и Prepare не должен ответить «раздача не открыта» (ревью, I2).
+func TestCleanupKeepsTorrentInUseLoaded(t *testing.T) {
+	ctx := context.Background()
+	s := newTestService(t)
+	ih, ep := archive(t, s)
+	must(t, s.Prepare(ctx, ih, ep[0]))
+	openedAgo(t, s, ih, ep[0], 5*24*time.Hour)
+	fakeDisk(s, 10*mib)
+	s.SetPolicy(Policy{MinFree: 7*mib + mib/2})
+	if err := s.Prepare(ctx, ih, ep[1]); err != nil {
+		t.Fatalf("следующая серия не выбралась: %v (хранятся %v)", err, stored(t, s, ih))
+	}
+	if got := stored(t, s, ih); !slices.Equal(got, []int{ep[1]}) {
+		t.Fatalf("хранятся %v", got)
+	}
+}
+
+// Диск с загрузками не вернулся: записи о файлах, которые не открывали дольше срока хранения,
+// снимаются — иначе баннер «папка недоступна» висел бы вечно; удалить такой файл вручную нельзя,
+// и текст говорит честно, что делать (ревью, I5).
+func TestExpireForgetsRecordsOnMissingDisk(t *testing.T) {
+	ctx := context.Background()
+	db := newTestDB(t)
+	reg := NewRegistry(db)
+	mi, _ := torrenttest.MakeTorrent(t, t.TempDir(), "film.mkv", 64<<10, torrenttest.File{Path: "film.mkv", Size: 300_000})
+	ih := mi.HashInfoBytes()
+	usb := filepath.Join(t.TempDir(), "USB")
+	if _, err := reg.Remember(ctx, ih, "torrent-file", usb); err != nil {
+		t.Fatal(err)
+	}
+	must(t, reg.SaveMetainfo(ctx, ih, "film.mkv", torrentBytes(t, mi)))
+	must(t, reg.MarkStored(ctx, ih, 0, filepath.Join(usb, "film.mkv"), 300_000, time.Now().Add(-15*24*time.Hour)))
+	s := serviceFor(newOfflineEngine(t), reg)
+	must(t, s.restore(ctx))
+	if err := s.DeleteFile(ctx, ih, 0); err == nil || !strings.Contains(err.Error(), "подключите диск") {
+		t.Fatalf("удаление файла с отключённого диска: %v", err)
+	}
+	must(t, s.expire(ctx))
+	if idx, _ := reg.StoredFiles(ctx, ih); len(idx) != 0 {
+		t.Fatalf("запись с отключённого диска старше срока хранения осталась: %v", idx)
+	}
+	must(t, s.restore(ctx))
+	if p := problemText(t, db, "torrents.dirs"); p != "" {
+		t.Fatalf("баннер остался: %q", p)
 	}
 }

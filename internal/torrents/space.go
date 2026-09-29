@@ -79,7 +79,9 @@ func (s *Service) remaining(vol string) int64 {
 		}
 		files := ss.t.Files()
 		for i := range ss.storedFiles {
-			n += files[i].Length() - files[i].BytesCompleted()
+			// Куски на перепроверке после повреждённого файла отметок — скачанные, пока не доказано
+			// обратное: иначе уборка приняла бы всю медиатеку за недокачанную и удаляла фильмы.
+			n += max(0, files[i].Length()-files[i].BytesCompleted()-ss.queuedBytes(files[i]))
 		}
 	}
 	return n

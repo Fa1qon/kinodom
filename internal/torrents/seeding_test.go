@@ -110,3 +110,26 @@ func TestOnlyFreshestTorrentsSeed(t *testing.T) {
 		t.Fatalf("у молчащей раздачи %d соединений", n)
 	}
 }
+
+// В «молчащей» раздаче выбрали новую серию — раздача сразу снова с пирами, серия качается (ревью, I3).
+func TestPrepareWakesQuietTorrent(t *testing.T) {
+	ctx := context.Background()
+	s := newTestService(t)
+	ih, tt, _ := seriesFixture(t, s)
+	one, two := fileIndex(t, tt, "Серия 1.mkv"), fileIndex(t, tt, "Серия 2.mkv")
+	must(t, s.Prepare(ctx, ih, one))
+	waitComplete(t, tt.Files()[one])
+	openedAgo(t, s, ih, one, 3*24*time.Hour)
+	ihA, epA := archive(t, s)
+	must(t, s.Prepare(ctx, ihA, epA[0])) // более свежая раздача занимает единственное место
+	s.SetPolicy(Policy{MaxSeeding: 1})
+	must(t, s.limitSeeding(ctx))
+	s.mu.Lock()
+	q := s.sessions[ih].quiet
+	s.mu.Unlock()
+	if !q {
+		t.Fatal("подготовка: сериал не молчит")
+	}
+	must(t, s.Prepare(ctx, ih, two))
+	waitComplete(t, tt.Files()[two])
+}

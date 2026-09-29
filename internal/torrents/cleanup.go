@@ -5,6 +5,8 @@ import (
 	"cmp"
 	"context"
 	"errors"
+	"io/fs"
+	"os"
 	"time"
 
 	"github.com/anacrolix/torrent/metainfo"
@@ -56,7 +58,11 @@ func (s *Service) expire(ctx context.Context) error {
 		switch err := s.DeleteFile(ctx, f.InfoHash, f.Index); {
 		case err == nil:
 			s.log.Info("срок хранения вышел — файл удалён", "path", f.Path, "opened", f.LastOpened)
-		case errors.Is(err, ErrWatching), errors.Is(err, ErrNotStored), errors.Is(err, errDirMissing):
+		case errors.Is(err, errDirMissing):
+			if err := s.forgetMissing(ctx, f); err != nil {
+				return err
+			}
+		case errors.Is(err, ErrWatching), errors.Is(err, ErrNotStored):
 		default:
 			s.log.Warn("файл не удалился по сроку хранения", "path", f.Path, "err", err)
 		}
@@ -72,7 +78,7 @@ func (s *Service) sweep(ctx context.Context) error {
 	defer s.mu.Unlock()
 	now := s.now()
 	for ih, ss := range s.sessions {
-		if len(ss.storedFiles) > 0 || now.Sub(ss.lastSeen) < idleFor || ss.streaming() {
+		if len(ss.storedFiles) > 0 || !s.idle(ih, ss) {
 			continue
 		}
 		dir := ""
@@ -108,4 +114,28 @@ func (s *Service) folderOf(rec Record) string {
 		return ""
 	}
 	return torrentDir(cmp.Or(rec.Dir, s.eng.DownloadsDir()), &info, rec.InfoHash)
+}
+
+// forgetMissing снимает запись о файле, которого нет на диске (диск не вернулся, папку удалили),
+// когда его и так не открывали дольше срока хранения: иначе запись и баннер «папка недоступна»
+// жили бы вечно. Файл, который есть (раздача не в движке по другой причине), не трогается.
+func (s *Service) forgetMissing(ctx context.Context, f StoredFile) error {
+	if _, err := os.Stat(f.Path); !errors.Is(err, fs.ErrNotExist) {
+		return nil
+	}
+	if err := s.reg.Unstore(ctx, f.InfoHash, f.Index); err != nil {
+		return err
+	}
+	s.log.Info("файла нет на диске, срок хранения вышел — запись снята", "path", f.Path)
+	left, err := s.reg.StoredFiles(ctx, f.InfoHash)
+	if err != nil || len(left) > 0 {
+		return err
+	}
+	s.mu.Lock()
+	_, open := s.sessions[f.InfoHash]
+	s.mu.Unlock()
+	if open {
+		return nil // раздача в движке — её уберёт уборка вместе с сессией
+	}
+	return s.reg.Forget(ctx, f.InfoHash)
 }

@@ -37,7 +37,6 @@ func (s *Service) limitSeeding(ctx context.Context) error {
 	for _, ih := range order[:min(len(order), s.pol().MaxSeeding)] {
 		top[ih.HexString()] = true
 	}
-	conns := cmp.Or(s.eng.cfg.ConnsPerTorrent, 20)
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	for ih, ss := range s.sessions {
@@ -51,11 +50,10 @@ func (s *Service) limitSeeding(ctx context.Context) error {
 		if quiet {
 			ss.t.DisallowDataUpload()
 			ss.t.SetMaxEstablishedConns(0)
+			ss.quiet = true
 		} else {
-			ss.t.AllowDataUpload()
-			ss.t.SetMaxEstablishedConns(conns)
+			s.wakeLocked(ss)
 		}
-		ss.quiet = quiet
 	}
 	return nil
 }
@@ -69,4 +67,14 @@ func (ss *session) downloading() bool {
 		}
 	}
 	return false
+}
+
+// wakeLocked возвращает «молчащей» раздаче соединения и отдачу. Вызывать под s.mu.
+func (s *Service) wakeLocked(ss *session) {
+	if !ss.quiet {
+		return
+	}
+	ss.t.AllowDataUpload()
+	ss.t.SetMaxEstablishedConns(cmp.Or(s.eng.cfg.ConnsPerTorrent, 20))
+	ss.quiet = false
 }
