@@ -60,9 +60,9 @@ func (f *fakeWatch) snapshot() []string {
 // quickWatch — отчёты без ожидания 10 с (тесты); сеанс кончается через 300 мс без запросов.
 func quickWatch(t *testing.T, min time.Duration) {
 	t.Helper()
-	was, wasMin, wasGap, wasLead := watchEvery, watchMin, watchGap, streamLead
-	watchEvery, watchMin, watchGap, streamLead = 20*time.Millisecond, min, 300*time.Millisecond, 0
-	t.Cleanup(func() { watchEvery, watchMin, watchGap, streamLead = was, wasMin, wasGap, wasLead })
+	was, wasMin, wasGap, wasLead, wasJump := watchEvery, watchMin, watchGap, streamLead, jumpRead
+	watchEvery, watchMin, watchGap, streamLead, jumpRead = 20*time.Millisecond, min, 300*time.Millisecond, 0, 64<<10
+	t.Cleanup(func() { watchEvery, watchMin, watchGap, streamLead, jumpRead = was, wasMin, wasGap, wasLead, wasJump })
 }
 
 // Место — с поправкой на то, что плеер читает впереди картинки (streamLead); не меньше нуля.
@@ -239,5 +239,28 @@ func waitUntil(t *testing.T, what string, ok func() bool) {
 			t.Fatalf("не дождались: %s", what)
 		}
 		time.Sleep(20 * time.Millisecond)
+	}
+}
+
+// Открыл серию и сразу закрыл: последний запрос плеера — к индексу в конце файла. Это не место и не
+// «просмотрено» (финальное ревью этапа 8): прыжок в конец принимается, только если оттуда прочитано
+// заметно много.
+func TestTailReadNotWatched(t *testing.T) {
+	quickWatch(t, 0)
+	fw := &fakeWatch{dur: map[string]float64{}}
+	_, srv, ih, _ := streamFixtureWith(t, "film.mp4", 300_000, func(s *Service) { s.SetWatchTracker(fw) })
+	url := srv.URL + "/stream/" + ih.HexString() + "/0/film.mp4"
+	getRange(t, url, "bytes=0-19999")
+	getRange(t, url, "bytes=-4096")
+	time.Sleep(2500 * time.Millisecond) // сеанс кончился, итог сообщён
+	r := fw.snapshot()
+	if len(r) == 0 {
+		t.Fatal("место не сообщено")
+	}
+	for _, x := range r {
+		if !strings.HasPrefix(x, "pc 0 ") || strings.HasSuffix(x, " 300000/300000") || strings.Contains(x, " 29") {
+			t.Errorf("индекс в конце стал местом: %v", r)
+			break
+		}
 	}
 }

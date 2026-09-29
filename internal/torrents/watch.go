@@ -26,7 +26,7 @@ type WatchTracker interface {
 // соединение каждые пару секунд — проверено вживую), поэтому место считается по сеансу: запросы одного
 // устройства к одному файлу с перерывами меньше watchGap. Место — докуда дочитал самый свежий запрос;
 // сеанс короче watchMin места не сообщает (плеер только открыл файл); прыжок в самый конец файла,
-// который продержался меньше watchMin, не место (плеер читает индекс в конце при открытии).
+// откуда прочитано меньше jumpRead, не место (плеер читает индекс в конце при открытии).
 // Переменные — тесты их ускоряют.
 var (
 	watchEvery = 10 * time.Second
@@ -42,15 +42,17 @@ var streamLead int64 = 4 << 20
 // SetWatchTracker подключает историю просмотров; nil — без неё. Вызывать до Run.
 func (s *Service) SetWatchTracker(t WatchTracker) { s.watch = t }
 
-// trackedReader — читатель файла, который помнит, докуда дочитали.
+// trackedReader — читатель файла, который помнит, докуда дочитали и сколько отдал после перемотки.
 type trackedReader struct {
-	rs  io.ReadSeeker
-	pos atomic.Int64
+	rs   io.ReadSeeker
+	pos  atomic.Int64
+	read atomic.Int64 // байт отдано после последней перемотки
 }
 
 func (t *trackedReader) Read(p []byte) (int, error) {
 	n, err := t.rs.Read(p)
 	t.pos.Add(int64(n))
+	t.read.Add(int64(n))
 	return n, err
 }
 
@@ -58,9 +60,14 @@ func (t *trackedReader) Seek(off int64, whence int) (int64, error) {
 	n, err := t.rs.Seek(off, whence)
 	if err == nil {
 		t.pos.Store(n)
+		t.read.Store(0)
 	}
 	return n, err
 }
+
+// jumpRead — сколько нужно прочитать с места в самом конце файла, чтобы это было место, а не индекс
+// (moov, idx1, Cues), который плеер читает при открытии. Переменная — тесты её уменьшают.
+var jumpRead int64 = 8 << 20
 
 type watchKey struct {
 	device string
@@ -119,7 +126,7 @@ func (s *Service) watchTick(now time.Time) {
 	for key, ss := range s.watchSessions {
 		if ss.latest != nil {
 			p := ss.latest.pos.Load()
-			jump := p >= ss.size*98/100 && ss.pos < ss.size*90/100 && now.Sub(ss.latestAt) < watchMin
+			jump := p >= ss.size*98/100 && ss.pos < ss.size*90/100 && ss.latest.read.Load() < jumpRead
 			if !jump {
 				ss.pos = p
 			}
