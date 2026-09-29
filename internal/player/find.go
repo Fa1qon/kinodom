@@ -5,6 +5,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 )
 
 // Player — найденный плеер.
@@ -87,11 +88,24 @@ func fileExists(p string) bool {
 }
 
 // Launch запускает плеер с потоком. Аргументы — отдельными строками, без cmd: ничего из ссылки не
-// становится командой (основная спека, раздел 14). VLC получает и название — для заголовка окна.
-func Launch(p Player, streamURL, title string) error {
+// становится командой (основная спека, раздел 14). VLC получает и название — для заголовка окна;
+// startSec > 0 — открыть с этого места (спека этапа 8, раздел 7.3).
+func Launch(p Player, streamURL, title string, startSec int) error {
+	return exec.Command(p.Path, launchArgs(p, streamURL, title, startSec)...).Start()
+}
+
+func launchArgs(p Player, streamURL, title string, startSec int) []string {
 	args := []string{streamURL}
 	if p.Name == "VLC" && title != "" {
 		args = append(args, "--meta-title="+title)
 	}
-	return exec.Command(p.Path, args...).Start()
+	if startSec > 0 {
+		switch p.Name {
+		case "VLC":
+			args = append(args, "--start-time="+strconv.Itoa(startSec))
+		case "MPC-HC":
+			args = append(args, "/start", strconv.Itoa(startSec*1000))
+		}
+	}
+	return args
 }

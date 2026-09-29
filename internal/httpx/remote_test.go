@@ -62,3 +62,25 @@ func TestFromThisPCAndHome(t *testing.T) {
 		}
 	}
 }
+
+// Устройство — адрес запроса; все адреса этого ПК — одно устройство «pc», IPv4 внутри IPv6 — как
+// IPv4 (спека этапа 8, раздел 4).
+func TestDevice(t *testing.T) {
+	setOwn(t, "127.0.0.1/8", "192.168.0.26/24")
+	cases := map[string]string{
+		"127.0.0.1:5000":             "pc",
+		"[::1]:5000":                 "pc",
+		"192.168.0.26:5000":          "pc",
+		"192.168.0.50:5000":          "192.168.0.50",
+		"[::ffff:192.168.0.50]:6000": "192.168.0.50",
+		"[fe80::1%eth0]:5000":        "fe80::1",
+		"не адрес":                   "",
+	}
+	for remote, want := range cases {
+		r := httptest.NewRequest("GET", "/", nil)
+		r.RemoteAddr = remote
+		if got := Device(r); got != want {
+			t.Errorf("%s: устройство %q, нужно %q", remote, got, want)
+		}
+	}
+}

@@ -57,6 +57,13 @@ export function clear(el) {
   el.replaceChildren();
 }
 
+// fill — заменить содержимое элемента; null, undefined и false пропускаются, массивы разворачиваются,
+// как у h() (replaceChildren напечатал бы «null» текстом).
+export function fill(el, ...kids) {
+  el.replaceChildren();
+  append(el, kids);
+}
+
 // icon — значок Material. С label — картинка с подписью для экранного диктора, иначе скрыт от него.
 export function icon(name, size = 20, label = '') {
   const svg = document.createElementNS(SVG, 'svg');

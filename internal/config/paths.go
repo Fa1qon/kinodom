@@ -20,6 +20,8 @@ type Paths struct {
 	EdgeProfile string // Data\edge-profile — профиль Edge для пропуска Cloudflare
 	Images      string // Data\images — постеры и логотипы
 	Torrent     string // Data\torrent — отметки кусков и узлы DHT
+	IPTV        string // Data\iptv — телепрограмма и база iptv-org (этап 8)
+	Logos       string // Data\logos — логотипы каналов: отдельно от постеров, их чистит каталог
 }
 
 // DefaultHome — KINODOM_HOME, иначе %ProgramData%\Kinodom.
@@ -45,12 +47,14 @@ func NewPaths(home string) Paths {
 		EdgeProfile: filepath.Join(data, "edge-profile"),
 		Images:      filepath.Join(data, "images"),
 		Torrent:     filepath.Join(data, "torrent"),
+		IPTV:        filepath.Join(data, "iptv"),
+		Logos:       filepath.Join(data, "logos"),
 	}
 }
 
 // Ensure создаёт папки, которых ещё нет.
 func (p Paths) Ensure() error {
-	for _, d := range []string{p.Home, p.Data, p.Logs, p.Images, p.Torrent} {
+	for _, d := range []string{p.Home, p.Data, p.Logs, p.Images, p.Torrent, p.IPTV, p.Logos} {
 		if err := os.MkdirAll(d, 0o755); err != nil {
 			return err
 		}
