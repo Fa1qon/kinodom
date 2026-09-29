@@ -61,11 +61,12 @@ type Group struct {
 
 // Lineup — состав каналов: снимок, который читает API.
 type Lineup struct {
-	Order        []*Channel          // федеральные по номеру, потом остальные — по категориям; только с источниками
-	ByKey        map[string]*Channel // все каналы, к которым привязан хоть один поток
-	Unrecognized []Group             // по убыванию живых, потом потоков
-	LocalShift   int
-	Built        time.Time
+	Order         []*Channel          // федеральные по номеру, потом остальные — по категориям; только с источниками
+	ByKey         map[string]*Channel // все каналы, к которым привязан хоть один поток
+	Unrecognized  []Group             // по убыванию живых, потом потоков
+	StreamChannel map[int64]string    // источник → ключ канала (только привязанные)
+	LocalShift    int
+	Built         time.Time
 }
 
 // epgIndex — справочник каналов телепрограммы для сопоставления.
@@ -238,7 +239,7 @@ type buildInput struct {
 
 // build — состав каналов (спека этапа 8, разделы 5.3–5.6 и 5.9).
 func build(in buildInput) *Lineup {
-	l := &Lineup{ByKey: map[string]*Channel{}, LocalShift: in.localShift, Built: in.now}
+	l := &Lineup{ByKey: map[string]*Channel{}, StreamChannel: map[int64]string{}, LocalShift: in.localShift, Built: in.now}
 	p := in.pool
 	groups := map[string]*Group{}
 	streams := make([]*Stream, 0, len(p.streams))
@@ -279,6 +280,7 @@ func build(in buildInput) *Lineup {
 			}
 			continue
 		}
+		l.StreamChannel[s.ID] = r.key
 		c := l.ByKey[r.key]
 		if c == nil {
 			c = newChannel(r.key, in.epg)
