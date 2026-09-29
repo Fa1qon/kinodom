@@ -58,17 +58,18 @@ type session struct {
 	lastSample   time.Time
 	speed        float64 // байт/с, сглаженная
 	prepared     map[int]*prepared
-	storedFiles  map[int]bool // файлы, которые хранятся и докачиваются (в том числе до перезапуска)
-	readers      map[int]int  // открытые потоки по файлам: такой файл «сейчас смотрят»
-	paused       map[int]bool // докачка на паузе: мало места (этап 6)
-	quiet        bool         // раздача молчит: не входит в раздаваемые (этап 6)
-	verifyQ      map[int]bool // куски, ждущие перепроверки по хэшу (и проверяемый сейчас)
-	raw          []byte       // содержимое .torrent, пока метаинфо не сохранена
-	metaSaved    bool         // метаинфо в базе
-	lastSeen     time.Time    // когда раздачу последний раз открывали или спрашивали о ней
-	focus        int          // файл, который качается сейчас (очередь загрузки, этап 7); −1 — никакой
-	wantAll      bool         // «Скачать» до получения списка файлов: скачать всё, когда он придёт
-	downloadErr  string       // отложенное «Скачать» не удалось (мало места)
+	storedFiles  map[int]bool      // файлы, которые хранятся и докачиваются (в том числе до перезапуска)
+	readers      map[int]int       // открытые потоки по файлам: такой файл «сейчас смотрят»
+	touched      map[int]time.Time // когда просмотр файла последний раз записан в базу
+	paused       map[int]bool      // докачка на паузе: мало места (этап 6)
+	quiet        bool              // раздача молчит: не входит в раздаваемые (этап 6)
+	verifyQ      map[int]bool      // куски, ждущие перепроверки по хэшу (и проверяемый сейчас)
+	raw          []byte            // содержимое .torrent, пока метаинфо не сохранена
+	metaSaved    bool              // метаинфо в базе
+	lastSeen     time.Time         // когда раздачу последний раз открывали или спрашивали о ней
+	focus        int               // файл, который качается сейчас (очередь загрузки, этап 7); −1 — никакой
+	wantAll      bool              // «Скачать» до получения списка файлов: скачать всё, когда он придёт
+	downloadErr  string            // отложенное «Скачать» не удалось (мало места)
 }
 
 // prepared — файл, выбранный для просмотра.
@@ -316,6 +317,10 @@ func (s *Service) Open(ctx context.Context, src Source) (metainfo.Hash, error) {
 	if err != nil {
 		return ih, err
 	}
+	if _, err := os.Stat(dir); err != nil && dir != s.eng.DownloadsDir() {
+		// Раздача качалась на диск, которого сейчас нет: понятный текст вместо ошибки хранилища.
+		return metainfo.Hash{}, fmt.Errorf("папка раздачи недоступна: %s — подключите диск", dir)
+	}
 	s.eng.SetTorrentDir(ih, dir)
 	var t *torrent.Torrent
 	if mi != nil {
@@ -342,7 +347,7 @@ func (s *Service) sessionFor(t *torrent.Torrent) *session {
 		return ss
 	}
 	ss := &session{t: t, prepared: map[int]*prepared{}, storedFiles: map[int]bool{}, readers: map[int]int{},
-		paused: map[int]bool{}, verifyQ: map[int]bool{}, lastSeen: s.now(), focus: -1}
+		touched: map[int]time.Time{}, paused: map[int]bool{}, verifyQ: map[int]bool{}, lastSeen: s.now(), focus: -1}
 	if s.uploadOff {
 		t.DisallowDataUpload()
 	}

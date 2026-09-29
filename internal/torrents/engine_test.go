@@ -1,7 +1,9 @@
 package torrents
 
 import (
+	"log/slog"
 	"net/http"
+	"strings"
 	"testing"
 	"time"
 
@@ -132,5 +134,21 @@ func TestKeepAliveBoundsRequestStalls(t *testing.T) {
 	}
 	if got := torrenttest.OfflineConfig(t.TempDir()).KeepAliveTimeout; got != 100*time.Millisecond {
 		t.Fatalf("keepalive тестовых клиентов %v", got)
+	}
+}
+
+// Шум anacrolix (на каждый кусок и каждого ушедшего зрителя) — на уровне Debug; остальное — как есть
+// (хвост этапа 2).
+func TestQuietLogLowersAnacrolixNoise(t *testing.T) {
+	var buf strings.Builder
+	log := slog.New(quietLog{slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelInfo})})
+	log.Warn("finished hashing piece", "piece", 18, "err", "short write")
+	log.Warn("error flushing file before promotion", "file", `C:\K\film.mkv.part`)
+	log.With("torrent", "Космос").Info("reader initial read failed", "err", "context canceled")
+	log.Warn("tracker announce failed", "err", "timeout")
+	out := buf.String()
+	if strings.Contains(out, "short write") || strings.Contains(out, "flushing") || strings.Contains(out, "initial read") ||
+		!strings.Contains(out, "tracker announce failed") {
+		t.Fatalf("журнал: %s", out)
 	}
 }
