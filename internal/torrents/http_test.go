@@ -113,3 +113,31 @@ func TestAPIErrors(t *testing.T) {
 		t.Errorf("состояние файла без prepare: %d", code)
 	}
 }
+
+// Плейлист файла для плеера на другом устройстве: название — имя файла, адрес потока — с хостом, по
+// которому спросили; файл сохраняется как «<название>.m3u8» (основная спека, раздел 14).
+func TestM3URoute(t *testing.T) {
+	s, srv := apiFixture(t)
+	mi, _ := torrenttest.MakeTorrent(t, t.TempDir(), "Сезон", 64<<10,
+		torrenttest.File{Path: "Серия 1.mkv", Size: 100_000}, torrenttest.File{Path: "Серия 2.mkv", Size: 100_000})
+	ih, err := s.Open(t.Context(), Source{Torrent: torrentBytes(t, mi)})
+	must(t, err)
+	tt, _ := s.Engine().Client().Torrent(ih)
+	i := fileIndex(t, tt, "Серия 2.mkv")
+	resp, err := http.Get(fmt.Sprintf("%s/m3u/%s/%d.m3u8", srv.URL, ih.HexString(), i))
+	must(t, err)
+	defer resp.Body.Close()
+	var body bytes.Buffer
+	body.ReadFrom(resp.Body)
+	want := fmt.Sprintf("#EXTM3U\n#EXTINF:-1,Серия 2\n%s/stream/%s/%d/", srv.URL, ih.HexString(), i)
+	if resp.StatusCode != 200 || !strings.HasPrefix(body.String(), want) ||
+		!strings.Contains(resp.Header.Get("Content-Disposition"), ".m3u8") {
+		t.Fatalf("%d %q %s", resp.StatusCode, body.String(), resp.Header.Get("Content-Disposition"))
+	}
+	resp2, err := http.Get(fmt.Sprintf("%s/m3u/%s/99.m3u8", srv.URL, ih.HexString()))
+	must(t, err)
+	resp2.Body.Close()
+	if resp2.StatusCode != http.StatusNotFound {
+		t.Fatalf("нет файла: %d", resp2.StatusCode)
+	}
+}

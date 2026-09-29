@@ -4,8 +4,10 @@ import (
 	"errors"
 	"net/http"
 	"strconv"
+	"strings"
 
 	"kinodom/internal/httpx"
+	"kinodom/internal/player"
 )
 
 // Router — то, что модулю нужно от HTTP-сервера; api.Server ему соответствует.
@@ -22,6 +24,7 @@ func (s *Service) Register(r Router) {
 	r.Handle("POST /api/v1/torrents/{hash}/files/{index}/prepare", s.Name(), http.HandlerFunc(s.handlePrepare))
 	r.Handle("GET /api/v1/torrents/{hash}/files/{index}", s.Name(), http.HandlerFunc(s.handleFileStatus))
 	r.Handle("GET /stream/{hash}/{index}/{name}", s.Name(), s.StreamHandler())
+	r.Handle("GET /m3u/{hash}/{file}", s.Name(), http.HandlerFunc(s.handleM3U))
 	// Удалять скачанное — только с этого ПК (спека, раздел 13).
 	r.HandleLocal("DELETE /api/v1/downloads/{hash}/{index}", s.Name(), http.HandlerFunc(s.handleDelete))
 }
@@ -106,6 +109,31 @@ func (s *Service) handleFileStatus(w http.ResponseWriter, r *http.Request) {
 	}
 	// Адрес — из Host запроса: клиент уже знает, как достучаться до сервера (спека, раздел 9).
 	httpx.WriteJSON(w, http.StatusOK, fileStatusResponse{FileStatus: fs, StreamURL: "http://" + r.Host + fs.StreamPath})
+}
+
+// handleM3U — плейлист файла для плеера на устройстве без Kinodom (основная спека, раздел 14):
+// /m3u/{hash}/{номер}.m3u8. Адрес потока — с хостом из запроса: устройство уже знает, как
+// достучаться до сервера.
+func (s *Service) handleM3U(w http.ResponseWriter, r *http.Request) {
+	ih, ok := parseHash(w, r)
+	if !ok {
+		return
+	}
+	num, ok := strings.CutSuffix(r.PathValue("file"), ".m3u8")
+	index, err := strconv.Atoi(num)
+	if !ok || err != nil || index < 0 {
+		httpx.WriteError(w, http.StatusBadRequest, "нужен адрес /m3u/{раздача}/{номер файла}.m3u8")
+		return
+	}
+	name, ok := s.fileName(ih, index)
+	if !ok {
+		httpx.WriteError(w, http.StatusNotFound, ErrNoSuchFile.Error())
+		return
+	}
+	title := strings.TrimSuffix(baseName(name), extOf(name))
+	w.Header().Set("Content-Type", "audio/x-mpegurl; charset=utf-8")
+	w.Header().Set("Content-Disposition", player.M3UDisposition(title))
+	w.Write(player.M3U(title, "http://"+r.Host+streamPath(ih, index, name)))
 }
 
 func parseIndex(w http.ResponseWriter, r *http.Request) (int, bool) {

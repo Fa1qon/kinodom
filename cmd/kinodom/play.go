@@ -12,15 +12,13 @@ import (
 	"net/http"
 	"net/url"
 	"os"
-	"os/exec"
 	"os/signal"
 	"strings"
 	"time"
 
-	"golang.org/x/sys/windows/registry"
-
 	"kinodom/internal/config"
 	"kinodom/internal/httpx"
+	"kinodom/internal/player"
 	"kinodom/internal/torrents"
 )
 
@@ -45,7 +43,7 @@ func cmdPlay(args []string, stdout, stderr io.Writer) int {
 	}
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
 	defer stop()
-	p := &player{
+	p := &playFlow{
 		base:   fmt.Sprintf("http://127.0.0.1:%d", boot.APIPort),
 		out:    stdout,
 		client: &http.Client{Timeout: 30 * time.Second},
@@ -70,8 +68,8 @@ func cmdPlay(args []string, stdout, stderr io.Writer) int {
 	return 0
 }
 
-// player ведёт раздачу через API сервера: открыть → список файлов → prepare → буфер.
-type player struct {
+// playFlow ведёт раздачу через API сервера: открыть → список файлов → prepare → буфер.
+type playFlow struct {
 	base   string
 	out    io.Writer
 	client *http.Client
@@ -79,7 +77,7 @@ type player struct {
 	limit  time.Duration // сколько всего ждать списка файлов и буфера
 }
 
-func (p *player) play(ctx context.Context, src string, fileIdx int) (string, error) {
+func (p *playFlow) play(ctx context.Context, src string, fileIdx int) (string, error) {
 	req := map[string]any{}
 	if strings.HasPrefix(src, "magnet:") {
 		req["magnet"] = src
@@ -125,7 +123,7 @@ func (p *player) play(ctx context.Context, src string, fileIdx int) (string, err
 	return p.waitBuffer(ctx, path)
 }
 
-func (p *player) waitTorrent(ctx context.Context, hash string) (torrents.TorrentStatus, error) {
+func (p *playFlow) waitTorrent(ctx context.Context, hash string) (torrents.TorrentStatus, error) {
 	deadline := time.Now().Add(p.limit)
 	for {
 		var st torrents.TorrentStatus
@@ -148,7 +146,7 @@ func (p *player) waitTorrent(ctx context.Context, hash string) (torrents.Torrent
 	}
 }
 
-func (p *player) waitBuffer(ctx context.Context, path string) (string, error) {
+func (p *playFlow) waitBuffer(ctx context.Context, path string) (string, error) {
 	deadline := time.Now().Add(p.limit)
 	for {
 		var fs struct {
@@ -197,7 +195,7 @@ func chooseFile(files []torrents.FileInfo, idx int) (torrents.FileInfo, error) {
 }
 
 // call — запрос к API сервера; ошибка API возвращается её текстом.
-func (p *player) call(ctx context.Context, method, path string, in, out any) error {
+func (p *playFlow) call(ctx context.Context, method, path string, in, out any) error {
 	var body io.Reader
 	if in != nil {
 		b, err := json.Marshal(in)
@@ -297,16 +295,12 @@ func lanURLs(streamURL string) []lanURL {
 	return out
 }
 
-// openVLC запускает VLC с потоком; путь к VLC — из реестра (его пишет установщик VLC).
+// openVLC запускает VLC с потоком. Поиск — пакет player: реестр (и 32-битный VLC) и стандартные
+// папки программ (хвост этапа 2: раньше — только 64-битный ключ реестра).
 func openVLC(streamURL string) error {
-	k, err := registry.OpenKey(registry.LOCAL_MACHINE, `SOFTWARE\VideoLAN\VLC`, registry.QUERY_VALUE)
+	p, err := player.Find("vlc")
 	if err != nil {
-		return errors.New("VLC не найден — установлен ли он?")
+		return err
 	}
-	defer k.Close()
-	exe, _, err := k.GetStringValue("")
-	if err != nil || exe == "" {
-		return errors.New("в реестре нет пути к VLC")
-	}
-	return exec.Command(exe, streamURL).Start()
+	return player.Launch(p, streamURL, "")
 }
