@@ -73,3 +73,23 @@ func TestNormTitle(t *testing.T) {
 		}
 	}
 }
+
+// Сезон и серии из заголовка — для «Других раздач» сериала (спека этапа 7, раздел 10.4).
+func TestParseTitleSeason(t *testing.T) {
+	cases := map[string]string{
+		"Динозавры / The Dinosaurs [S01] (2026) WEB-DL 720p от New-Team | P1":   "S01",
+		"Расследования авиакатастроф / Mayday [S01-24] (2003-2024) HDTVRip-AVC": "S01-24",
+		"Шоу [S02E01-08] (2025) WEB-DL": "S02E01-08",
+		"Космос: Пространство и время / Cosmos: A SpaceTime Odyssey (Билл Поуп / Bill Pope) / Сезон: 1 / Серии: 1-13 из 13 [2014, Документальный, WEB-DL 1080p]": "Сезон: 1, Серии: 1-13 из 13",
+		"Вселенная (1-5 серий из 5) / Universe (Poppy Pinnock) [2021, Документальный, DVB]":                                                                      "1-5 серий из 5",
+		"Дорога в космос (Серии 1-15 из 15) [2021, Исторический, IPTVRip]":                                                                                       "Серии 1-15 из 15",
+		"Большой куш. Бангкок [02x13 из 13] [Эфир от 27.09] (2026) HDTV 1080р от Files-x":                                                                        "02x13 из 13",
+		"Сезон охоты / Open Season (2006) BDRip": "",
+		"Матрица / The Matrix (1999) BDRip":      "",
+	}
+	for in, want := range cases {
+		if got := ParseTitle(in).Season; got != want {
+			t.Errorf("%q: сезон %q, нужно %q", in, got, want)
+		}
+	}
+}

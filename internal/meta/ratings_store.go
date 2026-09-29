@@ -236,3 +236,36 @@ func (s ratingStore) ratings(ctx context.Context, releases []string) (map[string
 	}
 	return out, nil
 }
+
+// releasesOf — раздачи, для которых найден фильм, по номерам фильмов; у каждого фильма — по порядку.
+func (s ratingStore) releasesOf(ctx context.Context, kpIDs []int) (map[int][]string, error) {
+	out := map[int][]string{}
+	for len(kpIDs) > 0 {
+		chunk := kpIDs[:min(len(kpIDs), 500)]
+		kpIDs = kpIDs[len(chunk):]
+		args := make([]any, len(chunk))
+		for i, id := range chunk {
+			args[i] = id
+		}
+		rows, err := s.db.R.QueryContext(ctx,
+			`SELECT release_id, kp_id FROM kp_releases WHERE kp_id IN (?`+strings.Repeat(", ?", len(chunk)-1)+`) ORDER BY release_id`, args...)
+		if err != nil {
+			return nil, err
+		}
+		for rows.Next() {
+			var release string
+			var id int
+			if err := rows.Scan(&release, &id); err != nil {
+				rows.Close()
+				return nil, err
+			}
+			out[id] = append(out[id], release)
+		}
+		err = rows.Err()
+		rows.Close()
+		if err != nil {
+			return nil, err
+		}
+	}
+	return out, nil
+}

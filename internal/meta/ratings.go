@@ -146,6 +146,12 @@ func (r *Ratings) For(ctx context.Context, releases []string) (map[string]Rating
 	return r.st.ratings(ctx, releases)
 }
 
+// Releases — раздачи («rutor:1077013»), для которых найден каждый из фильмов kpIDs: раздачи одного
+// фильма для карточки и «Других раздач» (спека этапа 7, раздел 10.4).
+func (r *Ratings) Releases(ctx context.Context, kpIDs []int) (map[int][]string, error) {
+	return r.st.releasesOf(ctx, kpIDs)
+}
+
 func (r *Ratings) Status(ctx context.Context) (RatingsStatus, error) {
 	n, err := r.st.queueLen(ctx)
 	r.mu.Lock()

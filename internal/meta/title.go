@@ -16,6 +16,7 @@ type Title struct {
 	Names   []string // все названия раздачи по порядку («Зверь», «Дикий драйв», «La fiera», …)
 	Year    int      // 0 — год не найден
 	Quality string   // «WEB-DL 1080p»; "" — не найдено
+	Season  string   // сезон и серии: «S01», «Сезон: 1, Серии: 1-13 из 13»; "" — нет (спека этапа 7, раздел 10.4)
 }
 
 var (
@@ -29,6 +30,9 @@ var (
 	reNameSep = regexp.MustCompile(`\s+[/\\]\s+`)
 	// Части, которые не названия: «Сезон: 1», «Серии: 1-13 из 13».
 	reSeasonPart = regexp.MustCompile(`(?i)^(сезон|серии|серия|season|episodes?)\b`)
+	// Сезон и серии: «[S01]», «[S01-24]», «[S02E01-08]», «[02x13 из 13]», «Сезон: 1», «(1-5 серий из 5)»,
+	// «Серии: 1-13 из 13».
+	reSeason = regexp.MustCompile(`(?i)\[S\d{1,2}(?:E\d{1,3})?(?:-S?E?\d{1,3})?\]|\[\d{1,2}x\d{1,3}(?:-\d{1,3})?(?:\s+из\s+\d+)?\]|(?:сезон|season)\s*:?\s*\d+(?:\s*-\s*\d+)?|\d+(?:\s*-\s*\d+)?\s+сери[йияю]\s+из\s+\d+|(?:серии|серия)\s*:?\s*\d+(?:\s*-\s*\d+)?(?:\s+из\s+\d+)?`)
 	// Качество в скобке Rutracker — часть с типом рипа.
 	reQuality = regexp.MustCompile(`(?i)\b(?:blu-?ray|bd-?remux|bd-?rip|hd-?dvd-?rip|hybridrip|web-?dl-?rip|web-?dl|web-?rip|hdtv-?rip|hdtv|hd-?rip|dvd-?rip|dvd-?\d|dvd|sat-?rip|dvb|iptv-?rip|tv-?rip|betacam-?rip|vhs-?rip|cam-?rip|dcp-?rip|remux)\b`)
 )
@@ -88,6 +92,11 @@ func ParseTitle(s string) Title {
 	if len(t.Names) > 0 {
 		t.Ru = t.Names[0]
 	}
+	var seasons []string
+	for _, m := range reSeason.FindAllString(s, -1) {
+		seasons = append(seasons, strings.Trim(m, "[]"))
+	}
+	t.Season = strings.Join(seasons, ", ")
 	return t
 }
 
