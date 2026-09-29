@@ -12,7 +12,14 @@ export function render(root, r, ctx) {
   const history = h('div', { class: 'history' });
   const trackers = h('div', { class: 'tags' });
   const table = h('div', { class: 'results' });
-  root.append(h('div', { class: 'screen' }, h('h1', null, q ? `Поиск: «${q}»` : 'Поиск'), history, trackers, table));
+  // На узком экране поля поиска в шапке нет — оно здесь.
+  const field = h('input', { name: 'q', value: q, placeholder: 'Поиск', 'aria-label': 'Поиск', autocomplete: 'off', enterkeyhint: 'search' });
+  const form = h('form', { class: 'search-here', role: 'search', onsubmit: (e) => {
+    e.preventDefault();
+    const v = field.value.trim();
+    if (v) ctx.go('#/search?q=' + encodeURIComponent(v));
+  } }, h('label', { class: 'field' }, icon('search'), field));
+  root.append(h('div', { class: 'screen' }, form, h('h1', null, q ? `Поиск: «${q}»` : 'Поиск'), history, trackers, table));
 
   const loadHistory = async () => {
     let items = [];
@@ -73,7 +80,7 @@ export function render(root, r, ctx) {
       const s = res.trackers[t];
       if (s === 'ok') return h('span', { class: 'tag ok-tag' }, icon('check', 18, 'Готово'), `${TRACKER[t]} · ${count[t] || 0}`);
       if (s === 'идёт') return h('span', { class: 'tag busy-tag' }, icon('progress_activity', 18), `${TRACKER[t]} · ищет…`);
-      return h('span', { class: 'tag warn-tag' }, icon('warning', 18), `${TRACKER[t]} · ${s}`);
+      return h('span', { class: 'tag warn-tag' }, icon('warning', 18), s.startsWith(TRACKER[t]) ? s : `${TRACKER[t]} · ${s}`);
     }));
     if (!res.results.length) {
       table.replaceChildren(res.complete ? h('p', { class: 'muted' }, 'Ничего не нашлось') : '');
