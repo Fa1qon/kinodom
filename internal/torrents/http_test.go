@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"kinodom/internal/player"
 	"kinodom/internal/torrents/torrenttest"
 )
 
@@ -139,5 +140,46 @@ func TestM3URoute(t *testing.T) {
 	resp2.Body.Close()
 	if resp2.StatusCode != http.StatusNotFound {
 		t.Fatalf("нет файла: %d", resp2.StatusCode)
+	}
+}
+
+// «Смотреть» через API: файл хранится и в фокусе; в ответе — поток, .m3u8 и, только запросу с этого
+// ПК, ссылка kinodom:// на 127.0.0.1 и порт API (спека этапа 7, раздел 5.5).
+func TestWatchRoute(t *testing.T) {
+	s := newTestService(t)
+	mux := http.NewServeMux()
+	s.Register(testRouter{mux})
+	mi, _ := torrenttest.MakeTorrent(t, t.TempDir(), "Сезон", 64<<10,
+		torrenttest.File{Path: "Серия 1.mkv", Size: 100_000}, torrenttest.File{Path: "Серия 2.mkv", Size: 100_000})
+	ih, err := s.Open(t.Context(), Source{Torrent: torrentBytes(t, mi)})
+	must(t, err)
+	tt, _ := s.Engine().Client().Torrent(ih)
+	i := fileIndex(t, tt, "Серия 2.mkv")
+	watch := func(remote string) watchResponse {
+		req := httptest.NewRequest("POST", fmt.Sprintf("/api/v1/torrents/%s/files/%d/watch", ih.HexString(), i), nil)
+		req.Host, req.RemoteAddr = "192.168.1.20:8090", remote
+		rec := httptest.NewRecorder()
+		mux.ServeHTTP(rec, req)
+		var out watchResponse
+		if rec.Code != 200 || json.Unmarshal(rec.Body.Bytes(), &out) != nil {
+			t.Fatalf("%d %s", rec.Code, rec.Body)
+		}
+		return out
+	}
+	out := watch("192.168.1.30:50000") // телефон
+	if !strings.HasPrefix(out.Play.URL, "http://192.168.1.20:8090/stream/"+ih.HexString()) || out.Play.Title != "Серия 2" ||
+		out.M3UURL != fmt.Sprintf("http://192.168.1.20:8090/m3u/%s/%d.m3u8", ih.HexString(), i) || out.LaunchURL != nil {
+		t.Fatalf("с телефона: %+v", out)
+	}
+	if st, _ := s.Status(ih); st.Focus != i {
+		t.Fatalf("фокус %d", st.Focus)
+	}
+	out = watch("127.0.0.1:50000") // браузер на этом ПК
+	if out.LaunchURL == nil {
+		t.Fatal("с этого ПК нет ссылки kinodom://")
+	}
+	stream, title, err := player.ParseLaunch(*out.LaunchURL, 8090)
+	if err != nil || !strings.HasPrefix(stream, "http://127.0.0.1:8090/stream/") || title != "Серия 2" {
+		t.Fatalf("kinodom://: %q, %q, %v", stream, title, err)
 	}
 }

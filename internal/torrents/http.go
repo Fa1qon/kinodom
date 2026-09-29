@@ -2,6 +2,8 @@ package torrents
 
 import (
 	"errors"
+	"fmt"
+	"net"
 	"net/http"
 	"strconv"
 	"strings"
@@ -25,6 +27,7 @@ func (s *Service) Register(r Router) {
 	r.Handle("GET /api/v1/torrents/{hash}/files/{index}", s.Name(), http.HandlerFunc(s.handleFileStatus))
 	r.Handle("GET /stream/{hash}/{index}/{name}", s.Name(), s.StreamHandler())
 	r.Handle("GET /m3u/{hash}/{file}", s.Name(), http.HandlerFunc(s.handleM3U))
+	r.Handle("POST /api/v1/torrents/{hash}/files/{index}/watch", s.Name(), http.HandlerFunc(s.handleWatch))
 	// Удалять скачанное — только с этого ПК (спека, раздел 13).
 	r.HandleLocal("DELETE /api/v1/downloads/{hash}/{index}", s.Name(), http.HandlerFunc(s.handleDelete))
 }
@@ -78,19 +81,11 @@ func (s *Service) handlePrepare(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	err := s.Prepare(r.Context(), ih, index)
-	switch {
-	case err == nil:
-		httpx.WriteJSON(w, http.StatusAccepted, struct{}{})
-	case errors.Is(err, ErrNotOpen), errors.Is(err, ErrNoSuchFile):
-		httpx.WriteError(w, http.StatusNotFound, err.Error())
-	case errors.Is(err, ErrNoInfo):
-		httpx.WriteError(w, http.StatusConflict, err.Error())
-	case errors.Is(err, ErrLowSpace):
-		httpx.WriteError(w, http.StatusInsufficientStorage, err.Error())
-	default:
-		httpx.WriteError(w, http.StatusInternalServerError, err.Error())
+	if err := s.Prepare(r.Context(), ih, index); err != nil {
+		writePrepareError(w, err)
+		return
 	}
+	httpx.WriteJSON(w, http.StatusAccepted, struct{}{})
 }
 
 func (s *Service) handleFileStatus(w http.ResponseWriter, r *http.Request) {
@@ -109,6 +104,65 @@ func (s *Service) handleFileStatus(w http.ResponseWriter, r *http.Request) {
 	}
 	// Адрес — из Host запроса: клиент уже знает, как достучаться до сервера (спека, раздел 9).
 	httpx.WriteJSON(w, http.StatusOK, fileStatusResponse{FileStatus: fs, StreamURL: "http://" + r.Host + fs.StreamPath})
+}
+
+// Play — то, что клиент открывает в плеере (основная спека, раздел 13): у всего воспроизводимого
+// одинаково.
+type Play struct {
+	URL   string `json:"url"`
+	Title string `json:"title"`
+	Kind  string `json:"kind"` // video
+}
+
+type watchResponse struct {
+	Play      Play    `json:"play"`
+	M3UURL    string  `json:"m3uUrl"`
+	LaunchURL *string `json:"launchUrl"` // только запросу с этого ПК: kinodom:// открывает плеер здесь
+}
+
+// handleWatch — «Смотреть» (спека этапа 7, раздел 5.5): файл хранится, фокус очереди — на нём, в
+// ответе — чем его открыть. Работает с любого устройства.
+func (s *Service) handleWatch(w http.ResponseWriter, r *http.Request) {
+	ih, ok := parseHash(w, r)
+	if !ok {
+		return
+	}
+	index, ok := parseIndex(w, r)
+	if !ok {
+		return
+	}
+	if err := s.Prepare(r.Context(), ih, index); err != nil {
+		writePrepareError(w, err)
+		return
+	}
+	name, _ := s.fileName(ih, index)
+	title := strings.TrimSuffix(baseName(name), extOf(name))
+	path := streamPath(ih, index, name)
+	out := watchResponse{Play: Play{URL: "http://" + r.Host + path, Title: title, Kind: "video"},
+		M3UURL: fmt.Sprintf("http://%s/m3u/%s/%d.m3u8", r.Host, ih.HexString(), index)}
+	if httpx.IsLoopback(r) {
+		// Ссылка для kinodom open — строго на 127.0.0.1 и порт API, как бы ни открыли пульт.
+		if _, port, err := net.SplitHostPort(r.Host); err == nil {
+			l := player.LaunchURL("http://127.0.0.1:"+port+path, title)
+			out.LaunchURL = &l
+		}
+	}
+	httpx.WriteJSON(w, http.StatusOK, out)
+}
+
+// writePrepareError — ответ на неудачный выбор файла: такой раздачи или файла нет, списка файлов
+// ещё нет, мало места.
+func writePrepareError(w http.ResponseWriter, err error) {
+	switch {
+	case errors.Is(err, ErrNotOpen), errors.Is(err, ErrNoSuchFile):
+		httpx.WriteError(w, http.StatusNotFound, err.Error())
+	case errors.Is(err, ErrNoInfo):
+		httpx.WriteError(w, http.StatusConflict, err.Error())
+	case errors.Is(err, ErrLowSpace):
+		httpx.WriteError(w, http.StatusInsufficientStorage, err.Error())
+	default:
+		httpx.WriteError(w, http.StatusInternalServerError, err.Error())
+	}
 }
 
 // handleM3U — плейлист файла для плеера на устройстве без Kinodom (основная спека, раздел 14):

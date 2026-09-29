@@ -92,3 +92,31 @@ func TestKinopoiskPosterIsFetchedLater(t *testing.T) {
 		t.Fatalf("постер Кинопоиска не догрузился: %q", es[0].ImageKey)
 	}
 }
+
+// magnetSource — трекер, который собирает magnet со своими трекерами (как t2).
+type magnetSource struct{ *fakeSource }
+
+func (m magnetSource) Magnet(ih string) string {
+	return "magnet:?xt=urn:btih:" + ih + "&tr=http://ann.example"
+}
+
+// Страницы раздачи ещё нет, а infohash известен из топа — «Скачать» не ждёт догрузки: magnet
+// собирает источник со своими трекерами, а у источника без них — голый magnet (DHT).
+func TestReleaseMagnetBeforeDetails(t *testing.T) {
+	rt, t1 := newFake("t2"), newFake("t1")
+	rt.top["2110"] = []source.Release{rel("t2", "7", "", 30, 1, "aa77")}
+	t1.top["12"] = []source.Release{rel("t1", "8", "Б (2020) WEB-DL", 20, 1, "bb88")}
+	c := New(Options{DB: openDB(t), Sources: []source.Source{magnetSource{rt}, t1},
+		Sections: []Section{{"t2", "2110", false}, {"t1", "12", false}}})
+	refresh(t, c, false)
+	for _, e := range list(t, c, ListOptions{}) {
+		r, err := c.Release(ctx, e.ID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		want := map[string]string{"7": "magnet:?xt=urn:btih:aa77&tr=http://ann.example", "8": "magnet:?xt=urn:btih:bb88"}[e.TopicID]
+		if r.Magnet != want {
+			t.Fatalf("раздача %s: %q", e.TopicID, r.Magnet)
+		}
+	}
+}
