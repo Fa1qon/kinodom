@@ -55,6 +55,7 @@ type session struct {
 	speed        float64 // байт/с, сглаженная
 	prepared     map[int]*prepared
 	storedFiles  map[int]bool // файлы, которые хранятся и докачиваются (в том числе до перезапуска)
+	readers      map[int]int  // открытые потоки по файлам: такой файл «сейчас смотрят»
 }
 
 // prepared — файл, выбранный для просмотра.
@@ -261,7 +262,7 @@ func (s *Service) sessionFor(t *torrent.Torrent) *session {
 	if ss, ok := s.sessions[ih]; ok && ss.t == t {
 		return ss
 	}
-	ss := &session{t: t, prepared: map[int]*prepared{}, storedFiles: map[int]bool{}}
+	ss := &session{t: t, prepared: map[int]*prepared{}, storedFiles: map[int]bool{}, readers: map[int]int{}}
 	s.sessions[ih] = ss
 	return ss
 }
