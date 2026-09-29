@@ -1,0 +1,119 @@
+/* Пульт Kinodom (спека этапа 7, раздел 6.4): прямые углы, рамки 1 px, без пастельных заливок и
+   теней; цвет — только со смыслом: жёлтый — «не готово» или «внимание», синий — «можно смотреть»,
+   зелёный — «готово» или «работает». */
+
+@font-face {
+  font-family: "Golos Text";
+  font-weight: 400 700;
+  font-display: swap;
+  src: url(fonts/golos-text-cyrillic.woff2) format("woff2");
+  unicode-range: U+0301, U+0400-045F, U+0490-0491, U+04B0-04B1, U+2116;
+}
+@font-face {
+  font-family: "Golos Text";
+  font-weight: 400 700;
+  font-display: swap;
+  src: url(fonts/golos-text-latin.woff2) format("woff2");
+  unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
+}
+@font-face {
+  font-family: Unbounded;
+  font-weight: 500 700;
+  font-display: swap;
+  src: url(fonts/unbounded-cyrillic.woff2) format("woff2");
+  unicode-range: U+0301, U+0400-045F, U+0490-0491, U+04B0-04B1, U+2116;
+}
+@font-face {
+  font-family: Unbounded;
+  font-weight: 500 700;
+  font-display: swap;
+  src: url(fonts/unbounded-latin.woff2) format("woff2");
+  unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
+}
+
+:root {
+  color-scheme: dark;
+  --bg: #0F1113;
+  --bg-raised: #14171A;
+  --bg-input: #0B0D0F;
+  --hover: #1C2024;
+  --line: #2C3136;
+  --line-strong: #3A4046;
+  --line-soft: #22272B;
+  --text: #ECE8E1;
+  --muted: #A39E95;
+  --dim: #8E897F;
+  --faint: #5E5A54;
+  --soft: #D9D4CB;
+  --prose: #D2CDC4;
+  --inv-bg: #ECE8E1;
+  --inv-text: #111315;
+  --yellow: #F0C040;
+  --blue: #3F8EF0;
+  --green: #4CC777;
+  --warn-bg: #1A1508;
+  --warn-line: #5F4B12;
+  --warn-text: #F3E2B0;
+  --track: #262B30;
+  --buffer: #4A4F55;
+  --skel: #23282D;
+  --font: "Golos Text", system-ui, sans-serif;
+  --display: Unbounded, "Golos Text", sans-serif;
+  --pad: 48px;
+}
+
+* { box-sizing: border-box; }
+html { background: var(--bg); }
+body { margin: 0; background: var(--bg); color: var(--text); font: 15px/1.4 var(--font); }
+a { color: var(--text); text-decoration: none; }
+a:hover { color: #FFFFFF; }
+button, input { font: inherit; color: inherit; }
+:focus-visible { outline: 2px solid var(--text); outline-offset: 2px; }
+.ic { display: inline-block; flex-shrink: 0; }
+.muted { color: var(--muted); }
+.grow { flex-grow: 1; }
+h1 { margin: 0; font: 700 28px/1.2 var(--display); }
+h2 { margin: 0; font-size: 20px; font-weight: 700; }
+
+/* Шапка */
+.top { height: 64px; display: flex; align-items: stretch; gap: 40px; padding: 0 var(--pad); border-bottom: 1px solid var(--line); }
+.logo { display: flex; align-items: center; font: 700 18px var(--display); letter-spacing: .08em; text-transform: uppercase; }
+.nav { display: flex; }
+.nav a, .nav .soon { display: flex; align-items: center; gap: 8px; padding: 0 16px; font-size: 15px; color: var(--muted); border-bottom: 2px solid transparent; margin-bottom: -1px; }
+.nav a.on { color: var(--text); border-bottom-color: var(--text); }
+.nav .soon { color: var(--faint); cursor: default; }
+.nav .ic { color: var(--yellow); }
+.search { display: flex; align-items: center; }
+.search .field { width: 380px; }
+.top .narrow-only { display: none; }
+
+/* Поля и кнопки */
+.field { display: flex; align-items: center; gap: 10px; height: 40px; padding: 0 12px; border: 1px solid var(--line-strong); background: var(--bg-input); color: var(--dim); }
+.field:focus-within { border-color: var(--text); }
+.field input { flex-grow: 1; min-width: 0; height: 100%; background: transparent; border: 0; outline: 0; color: var(--text); font-size: 15px; }
+.input { width: 100%; height: 40px; padding: 0 12px; background: var(--bg-input); border: 1px solid var(--line-strong); color: var(--text); }
+.input:focus { border-color: var(--text); outline: 0; }
+.input:disabled { color: var(--muted); border-color: var(--line-soft); }
+.btn { display: inline-flex; align-items: center; justify-content: center; gap: 8px; height: 40px; padding: 0 14px; border: 1px solid var(--line-strong); background: transparent; color: var(--text); font-weight: 600; font-size: 14px; white-space: nowrap; cursor: pointer; }
+.btn:hover { background: var(--hover); }
+.btn:disabled { color: var(--faint); border-color: var(--line-soft); background: transparent; cursor: default; }
+.btn.inv { background: var(--inv-bg); border-color: var(--inv-bg); color: var(--inv-text); }
+.btn.big { height: 48px; font-size: 15px; border-width: 2px; }
+.sq { display: inline-flex; align-items: center; justify-content: center; width: 40px; height: 40px; padding: 0; border: 1px solid var(--line-strong); background: transparent; color: var(--soft); cursor: pointer; }
+.sq:disabled { color: #4A4741; border-color: var(--line-soft); cursor: default; }
+.tag { display: inline-flex; align-items: center; gap: 4px; height: 28px; padding: 0 10px; border: 1px solid var(--line); font-size: 13px; color: var(--soft); white-space: nowrap; }
+.warn { display: flex; align-items: center; gap: 12px; padding: 10px 14px; border: 1px solid var(--warn-line); background: var(--warn-bg); font-size: 15px; color: var(--warn-text); }
+.warn .ic { color: var(--yellow); }
+.card { padding: 20px 22px; border: 1px solid var(--line); display: flex; flex-direction: column; gap: 16px; }
+.card .h { font-size: 17px; font-weight: 700; }
+.tabs { display: inline-flex; border: 1px solid var(--line-strong); }
+.tabs a { display: inline-flex; align-items: center; gap: 8px; height: 40px; padding: 0 18px; font-size: 15px; font-weight: 600; color: var(--muted); }
+.tabs a + a { border-left: 1px solid var(--line-strong); }
+.tabs a.on { background: var(--inv-bg); color: var(--inv-text); }
+.tabs a .ic { color: #8A6200; }
+.tabs a:not(.on) .ic { color: var(--yellow); }
+.empty { padding: 40px var(--pad); color: var(--muted); }
+.error { color: var(--yellow); font-size: 14px; }
+.skel { height: 12px; background: var(--skel); }
+.track { position: relative; height: 4px; background: var(--track); }
+.track > div { position: absolute; left: 0; top: 0; height: 100%; }

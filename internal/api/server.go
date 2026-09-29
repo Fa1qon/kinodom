@@ -48,7 +48,7 @@ func New(addr string, d Deps) *Server {
 		ready: make(chan struct{}),
 	}
 	s.mux.HandleFunc("GET /api/v1/status", s.handleStatus)
-	s.mux.Handle("GET /", http.FileServerFS(d.Web))
+	s.mux.Handle("GET /", pultHandler(d.Web))
 	return s
 }
 
