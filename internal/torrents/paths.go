@@ -15,6 +15,10 @@ import (
 // а Проводник и многие плееры спотыкаются о пути длиннее 260.
 const maxComponentRunes = 100
 
+// maxFilePathRunes — предел пути файла внутри папки раздачи: вместе с папкой загрузок (до ~25
+// символов) и папкой раздачи (до 111) полный путь остаётся короче 260 (хвост этапа 2).
+const maxFilePathRunes = 120
+
 var badChars = strings.NewReplacer("<", "_", ">", "_", ":", "_", `"`, "_", "/", "_", `\`, "_", "|", "_", "?", "_", "*", "_")
 
 // reservedNames — имена устройств Windows: файл с таким именем создать нельзя.
@@ -84,7 +88,15 @@ func filePath(o storage.FilePathMakerOpts) string {
 	for i, p := range parts {
 		out[i] = sanitizeComponent(p)
 	}
-	return filepath.Join(out...)
+	p := filepath.Join(out...)
+	if len(out) == 1 || utf8.RuneCountInString(p) <= maxFilePathRunes {
+		return p
+	}
+	// Глубокая вложенность: папки внутри раздачи сворачиваются в одну с коротким хэшем полного
+	// пути — файлы из разных папок не сольются, а из одной останутся рядом.
+	h := fnv.New32a()
+	h.Write([]byte(strings.Join(parts[:len(parts)-1], "/")))
+	return filepath.Join(fmt.Sprintf("~%08x", h.Sum32()), out[len(out)-1])
 }
 
 // enginePath — тот же полный путь к файлу, который вычислит файловое хранилище движка.
