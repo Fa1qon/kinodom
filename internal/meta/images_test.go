@@ -265,3 +265,31 @@ func TestPrivateAddressesAreNotFetched(t *testing.T) {
 		t.Fatalf("через прокси в домашней сети: %v", err)
 	}
 }
+
+// С прокси соединение идёт только с самим прокси, и проверка при соединении не видит, куда ведёт
+// редирект: хостинг из описания раздачи отвечает 302 на адрес домашней сети — туда не ходим
+// (финальное ревью 7a, M10).
+func TestRedirectToPrivateAddressIsNotFollowed(t *testing.T) {
+	pic := pngBytes(t)
+	var private atomic.Int32
+	proxy := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Hostname() == "192.168.1.1" {
+			private.Add(1)
+			w.Write(pic)
+			return
+		}
+		http.Redirect(w, r, "http://192.168.1.1/admin.png", http.StatusFound)
+	}))
+	t.Cleanup(proxy.Close)
+	px, _ := netx.NewProxy(proxy.URL)
+	im, err := NewImages(ImagesOptions{Dir: t.TempDir(), Rate: 1000, Proxy: px})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := im.Fetch(ctx, "http://images.example/p.png", ViaProxy); !errors.Is(err, ErrNoImage) {
+		t.Errorf("редирект в домашнюю сеть: %v", err)
+	}
+	if private.Load() != 0 {
+		t.Fatalf("до домашней сети дошло %d запросов", private.Load())
+	}
+}
