@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -61,7 +62,7 @@ func newImages(t *testing.T, proxy string) *Images {
 	if err != nil {
 		t.Fatal(err)
 	}
-	im, err := NewImages(ImagesOptions{Dir: t.TempDir(), Proxy: px, Rate: 1000})
+	im, err := NewImages(ImagesOptions{Dir: t.TempDir(), Proxy: px, Rate: 1000, AllowPrivate: true})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -196,5 +197,71 @@ func TestImagesSweep(t *testing.T) {
 	slices.Sort(want)
 	if !slices.Equal(names, want) {
 		t.Fatalf("остались %v", names)
+	}
+}
+
+// Одну картинку одновременно просят несколько раздач: у всех — ключ, ни одной ошибки «Access is
+// denied» от второго переименования (ревью 5b, M4).
+func TestConcurrentFetchOfSameImage(t *testing.T) {
+	var hits atomic.Int32
+	s := imageSite(t, &hits)
+	im := newImages(t, "")
+	var wg sync.WaitGroup
+	errs := make([]error, 8)
+	for i := range errs {
+		wg.Go(func() { _, errs[i] = im.Fetch(ctx, s.URL+"/p.png", Direct) })
+	}
+	wg.Wait()
+	if err := errors.Join(errs...); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// Адрес, где не картинка, не качается снова: заглушку хостинга просят сотни раздач (ревью 5b, M4).
+func TestNoImageAddressIsRemembered(t *testing.T) {
+	var hits atomic.Int32
+	s := imageSite(t, &hits)
+	im := newImages(t, "")
+	for range 3 {
+		if _, err := im.Fetch(ctx, s.URL+"/page", Direct); !errors.Is(err, ErrNoImage) {
+			t.Fatalf("заглушка: %v", err)
+		}
+	}
+	if hits.Load() != 1 {
+		t.Fatalf("заглушка скачана %d раз", hits.Load())
+	}
+}
+
+// Адреса этого ПК и домашней сети из описаний раздач не скачиваются — ни прямо, ни по имени,
+// которое указывает в домашнюю сеть; сам прокси в домашней сети при этом работает (ревью 5b, M10).
+func TestPrivateAddressesAreNotFetched(t *testing.T) {
+	var hits atomic.Int32
+	s := imageSite(t, &hits)
+	im, err := NewImages(ImagesOptions{Dir: t.TempDir(), Rate: 1000})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, port, _ := strings.Cut(strings.TrimPrefix(s.URL, "http://"), ":")
+	for _, u := range []string{"http://192.168.1.1/p.png", "http://localhost:" + port + "/p.png", "http://[::1]:" + port + "/p.png"} {
+		if _, err := im.Fetch(ctx, u, ViaProxy); !errors.Is(err, ErrNoImage) {
+			t.Errorf("%s: %v", u, err)
+		}
+	}
+	if _, err := im.Fetch(ctx, s.URL+"/p.png", Direct); !errors.Is(err, ErrNoImage) {
+		t.Errorf("127.0.0.1 напрямую: %v", err)
+	}
+	if hits.Load() != 0 {
+		t.Fatalf("до домашней сети дошло %d запросов", hits.Load())
+	}
+	pic := pngBytes(t)
+	proxy := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { w.Write(pic) }))
+	t.Cleanup(proxy.Close)
+	px, _ := netx.NewProxy(proxy.URL) // прокси — на этом ПК
+	viaProxy, err := NewImages(ImagesOptions{Dir: t.TempDir(), Rate: 1000, Proxy: px})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := viaProxy.Fetch(ctx, "http://images.example/p.png", ViaProxy); err != nil {
+		t.Fatalf("через прокси в домашней сети: %v", err)
 	}
 }
