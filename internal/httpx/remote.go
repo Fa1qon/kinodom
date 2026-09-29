@@ -81,3 +81,20 @@ func FromHome(r *http.Request) bool {
 	ip := remoteIP(r)
 	return ip != nil && (ip.IsLoopback() || ip.IsPrivate() || ip.IsLinkLocalUnicast() || isOwn(ip))
 }
+
+// DevicePC — устройство «этот ПК»: loopback и все его адреса в сети.
+const DevicePC = "pc"
+
+// Device — устройство, с которого пришёл запрос: у каждого своё избранное и своя история просмотров
+// (спека этапа 8, раздел 4). Это адрес без порта; все адреса этого ПК — одно устройство DevicePC.
+// "" — адрес не разобрать.
+func Device(r *http.Request) string {
+	ip := remoteIP(r)
+	switch {
+	case ip == nil:
+		return ""
+	case ip.IsLoopback() || isOwn(ip):
+		return DevicePC
+	}
+	return ip.String()
+}
