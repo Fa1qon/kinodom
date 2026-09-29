@@ -557,3 +557,29 @@ func TestCatalogTogether(t *testing.T) {
 		t.Fatal("логин из Options.Settings попал в базу")
 	}
 }
+
+// Папка загрузок на сетевом диске: торренты не запускаются, в «Состоянии» — почему (хвост этапа 2).
+func TestNetworkDownloadsDirIsExplained(t *testing.T) {
+	a := startAppRaw(t, Options{Home: t.TempDir(), ListenAddr: "127.0.0.1:0", Offline: true, DownloadsDir: `\\kinodom-nas\video`})
+	waitUntil(t, "проблема про сетевой диск", func() bool { return strings.Contains(problemsOf(t, a), "на сетевом диске") })
+}
+
+// Правила хранения — из настроек; запрет сна подключён к торрентам (спека, разделы 9 и 15).
+func TestStoragePolicyFromSettings(t *testing.T) {
+	home := t.TempDir()
+	db, err := store.Open(context.Background(), config.NewPaths(home).DB)
+	if err != nil {
+		t.Fatal(err)
+	}
+	db.SetSetting(context.Background(), "torrents.keepDays", "3")
+	db.SetSetting(context.Background(), "torrents.minFreeGB", "7")
+	db.Close()
+	a := startAppWith(t, Options{Home: home, ListenAddr: "127.0.0.1:0", Offline: true, DownloadsDir: t.TempDir()})
+	p := a.Torrents.Policy()
+	if p.KeepFor != 3*24*time.Hour || p.MinFree != 7<<30 || p.MaxSeeding != 10 {
+		t.Fatalf("правила %+v", p)
+	}
+	if a.Power == nil {
+		t.Fatal("запрет сна не создан")
+	}
+}
