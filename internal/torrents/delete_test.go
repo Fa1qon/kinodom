@@ -153,10 +153,13 @@ func TestDeleteWatchedFileIsRefused(t *testing.T) {
 	must(t, s.DeleteFile(ctx, ih, 0))
 }
 
-// Удалён последний хранимый файл — раздача уходит из движка, из базы и с диска.
+// Удалён последний хранимый файл — раздача уходит из движка, из базы и с диска, как только
+// о ней перестали спрашивать.
 func TestDeleteLastFileForgetsTorrent(t *testing.T) {
 	ctx := context.Background()
+	clk := &testClock{t: time.Now()}
 	s := newTestService(t)
+	s.now = clk.now
 	runService(t, s)
 	ih, tt, _ := seriesFixture(t, s)
 	one := fileIndex(t, tt, "Серия 1.mkv")
@@ -164,6 +167,12 @@ func TestDeleteLastFileForgetsTorrent(t *testing.T) {
 	waitComplete(t, tt.Files()[one])
 	dir := torrentDir(s.Engine().TorrentDir(ih), tt.Info(), ih)
 	must(t, s.DeleteFile(ctx, ih, one))
+	// Раздачу только что листали — сразу её не выгружают (ревью этапа 6, I2).
+	if _, ok := s.Engine().Client().Torrent(ih); !ok {
+		t.Fatal("раздача, о которой только что спрашивали, выгружена сразу")
+	}
+	clk.add(idleFor + time.Minute)
+	must(t, s.sweep(ctx))
 	if _, ok := s.Status(ih); ok {
 		t.Fatal("раздача осталась открытой")
 	}

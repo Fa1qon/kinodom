@@ -6,6 +6,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"runtime/debug"
 	"time"
 
 	"github.com/anacrolix/torrent"
@@ -43,6 +44,9 @@ func checkMarks(stateDir string) (recreated bool, err error) {
 // повреждение: здесь, в своей горутине, её можно перехватить (Tx.Check проверяет в отдельной
 // горутине, и паника там уронила бы процесс).
 func readAllMarks(p string) (err error) {
+	// Страница, указывающая за пределы отображённого файла, — сбой доступа к памяти, а не паника:
+	// без SetPanicOnFault recover его не ловит, и служба падала бы по кругу (ревью этапа 6).
+	defer debug.SetPanicOnFault(debug.SetPanicOnFault(true))
 	defer func() {
 		if r := recover(); r != nil {
 			err = fmt.Errorf("файл отметок повреждён: %v", r)
@@ -81,17 +85,41 @@ type pieceRef struct {
 func (s *Service) queueVerify(ss *session) {
 	t := ss.t
 	files := t.Files()
-	seen := map[int]bool{}
 	for i := range ss.storedFiles {
 		files[i].SetPriority(torrent.PiecePriorityNone)
 		for p := files[i].BeginPieceIndex(); p < files[i].EndPieceIndex(); p++ {
-			if !seen[p] {
-				seen[p] = true
+			if !ss.verifyQ[p] {
+				ss.verifyQ[p] = true
 				s.toVerify = append(s.toVerify, pieceRef{t.InfoHash(), p})
-				ss.verifying++
 			}
 		}
 	}
+}
+
+// verifyDone — раздача перепроверена: её хранимые файлы снова качаются (кроме стоящих на паузе).
+// Вызывать под s.mu.
+func (ss *session) verifyDone() {
+	files := ss.t.Files()
+	for i := range ss.storedFiles {
+		if !ss.paused[i] {
+			files[i].SetPriority(torrent.PiecePriorityNormal)
+		}
+	}
+}
+
+// queuedBytes — сколько байт файла лежит в кусках, ждущих перепроверки: до неё они числятся
+// нескачанными, хотя почти наверняка на диске. Вызывать под s.mu.
+func (ss *session) queuedBytes(f *torrent.File) int64 {
+	var n int64
+	info := ss.t.Info()
+	for i := f.BeginPieceIndex(); i < f.EndPieceIndex(); i++ {
+		if !ss.verifyQ[i] {
+			continue
+		}
+		p := info.Piece(i)
+		n += max(0, min(p.Offset()+p.Length(), f.Offset()+f.Length())-max(p.Offset(), f.Offset()))
+	}
+	return n
 }
 
 // verifySome перепроверяет куски из очереди не дольше budget: Run зовёт его раз в секунду, и
@@ -108,21 +136,20 @@ func (s *Service) verifySome(budget time.Duration) {
 		ref := s.toVerify[0]
 		s.toVerify = s.toVerify[1:]
 		ss := s.sessions[ref.ih]
-		s.mu.Unlock()
-		if ss == nil {
-			continue
+		if ss == nil || !ss.verifyQ[ref.index] {
+			s.mu.Unlock()
+			continue // раздачу убрали или кусок сняли с очереди (файл удалён)
 		}
+		s.verifyNow = ref // удаление и уборка не трогают этот кусок и не выгружают раздачу
+		s.mu.Unlock()
 		if err := ss.t.Piece(ref.index).VerifyData(); err != nil {
 			s.log.Warn("кусок не перепроверился", "hash", ref.ih.HexString(), "piece", ref.index, "err", err)
 		}
 		s.mu.Lock()
-		if ss.verifying--; ss.verifying == 0 {
-			files := ss.t.Files()
-			for i := range ss.storedFiles {
-				if !ss.paused[i] {
-					files[i].SetPriority(torrent.PiecePriorityNormal)
-				}
-			}
+		s.verifyNow = pieceRef{}
+		delete(ss.verifyQ, ref.index)
+		if len(ss.verifyQ) == 0 {
+			ss.verifyDone()
 		}
 		s.mu.Unlock()
 	}

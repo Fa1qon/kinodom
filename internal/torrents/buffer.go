@@ -41,8 +41,11 @@ func (s *Service) Prepare(ctx context.Context, ih metainfo.Hash, index int) erro
 	if err != nil || done {
 		return err
 	}
-	if err := s.ensureSpace(ctx, dir, need); err != nil {
-		return err
+	// Файлу не нужно ни байта (уже хранится или скачан) — ни очистки, ни отказа «мало места».
+	if need > 0 {
+		if err := s.ensureSpace(ctx, dir, need); err != nil {
+			return err
+		}
 	}
 	return s.prepare(ctx, ih, index)
 }
@@ -88,6 +91,7 @@ func (s *Service) prepare(ctx context.Context, ih metainfo.Hash, index int) erro
 	ss.prepared[index] = p
 	ss.stored = true
 	ss.storedFiles[index] = true
+	s.wakeLocked(ss) // «молчащую» раздачу выбрали снова — ей нужны пиры
 
 	// Хранимые файлы (и выбранные раньше, и восстановленные после перезапуска) докачиваются,
 	// остальные серии — только когда их откроют.

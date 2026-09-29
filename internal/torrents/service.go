@@ -59,7 +59,7 @@ type session struct {
 	readers      map[int]int  // открытые потоки по файлам: такой файл «сейчас смотрят»
 	paused       map[int]bool // докачка на паузе: мало места (этап 6)
 	quiet        bool         // раздача молчит: не входит в раздаваемые (этап 6)
-	verifying    int          // сколько её кусков ждут перепроверки по хэшу
+	verifyQ      map[int]bool // куски, ждущие перепроверки по хэшу (и проверяемый сейчас)
 	raw          []byte       // содержимое .torrent, пока метаинфо не сохранена
 	metaSaved    bool         // метаинфо в базе
 	lastSeen     time.Time    // когда раздачу последний раз открывали или спрашивали о ней
@@ -90,6 +90,7 @@ type Service struct {
 	keeper    *power.Keeper                   // запрет сна, пока идёт поток; nil — без него
 	upload    float64                         // лимит отдачи, выставленный сейчас (только Run)
 	toVerify  []pieceRef                      // куски на перепроверку: файл отметок был повреждён
+	verifyNow pieceRef                        // кусок, который проверяется прямо сейчас (без s.mu)
 	spaceMu   sync.Mutex                      // одна проверка места за раз (Prepare, уборка)
 	freeSpace func(dir string) (int64, error) // свободное место на диске папки; тесты подменяют
 
@@ -298,7 +299,7 @@ func (s *Service) sessionFor(t *torrent.Torrent) *session {
 		return ss
 	}
 	ss := &session{t: t, prepared: map[int]*prepared{}, storedFiles: map[int]bool{}, readers: map[int]int{},
-		paused: map[int]bool{}, lastSeen: s.now()}
+		paused: map[int]bool{}, verifyQ: map[int]bool{}, lastSeen: s.now()}
 	s.sessions[ih] = ss
 	return ss
 }
