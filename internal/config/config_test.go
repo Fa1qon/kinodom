@@ -32,6 +32,8 @@ func TestNewPathsLayout(t *testing.T) {
 		"EdgeProfile": {p.EdgeProfile, `C:\K\data\edge-profile`},
 		"Images":      {p.Images, `C:\K\data\images`},
 		"Torrent":     {p.Torrent, `C:\K\data\torrent`},
+		"IPTV":        {p.IPTV, `C:\K\data\iptv`},
+		"Logos":       {p.Logos, `C:\K\data\logos`},
 	}
 	for name, c := range cases {
 		if c[0] != c[1] {
@@ -45,7 +47,7 @@ func TestEnsureCreatesDirs(t *testing.T) {
 	if err := p.Ensure(); err != nil {
 		t.Fatal(err)
 	}
-	for _, d := range []string{p.Home, p.Data, p.Logs, p.Images, p.Torrent} {
+	for _, d := range []string{p.Home, p.Data, p.Logs, p.Images, p.Torrent, p.IPTV, p.Logos} {
 		if fi, err := os.Stat(d); err != nil || !fi.IsDir() {
 			t.Errorf("папка %s не создана: %v", d, err)
 		}
