@@ -185,3 +185,25 @@ func TestVariantsShowOpenedTwin(t *testing.T) {
 		t.Fatalf("на карточке %+v, в списке %d", cs, len(es))
 	}
 }
+
+// «Загрузки» различают сезоны и качество одного сериала: у раздачи по infohash — сезон и качество из
+// заголовка (финальное ревью 7b).
+func TestReleasesByHashSeasonAndQuality(t *testing.T) {
+	t1 := newFake("t1")
+	t1.top["12"] = []source.Release{
+		rel("t1", "1", "Динозавры / The Dinosaurs [S01] (2026) WEB-DL 1080p", 50, 1, "aa"),
+		rel("t1", "2", "Динозавры / The Dinosaurs [S02] (2027) WEB-DL 720p", 40, 1, "bb"),
+	}
+	c, _ := newCatalog(t, openDB(t), nil, t1)
+	refresh(t, c, true)
+	refs, err := c.ReleasesByHash(ctx, []string{"aa", "bb"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if r := refs["aa"]; r.Season != "S01" || r.Quality != "WEB-DL 1080p" {
+		t.Fatalf("первый сезон: %+v", r)
+	}
+	if r := refs["bb"]; r.Season != "S02" || r.Quality != "WEB-DL 720p" {
+		t.Fatalf("второй сезон: %+v", r)
+	}
+}

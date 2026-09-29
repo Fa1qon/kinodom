@@ -152,7 +152,7 @@ for (const [got, want] of checks) {
 func TestPultDownloadGroups(t *testing.T) {
 	node := lookNode(t)
 	script := `
-import { groupDownloads } from './views/downloads.js';
+import { groupDownloads, groupLine } from './views/downloads.js';
 const f = (hash, index, state, size, done, extra = {}) =>
   ({ hash, index, state, size, done, file: hash + index + '.mkv', release: null, canDelete: true, ...extra });
 const gs = groupDownloads([
@@ -171,6 +171,18 @@ const want = 'a 012 downloading 300 50 10 true | b 0 done 300 100 0 true | c 01 
 if (got !== want) {
   console.error(got, '≠', want);
   process.exitCode = 1;
+}
+// Вторая строка раздачи различает сезоны и качество одного сериала; у фильма из одного файла — файл.
+const lines = [
+  [groupLine({ release: { season: 'S01', quality: 'WEB-DL 1080p' }, items: [f('x', 0, 'done', 1, 1), f('x', 1, 'done', 1, 1)] }), 'S01 · WEB-DL 1080p · 2 серии'],
+  [groupLine({ release: { season: '', quality: 'BDRip' }, items: [f('y', 0, 'done', 1, 1, { file: 'film.mkv' })] }), 'BDRip · film.mkv'],
+  [groupLine({ release: null, items: [f('z', 0, 'done', 1, 1), f('z', 1, 'done', 1, 1), f('z', 2, 'done', 1, 1), f('z', 3, 'done', 1, 1), f('z', 4, 'done', 1, 1)] }), '5 серий'],
+];
+for (const [got, want] of lines) {
+  if (got !== want) {
+    console.error(JSON.stringify(got), '≠', JSON.stringify(want));
+    process.exitCode = 1;
+  }
 }
 `
 	cmd := exec.Command(node, "--input-type=module", "--no-warnings", "-e", script)

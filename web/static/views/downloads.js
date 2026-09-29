@@ -65,7 +65,7 @@ export function render(root, r, ctx) {
       thumb,
       h('div', { class: 'dl-name' },
         g.release ? h('a', { class: 'strong', href: `#/release/${g.release.id}`, title: full, 'data-key': `open-${g.hash}` }, title) : h('span', { class: 'strong' }, title),
-        h('span', { class: 'muted small ellipsis', title: single ? d0.file : null }, single ? d0.file : plural(g.items.length, 'серия', 'серии', 'серий'))),
+        h('span', { class: 'muted small ellipsis', title: single ? d0.file : null }, groupLine(g))),
       stateCell(g.state, lead.readiness, g.percent),
       h('div', { class: 'dl-size' }, size(g.size), g.speed ? h('div', { class: 'muted small' }, speed(g.speed)) : null),
       h('div', { class: 'muted small dl-when' }, when(g.items), errorOf(key)),
@@ -194,6 +194,15 @@ export function groupDownloads(items) {
       canDelete: g.items.some((d) => d.canDelete),
     };
   });
+}
+
+// groupLine — вторая строка раздачи: сезон, качество и число серий («S01 · WEB-DL 1080p · 8 серий»), у
+// фильма из одного файла — имя файла. Сезон и качество различают раздачи одного сериала: без них два
+// сезона выглядели одинаково, а корзина удаляет раздачу целиком (финальное ревью 7b).
+export function groupLine(g) {
+  const r = g.release || {};
+  const tail = g.items.length === 1 ? g.items[0].file : plural(g.items.length, 'серия', 'серии', 'серий');
+  return [r.season, r.quality, tail].filter(Boolean).join(' · ');
 }
 
 // shortTitle — название раздачи без переводов, года и качества: «Динозавры / The Dinosaurs [S01]
