@@ -94,6 +94,8 @@ func (c *Catalog) runSearch(ctx context.Context, cancel context.CancelFunc, run 
 			switch {
 			case errors.Is(err, context.DeadlineExceeded) && len(rs) == 0:
 				err = errors.New("не ответил за 30 с")
+			case errors.Is(err, context.Canceled) && len(rs) == 0:
+				err = errors.New("каталог остановлен") // модуль остановили посреди поиска (ревью 5c)
 			case err != nil && !errors.As(err, &partial):
 				rs = nil
 			}
