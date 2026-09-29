@@ -57,6 +57,8 @@ type session struct {
 	lastBytes    int64
 	lastSample   time.Time
 	speed        float64 // байт/с, сглаженная
+	upSpeed      float64 // отдача, байт/с, сглаженная
+	lastUp       int64
 	prepared     map[int]*prepared
 	storedFiles  map[int]bool      // файлы, которые хранятся и докачиваются (в том числе до перезапуска)
 	readers      map[int]int       // открытые потоки по файлам: такой файл «сейчас смотрят»
@@ -103,6 +105,7 @@ type Service struct {
 	verifyNow  pieceRef                        // кусок, который проверяется прямо сейчас (без s.mu)
 	spaceMu    sync.Mutex                      // одна проверка места за раз (Prepare, уборка)
 	freeSpace  func(dir string) (int64, error) // свободное место на диске папки; тесты подменяют
+	totalSpace func(dir string) (int64, error) // размер диска папки
 
 	activeStreams atomic.Int32
 }
@@ -119,6 +122,7 @@ func NewService(eng *Engine, reg *Registry, log *slog.Logger) *Service {
 		policy:       Policy{KeepFor: defaultKeepFor, MinFree: defaultMinFree, MaxSeeding: defaultMaxSeeding},
 		upload:       -1,
 		freeSpace:    diskFree,
+		totalSpace:   diskTotal,
 	}
 }
 
@@ -449,13 +453,14 @@ func (s *Service) sample() {
 	for ih, ss := range s.sessions {
 		st := ss.t.Stats()
 		// Полезные байты: без повторов, отброшенных кусков и служебного (хвост этапа 2).
-		b := st.BytesReadUsefulData.Int64()
+		b, up := st.BytesReadUsefulData.Int64(), st.BytesWrittenData.Int64()
 		if !ss.lastSample.IsZero() {
 			if dt := now.Sub(ss.lastSample).Seconds(); dt > 0 {
 				ss.speed = 0.5*ss.speed + 0.5*float64(b-ss.lastBytes)/dt
+				ss.upSpeed = 0.5*ss.upSpeed + 0.5*float64(up-ss.lastUp)/dt
 			}
 		}
-		ss.lastBytes, ss.lastSample = b, now
+		ss.lastBytes, ss.lastUp, ss.lastSample = b, up, now
 		s.observe(ss, now)
 		if !ss.metaSaved && ss.t.Info() != nil {
 			unsaved = append(unsaved, ss)

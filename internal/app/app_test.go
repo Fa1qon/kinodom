@@ -933,3 +933,51 @@ func TestDownloadAndWatchThroughAPI(t *testing.T) {
 		t.Fatalf("нет раздачи: %d", resp.StatusCode)
 	}
 }
+
+// Трекер по его проблемам: не ответил — «не отвечает», раздел, форум, разбор или вход Rutracker —
+// «частично»; «не отвечает» хуже (спека этапа 7, раздел 5.7).
+func TestTrackerStateFromProblems(t *testing.T) {
+	ps := []store.Problem{
+		{ID: "rutracker.login", Text: "Rutracker: капча — вход не выполнен"},
+		{ID: "catalog.rutor:12", Text: "Rutor: в разделе «Научно-популярные» пришло 3 раздачи вместо 100"},
+		{ID: "catalog.rutor", Text: "Rutor недоступен"},
+		{ID: "proxy.invalid", Text: "Прокси не работает"},
+	}
+	if st := trackerOf(ps, "rutracker"); st.State != "warn" || !strings.Contains(st.Text, "капча") {
+		t.Fatalf("Rutracker: %+v", st)
+	}
+	if st := trackerOf(ps, "rutor"); st.State != "down" || st.Text != "Rutor недоступен" {
+		t.Fatalf("Rutor: %+v", st)
+	}
+	if st := trackerOf(ps[3:], "rutor"); st.State != "ok" {
+		t.Fatalf("без проблем трекера: %+v", st)
+	}
+}
+
+// «Состояние» через API: с этого ПК, оба трекера (у Rutracker — вход), ключ Кинопоиска, место в
+// папке загрузок, потоки.
+func TestStatusThroughAPI(t *testing.T) {
+	a := startApp(t)
+	var st struct {
+		Local    bool `json:"local"`
+		Trackers map[string]struct {
+			State string               `json:"state"`
+			Login *rutracker.LoginInfo `json:"login"`
+		} `json:"trackers"`
+		Kinopoisk struct {
+			KeySet bool `json:"keySet"`
+		} `json:"kinopoisk"`
+		Disk    torrents.DiskInfo `json:"disk"`
+		Streams struct {
+			Count int `json:"count"`
+		} `json:"streams"`
+	}
+	getJSON(t, "http://"+a.API.Addr()+"/api/v1/status", &st)
+	if rt, ok := st.Trackers["rutracker"]; !st.Local || !ok || rt.Login == nil || rt.Login.State != rutracker.LoginNone || st.Trackers["rutor"].State == "" {
+		t.Fatalf("трекеры: %+v", st.Trackers)
+	}
+	if st.Kinopoisk.KeySet || st.Disk.FreeBytes <= 0 || st.Disk.TotalBytes < st.Disk.FreeBytes || st.Disk.MinFreeBytes != 20<<30 ||
+		st.Streams.Count != 0 {
+		t.Fatalf("состояние: %+v", st)
+	}
+}
