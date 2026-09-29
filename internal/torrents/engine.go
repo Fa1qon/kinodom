@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 
@@ -54,6 +55,7 @@ func NewEngine(c Config) (*Engine, error) {
 	if c.Log == nil {
 		c.Log = slog.Default()
 	}
+	c.Log = slog.New(quietLog{c.Log.Handler()}) // шум anacrolix — на Debug (хвост этапа 2)
 	if err := CheckDownloadsDir(c.DownloadsDir); err != nil {
 		return nil, err
 	}
@@ -155,6 +157,40 @@ func buildClientConfig(c Config, st storage.ClientImpl, up *rate.Limiter) (*torr
 		// поэтому TrackerListenPacket не трогаем — они идут напрямую.
 	}
 	return cfg, nil
+}
+
+// noise — сообщения anacrolix, которые идут на каждый кусок или на каждого ушедшего зрителя: в
+// журнале службы они бесполезны и забивают его (хвост этапа 2).
+var noise = []string{"short write", "error flushing file before promotion", "initial read failed"}
+
+// quietLog — журнал движка, где шум anacrolix опущен до Debug.
+type quietLog struct{ slog.Handler }
+
+func (h quietLog) Handle(ctx context.Context, r slog.Record) error {
+	if r.Level > slog.LevelDebug && isNoise(r) {
+		r.Level = slog.LevelDebug
+		if !h.Handler.Enabled(ctx, r.Level) {
+			return nil
+		}
+	}
+	return h.Handler.Handle(ctx, r)
+}
+
+func (h quietLog) WithAttrs(as []slog.Attr) slog.Handler { return quietLog{h.Handler.WithAttrs(as)} }
+func (h quietLog) WithGroup(name string) slog.Handler    { return quietLog{h.Handler.WithGroup(name)} }
+
+func isNoise(r slog.Record) bool {
+	text := r.Message
+	r.Attrs(func(a slog.Attr) bool {
+		text += " " + a.Value.String()
+		return true
+	})
+	for _, n := range noise {
+		if strings.Contains(text, n) {
+			return true
+		}
+	}
+	return false
 }
 
 func limitOf(bytesPerSec float64) rate.Limit {

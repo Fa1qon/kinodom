@@ -2,6 +2,8 @@ package torrents
 
 import (
 	"context"
+	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -171,5 +173,38 @@ func waitFor(t *testing.T, what string, cond func() bool) {
 			t.Fatalf("не дождались: %s", what)
 		}
 		time.Sleep(20 * time.Millisecond)
+	}
+}
+
+// Файл, который смотрят, качается вне очереди: иначе у второго телевизора кончилась бы подкачка;
+// зритель ушёл — файл снова ждёт очереди.
+func TestWatchedFileDownloadsOutsideQueue(t *testing.T) {
+	ctx := context.Background()
+	s := newTestService(t)
+	ih, ep := archive(t, s)
+	must(t, s.Download(ctx, ih, nil))
+	tt, _ := s.Engine().Client().Torrent(ih)
+	closeReader := s.openReader(ih, ep[2])
+	if p := tt.Files()[ep[2]].Priority(); p != torrent.PiecePriorityNormal {
+		t.Fatalf("серию смотрят, а она ждёт очереди: %v", p)
+	}
+	closeReader()
+	if p := tt.Files()[ep[2]].Priority(); p != torrent.PiecePriorityNone {
+		t.Fatalf("зритель ушёл, а серия качается вне очереди: %v", p)
+	}
+}
+
+// Раздача качалась на диск, которого сейчас нет: понятный текст, а не ошибка хранилища (ревью этапа 6).
+func TestOpenFromMissingDiskIsExplained(t *testing.T) {
+	ctx := context.Background()
+	s := newTestService(t)
+	mi, _ := torrenttest.MakeTorrent(t, t.TempDir(), "film.mkv", 64<<10, torrenttest.File{Path: "film.mkv", Size: 100_000})
+	gone := filepath.Join(t.TempDir(), "usb")
+	if _, err := s.reg.Remember(ctx, mi.HashInfoBytes(), "torrent-file", gone); err != nil {
+		t.Fatal(err)
+	}
+	_, err := s.Open(ctx, Source{Torrent: torrentBytes(t, mi)})
+	if err == nil || !strings.Contains(err.Error(), "папка раздачи недоступна") {
+		t.Fatalf("ошибка %v", err)
 	}
 }
