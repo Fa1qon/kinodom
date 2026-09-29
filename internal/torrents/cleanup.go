@@ -78,8 +78,8 @@ func (s *Service) sweep(ctx context.Context) error {
 	defer s.mu.Unlock()
 	now := s.now()
 	for ih, ss := range s.sessions {
-		if len(ss.storedFiles) > 0 || !s.idle(ih, ss) {
-			continue
+		if len(ss.storedFiles) > 0 || ss.wantAll || !s.idle(ih, ss) {
+			continue // «Скачать» ждёт списка файлов — раздача нужна, даже если о ней не спрашивают
 		}
 		dir := ""
 		if info := ss.t.Info(); info != nil {

@@ -100,7 +100,11 @@ func (p *player) play(ctx context.Context, src string, fileIdx int) (string, err
 	if err != nil {
 		return "", err
 	}
-	f, err := chooseFile(st.Files, fileIdx)
+	infos := make([]torrents.FileInfo, len(st.Files))
+	for i, x := range st.Files {
+		infos[i] = x.FileInfo
+	}
+	f, err := chooseFile(infos, fileIdx)
 	if err != nil {
 		return "", err
 	}

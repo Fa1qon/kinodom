@@ -86,7 +86,7 @@ func (s *Service) queueVerify(ss *session) {
 	t := ss.t
 	files := t.Files()
 	for i := range ss.storedFiles {
-		files[i].SetPriority(torrent.PiecePriorityNone)
+		files[i].SetPriority(torrent.PiecePriorityNone) // до конца перепроверки (applyLocked)
 		for p := files[i].BeginPieceIndex(); p < files[i].EndPieceIndex(); p++ {
 			if !ss.verifyQ[p] {
 				ss.verifyQ[p] = true
@@ -96,15 +96,10 @@ func (s *Service) queueVerify(ss *session) {
 	}
 }
 
-// verifyDone — раздача перепроверена: её хранимые файлы снова качаются (кроме стоящих на паузе).
-// Вызывать под s.mu.
-func (ss *session) verifyDone() {
-	files := ss.t.Files()
-	for i := range ss.storedFiles {
-		if !ss.paused[i] {
-			files[i].SetPriority(torrent.PiecePriorityNormal)
-		}
-	}
+// verifyDone — раздача перепроверена: её хранимые файлы снова качаются по очереди (кроме стоящих
+// на паузе). Вызывать под s.mu.
+func (s *Service) verifyDone(ss *session) {
+	s.applyLocked(ss)
 }
 
 // queuedBytes — сколько байт файла лежит в кусках, ждущих перепроверки: до неё они числятся
@@ -149,7 +144,7 @@ func (s *Service) verifySome(budget time.Duration) {
 		s.verifyNow = pieceRef{}
 		delete(ss.verifyQ, ref.index)
 		if len(ss.verifyQ) == 0 {
-			ss.verifyDone()
+			s.verifyDone(ss)
 		}
 		s.mu.Unlock()
 	}

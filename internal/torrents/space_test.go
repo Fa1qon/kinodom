@@ -145,8 +145,8 @@ func TestLowSpacePausesBackgroundDownloads(t *testing.T) {
 	ctx := context.Background()
 	s := newTestService(t)
 	ih, ep := archive(t, s)
-	must(t, s.Prepare(ctx, ih, ep[0]))
 	must(t, s.Prepare(ctx, ih, ep[1]))
+	must(t, s.Prepare(ctx, ih, ep[0])) // фокус очереди — на первой серии
 	s.mu.Lock()
 	s.sessions[ih].readers[ep[1]]++ // вторую серию смотрят
 	s.mu.Unlock()
@@ -242,10 +242,19 @@ func TestConcurrentPrepareKeepsBoth(t *testing.T) {
 	wg.Wait()
 	must(t, errors.Join(errs...))
 	tt, _ := s.Engine().Client().Torrent(ih)
+	// Целиком качается одна (фокус очереди), но буфер — начало файла — набирают обе: второй
+	// телевизор не ждёт, пока докачается чужая серия (этап 7).
+	normal := 0
 	for _, i := range ep[:2] {
-		if p := tt.Files()[i].Priority(); p != torrent.PiecePriorityNormal {
-			t.Fatalf("серия %d: приоритет %v", i, p)
+		if tt.Files()[i].Priority() == torrent.PiecePriorityNormal {
+			normal++
 		}
+		if p := tt.PieceState(tt.Files()[i].BeginPieceIndex()).Priority; p < torrent.PiecePriorityHigh {
+			t.Fatalf("серия %d: начало файла не в приоритете (%v)", i, p)
+		}
+	}
+	if normal != 1 {
+		t.Fatalf("целиком качаются %d серий, а не одна", normal)
 	}
 	if got := stored(t, s, ih); !slices.Equal(got, sorted(ep[0], ep[1])) {
 		t.Fatalf("хранятся %v", got)

@@ -30,10 +30,11 @@ func TestPlayFlowAgainstFakeServer(t *testing.T) {
 	})
 	mux.HandleFunc("GET /api/v1/torrents/{hash}", func(w http.ResponseWriter, r *http.Request) {
 		statusCalls++
-		st := torrents.TorrentStatus{Hash: hash, State: torrents.StateConnecting, Files: []torrents.FileInfo{}}
+		st := torrents.TorrentStatus{Hash: hash, State: torrents.StateConnecting, Files: []torrents.FileProgress{}}
 		if statusCalls > 1 {
 			st.State, st.Peers = torrents.StateReady, 3
-			st.Files = []torrents.FileInfo{{Index: 2, Name: "Серия 1.mkv", Size: 1}, {Index: 0, Name: "Серия 2.mkv", Size: 1}}
+			st.Files = []torrents.FileProgress{{FileInfo: torrents.FileInfo{Index: 2, Name: "Серия 1.mkv", Size: 1}},
+				{FileInfo: torrents.FileInfo{Index: 0, Name: "Серия 2.mkv", Size: 1}}}
 		}
 		httpx.WriteJSON(w, 200, st)
 	})

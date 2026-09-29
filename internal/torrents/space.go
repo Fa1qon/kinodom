@@ -10,7 +10,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/anacrolix/torrent"
 	"github.com/anacrolix/torrent/metainfo"
 )
 
@@ -214,15 +213,18 @@ func (s *Service) pauseDownloads(vol string, pause bool) {
 			continue
 		}
 		files := ss.t.Files()
+		changed := false
 		for i := range ss.storedFiles {
 			switch {
 			case pause && !ss.paused[i] && ss.readers[i] == 0 && files[i].BytesCompleted() < files[i].Length():
-				files[i].SetPriority(torrent.PiecePriorityNone)
-				ss.paused[i] = true
+				ss.paused[i], changed = true, true
 			case !pause && ss.paused[i]:
-				files[i].SetPriority(torrent.PiecePriorityNormal)
 				delete(ss.paused, i)
+				changed = true
 			}
+		}
+		if changed {
+			s.applyLocked(ss)
 		}
 	}
 }
