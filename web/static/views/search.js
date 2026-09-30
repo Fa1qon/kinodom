@@ -2,6 +2,7 @@
 // 5.4 и 6.3).
 import { h, icon, size, poll, keepFocus, offWarn } from '../ui.js';
 import { get, del } from '../api.js';
+import { poster } from './catalog.js';
 
 const TRACKER = { rutor: 'Rutor', rutracker: 'Rutracker' };
 const SEARCH_FOR = 30000; // поиск сервер держит не дольше 30 с
@@ -61,7 +62,8 @@ export function render(root, r, ctx) {
     };
   }
 
-  // Первый запрос пишет историю, повторы опроса — с poll=1 (спека этапа 7, раздел 5.4).
+  // Первый запрос пишет историю, повторы опроса — с poll=1 (спека этапа 7, раздел 5.4). Опрос идёт и
+  // после конца поиска, пока у найденного догружаются страницы с постерами (keepPolling).
   const started = Date.now();
   let first = true;
   const search = poll(async () => {
@@ -77,7 +79,7 @@ export function render(root, r, ctx) {
     if (first) loadHistory();
     first = false;
     keepFocus(table, () => draw(res));
-    if (res.complete || Date.now() - started > SEARCH_FOR) search.stop();
+    if (!keepPolling(res, started, Date.now())) search.stop();
   }, 1000);
 
   function draw(res) {
@@ -87,8 +89,9 @@ export function render(root, r, ctx) {
       return;
     }
     table.replaceChildren(
-      h('div', { class: 'res-row res-head', 'aria-hidden': 'true' }, h('span', null, 'Раздача'), h('span', null, 'Трекер'), h('span', null, 'Качество'), h('span', null, 'Формат'), h('span', null, 'Размер'), h('span', null, 'Раздают')),
+      h('div', { class: 'res-row res-head', 'aria-hidden': 'true' }, h('span', null, ''), h('span', null, 'Раздача'), h('span', null, 'Трекер'), h('span', null, 'Качество'), h('span', null, 'Формат'), h('span', null, 'Размер'), h('span', null, 'Раздают')),
       ...res.results.map((e) => h('a', { class: 'res-row', href: `#/release/${e.id}`, 'data-key': `res-${e.id}` },
+        poster(e, e.name || e.title, 'poster thumb'),
         h('span', { class: 'res-title' }, h('span', { class: 'strong ellipsis' }, e.name || e.title), h('span', { class: 'muted small ellipsis' }, e.title)),
         h('span', { class: 'muted' }, TRACKER[e.tracker] || e.tracker),
         h('span', { class: 'muted' }, e.quality || ''),
@@ -102,6 +105,17 @@ export function render(root, r, ctx) {
     search.stop();
     ctx.listeners.delete(onStatus);
   };
+}
+
+// POSTERS_FOR — после конца поиска постеры найденного ждём не дольше 2 минут от начала (их страницы
+// догружаются по одной в секунду на трекер).
+const POSTERS_FOR = 120000;
+
+// keepPolling — опрашивать ли поиск дальше: трекеры ещё ищут (до 30 с) или у найденного догружаются
+// страницы с постерами (до 2 минут от начала) — замечание № 10 этапа 11b.
+export function keepPolling(res, startedAt, now) {
+  if (!res.complete) return now - startedAt <= SEARCH_FOR;
+  return now - startedAt <= POSTERS_FOR && res.results.some((e) => e.detailsPending);
 }
 
 // trackerTags — состояние каждого трекера в поиске: сколько найдено, ищет, текст ошибки. Им же
