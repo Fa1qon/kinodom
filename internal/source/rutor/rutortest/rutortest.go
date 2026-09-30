@@ -35,7 +35,7 @@ var ListPages = []string{
 
 // Server — фейковый Rutor на образцах: Mirror — сайт (зеркало), Download — d.rutor.info.
 //
-//	/browse/0/12/0/2               → browse_12_sort2.html (другие категории — browse_1_sort2.html)
+//	/browse/0/12/0/2               → browse_12_sort2.html, /browse/1/12/0/2 — browse_12_sort2_page2.html (другие — browse_1_sort2.html)
 //	/search/0/{кат}/100/2/{запрос} → 1 и 5 — search_all_matrix.html, 12 — search_cat12_discovery.html, иначе пусто
 //	/torrent/{id}                  → torrent_{id}.html; нет образца — редирект на /d.php, как у Rutor
 //	Download: /download/{id}       → download_{id}.torrent; нет образца — редирект на Mirror/d.php
@@ -82,6 +82,8 @@ func (s *Server) site(w http.ResponseWriter, r *http.Request) {
 		serve(w, "torrent_notfound.html")
 	case p == "/browse/0/12/0/2":
 		serve(w, "browse_12_sort2.html")
+	case p == "/browse/1/12/0/2":
+		serve(w, "browse_12_sort2_page2.html")
 	case strings.HasPrefix(p, "/browse/"):
 		serve(w, "browse_1_sort2.html")
 	case strings.HasPrefix(p, "/search/"):

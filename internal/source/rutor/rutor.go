@@ -12,6 +12,7 @@ import (
 	"net/url"
 	"regexp"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -143,25 +144,36 @@ func (r *Rutor) Categories(context.Context) ([]source.Category, error) {
 // Top — первые limit раздач категории по раздающим (limit ≤ 0 — все 100 строк страницы).
 // Цифры в списке Rutor неточны, поэтому сортируем сами (спека, раздел 6).
 func (r *Rutor) Top(ctx context.Context, categoryID string, limit int) ([]source.Release, error) {
-	if !isNumber(categoryID) {
-		return nil, fmt.Errorf("Rutor: категория %q — не номер", categoryID)
-	}
-	p, err := r.page(ctx, "/browse/0/"+categoryID+"/0/2")
+	rs, _, err := r.TopPage(ctx, categoryID, 0)
 	if err != nil {
 		return nil, err
 	}
-	rs, err := parseList(p.Body)
-	if err != nil {
-		return nil, err
-	}
-	for i := range rs {
-		rs[i].CategoryID = categoryID
-	}
-	sortBySeeders(rs)
 	if limit > 0 && len(rs) > limit {
 		rs = rs[:limit]
 	}
 	return rs, nil
+}
+
+// TopPage — страница категории по раздающим (0 — первая, по 100 строк): порции каталога глубже первой
+// сотни (спека 11b, 7.2). more — страница полная, дальше, возможно, есть ещё.
+func (r *Rutor) TopPage(ctx context.Context, categoryID string, page int) (rs []source.Release, more bool, err error) {
+	if !isNumber(categoryID) || page < 0 {
+		return nil, false, fmt.Errorf("Rutor: категория %q — не номер", categoryID)
+	}
+	p, err := r.page(ctx, "/browse/"+strconv.Itoa(page)+"/"+categoryID+"/0/2")
+	if err != nil {
+		return nil, false, err
+	}
+	rs, err = parseList(p.Body)
+	if err != nil {
+		return nil, false, err
+	}
+	for i := range rs {
+		rs[i].CategoryID = categoryID
+	}
+	more = len(rs) >= 100
+	sortBySeeders(rs)
+	return rs, more, nil
 }
 
 // Search ищет по видеокатегориям: шесть запросов, не больше трёх одновременно и мимо
