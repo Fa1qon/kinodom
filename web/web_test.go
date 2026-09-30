@@ -505,6 +505,31 @@ for (const [name, ok] of checks) {
 	}
 }
 
+// Серия нескачанного сериала (замечание № 3 этапа 11b): OK на строке — окно «Скачать?»; после «Скачать»
+// строка выбирает файл панели; пока идёт действие — ничего.
+func TestPultReleaseEpisodeConfirm(t *testing.T) {
+	node := lookNode(t)
+	script := `
+import { episodeAction } from './views/release.js';
+const checks = [
+  ['до «Скачать» — окно', episodeAction(false, false), 'confirm'],
+  ['после «Скачать» — выбрать файл панели', episodeAction(true, false), 'pick'],
+  ['идёт действие — ничего', episodeAction(false, true), 'none'],
+];
+for (const [name, got, want] of checks) {
+  if (got !== want) {
+    console.error(name, ': получили', got, 'ждали', want);
+    process.exitCode = 1;
+  }
+}
+`
+	cmd := exec.Command(node, "--input-type=module", "--no-warnings", "-e", script)
+	cmd.Dir = "static"
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Errorf("%v\n%s", err, out)
+	}
+}
+
 // Разделы каталога деревом: строка настройки читается и пишется без потерь; категория целиком —
 // «cN+», раздел со всеми подразделами — «раздел+», только собственные раздачи раздела — «раздел».
 func TestPultSectionsEncoding(t *testing.T) {

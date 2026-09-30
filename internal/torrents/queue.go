@@ -132,6 +132,39 @@ func (s *Service) Download(ctx context.Context, ih metainfo.Hash, files []int) e
 	return nil
 }
 
+// DownloadFrom — «Скачать» с выбранной серии (замечание № 3 этапа 11b): как Download(ih, nil) — все
+// видеофайлы встают в очередь, но первым качается from, дальше — по порядку серий после него. Списка
+// файлов ещё нет (magnet) — как Download(ih, nil): очередь начнётся с первой серии. from вне списка или
+// не видеофайл — ErrNoSuchFile.
+func (s *Service) DownloadFrom(ctx context.Context, ih metainfo.Hash, from int) error {
+	s.mu.Lock()
+	ss, ok := s.sessions[ih]
+	if !ok {
+		s.mu.Unlock()
+		return ErrNotOpen
+	}
+	known := ss.t.Info() != nil
+	if known && !slices.ContainsFunc(playableFiles(allFiles(ss.t)), func(f FileInfo) bool { return f.Index == from }) {
+		s.mu.Unlock()
+		return ErrNoSuchFile
+	}
+	s.mu.Unlock()
+	if err := s.Download(ctx, ih, nil); err != nil || !known {
+		return err
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if ss, ok = s.sessions[ih]; !ok {
+		return ErrNotOpen
+	}
+	if ss.storedFiles[from] && !fileDone(ss.t.Files()[from]) && ss.focus != from {
+		s.setFocusLocked(ss, from)
+		s.wakeLocked(ss)
+		s.applyLocked(ss)
+	}
+	return nil
+}
+
 // storeLocked делает файл хранимым: запись в базу (без неё файл не восстановится после перезапуска
 // и не попадёт в очистку) и в сессию. Вызывать под s.mu.
 func (s *Service) storeLocked(ctx context.Context, ss *session, i int) error {
