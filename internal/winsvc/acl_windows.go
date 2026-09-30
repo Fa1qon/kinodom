@@ -42,21 +42,30 @@ func (acl) Grant(path, account string, write bool) error {
 	return windows.SetNamedSecurityInfo(path, windows.SE_FILE_OBJECT, windows.DACL_SECURITY_INFORMATION, nil, nil, dacl, nil)
 }
 
-func (acl) Restrict(path string, accounts []string) error {
-	entries := make([]windows.EXPLICIT_ACCESS, 0, len(accounts))
-	for _, a := range accounts {
-		sid, err := sidOf(a)
-		if err != nil {
-			return err
+func (acl) Restrict(path string, full, read []string) error {
+	var entries []windows.EXPLICIT_ACCESS
+	for _, set := range []struct {
+		accounts []string
+		mask     windows.ACCESS_MASK
+	}{{full, rightsFull}, {read, rightsRead}} {
+		for _, a := range set.accounts {
+			sid, err := sidOf(a)
+			if err != nil {
+				return err
+			}
+			entries = append(entries, entry(sid, set.mask))
 		}
-		entries = append(entries, entry(sid, rightsFull))
 	}
 	dacl, err := windows.ACLFromEntries(entries, nil)
 	if err != nil {
 		return err
 	}
+	owner, err := windows.StringToSid(SIDAdmins)
+	if err != nil {
+		return err
+	}
 	return windows.SetNamedSecurityInfo(path, windows.SE_FILE_OBJECT,
-		windows.DACL_SECURITY_INFORMATION|windows.PROTECTED_DACL_SECURITY_INFORMATION, nil, nil, dacl, nil)
+		windows.OWNER_SECURITY_INFORMATION|windows.DACL_SECURITY_INFORMATION|windows.PROTECTED_DACL_SECURITY_INFORMATION, owner, nil, dacl, nil)
 }
 
 func entry(sid *windows.SID, mask windows.ACCESS_MASK) windows.EXPLICIT_ACCESS {

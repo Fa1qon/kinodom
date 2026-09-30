@@ -31,20 +31,26 @@ func programDir() (string, error) {
 func cmdInstall(args []string, stdout, stderr io.Writer) int {
 	fs := flag.NewFlagSet("install", flag.ContinueOnError)
 	fs.SetOutput(stderr)
-	downloads := fs.String("downloads", "", "папка загрузок; пусто — не менять")
+	downloads := fs.String("downloads", "", "папка загрузок: заменяет сохранённую; пусто — не менять")
+	downloadsDefault := fs.String("downloads-default", "", "папка загрузок, только если её ещё нет в настройках (установщик)")
 	noStart := fs.Bool("no-start", false, "не запускать службу")
 	result := fs.String("result", "", "файл для текста отказа (UTF-8; его читает установщик)")
 	if err := fs.Parse(args); err != nil || fs.NArg() > 0 {
-		fmt.Fprintln(stderr, "использование: kinodom install [--downloads ПАПКА] [--no-start] [--result ФАЙЛ]")
+		fmt.Fprintln(stderr, "использование: kinodom install [--downloads ПАПКА | --downloads-default ПАПКА] [--no-start] [--result ФАЙЛ]")
 		return 2
 	}
-	err := install(*downloads, *noStart, stdout)
-	if *result != "" {
+	return finish(stderr, *result, install(*downloads, *downloadsDefault, *noStart, stdout))
+}
+
+// finish — код выхода системной команды; отказ — ещё и текстом в файл result (UTF-8): его читает
+// установщик, вывод консоли ему в понятной кодировке не достать.
+func finish(stderr io.Writer, result string, err error) int {
+	if result != "" {
 		text := ""
 		if err != nil {
 			text = err.Error()
 		}
-		os.WriteFile(*result, []byte(text), 0o644)
+		os.WriteFile(result, []byte(text), 0o644)
 	}
 	if err != nil {
 		return fail(stderr, err)
@@ -52,7 +58,7 @@ func cmdInstall(args []string, stdout, stderr io.Writer) int {
 	return 0
 }
 
-func install(downloads string, noStart bool, stdout io.Writer) error {
+func install(downloads, downloadsDefault string, noStart bool, stdout io.Writer) error {
 	sys := newSystem()
 	if !sys.IsAdmin() {
 		return setup.ErrNotAdmin
@@ -71,7 +77,7 @@ func install(downloads string, noStart bool, stdout io.Writer) error {
 	}
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
 	defer stop()
-	err = setup.Install(ctx, sys, setup.InstallOptions{Downloads: downloads, NoStart: noStart, Home: paths.Home,
+	err = setup.Install(ctx, sys, setup.InstallOptions{Downloads: downloads, DownloadsDefault: downloadsDefault, NoStart: noStart, Home: paths.Home,
 		ProgramDir: dir, APIPort: boot.APIPort, TorrentPort: boot.TorrentPort}, func(s string) { fmt.Fprintln(stdout, s) })
 	if err != nil {
 		return err
@@ -85,20 +91,21 @@ func cmdUninstall(args []string, stdout, stderr io.Writer) int {
 	fs := flag.NewFlagSet("uninstall", flag.ContinueOnError)
 	fs.SetOutput(stderr)
 	purge := fs.Bool("purge", false, "удалить также настройки и скачанное")
+	result := fs.String("result", "", "файл для текста отказа (UTF-8; его читает программа удаления)")
 	if err := fs.Parse(args); err != nil || fs.NArg() > 0 {
-		fmt.Fprintln(stderr, "использование: kinodom uninstall [--purge]")
+		fmt.Fprintln(stderr, "использование: kinodom uninstall [--purge] [--result ФАЙЛ]")
 		return 2
 	}
 	err := setup.Uninstall(context.Background(), newSystem(), *purge, config.DefaultHome(), func(s string) { fmt.Fprintln(stdout, s) })
-	if err != nil {
-		return fail(stderr, err)
+	if err == nil {
+		fmt.Fprintln(stdout, "Kinodom удалён")
 	}
-	fmt.Fprintln(stdout, "Kinodom удалён")
-	return 0
+	return finish(stderr, *result, err)
 }
 
 // cmdStop — остановить службу и дождаться остановки: установщик вызывает её перед заменой файлов.
-// Службы нет — ничего не делает.
+// Перезапуск при сбое снимается (иначе упавшая служба поднялась бы посреди копирования) и
+// возвращается следующим kinodom install. Службы нет — ничего не делает.
 func cmdStop(args []string, stdout, stderr io.Writer) int {
 	if len(args) != 0 {
 		fmt.Fprintln(stderr, "использование: kinodom stop")

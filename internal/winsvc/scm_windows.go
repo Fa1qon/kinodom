@@ -135,34 +135,43 @@ func (scm) Start(name string) error {
 }
 
 func (scm) Stop(name string, wait time.Duration) error {
-	return withService(name, func(s *mgr.Service) error {
+	return withService(name, func(s *mgr.Service) error { return stopService(s, wait, 300*time.Millisecond) })
+}
+
+// serviceControl — что нужно остановке от службы (mgr.Service; в тестах — подделка).
+type serviceControl interface {
+	Query() (svc.Status, error)
+	Control(svc.Cmd) (svc.Status, error)
+	ResetRecoveryActions() error
+}
+
+// stopService останавливает службу и ждёт остановки. Сначала снимает перезапуск при сбое: служба,
+// падающая при запуске, иначе поднялась бы посреди замены файлов (Install вернёт перезапуск, Uninstall
+// удаляет службу). Пока служба запускается, «остановить» она не принимает — ждём.
+func stopService(s serviceControl, wait, step time.Duration) error {
+	if err := s.ResetRecoveryActions(); err != nil {
+		return fmt.Errorf("перезапуск при сбое не снялся: %w", err)
+	}
+	deadline := time.Now().Add(wait)
+	for {
 		st, err := s.Query()
 		if err != nil {
 			return err
 		}
-		if st.State == svc.Stopped {
+		switch st.State {
+		case svc.Stopped:
 			return nil
-		}
-		if st.State != svc.StopPending {
-			if _, err := s.Control(svc.Stop); err != nil && !errors.Is(err, windows.ERROR_SERVICE_NOT_ACTIVE) {
+		case svc.Running, svc.Paused:
+			_, err := s.Control(svc.Stop)
+			if err != nil && !errors.Is(err, windows.ERROR_SERVICE_NOT_ACTIVE) && !errors.Is(err, windows.ERROR_SERVICE_CANNOT_ACCEPT_CTRL) {
 				return err
 			}
 		}
-		deadline := time.Now().Add(wait)
-		for {
-			st, err := s.Query()
-			if err != nil {
-				return err
-			}
-			if st.State == svc.Stopped {
-				return nil
-			}
-			if time.Now().After(deadline) {
-				return fmt.Errorf("не остановилась за %d с", int(wait.Seconds()))
-			}
-			time.Sleep(300 * time.Millisecond)
+		if time.Now().After(deadline) {
+			return fmt.Errorf("не остановилась за %d с", int(wait.Seconds()))
 		}
-	})
+		time.Sleep(step)
+	}
 }
 
 func (scm) Delete(name string) error {

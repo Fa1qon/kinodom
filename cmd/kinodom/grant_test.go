@@ -137,7 +137,8 @@ func TestGrantCommand(t *testing.T) {
 	if got := f.Actions(); len(got) != 1 || got[0] != "acl.grant "+dir+" "+winsvc.ServiceAccount+" write" {
 		t.Fatalf("действия %v", got)
 	}
-	for _, bad := range []string{`\\server\share`, "Movies", filepath.Join(dir, "нет такой")} {
+	// Корень диска — отказ: наследуемые права ушли бы на весь диск (ревью, мелочь 15).
+	for _, bad := range []string{`\\server\share`, "Movies", filepath.Join(dir, "нет такой"), `C:\`, "C:/"} {
 		if code, _, _ := runCmd(cmdGrant, bad); code == 0 {
 			t.Errorf("%s: принято", bad)
 		}

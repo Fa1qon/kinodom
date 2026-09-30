@@ -135,10 +135,10 @@ func (a fakeACL) Grant(path, account string, write bool) error {
 	return nil
 }
 
-func (a fakeACL) Restrict(path string, accounts []string) error {
+func (a fakeACL) Restrict(path string, full, read []string) error {
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	a.act("acl.restrict %s %s", path, strings.Join(accounts, ","))
+	a.act("acl.restrict %s full=%s read=%s", path, strings.Join(full, ","), strings.Join(read, ","))
 	return nil
 }
 

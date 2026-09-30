@@ -1,7 +1,7 @@
 // Мастер начальных настроек (спека этапа 11a, раздел 7): раздачи, Кинопоиск, каналы, медиатека,
 // «Готово». Открывается сам после установки, пока не пройден; снова — «Параметры → Открыть мастер».
 // У каждого шага «Назад», «Пропустить», «Далее»; поля заполнены текущими настройками.
-import { h, fill, icon, poll, fileBase64 } from '../ui.js';
+import { h, fill, icon, poll, keepFocus, fileBase64 } from '../ui.js';
 import { get, put, post } from '../api.js';
 import { remoteNote } from './settings-layout.js';
 import { pickFolder, grantControl } from './folders.js';
@@ -220,7 +220,13 @@ export function render(root, r, ctx) {
       const rows = new Map(); // категория → поля новых папок
       const progress = h('div', { class: 'small', role: 'status' });
       const box = h('div', { class: 'setup-body' });
-      const draw = () => {
+      // Опрос перерисовывает карточки, только если изменились папки или их проблемы, и не сбивает
+      // фокус пульта ТВ (keepFocus по data-key).
+      const folderKey = (cs) => JSON.stringify(cs.map((c) => [c.id, c.folders.map((f) => [f.id, f.problem])]));
+      let drawn = '';
+      let quiet = 0; // опросов подряд без перемен после конца обхода
+      const draw = () => keepFocus(box, () => {
+        drawn = folderKey(cats);
         fill(box, wanted.map(([builtin, label]) => {
           const c = cats.find((x) => x.builtin === builtin);
           if (!c) return null;
@@ -240,7 +246,7 @@ export function render(root, r, ctx) {
               draw();
             } }, 'Ещё папка'));
         }));
-      };
+      });
       const watch = async () => {
         let lib;
         let cs;
@@ -254,8 +260,15 @@ export function render(root, r, ctx) {
         if (!alive) return;
         cats = cs;
         const recognized = lib.categories.reduce((n, c) => n + c.count, 0);
-        progress.textContent = `найдено ${recognized + lib.unrecognized}, распознано ${recognized}` + (lib.scan.running ? ' — идёт обход' : '');
-        draw();
+        const text = `найдено ${recognized + lib.unrecognized}, распознано ${recognized}` + (lib.scan.running ? ' — идёт обход' : '');
+        // Обход кончился, а числа три опроса подряд не меняются (сверка с Кинопоиском дошла) — хватит.
+        quiet = !lib.scan.running && text === progress.textContent ? quiet + 1 : 0;
+        progress.textContent = text;
+        if (folderKey(cats) !== drawn) draw();
+        if (quiet >= 3 && stop) {
+          stop();
+          stop = null;
+        }
       };
       const find = async () => {
         for (const c of cats) {
@@ -266,6 +279,7 @@ export function render(root, r, ctx) {
           rows.delete(c.id);
         }
         await post('/library/scan');
+        quiet = 0;
         await watch();
         if (!stop) stop = poll(watch, 2000).stop;
       };

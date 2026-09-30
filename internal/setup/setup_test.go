@@ -99,7 +99,8 @@ func TestInstallFirstTime(t *testing.T) {
 	exe := filepath.Join(prog, "kinodom.exe")
 	want := []string{
 		"scm.install Kinodom",
-		"acl.restrict " + data + " S-1-5-18,S-1-5-32-544,NT SERVICE\\Kinodom",
+		"acl.restrict " + o.Home + " full=S-1-5-18,S-1-5-32-544 read=S-1-5-32-545,NT SERVICE\\Kinodom",
+		"acl.restrict " + data + " full=S-1-5-18,S-1-5-32-544,NT SERVICE\\Kinodom read=",
 		"acl.grant " + dl + " NT SERVICE\\Kinodom write",
 		fmt.Sprintf("fw.set Kinodom — пульт TCP %d LocalSubnet %s", o.APIPort, exe),
 		"fw.set Kinodom — раздачи TCP,UDP 42000 Any " + exe,
@@ -291,4 +292,101 @@ func addTorrent(t *testing.T, home, dl string) string {
 	os.MkdirAll(folders[0], 0o755)
 	os.WriteFile(filepath.Join(folders[0], "film.mkv"), []byte("x"), 0o644)
 	return folders[0]
+}
+
+// Папка загрузок «по умолчанию» (установщик при первой установке) не перезаписывает сохранённую:
+// переустановка после удаления без данных и обновление сохраняют выбор (ревью C1).
+func TestInstallDownloadsDefaultKeepsSaved(t *testing.T) {
+	f := winsvctest.New()
+	chosen, offered := filepath.Join(t.TempDir(), "Мой выбор"), filepath.Join(t.TempDir(), "Kinodom")
+	o := options(t, "")
+	o.DownloadsDefault = chosen
+	if err := Install(ctx, f.System(), o, nolog); err != nil {
+		t.Fatal(err)
+	}
+	if got := setting(t, o.Home, settings.KeyDownloadsDir); got != chosen {
+		t.Fatalf("первая установка: %q", got)
+	}
+	f.Reset()
+	o.DownloadsDefault = offered
+	if err := Install(ctx, f.System(), o, nolog); err != nil {
+		t.Fatal(err)
+	}
+	if got := setting(t, o.Home, settings.KeyDownloadsDir); got != chosen {
+		t.Fatalf("папка загрузок перезаписана: %q", got)
+	}
+	if indexOf(f.Actions(), "acl.grant "+chosen) < 0 || indexOf(f.Actions(), "acl.grant "+offered) >= 0 {
+		t.Fatalf("права: %v", f.Actions())
+	}
+}
+
+// Первая установка не удалась после создания службы — всё сделанное убирается: ни службы (иначе
+// она перезапускалась бы каждые 5 с без программы удаления), ни правил, ни ссылки (ревью I1).
+func TestInstallFirstFailureRollsBack(t *testing.T) {
+	f := winsvctest.New()
+	o := options(t, filepath.Join(t.TempDir(), "K"))
+	o.APIPort, o.ReadyTimeout = closedPort(t), 200*time.Millisecond
+	if err := Install(ctx, f.System(), o, nolog); err == nil {
+		t.Fatal("установка без ответа службы прошла")
+	}
+	if len(f.Services) != 0 || len(f.Rules) != 0 || len(f.Protocols) != 0 {
+		t.Fatalf("осталось: службы %v, правила %v, ссылки %v", f.Services, f.Rules, f.Protocols)
+	}
+	// Починка существующей установки при отказе ничего не удаляет.
+	f.Services[ServiceName] = winsvc.ServiceConfig{Name: ServiceName}
+	if err := Install(ctx, f.System(), o, nolog); err == nil {
+		t.Fatal("починка без ответа службы прошла")
+	}
+	if _, ok := f.Services[ServiceName]; !ok || len(f.Rules) != 2 {
+		t.Fatalf("починка откатила установку: службы %v, правила %v", f.Services, f.Rules)
+	}
+}
+
+// Починка и обновление не переводят базу на новую схему — это делает служба: если обновление
+// откатится, прежняя версия найдёт базу своей версии (ревью I2). Диск загрузок отключён — обновление
+// всё равно проходит, права на папку — когда диск вернётся (ревью, мелочь 14).
+func TestInstallRepairKeepsSchemaAndSurvivesMissingDisk(t *testing.T) {
+	f := winsvctest.New()
+	o := options(t, "")
+	db, err := store.Open(ctx, config.NewPaths(o.Home).DB)
+	if err != nil {
+		t.Fatal(err)
+	}
+	db.SetSetting(ctx, settings.KeyDownloadsDir, `Q:\Kinodom`)
+	db.W.Exec("PRAGMA user_version = 5")
+	db.Close()
+	f.Services[ServiceName] = winsvc.ServiceConfig{Name: ServiceName}
+	var logged []string
+	if err := Install(ctx, f.System(), o, func(s string) { logged = append(logged, s) }); err != nil {
+		t.Fatalf("обновление при отключённом диске: %v", err)
+	}
+	if indexOf(f.Actions(), `acl.grant Q:\`) >= 0 || !strings.Contains(strings.Join(logged, "\n"), `Q:\Kinodom`) {
+		t.Fatalf("действия %v, журнал %v", f.Actions(), logged)
+	}
+	check, err := store.OpenAsIs(ctx, config.NewPaths(o.Home).DB)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer check.Close()
+	var v int
+	check.R.QueryRow("PRAGMA user_version").Scan(&v)
+	if v != 5 {
+		t.Fatalf("установка перевела базу на версию %d", v)
+	}
+}
+
+// Корень диска — не папка загрузок: права раздались бы на весь диск (ревью, мелочь 15).
+func TestInstallRejectsDriveRoot(t *testing.T) {
+	for _, root := range []string{`D:\`, `D:\.`, "C:/"} {
+		f := winsvctest.New()
+		o := options(t, root)
+		if err := Install(ctx, f.System(), o, nolog); err == nil || !strings.Contains(err.Error(), "весь диск") || len(f.Actions()) != 0 {
+			t.Errorf("%s: %v, действия %v", root, err, f.Actions())
+		}
+		o = options(t, "")
+		o.DownloadsDefault = root
+		if err := Install(ctx, f.System(), o, nolog); err == nil || len(f.Actions()) != 0 {
+			t.Errorf("по умолчанию %s: %v", root, err)
+		}
+	}
 }
