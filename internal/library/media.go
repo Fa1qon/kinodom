@@ -37,7 +37,8 @@ var mediaExtraLead int64 = 12 << 20
 type mediaReporter struct{ h History }
 
 func (m mediaReporter) Report(ctx context.Context, device, hash string, index int, offset, size int64) {
-	m.h.Report(ctx, device, hash, index, max(offset-mediaExtraLead, 0), size)
+	// Не больше 2 % файла: иначе урок на 100 МБ, досмотренный до конца, не стал бы «просмотрено».
+	m.h.Report(ctx, device, hash, index, max(offset-min(mediaExtraLead, size/50), 0), size)
 }
 
 // mediaReader — открытый файл медиатеки (тесты подменяют открытие, чтобы оборвать чтение).

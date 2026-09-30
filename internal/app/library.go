@@ -48,7 +48,7 @@ func (d libraryDownloads) TorrentUnits(ctx context.Context) ([]library.TorrentUn
 	}
 	out := make([]library.TorrentUnit, 0, len(ts))
 	for _, t := range ts {
-		u := library.TorrentUnit{Hash: t.Hash, Name: t.Name, Dir: t.Dir, LastOpened: t.LastOpened}
+		u := library.TorrentUnit{Hash: t.Hash, Name: t.Name, Dir: t.Dir, LastOpened: t.LastOpened, Missing: t.Missing}
 		for _, f := range t.Files {
 			u.Files = append(u.Files, library.TorrentFile{Index: f.Index, Path: f.Name, Size: f.Size, Done: f.Done, Stored: f.Stored,
 				Readiness: string(f.Readiness)})

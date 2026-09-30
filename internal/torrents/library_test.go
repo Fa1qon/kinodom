@@ -31,3 +31,18 @@ func TestLibraryTorrents(t *testing.T) {
 		t.Errorf("последнее открытие: %v", ts[0].LastOpened)
 	}
 }
+
+// Раздача с хранимыми файлами, которую движок ещё не загрузил (старт, отключённый диск), — в
+// списке с пометкой «не загружена»: медиатека не должна принять её за удалённую.
+func TestLibraryTorrentsMissing(t *testing.T) {
+	ctx := context.Background()
+	s := newTestService(t)
+	ih := hashOf(t, "d")
+	remember(t, s.reg, ih, "x")
+	must(t, s.reg.MarkStored(ctx, ih, 0, `D:\K\a.mkv`, 1))
+	ts, err := s.LibraryTorrents(ctx)
+	must(t, err)
+	if len(ts) != 1 || ts[0].Hash != ih.HexString() || !ts[0].Missing || len(ts[0].Files) != 0 {
+		t.Fatalf("незагруженная раздача: %+v", ts)
+	}
+}

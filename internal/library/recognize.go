@@ -19,6 +19,8 @@ const (
 	StateFound        = "found"        // номер Кинопоиска найден
 	StateUnrecognized = "unrecognized" // не нашли уверенно — «Не распознано»
 	StateWait         = "wait"         // квота кончилась или Кинопоиск сбоит — искать позже
+	StateRetry        = "retry"        // итог поиска: Кинопоиск сбоит на этой единице — повторить её позже
+	StateLinked       = "linked"       // номер Кинопоиска — ссылкой из пульта: обходы его не трогают
 	StateManual       = "manual"       // размечено вручную (название и год, без Кинопоиска)
 	StatePlain        = "plain"        // категория без Кинопоиска — название из имени
 )
@@ -73,8 +75,8 @@ func recognize(ctx context.Context, kp KP, p Parsed, alt []string, layout Layout
 			return Result{State: StateUnrecognized}, nil
 		}
 	}
-	if troubled {
-		return Result{State: StateWait}, nil
+	if troubled { // 500 на кириллице (бывает на одной и той же выдаче), сеть — эту единицу позже
+		return Result{State: StateRetry}, nil
 	}
 	return Result{State: StateUnrecognized}, nil
 }

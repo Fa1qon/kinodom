@@ -136,7 +136,8 @@ type view struct {
 	byHash  map[string]*unitRow
 	rows    map[string]cardRow
 	ratings map[int]meta.Rating
-	stale   bool // скачанное изменилось с последнего обхода: нужна новая раздача или убрать удалённую
+	stale   bool            // скачанное изменилось с последнего обхода: нужна новая раздача или убрать удалённую
+	hidden  map[string]bool // «раздачи» истории версий из скрытых на устройстве категорий
 }
 
 func (l *Library) view(ctx context.Context, device string) (*view, error) {
@@ -149,7 +150,7 @@ func (l *Library) view(ctx context.Context, device string) (*view, error) {
 		return nil, err
 	}
 	v := &view{cats: cats, byID: map[int64]Category{}, builtin: map[string]int64{}, visible: map[int64]bool{},
-		units: map[string][]*unitRow{}, byHash: map[string]*unitRow{}, rows: map[string]cardRow{}}
+		units: map[string][]*unitRow{}, byHash: map[string]*unitRow{}, rows: map[string]cardRow{}, hidden: map[string]bool{}}
 	for _, c := range cats {
 		v.byID[c.ID] = c
 		if c.Builtin != "" {
@@ -163,7 +164,12 @@ func (l *Library) view(ctx context.Context, device string) (*view, error) {
 		tus = nil
 	}
 	live := map[string]*TorrentUnit{}
+	missing := map[string]bool{}
 	for i := range tus {
+		if tus[i].Missing {
+			missing[tus[i].Hash] = true
+			continue
+		}
 		live[tus[i].Hash] = &tus[i]
 	}
 	rows, err := l.d.R.QueryContext(ctx, `SELECT u.id, u.source, u.key, u.name, u.title, u.year, u.kp_id, u.state, u.manual_title, u.manual_year,
@@ -183,8 +189,15 @@ func (l *Library) view(ctx context.Context, device string) (*view, error) {
 			return nil, err
 		}
 		u.AddedAt = fromMS(added)
+		if u.Category > 0 && !v.visible[u.Category] {
+			v.hidden[u.hash()] = true
+			continue // версия из скрытой на устройстве категории — не склеивается в видимую карточку
+		}
 		if u.Source == "torrent" {
 			known[u.Key] = true
+			if missing[u.Key] {
+				continue // раздача ещё не загружена — не видна, обход не нужен
+			}
 			if u.tu = live[u.Key]; u.tu == nil {
 				v.stale = tus != nil
 				continue // раздачу удалили — единица уйдёт при следующем обходе
@@ -655,7 +668,7 @@ func (l *Library) HiddenHashes(ctx context.Context, device string, hashes []stri
 	}
 	out := map[string]bool{}
 	for _, h := range hashes {
-		if u := v.byHash[h]; u != nil && !v.shown(cardKey(u.ID, u.KP)) {
+		if u := v.byHash[h]; v.hidden[h] || (u != nil && !v.shown(cardKey(u.ID, u.KP))) {
 			out[h] = true
 		}
 	}
