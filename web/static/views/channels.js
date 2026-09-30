@@ -1,9 +1,10 @@
 // «Каналы» (спека этапа 8, разделы 5.5 и 6.2): избранное устройства, федеральные, остальные по
 // категориям; вкладки категорий, переключатели страны и языка; в строке — «сейчас и следом», оценка
-// проверки, ★ и «Смотреть». Список опрашивается раз в минуту.
+// проверки и «Смотреть» (★ — на странице канала). Время передач — по поясу каналов из настроек. Список
+// опрашивается раз в минуту.
 import { h, fill, icon, poll, store, keepFocus, plural } from '../ui.js';
 import { get } from '../api.js';
-import { gradeMark, hhmm, progressOf, logo, watchChannel, toggleFavorite, starButton } from './tvkit.js';
+import { gradeMark, hhmm, progressOf, logo, watchChannel } from './tvkit.js';
 
 // UNKNOWN — значение переключателя для «страна / язык не указаны».
 export const UNKNOWN = '?';
@@ -55,7 +56,6 @@ export function render(root, r, ctx) {
   let alive = true;
   let data = null;
   let error = '';
-  let busy = '';
 
   const head = h('div', { class: 'row wrap' });
   const filters = h('div', { class: 'filters', role: 'tablist', 'aria-label': 'Категории' });
@@ -77,18 +77,6 @@ export function render(root, r, ctx) {
     }
     if (alive) draw();
   }, 60000);
-
-  async function star(key, isFavorite) {
-    busy = key;
-    draw();
-    try {
-      await toggleFavorite(isFavorite, key);
-    } catch (e) {
-      error = e.message;
-    }
-    busy = '';
-    pollList.now();
-  }
 
   async function watch(key) {
     try {
@@ -146,28 +134,16 @@ export function render(root, r, ctx) {
         h('span', { class: 'ch-num' }, c.number ? String(c.number) : ''),
         h('span', { class: 'ch-text' },
           h('span', { class: 'ch-name' }, c.name),
-          now ? h('span', { class: 'ch-now' }, h('span', { class: 'muted' }, hhmm(now.start)), ' ', now.title) : h('span', { class: 'ch-now muted' }, '—'),
+          now ? h('span', { class: 'ch-now' }, h('span', { class: 'muted' }, hhmm(now.start, data.utcOffset)), ' ', now.title) : h('span', { class: 'ch-now muted' }, '—'),
           now ? h('div', { class: 'track ch-track' }, h('div', { style: { width: `${progressOf(now)}%`, background: 'var(--buffer)' } })) : null,
-          next ? h('span', { class: 'ch-next muted small' }, `${hhmm(next.start)} ${next.title}`) : null)),
+          next ? h('span', { class: 'ch-next muted small' }, `${hhmm(next.start, data.utcOffset)} ${next.title}`) : null)),
       gradeMark(c.grade),
-      ctx.canEdit ? starButton(c.block === 'favorite', () => star(c.key, c.block === 'favorite'), `star-${c.key}`) : null,
-      h('button', { class: 'btn', type: 'button', disabled: busy === c.key, 'data-key': `watch-${c.key}`, 'aria-label': `Смотреть ${c.name}`,
+      h('button', { class: 'btn', type: 'button', 'data-key': `watch-${c.key}`, 'aria-label': `Смотреть ${c.name}`,
         onclick: () => watch(c.key) }, icon('play_arrow'), h('span', { class: 'wide-only' }, 'Смотреть')));
   }
 
-  // canEdit пришёл позже списка — ★ появляется. Только при смене canEdit: «Состояние» опрашивается раз в
-  // 15 с, а список на ТВ — около тысячи строк.
-  let shownCanEdit = ctx.canEdit;
-  const onStatus = () => {
-    if (alive && data && ctx.canEdit !== shownCanEdit) {
-      shownCanEdit = ctx.canEdit;
-      draw();
-    }
-  };
-  ctx.listeners.add(onStatus);
   return () => {
     alive = false;
     pollList.stop();
-    ctx.listeners.delete(onStatus);
   };
 }
