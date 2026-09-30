@@ -213,7 +213,10 @@ a.var-row:hover { background: var(--hover); }
 .tag.warn-tag .ic { color: var(--yellow); }
 .results { border: 1px solid var(--line-soft); }
 .results:empty, .results:has(> p) { border: 0; }
-.res-row { display: grid; grid-template-columns: minmax(0, 1fr) 120px 160px 90px 110px 100px; gap: 16px; align-items: center; padding: 12px 18px; border-bottom: 1px solid #1E2226; font-size: 15px; }
+.res-row { display: grid; grid-template-columns: 48px minmax(0, 1fr) 120px 160px 90px 110px 100px; gap: 16px; align-items: center; padding: 12px 18px; border-bottom: 1px solid #1E2226; font-size: 15px; }
+/* Постер найденного — миниатюрой в строке (замечание № 10 этапа 11b): без подписей и меток. */
+.poster.thumb { width: 48px; height: 72px; min-height: 0; aspect-ratio: auto; }
+.poster.thumb .ptitle, .poster.thumb .kp, .poster.thumb .vars { display: none; }
 .res-row:last-child { border-bottom: 0; }
 a.res-row:hover { background: var(--hover); }
 .res-head { font-size: 12px; color: var(--dim); text-transform: uppercase; letter-spacing: .08em; border-bottom-color: var(--line); }
@@ -397,7 +400,7 @@ a.res-row:hover { background: var(--hover); }
   .rel-main { grid-column: 2; grid-row: 1 / span 2; }
   .panel { grid-column: 1; grid-row: 2; padding: 18px; }
   .pair { flex-wrap: wrap; }
-  .res-row { grid-template-columns: minmax(0, 1fr) 90px 130px 70px 90px 80px; gap: 12px; }
+  .res-row { grid-template-columns: 48px minmax(0, 1fr) 90px 130px 70px 90px 80px; gap: 12px; }
   .dl { gap: 14px; }
   .dl-state { width: 180px; }
   .dl-state .track { width: 160px; }
@@ -456,8 +459,9 @@ a.res-row:hover { background: var(--hover); }
   .search-here .field { width: 100%; }
   .res-head { display: none; }
   /* Под названием — трекер, качество, формат, размер, раздающие: качеством раздачи и различаются. */
-  .res-row { grid-template-columns: auto minmax(0, 1fr) auto auto auto; gap: 4px 10px; padding: 12px; }
-  .res-title { grid-column: 1 / -1; }
+  .res-row { grid-template-columns: 40px auto minmax(0, 1fr) auto auto auto; gap: 4px 10px; padding: 12px; }
+  .poster.thumb { width: 40px; height: 60px; grid-row: 1 / span 2; }
+  .res-title { grid-column: 2 / -1; }
 
   /* Загрузки */
   .dl { flex-wrap: wrap; gap: 10px 12px; padding: 12px; }

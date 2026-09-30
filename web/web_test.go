@@ -627,6 +627,35 @@ if (calls < 3) {
 	}
 }
 
+// Поиск (замечание № 10 этапа 11b): опрос идёт, пока трекеры ищут (до 30 с), и дальше — пока у найденного
+// догружаются страницы с постерами, но не дольше 2 минут от начала.
+func TestPultSearchPolling(t *testing.T) {
+	node := lookNode(t)
+	script := `
+import { keepPolling } from './views/search.js';
+const pending = { complete: true, results: [{ detailsPending: true }, { detailsPending: false }] };
+const done = { complete: true, results: [{ detailsPending: false }] };
+const checks = [
+  ['ищут — опрос идёт', keepPolling({ complete: false, results: [] }, 0, 10000), true],
+  ['ищут дольше 30 с — хватит', keepPolling({ complete: false, results: [] }, 0, 31000), false],
+  ['нашли, постеры догружаются — опрос идёт', keepPolling(pending, 0, 60000), true],
+  ['догружаются дольше 2 минут — хватит', keepPolling(pending, 0, 121000), false],
+  ['всё догружено — хватит', keepPolling(done, 0, 5000), false],
+];
+for (const [name, got, want] of checks) {
+  if (got !== want) {
+    console.error(name, ': получили', got, 'ждали', want);
+    process.exitCode = 1;
+  }
+}
+`
+	cmd := exec.Command(node, "--input-type=module", "--no-warnings", "-e", script)
+	cmd.Dir = "static"
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Errorf("%v\n%s", err, out)
+	}
+}
+
 // Разделы каталога деревом: строка настройки читается и пишется без потерь; категория целиком —
 // «cN+», раздел со всеми подразделами — «раздел+», только собственные раздачи раздела — «раздел».
 func TestPultSectionsEncoding(t *testing.T) {
