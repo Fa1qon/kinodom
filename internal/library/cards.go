@@ -136,6 +136,7 @@ type view struct {
 	byHash  map[string]*unitRow
 	rows    map[string]cardRow
 	ratings map[int]meta.Rating
+	stale   bool // скачанное изменилось с последнего обхода: нужна новая раздача или убрать удалённую
 }
 
 func (l *Library) view(ctx context.Context, device string) (*view, error) {
@@ -157,8 +158,9 @@ func (l *Library) view(ctx context.Context, device string) (*view, error) {
 		v.visible[c.ID] = !c.Hidden || on[c.ID]
 	}
 	tus, err := l.torrents(ctx)
-	if err != nil {
-		return nil, err
+	if err != nil { // загрузки недоступны — медиатека показывает папки, скачанное вернётся с ними
+		l.log.Warn("медиатека: скачанное не читается", "err", err)
+		tus = nil
 	}
 	live := map[string]*TorrentUnit{}
 	for i := range tus {
@@ -171,6 +173,7 @@ func (l *Library) view(ctx context.Context, device string) (*view, error) {
 		return nil, err
 	}
 	var kps []int
+	known := map[string]bool{}
 	for rows.Next() {
 		u := &unitRow{}
 		var added int64
@@ -181,7 +184,9 @@ func (l *Library) view(ctx context.Context, device string) (*view, error) {
 		}
 		u.AddedAt = fromMS(added)
 		if u.Source == "torrent" {
+			known[u.Key] = true
 			if u.tu = live[u.Key]; u.tu == nil {
+				v.stale = tus != nil
 				continue // раздачу удалили — единица уйдёт при следующем обходе
 			}
 		}
@@ -195,6 +200,12 @@ func (l *Library) view(ctx context.Context, device string) (*view, error) {
 	rows.Close()
 	if err := rows.Err(); err != nil {
 		return nil, err
+	}
+	for h := range live {
+		v.stale = v.stale || !known[h]
+	}
+	if v.stale {
+		l.startScan(true) // скачали новое или удалили раздачу — обход сразу, экран обновится после него
 	}
 	rows, err = l.d.R.QueryContext(ctx, `SELECT key, title, name_orig, year, type, genres, description, image_key, source, category FROM lib_cards`)
 	if err != nil {
@@ -633,4 +644,37 @@ func (l *Library) LocalPoster(ctx context.Context, unit int64) string {
 		return ""
 	}
 	return localPoster(key)
+}
+
+// HiddenHashes — «раздачи» истории, чьи карточки скрыты на устройстве (скрытая категория): экран
+// «История» их не показывает.
+func (l *Library) HiddenHashes(ctx context.Context, device string, hashes []string) (map[string]bool, error) {
+	v, err := l.view(ctx, device)
+	if err != nil {
+		return nil, err
+	}
+	out := map[string]bool{}
+	for _, h := range hashes {
+		if u := v.byHash[h]; u != nil && !v.shown(cardKey(u.ID, u.KP)) {
+			out[h] = true
+		}
+	}
+	return out, nil
+}
+
+// HistoryFiles — имена файлов «раздачи» медиатеки (lib-<единица>) по номеру в истории и их число.
+func (l *Library) HistoryFiles(ctx context.Context, hash string) (map[int]string, int, error) {
+	id, err := strconv.ParseInt(strings.TrimPrefix(hash, "lib-"), 10, 64)
+	if err != nil || !strings.HasPrefix(hash, "lib-") {
+		return nil, 0, ErrNoUnit
+	}
+	files, err := l.d.files(ctx, id)
+	if err != nil {
+		return nil, 0, err
+	}
+	names := map[int]string{}
+	for _, f := range files {
+		names[f.index()] = baseName(f.Path)
+	}
+	return names, len(files), nil
 }

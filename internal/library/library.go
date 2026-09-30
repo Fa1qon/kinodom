@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"log/slog"
+	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -241,6 +243,9 @@ func (l *Library) scanNow(ctx context.Context) error {
 	l.mu.Lock()
 	l.problems = problems
 	l.mu.Unlock()
+	if err := l.syncProblems(ctx, cats, problems); err != nil {
+		return err
+	}
 	tus, err := l.torrents(ctx)
 	if err != nil {
 		l.log.Warn("медиатека: скачанное не читается", "err", err)
@@ -252,6 +257,41 @@ func (l *Library) scanNow(ctx context.Context) error {
 	}
 	return l.refreshCards(ctx, tus)
 }
+
+// syncProblems — недоступные папки категорий — проблемы в «Состоянии» (спека, раздел 5.11);
+// вернувшиеся и убранные папки — проблемы сняты.
+func (l *Library) syncProblems(ctx context.Context, cats []Category, problems map[int64]string) error {
+	want := map[string]string{}
+	for _, c := range cats {
+		for _, f := range c.Folders {
+			switch problems[f.ID] {
+			case "not_found":
+				want[problemID(f.ID)] = "Папка медиатеки не найдена: " + f.Path + " (категория «" + c.Name + "»)"
+			case "no_access":
+				want[problemID(f.ID)] = "Папка медиатеки не читается — нет прав: " + f.Path + " (категория «" + c.Name + "»)"
+			}
+		}
+	}
+	have, err := l.d.Problems(ctx)
+	if err != nil {
+		return err
+	}
+	for _, p := range have {
+		if _, ok := want[p.ID]; !ok && strings.HasPrefix(p.ID, "library.folder.") {
+			if err := l.d.ClearProblem(ctx, p.ID); err != nil {
+				return err
+			}
+		}
+	}
+	for id, text := range want {
+		if err := l.d.SetProblem(ctx, id, text); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func problemID(folder int64) string { return "library.folder." + strconv.FormatInt(folder, 10) }
 
 // torrents — скачанное сейчас; без модуля загрузок — пусто.
 func (l *Library) torrents(ctx context.Context) ([]TorrentUnit, error) {

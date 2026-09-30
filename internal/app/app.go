@@ -25,6 +25,7 @@ import (
 	"kinodom/internal/history"
 	"kinodom/internal/httpx"
 	"kinodom/internal/iptv"
+	"kinodom/internal/library"
 	"kinodom/internal/logx"
 	"kinodom/internal/meta"
 	"kinodom/internal/netx"
@@ -84,6 +85,7 @@ type App struct {
 	Settings *settings.Service // настройки из пульта: меняются без перезапуска (этап 7)
 	IPTV     *iptv.Module      // каналы (модуль iptv, этап 8)
 	History  *history.Service  // история просмотров по устройствам (этап 8c)
+	Library  *library.Library  // медиатека: скачанное и папки заказчика (модуль library, этап 9)
 
 	kp        *meta.Kinopoisk
 	rutracker *rutracker.Rutracker
@@ -164,6 +166,7 @@ func New(ctx context.Context, o Options) (*App, error) {
 	if err := a.initIPTV(ctx, o, vals); err != nil {
 		return fail(err)
 	}
+	a.initLibrary(ctx)
 	a.API.SetStatus(a.statusFields)
 	// Следующие этапы добавляют сюда свои модули так же: a.Sup.Add(m, a.ModuleEnabled(ctx, m.Name())).
 	return a, nil
@@ -308,6 +311,12 @@ func (a *App) initCatalog(ctx context.Context, o Options, v settings.Values) err
 	a.Sup.Add(edge.NewModule(a.Log.With("module", "edge")), edgeOn)
 	a.Catalog = catalog.New(catalog.Options{DB: a.DB, Sources: []source.Source{rutorSrc, rtSrc}, Sections: sections,
 		Ratings: a.Ratings, Images: a.Images, KinopoiskPoster: a.kp.PosterURL, TorrentFormat: torrentFormat,
+		KeepImages: func(ctx context.Context) (map[string]bool, error) { // постеры медиатеки (этап 9)
+			if a.Library == nil {
+				return nil, nil
+			}
+			return a.Library.ImageKeys(ctx)
+		},
 		PreferredFormat: v.PreferredFormat, Log: log})
 	a.Catalog.Register(a.API)
 	a.API.Handle("GET /api/v1/releases/{id}", a.Catalog.Name(), http.HandlerFunc(a.handleRelease))
