@@ -12,6 +12,35 @@ export function progressLine(name, p) {
   return p.finished ? `${name}: ${ago(p.finished)}` : `${name}: ещё не было`;
 }
 
+// hideCard — карточка «Скрытие»: категории, страны, языки, другие часовые пояса. draft — черновик
+// {categories, countries, languages, otherZones}, меняется отметками; «Сохранить» включается сразу, как
+// черновик разошёлся с настройками iv (опрос перерисовывает экран раз в 5 с — ждать его нельзя).
+export function hideCard(iv, all, draft, editable, onSave) {
+  const saved = () => JSON.stringify({ categories: iv.hiddenCategories, countries: iv.hiddenCountries, languages: iv.hiddenLanguages, otherZones: iv.hideOtherZones });
+  const save = editable ? h('button', { class: 'btn inv', type: 'button', 'data-key': 'hide-save', onclick: onSave }, icon('save'), 'Сохранить') : null;
+  const sync = () => {
+    if (save) save.disabled = JSON.stringify(draft) === saved();
+  };
+  sync();
+  const counts = (list) => new Map(list.map((x) => [x.id, x.count]));
+  const catCount = counts(all.categories);
+  const box = (kind, id, name, n) => h('label', { class: 'check' },
+    h('input', { type: 'checkbox', checked: draft[kind].includes(id), disabled: !editable, 'data-key': `hide-${kind}-${id || 'none'}`, onchange: (e) => {
+      draft[kind] = e.target.checked ? [...draft[kind], id] : draft[kind].filter((x) => x !== id);
+      sync();
+    } }), n === undefined ? name : `${name} · ${n}`);
+  const group = (title, items) => h('div', { class: 'hide-group' }, h('div', { class: 'strong' }, title), h('div', { class: 'hide-list' }, items));
+  return h('div', { class: 'card' }, h('div', { class: 'row' }, h('div', { class: 'h grow' }, 'Скрытие'), save),
+    group('Категории', CATEGORIES.map(([id, name]) => box('categories', id, name, catCount.get(id)))),
+    group('Страны', all.countries.map((x) => box('countries', x.id, x.name, x.count))),
+    group('Языки', all.languages.map((x) => box('languages', x.id, x.name, x.count))),
+    h('label', { class: 'check' }, h('input', { type: 'checkbox', checked: draft.otherZones, disabled: !editable, 'data-key': 'hide-zones',
+      onchange: (e) => {
+        draft.otherZones = e.target.checked;
+        sync();
+      } }), 'Другие часовые пояса'));
+}
+
 export function render(root, r, ctx) {
   const content = layout(root, 'iptv', 'Каналы');
   content.append(channelTabs('iptv'));
@@ -70,7 +99,7 @@ export function render(root, r, ctx) {
     keepFocus(root, () => fill(content, 
       canEdit() ? null : remoteNote(),
       error ? h('p', { class: 'error' }, error) : null,
-      playlistsCard(), epgCard(), hideCard(), hiddenChannelsCard(), favoritesCard()));
+      playlistsCard(), epgCard(), hidingCard(), hiddenChannelsCard(), favoritesCard()));
   }
 
   function playlistsCard() {
@@ -165,31 +194,15 @@ export function render(root, r, ctx) {
       h('label', { class: 'fld' }, 'Часовой пояс каналов', zone));
   }
 
-  function hideCard() {
+  function hidingCard() {
     if (!all) return h('div', { class: 'card' }, h('div', { class: 'h' }, 'Скрытие'), h('p', { class: 'muted' }, 'Загружается…'));
     const iv = settings.iptv;
     if (!hidden) hidden = { categories: [...iv.hiddenCategories], countries: [...iv.hiddenCountries], languages: [...iv.hiddenLanguages], otherZones: iv.hideOtherZones };
-    const counts = (list) => new Map(list.map((x) => [x.id, x.count]));
-    const catCount = counts(all.categories);
-    const box = (kind, id, name, n) => h('label', { class: 'check' },
-      h('input', { type: 'checkbox', checked: hidden[kind].includes(id), disabled: !canEdit(), 'data-key': `hide-${kind}-${id || 'none'}`, onchange: (e) => {
-        hidden[kind] = e.target.checked ? [...hidden[kind], id] : hidden[kind].filter((x) => x !== id);
-      } }), n === undefined ? name : `${name} · ${n}`);
-    const group = (title, items) => h('div', { class: 'hide-group' }, h('div', { class: 'strong' }, title), h('div', { class: 'hide-list' }, items));
-    const dirty = JSON.stringify(hidden) !== JSON.stringify({ categories: iv.hiddenCategories, countries: iv.hiddenCountries, languages: iv.hiddenLanguages, otherZones: iv.hideOtherZones });
-    return h('div', { class: 'card' }, h('div', { class: 'row' }, h('div', { class: 'h grow' }, 'Скрытие'),
-      canEdit() ? h('button', { class: 'btn inv', type: 'button', disabled: !dirty, 'data-key': 'hide-save', onclick: () => act(async () => {
-        await put('/settings', { iptv: { hiddenCategories: hidden.categories, hiddenCountries: hidden.countries, hiddenLanguages: hidden.languages, hideOtherZones: hidden.otherZones } });
-        hidden = null;
-        await reloadChannels();
-      }) }, icon('save'), 'Сохранить') : null),
-      group('Категории', CATEGORIES.map(([id, name]) => box('categories', id, name, catCount.get(id)))),
-      group('Страны', all.countries.map((x) => box('countries', x.id, x.name, x.count))),
-      group('Языки', all.languages.map((x) => box('languages', x.id, x.name, x.count))),
-      h('label', { class: 'check' }, h('input', { type: 'checkbox', checked: hidden.otherZones, disabled: !canEdit(), 'data-key': 'hide-zones',
-        onchange: (e) => {
-          hidden.otherZones = e.target.checked;
-        } }), 'Другие часовые пояса'));
+    return hideCard(iv, all, hidden, canEdit(), () => act(async () => {
+      await put('/settings', { iptv: { hiddenCategories: hidden.categories, hiddenCountries: hidden.countries, hiddenLanguages: hidden.languages, hideOtherZones: hidden.otherZones } });
+      hidden = null;
+      await reloadChannels();
+    }));
   }
 
   function hiddenChannelsCard() {

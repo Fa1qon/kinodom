@@ -995,3 +995,52 @@ for (const [got, want] of checks) {
 		t.Errorf("%v\n%s", err, out)
 	}
 }
+
+// «Скрытие» в «Настройках → Каналы»: отметка сразу включает «Сохранить» (найдено вживую, 11b-А: кнопка
+// включалась только перерисовкой опроса раз в 5 с — с пульта ТВ фокус на неё не попадал).
+func TestPultHideCardSaveEnables(t *testing.T) {
+	node := lookNode(t)
+	script := `
+globalThis.Node = class {};
+class El extends Node {
+  constructor(tag) { super(); this.tag = tag; this.attrs = {}; this.listeners = {}; this.children = []; this.style = {}; }
+  setAttribute(k, v) { this.attrs[k] = v; }
+  addEventListener(k, f) { this.listeners[k] = f; }
+  append(...k) { this.children.push(...k); }
+  all() { return [this, ...this.children.flatMap((c) => (c instanceof El ? c.all() : []))]; }
+}
+globalThis.document = { createElement: (t) => new El(t), createElementNS: (_, t) => new El(t) };
+const { hideCard } = await import('./views/settings-iptv.js');
+const iv = { hiddenCategories: [], hiddenCountries: [], hiddenLanguages: [], hideOtherZones: false };
+const all = { categories: [], countries: [{ id: 'RU', name: 'Россия', count: 2 }],
+  languages: [{ id: 'rus', name: 'русский', count: 2 }, { id: 'eng', name: 'английский', count: 1 }] };
+const draft = { categories: [], countries: [], languages: [], otherZones: false };
+let saved = 0;
+const card = hideCard(iv, all, draft, true, () => saved++);
+const find = (key) => card.all().find((e) => e.attrs['data-key'] === key);
+const btn = find('hide-save');
+const eng = find('hide-languages-eng');
+const checks = [];
+checks.push(['без изменений — выключена', btn.disabled === true]);
+eng.checked = true;
+eng.listeners.change({ target: eng });
+checks.push(['отметили язык — включена сразу', btn.disabled === false]);
+checks.push(['черновик', JSON.stringify(draft.languages) === '["eng"]']);
+eng.checked = false;
+eng.listeners.change({ target: eng });
+checks.push(['сняли отметку — снова выключена', btn.disabled === true]);
+btn.listeners.click();
+checks.push(['нажатие сохраняет', saved === 1]);
+for (const [name, ok] of checks) {
+  if (!ok) {
+    console.error('не выполнено:', name);
+    process.exitCode = 1;
+  }
+}
+`
+	cmd := exec.Command(node, "--input-type=module", "--no-warnings", "-e", script)
+	cmd.Dir = "static"
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Errorf("%v\n%s", err, out)
+	}
+}
