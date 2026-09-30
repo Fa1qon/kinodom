@@ -346,6 +346,24 @@ func TestStubDetectionOffByDefault(t *testing.T) {
 	}
 }
 
+// Х1: Accept картинок без AVIF — его разбирать нечем (иначе хостинг отдаст AVIF и постера не будет).
+func TestImagesAcceptNoAVIF(t *testing.T) {
+	pic := pngBytes(t)
+	var accept atomic.Value
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		accept.Store(r.Header.Get("Accept"))
+		w.Write(pic)
+	}))
+	t.Cleanup(srv.Close)
+	im := newImages(t, "")
+	if _, err := im.Fetch(ctx, srv.URL+"/p.png", Direct); err != nil {
+		t.Fatal(err)
+	}
+	if a, _ := accept.Load().(string); strings.Contains(a, "avif") || a == "" {
+		t.Fatalf("Accept %q", a)
+	}
+}
+
 // Неудача сети или ответ не 200 (хвост Х29): с FailFor адрес не запрашивается снова столько времени —
 // логотип, которого нет, не качается на каждой перерисовке списка каналов; потом — снова.
 func TestFailedFetchRemembered(t *testing.T) {

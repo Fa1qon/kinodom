@@ -3,8 +3,11 @@ package meta
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net/http"
+	"net/http/httptest"
 	"strings"
+	"sync/atomic"
 	"testing"
 )
 
@@ -125,7 +128,38 @@ func TestWithoutKey(t *testing.T) {
 
 func TestPosterURL(t *testing.T) {
 	kp := NewKinopoisk(KinopoiskOptions{})
-	if got := kp.PosterURL(301); got != "https://kinopoiskapiunofficial.tech/images/posters/kp/301.jpg" {
+	// Постер — прямо с сайта Кинопоиска (спека 11b, 5.2), без переадресации через kinopoiskapiunofficial.tech.
+	if got := kp.PosterURL(301); got != "https://st.kp.yandex.net/images/film_big/301.jpg" {
 		t.Fatalf("постер %s", got)
+	}
+}
+
+// Х1: ключ не уходит на чужой хост при переадресации.
+func TestKeyNotForwardedOnRedirect(t *testing.T) {
+	var got atomic.Value
+	other := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		got.Store(r.Header.Get("X-API-KEY"))
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprint(w, filmJSON(301, "Матрица", "The Matrix", 1999, 8.5))
+	}))
+	t.Cleanup(other.Close)
+	api := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		otherURL := strings.Replace(other.URL, "127.0.0.1", "localhost", 1) // другой хост
+		http.Redirect(w, r, otherURL+r.URL.Path, http.StatusFound)
+	}))
+	t.Cleanup(api.Close)
+	kp := NewKinopoisk(KinopoiskOptions{Key: testKey, APIBase: api.URL, Rate: 1000})
+	kp.Film(ctx, 301)
+	if k, _ := got.Load().(string); k != "" {
+		t.Fatalf("ключ ушёл на чужой хост: %q", k)
+	}
+}
+
+// Х1: прокси из окружения клиент ключа не берёт — Кинопоиск напрямую (спека, раздел 8).
+func TestKeyClientNoEnvProxy(t *testing.T) {
+	kp := NewKinopoisk(KinopoiskOptions{})
+	tr, ok := kp.http.Transport.(*http.Transport)
+	if !ok || tr.Proxy != nil {
+		t.Fatalf("транспорт %T, прокси из окружения: %v", kp.http.Transport, ok && tr.Proxy != nil)
 	}
 }
