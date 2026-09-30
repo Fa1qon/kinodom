@@ -52,15 +52,18 @@ func TestInstallerScript(t *testing.T) {
 		`Source: "kinodom.ico"`,
 		`IconFilename: "{app}\kinodom.ico"`,
 		`Parameters: "tray --open"`,
-		`Parameters: "tray"; Flags: runasoriginaluser nowait`,
+		// Значок — сразу после удачного kinodom install, и в тихом обновлении: строка [Run] без
+		// postinstall выполняется до ssPostInstall и проверку «установка прошла» не проходит
+		// (проверено тихим обновлением на этом ПК).
+		`ExecAsOriginalUser(ExpandConstant('{app}\kinodomw.exe'), 'tray'`,
 	} {
 		if !strings.Contains(s, want) {
 			t.Errorf("в kinodom.iss нет %q", want)
 		}
 	}
-	for _, banned := range []string{"AfterInstall:", "RaiseException("} {
+	for _, banned := range []string{"AfterInstall:", "RaiseException(", `Parameters: "tray"; Flags: runasoriginaluser`} {
 		if strings.Contains(s, banned) {
-			t.Errorf("в kinodom.iss есть %q — установка при отказе не откатится", banned)
+			t.Errorf("в kinodom.iss есть %q — см. комментарии к списку обязательного", banned)
 		}
 	}
 }

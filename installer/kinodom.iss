@@ -62,8 +62,8 @@ Type: files; Name: "{autoprograms}\Kinodom.url"
 Type: files; Name: "{autodesktop}\Kinodom.url"
 
 [Run]
-; Значок в трее — сразу, от имени пользователя (установщик работает от администратора); пульт — флажком.
-Filename: "{app}\kinodomw.exe"; Parameters: "tray"; Flags: runasoriginaluser nowait; Check: InstallSucceeded
+; Пульт — флажком на странице «Готово». Значок в трее запускает CurStepChanged сразу после удачного
+; kinodom install (строка [Run] без postinstall выполняется раньше и проверку не проходит).
 Filename: "{app}\kinodomw.exe"; Parameters: "tray --open"; Description: "Открыть Kinodom"; Flags: postinstall nowait skipifsilent; Check: InstallSucceeded
 
 [Code]
@@ -218,7 +218,12 @@ begin
     WizardForm.StatusLabel.Caption := 'Настраиваю службу Kinodom…';
     if Exec(ExpandConstant('{app}\kinodom.exe'), 'install ' + InstallParams(ResultFile), '', SW_HIDE,
        ewWaitUntilTerminated, Code) and (Code = 0) then
-      InstallOK := True
+    begin
+      InstallOK := True;
+      { Значок в трее — от имени пользователя, запустившего установку (сам установщик — от администратора);
+        и при тихом обновлении: stop его закрывал. }
+      ExecAsOriginalUser(ExpandConstant('{app}\kinodomw.exe'), 'tray', '', SW_SHOWNORMAL, ewNoWait, Code);
+    end
     else
     begin
       FailText := ResultText(ResultFile, Code);
