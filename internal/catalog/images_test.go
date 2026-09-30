@@ -1,6 +1,7 @@
 package catalog
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"testing"
@@ -51,5 +52,33 @@ func TestSweepImagesKeepsCatalogPosters(t *testing.T) {
 	db.R.QueryRow(`SELECT image_key FROM releases WHERE topic_id = '2'`).Scan(&key)
 	if key != "" {
 		t.Fatalf("у раздачи остался ключ удалённой картинки %q", key)
+	}
+}
+
+// Постеры медиатеки (спека этапа 9, раздел 5.5) — через Options.KeepImages: чистка их не трогает,
+// даже если раздача давно выпала из каталога.
+func TestSweepImagesKeepsExtra(t *testing.T) {
+	dir := t.TempDir()
+	images, err := meta.NewImages(meta.ImagesOptions{Dir: dir})
+	if err != nil {
+		t.Fatal(err)
+	}
+	lib := meta.ImageKey("http://h/lib.jpg")
+	db := openDB(t)
+	c, clk := newCatalog(t, db, func(o *Options) {
+		o.Images = images
+		o.KeepImages = func(context.Context) (map[string]bool, error) { return map[string]bool{lib: true}, nil }
+	})
+	p := filepath.Join(dir, lib+".jpg")
+	if err := os.WriteFile(p, []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	old := clk.now().Add(-90 * 24 * time.Hour)
+	os.Chtimes(p, old, old)
+	if err := c.sweepImages(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(p); err != nil {
+		t.Errorf("постер медиатеки удалён: %v", err)
 	}
 }

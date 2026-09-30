@@ -191,40 +191,10 @@ func (w walker) walk(dir string, fn func(rel string, e fs.DirEntry, f ScannedFil
 func (w walker) collect(unit string) []ScannedFile {
 	var out []ScannedFile
 	w.walk(unit, func(rel string, e fs.DirEntry, f ScannedFile) {
-		parts := strings.Split(filepath.Dir(rel), string(filepath.Separator))
-		var section []string
-		for i := len(parts) - 1; i >= 0; i-- {
-			if parts[i] == "." {
-				continue
-			}
-			if n, ok := SeasonDir(parts[i]); ok {
-				if f.Season == 0 {
-					f.Season = n
-				}
-				continue
-			}
-			section = append([]string{parts[i]}, section...)
-		}
-		f.Section = strings.Join(section, " / ")
-		s, ep := Episode(e.Name())
-		if f.Season == 0 {
-			f.Season = s
-		}
-		f.Episode = ep
+		f.Season, f.Section, f.Episode = place(strings.Split(filepath.Dir(rel), string(filepath.Separator)), e.Name())
 		out = append(out, f)
 	})
-	slices.SortFunc(out, func(a, b ScannedFile) int {
-		if a.Season != b.Season {
-			return a.Season - b.Season
-		}
-		if c := natCompare(a.Section, b.Section); c != 0 {
-			return c
-		}
-		if a.Episode != b.Episode && a.Episode > 0 && b.Episode > 0 {
-			return a.Episode - b.Episode
-		}
-		return natCompare(filepath.Base(a.Path), filepath.Base(b.Path))
-	})
+	slices.SortFunc(out, fileOrder)
 	return out
 }
 
