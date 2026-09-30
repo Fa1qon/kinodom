@@ -12,6 +12,7 @@ import (
 	"kinodom/internal/power"
 	"kinodom/internal/store"
 	"kinodom/internal/supervisor"
+	"kinodom/internal/watch"
 )
 
 // Ratings — рейтинги Кинопоиска по номерам (meta.Ratings).
@@ -62,11 +63,15 @@ type Downloads interface {
 	TorrentUnits(ctx context.Context) ([]TorrentUnit, error)
 }
 
-// History — история просмотров по устройствам (history.Service).
+// History — история просмотров по устройствам (history.Service): места, «продолжить», длительность;
+// Report — место по чтению потока (watch).
 type History interface {
 	Files(ctx context.Context, device, hash string) ([]history.FileProgress, error)
 	List(ctx context.Context, device string) ([]history.Item, error)
 	StartSec(ctx context.Context, device, hash string, index int) int
+	Report(ctx context.Context, device, hash string, index int, offset, size int64)
+	Duration(ctx context.Context, hash string, index int) (float64, bool)
+	SetDuration(ctx context.Context, hash string, index int, sec float64) error
 }
 
 type Options struct {
@@ -96,6 +101,10 @@ type Library struct {
 	lastScan time.Time
 	problems map[int64]string // папка категории → not_found, no_access
 	kpPause  time.Time        // квота Кинопоиска кончилась — распознавание не раньше
+
+	tracker  *watch.Tracker                         // место по чтению потока файлов из папок
+	durTried sync.Map                               // «раздача/номер» → длительность уже пробовали узнать
+	open     func(name string) (mediaReader, error) // nil — os.Open; тесты обрывают чтение
 }
 
 // ScanState — идёт ли обход и когда был последний.
@@ -127,7 +136,13 @@ func New(o Options) *Library {
 	if o.KeepDays == nil {
 		o.KeepDays = func() int { return 14 }
 	}
-	return &Library{o: o, d: db{o.DB}, log: o.Log, now: o.Now, problems: map[int64]string{}}
+	l := &Library{o: o, d: db{o.DB}, log: o.Log, now: o.Now, problems: map[int64]string{}}
+	var rep watch.Reporter
+	if o.History != nil {
+		rep = o.History
+	}
+	l.tracker = watch.New(rep, l.now)
+	return l
 }
 
 func (l *Library) Name() string { return "library" }
@@ -139,12 +154,16 @@ func (l *Library) Run(ctx context.Context) error {
 	l.startScan(true)
 	t := time.NewTicker(scanEvery)
 	defer t.Stop()
+	sec := time.NewTicker(time.Second)
+	defer sec.Stop()
 	for {
 		select {
 		case <-ctx.Done():
 			return nil
 		case <-t.C:
 			l.startScan(true)
+		case <-sec.C:
+			l.tracker.Tick(l.now())
 		}
 	}
 }
