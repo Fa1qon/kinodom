@@ -290,6 +290,43 @@ for (const [got, want] of checks) {
 	}
 }
 
+// «Смотреть» на этом ПК: ссылка kinodom://; если браузер за время ожидания не отдал фокус плееру
+// (обработчик ссылки не установлен) — запасной адрес .m3u8 (отзыв заказчика 2026-09-30).
+func TestPultOpenPlayer(t *testing.T) {
+	node := lookNode(t)
+	script := `
+import { openPlayer } from './ui.js';
+const env = () => {
+  const e = { listeners: {}, loc: { href: '' }, doc: { hidden: false }, timers: [] };
+  e.win = { addEventListener: (n, f) => { e.listeners[n] = f; }, removeEventListener: (n) => { delete e.listeners[n]; } };
+  e.wait = (f) => e.timers.push(f);
+  return e;
+};
+const a = env();
+openPlayer('kinodom://play?x', '/m3u/a.m3u8', a);
+a.timers.forEach((f) => f());
+const b = env();
+openPlayer('kinodom://play?x', '/m3u/a.m3u8', b);
+b.listeners.blur();
+b.timers.forEach((f) => f());
+const checks = [
+  [a.loc.href, '/m3u/a.m3u8'], // плеер не открылся — скачать .m3u8
+  [b.loc.href, 'kinodom://play?x'], // плеер забрал фокус — ничего больше
+];
+for (const [got, want] of checks) {
+  if (got !== want) {
+    console.error(JSON.stringify(got), '≠', JSON.stringify(want));
+    process.exitCode = 1;
+  }
+}
+`
+	cmd := exec.Command(node, "--input-type=module", "--no-warnings", "-e", script)
+	cmd.Dir = "static"
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Errorf("%v\n%s", err, out)
+	}
+}
+
 // Пульт телевизора: стрелка переводит фокус на ближайший элемент в эту сторону; элемент на одной
 // линии важнее более близкого наискосок; в сторону, где ничего нет, фокус не уходит; влево и
 // вправо — только в своём ряду (с единственного раздела вправо — не в сетку наискосок).

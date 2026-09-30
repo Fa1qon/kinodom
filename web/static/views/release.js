@@ -1,7 +1,7 @@
 // Раздача: постер, название, теги, описание; до «Скачать» — одна светлая кнопка, после — у каждого
 // файла прогресс и «Смотреть» цвета готовности, справа — панель файла в фокусе; ниже — «Другие раздачи»
 // фильма и «Искать на трекерах» (спека этапа 7, разделы 5.4, 5.5, 6.3 и 10.7).
-import { h, icon, size, speed, rating, minutes, ready, poll, copyText, store, plural, shortNames, keepFocus, fileFormat } from '../ui.js';
+import { h, icon, size, speed, rating, minutes, ready, poll, copyText, store, plural, shortNames, keepFocus, fileFormat, openPlayer } from '../ui.js';
 import { get, post, put } from '../api.js';
 import { whereStopped, resumeIndex } from './history.js';
 import { poster } from './catalog.js';
@@ -281,7 +281,8 @@ export function render(root, r, ctx) {
     drawLive();
     try {
       const res = await post(`/torrents/${rel.hash}/files/${f.index}/watch`, fromStart ? { fromStart: true } : {});
-      location.href = ctx.local && res.launchUrl ? res.launchUrl : playerLink(res);
+      if (ctx.local && res.launchUrl) openPlayer(res.launchUrl, res.m3uUrl);
+      else location.href = playerLink(res);
     } catch (e) {
       actionError = e.message;
     }
