@@ -2,3 +2,4 @@
 *.exe
 spikes/**/data/
 bin/
+dist/
