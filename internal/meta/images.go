@@ -44,6 +44,9 @@ type ImagesOptions struct {
 	// AllowPrivate — тесты: картинки с адресов этого ПК (фейковые хостинги). В работе адреса этого
 	// ПК и домашней сети не скачиваются: они приходят из описаний раздач (ревью 5b, M10).
 	AllowPrivate bool
+	// FailFor — неудача сети или ответ не 200 запоминается по адресу на столько: адрес не запрашивается
+	// снова (логотипы каналов — хвост Х29). 0 — не запоминается (постеры повторяет каталог).
+	FailFor time.Duration
 }
 
 // Images — картинки, которые сервер скачивает к себе и отдаёт клиентам сам (спека, раздел 8):
@@ -57,6 +60,12 @@ type Images struct {
 
 	mu      sync.Mutex
 	noImage map[string]time.Time // адрес → когда оказалось, что там не картинка
+	failed  map[string]failure   // адрес → неудача сети (FailFor)
+}
+
+type failure struct {
+	at  time.Time
+	err error
 }
 
 // noImageFor — адрес, где не картинка (заглушка хостинга, страница), не качается снова столько:
@@ -98,7 +107,7 @@ func NewImages(o ImagesOptions) (*Images, error) {
 		proxied.CheckRedirect, direct.CheckRedirect = publicRedirect, publicRedirect
 	}
 	return &Images{o: o, proxied: proxied, direct: direct, lim: rate.NewLimiter(o.Rate, 1),
-		noImage: map[string]time.Time{}}, nil
+		noImage: map[string]time.Time{}, failed: map[string]failure{}}, nil
 }
 
 // publicRedirect — редирект картинки на адрес этого ПК или домашней сети не выполняется (M10);
@@ -133,15 +142,24 @@ func (im *Images) Fetch(ctx context.Context, src string, via Via) (string, error
 	}
 	im.mu.Lock()
 	at, known := im.noImage[src]
+	f, failed := im.failed[src]
 	im.mu.Unlock()
 	if known && time.Since(at) < noImageFor {
 		return "", ErrNoImage
 	}
+	if failed && time.Since(f.at) < im.o.FailFor {
+		return "", f.err
+	}
 	key, err = im.fetch(ctx, u, src, key, via)
-	if errors.Is(err, ErrNoImage) {
-		im.mu.Lock()
+	im.mu.Lock()
+	defer im.mu.Unlock()
+	switch {
+	case errors.Is(err, ErrNoImage):
 		im.noImage[src] = time.Now()
-		im.mu.Unlock()
+	case err != nil && im.o.FailFor > 0 && ctx.Err() == nil:
+		im.failed[src] = failure{time.Now(), err}
+	case err == nil:
+		delete(im.failed, src)
 	}
 	return key, err
 }

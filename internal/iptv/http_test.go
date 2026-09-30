@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -149,6 +150,42 @@ func TestHTTPChannelsAndFavorites(t *testing.T) {
 	}
 	if code := c.json("PUT", "/api/v1/iptv/favorites", fromOutside, map[string]any{"keys": []string{"ntv"}}, nil); code != 403 {
 		t.Errorf("избранное снаружи: %d", code)
+	}
+}
+
+// Фильтры над списком (замечание № 6 этапа 11b): страны и языки, скрытые в настройках, в «Все страны» и
+// «Все языки» не показываются — даже если канал с ними виден (избранное, федеральный блок).
+func TestHTTPFacetsSkipHidden(t *testing.T) {
+	m, c, _ := startHTTP(t)
+	if code := c.json("PUT", "/api/v1/iptv/favorites", fromPhone, map[string]any{"keys": []string{"bbc"}}, nil); code != 204 {
+		t.Fatalf("избранное: %d", code)
+	}
+	m.SetHidden(Hidden{Languages: []string{"eng", ""}, Countries: []string{"GB"}})
+	var resp struct {
+		Channels  []ChannelView `json:"channels"`
+		Countries []Facet       `json:"countries"`
+		Languages []Facet       `json:"languages"`
+	}
+	c.json("GET", "/api/v1/channels", fromPhone, nil, &resp)
+	if got := keys(resp.Channels); got != "bbc:favorite ntv:federal" {
+		t.Fatalf("каналы: %s", got)
+	}
+	for _, f := range resp.Languages {
+		if f.ID == "eng" || f.ID == "" {
+			t.Errorf("скрытый язык в фильтре: %+v", resp.Languages)
+		}
+	}
+	for _, f := range resp.Countries {
+		if f.ID == "GB" {
+			t.Errorf("скрытая страна в фильтре: %+v", resp.Countries)
+		}
+	}
+	var all struct {
+		Languages []Facet `json:"languages"`
+	}
+	c.json("GET", "/api/v1/channels?all=1", fromPhone, nil, &all)
+	if !slices.ContainsFunc(all.Languages, func(f Facet) bool { return f.ID == "eng" }) {
+		t.Errorf("?all=1 (настройки скрытия) — все языки: %+v", all.Languages)
 	}
 }
 

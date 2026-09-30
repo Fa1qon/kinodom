@@ -351,8 +351,10 @@ func oneAddress(site string) []string {
 // initIPTV — модуль iptv (спека этапа 8): плейлисты, каналы, проверки. Логотипы каналов — в своём кэше
 // картинок (data\logos): кэш постеров чистит каталог. Телепрограмма, плейлисты и логотипы — напрямую.
 func (a *App) initIPTV(ctx context.Context, o Options, v settings.Values) error {
+	// Логотип, который не скачался, час не запрашивается снова: список каналов перерисовывается, а
+	// сломанный адрес качался бы на каждой перерисовке (хвост Х29).
 	logos, err := meta.NewImages(meta.ImagesOptions{Dir: a.Paths.Logos, Rate: 20, Log: a.Log.With("module", "logos"),
-		AllowPrivate: o.LocalImages})
+		AllowPrivate: o.LocalImages, FailFor: time.Hour})
 	if err != nil {
 		return err
 	}
@@ -361,6 +363,7 @@ func (a *App) initIPTV(ctx context.Context, o Options, v settings.Values) error 
 	a.IPTV.Register(a.API, func(w http.ResponseWriter, r *http.Request, src string) {
 		key, err := logos.Fetch(r.Context(), src, meta.Direct)
 		if err != nil {
+			w.Header().Set("Cache-Control", "max-age=3600") // браузер ТВ не спрашивает сломанный логотип снова час
 			http.NotFound(w, r)
 			return
 		}

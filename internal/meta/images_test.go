@@ -232,6 +232,34 @@ func TestNoImageAddressIsRemembered(t *testing.T) {
 	}
 }
 
+// Неудача сети или ответ не 200 (хвост Х29): с FailFor адрес не запрашивается снова столько времени —
+// логотип, которого нет, не качается на каждой перерисовке списка каналов; потом — снова.
+func TestFailedFetchRemembered(t *testing.T) {
+	var hits atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		hits.Add(1)
+		w.WriteHeader(http.StatusInternalServerError)
+	}))
+	t.Cleanup(srv.Close)
+	im, err := NewImages(ImagesOptions{Dir: t.TempDir(), Rate: 1000, AllowPrivate: true, FailFor: 200 * time.Millisecond})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for range 3 {
+		if _, err := im.Fetch(ctx, srv.URL+"/logo.png", Direct); err == nil {
+			t.Fatal("ответ 500 — не ошибка")
+		}
+	}
+	if hits.Load() != 1 {
+		t.Fatalf("неудачный адрес запрошен %d раз за FailFor", hits.Load())
+	}
+	time.Sleep(250 * time.Millisecond)
+	im.Fetch(ctx, srv.URL+"/logo.png", Direct)
+	if hits.Load() != 2 {
+		t.Fatalf("после FailFor адрес не запрошен снова: %d", hits.Load())
+	}
+}
+
 // Адреса этого ПК и домашней сети из описаний раздач не скачиваются — ни прямо, ни по имени,
 // которое указывает в домашнюю сеть; сам прокси в домашней сети при этом работает (ревью 5b, M10).
 func TestPrivateAddressesAreNotFetched(t *testing.T) {
