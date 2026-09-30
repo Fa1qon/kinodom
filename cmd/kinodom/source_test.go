@@ -94,7 +94,14 @@ func runRutracker(t *testing.T, s *rutrackertest.Server, args ...string) (int, s
 	return code, out.String(), errb.String()
 }
 
+// noRutrackerEnv — пара Rutracker разработчика из окружения не должна попадать в тесты.
+func noRutrackerEnv(t *testing.T) {
+	t.Setenv("KINODOM_RUTRACKER_LOGIN", "")
+	t.Setenv("KINODOM_RUTRACKER_PASSWORD", "")
+}
+
 func TestSourceRutrackerAPI(t *testing.T) {
+	noRutrackerEnv(t)
 	s := rutrackertest.NewServer(t)
 	code, out, errOut := runRutracker(t, s, "categories")
 	if code != 0 || !strings.Contains(out, "[Док] Космос") {
@@ -111,11 +118,15 @@ func TestSourceRutrackerAPI(t *testing.T) {
 }
 
 func TestSourceRutrackerDetailsAndSearch(t *testing.T) {
+	noRutrackerEnv(t)
 	s := rutrackertest.NewServer(t)
 	s.Login, s.Password = "user", "pass"
 	code, out, errOut := runRutracker(t, s, "details", "6914565")
 	if code != 0 || !strings.Contains(out, "Экстрасенсы") {
 		t.Fatalf("details: код %d\n%s\n%s", code, out, errOut)
+	}
+	if n := s.Logins(); n != 0 {
+		t.Fatalf("details без пары в окружении теста вошёл %d раз — пара взята из окружения разработчика", n)
 	}
 	t.Setenv("KINODOM_RUTRACKER_LOGIN", "user")
 	t.Setenv("KINODOM_RUTRACKER_PASSWORD", "pass")

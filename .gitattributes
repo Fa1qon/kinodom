@@ -1,3 +1,11 @@
+*.go text eol=lf
+*.js text eol=lf
+*.css text eol=lf
+*.html text eol=lf
+*.sql text eol=lf
+*.md text eol=lf
+*.ps1 text eol=lf
+*.iss text eol=lf
 **/testdata/** -text
 *.torrent binary
 *.png binary
