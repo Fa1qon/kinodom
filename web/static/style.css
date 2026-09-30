@@ -258,6 +258,8 @@ a.res-row:hover { background: var(--hover); }
 .tile { flex: 1; padding: 18px 22px; border: 1px solid var(--line); }
 .tile .v { font: 700 28px var(--display); margin-top: 6px; }
 .two-cols { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; align-items: start; }
+/* hidden сильнее display из классов (.col — flex): иначе свёрнутое не сворачивается. */
+[hidden] { display: none !important; }
 .col { display: flex; flex-direction: column; gap: 16px; min-width: 0; }
 .card.tight { gap: 4px; }
 
@@ -281,8 +283,6 @@ a.res-row:hover { background: var(--hover); }
 .setup-foot { padding-top: 4px; }
 .check-result.good { color: var(--green); }
 .check-result.bad { color: var(--yellow); }
-.kp-steps { margin: 0; padding-left: 22px; display: flex; flex-direction: column; gap: 6px; }
-.kp-steps a { color: var(--text); text-decoration: underline; }
 .setup > .error:empty, .dlg .error:empty { display: none; }
 .row.folder-row { flex-wrap: nowrap; }
 .folder-row .ellipsis { min-width: 0; }

@@ -208,7 +208,7 @@ func (im *Images) fetch(ctx context.Context, u *url.URL, src, key string, via Vi
 		return "", ErrNoImage
 	}
 	req.Header.Set("User-Agent", browserUA)
-	req.Header.Set("Accept", "image/avif,image/webp,image/*,*/*;q=0.8")
+	req.Header.Set("Accept", "image/webp,image/png,image/jpeg,image/*;q=0.8") // без AVIF: его разбирать нечем (Х1)
 	resp, err := client.Do(req)
 	if err != nil {
 		return "", fmt.Errorf("картинка %s: %w", u.Host, err)

@@ -11,7 +11,12 @@ import (
 
 // initLibrary — медиатека (спека этапа 9): скачанное в Kinodom и папки заказчика одними карточками.
 func (a *App) initLibrary(ctx context.Context) {
-	o := library.Options{DB: a.DB, KP: a.kp, Ratings: a.Ratings, Downloads: libraryDownloads{a}, History: a.History, Power: a.Power,
+	// Кинопоиск без токена, ключ — запасной (спека 11b, 5.6); вид фильма — из базы рейтингов.
+	kp := &meta.KPAny{Web: a.kpweb, Key: a.kp, Types: func(ctx context.Context, id int) (string, error) {
+		fs, err := a.Ratings.Films(ctx, []int{id})
+		return fs[id].Type, err
+	}}
+	o := library.Options{DB: a.DB, KP: kp, KPPoster: a.kp.PosterURL, Ratings: a.Ratings, Downloads: libraryDownloads{a}, History: a.History, Power: a.Power,
 		DownloadsDir: func() string { return a.Settings.Current().DownloadsDir },
 		KeepDays:     func() int { return a.Settings.Current().KeepDays },
 		Log:          a.Log.With("module", "library")}

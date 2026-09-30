@@ -16,7 +16,9 @@ import (
 	"time"
 
 	"golang.org/x/text/encoding/charmap"
+
 	"golang.org/x/time/rate"
+	"kinodom/internal/netx"
 )
 
 // Адреса Кинопоиска (спека, раздел 8; исследование, разделы 4, 11, 12). Кинопоиск — напрямую,
@@ -24,6 +26,7 @@ import (
 var (
 	DefaultKinopoiskAPI = "https://kinopoiskapiunofficial.tech"
 	DefaultRatingBase   = "https://rating.kinopoisk.ru"
+	DefaultKPPoster     = "https://st.kp.yandex.net" // постер по номеру — прямо с сайта (спека 11b, 5.2)
 )
 
 var (
@@ -48,6 +51,7 @@ type KinopoiskOptions struct {
 	Key        string        // ключ из настроек при старте; "" — только пути без ключа; дальше — SetKey
 	APIBase    string        // "" — DefaultKinopoiskAPI
 	RatingBase string        // "" — DefaultRatingBase
+	PosterBase string        // "" — DefaultKPPoster
 	Rate       rate.Limit    // 0 — 3 запроса/с (спека, раздел 5: заявлено 5, берём с запасом)
 	Timeout    time.Duration // 0 — 30 с
 }
@@ -70,6 +74,10 @@ func NewKinopoisk(o KinopoiskOptions) *Kinopoisk {
 	if o.RatingBase == "" {
 		o.RatingBase = DefaultRatingBase
 	}
+	if o.PosterBase == "" {
+		o.PosterBase = DefaultKPPoster
+	}
+	o.PosterBase = strings.TrimRight(o.PosterBase, "/")
 	o.APIBase = strings.TrimRight(o.APIBase, "/")
 	o.RatingBase = strings.TrimRight(o.RatingBase, "/")
 	if o.Rate == 0 {
@@ -78,7 +86,18 @@ func NewKinopoisk(o KinopoiskOptions) *Kinopoisk {
 	if o.Timeout == 0 {
 		o.Timeout = 30 * time.Second
 	}
-	return &Kinopoisk{o: o, http: &http.Client{Timeout: o.Timeout}, lim: rate.NewLimiter(o.Rate, 1), key: o.Key}
+	// Напрямую (прокси из окружения не берётся) и без ключа на чужом хосте после переадресации (Х1).
+	client := &http.Client{Transport: netx.NewTransport(nil), Timeout: o.Timeout,
+		CheckRedirect: func(req *http.Request, via []*http.Request) error {
+			if len(via) >= 10 {
+				return errors.New("слишком много переадресаций")
+			}
+			if req.URL.Host != via[0].URL.Host {
+				req.Header.Del("X-API-KEY")
+			}
+			return nil
+		}}
+	return &Kinopoisk{o: o, http: client, lim: rate.NewLimiter(o.Rate, 1), key: o.Key}
 }
 
 // SetKey — новый ключ из настроек: действует со следующего запроса, без перезапуска (хвост 5b).
@@ -103,7 +122,8 @@ type Film struct {
 	IMDbID     string
 	NameRu     string
 	NameOrig   string // nameOriginal, иначе nameEn
-	Year       int    // 0 — неизвестен
+	Year       int    // 0 — неизвестен; у сериала — год начала
+	YearEnd    int    // у сериала — год конца; 0 — идёт или неизвестен (Кинопоиск без токена)
 	Type       string // FILM, TV_SERIES, MINI_SERIES, TV_SHOW, VIDEO
 	Rating     float64
 	RatingIMDb float64 // 0 — рейтинга нет (фильм не вышел или мало оценок)
@@ -236,9 +256,10 @@ func (k *Kinopoisk) KeylessRating(ctx context.Context, id int) (kp, imdb float64
 	return kp, imdb, nil
 }
 
-// PosterURL — постер Кинопоиска без ключа и без квоты. Нет постера — редирект на no-poster.gif.
+// PosterURL — постер Кинопоиска по номеру прямо с сайта: без ключа и без квоты. Нет постера —
+// переадресация на /images/no-poster.gif (проверено вживую 2026-09-30).
 func (k *Kinopoisk) PosterURL(id int) string {
-	return k.o.APIBase + "/images/posters/kp/" + strconv.Itoa(id) + ".jpg"
+	return k.o.PosterBase + "/images/film_big/" + strconv.Itoa(id) + ".jpg"
 }
 
 func (k *Kinopoisk) getJSON(ctx context.Context, what, path string, q url.Values, v any) error {

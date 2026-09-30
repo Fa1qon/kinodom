@@ -62,7 +62,7 @@ func (c *Catalog) List(ctx context.Context, o ListOptions) (entries []Entry, tot
 	if err != nil {
 		return nil, 0, err
 	}
-	filtered = films(filtered, kp, c.PreferredFormat())
+	filtered, size := films(filtered, kp, c.PreferredFormat())
 	total = len(filtered)
 	if o.Offset >= total {
 		return []Entry{}, total, nil
@@ -82,7 +82,7 @@ func (c *Catalog) List(ctx context.Context, o ListOptions) (entries []Entry, tot
 		return nil, 0, err
 	}
 	for i, r := range page {
-		entries[i].Variants = max(1, len(vs[kp[r.ID]]))
+		entries[i].Variants = max(1, len(vs[kp[r.ID]]), size[r.ID])
 	}
 	return entries, total, nil
 }
@@ -133,6 +133,9 @@ func (c *Catalog) entries(ctx context.Context, rs []row) ([]Entry, error) {
 			CategoryID: r.CategoryID, Category: cmp.Or(names[CategoryRef{r.Tracker, r.CategoryID}], r.CategoryID), Seeders: r.Seeders,
 			Leechers: r.Leechers, Size: r.Size, Added: r.Added, InfoHash: r.InfoHash, ImageKey: r.ImageKey, Format: r.Format,
 			DetailsPending: r.DetailsAt.IsZero(), Rating: ratings[r.Tracker+":"+r.TopicID]}
+		if out[i].Rating.KinopoiskID == 0 && r.KinopoiskID > 0 {
+			out[i].Rating.KinopoiskID = r.KinopoiskID // номер из описания — до очереди рейтингов (медиатека, 11b-Б)
+		}
 	}
 	return out, nil
 }
