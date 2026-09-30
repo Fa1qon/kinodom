@@ -33,6 +33,14 @@ func TestFormatInText(t *testing.T) {
 		"ФОРМАТ: MPEG":                                                         "MPG",
 		"Формат субтитров: softsub (SRT)":                                      "",
 		"Описание без технических данных":                                      "",
+		// MediaInfo (хвост Х24): значение поля целиком — «MPEG-4», «MPEG Audio», «MPEG-TS» не MPG.
+		"Формат : MPEG-4\nКонтейнер: MKV":        "MKV",
+		"Формат : MPEG Audio\nФормат видео: AVI": "AVI",
+		"Формат: MPEG-TS":                        "",
+		"Формат : MPEG-4 Visual":                 "",
+		"Формат: MPEG-PS":                        "MPG",
+		"Контейнер: MKV (Matroska)":              "MKV",
+		"Формат видео: MKV, 1920x1080":           "MKV",
 	}
 	for text, want := range cases {
 		if got := FormatInText(text); got != want {

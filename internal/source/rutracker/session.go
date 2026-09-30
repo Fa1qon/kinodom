@@ -14,6 +14,7 @@ type Session struct {
 	Mirror    string
 	Cookies   []*http.Cookie
 	UserAgent string
+	Login     string // под каким логином сохранена ("" — гостем): чужая не восстанавливается (хвост Х40)
 	SavedAt   time.Time
 }
 
@@ -22,6 +23,7 @@ type Session struct {
 type SessionStore interface {
 	Load(ctx context.Context, tracker string) (Session, bool, error)
 	Save(ctx context.Context, tracker string, s Session) error
+	Delete(ctx context.Context, tracker string) error
 }
 
 // SetSessionStore подключает хранилище и восстанавливает сессию прошлого запуска — если она того же
@@ -36,8 +38,11 @@ func (r *Rutracker) SetSessionStore(s SessionStore) {
 		return
 	}
 	mirror := r.forum.Mirror()
-	if !ok || mirror == "" || sess.Mirror != mirror {
-		return
+	r.mu.Lock()
+	login := r.login
+	r.mu.Unlock()
+	if !ok || mirror == "" || sess.Mirror != mirror || sess.Login != login {
+		return // другое зеркало или другая учётная запись — прежний путь (пропуск и вход)
 	}
 	u, err := url.Parse(mirror + "/")
 	if err != nil {
@@ -54,11 +59,24 @@ func (r *Rutracker) SetSessionStore(s SessionStore) {
 	r.log.Info("Rutracker: сессия прошлого запуска восстановлена", "mirror", mirror) // без значений cookie
 }
 
+// forgetSession стирает сохранённую сессию: сменили или стёрли логин (хвост Х40).
+func (r *Rutracker) forgetSession() {
+	r.mu.Lock()
+	store := r.sessions
+	r.mu.Unlock()
+	if store == nil {
+		return
+	}
+	if err := store.Delete(context.Background(), Name); err != nil {
+		r.log.Warn("Rutracker: сохранённая сессия не стёрлась", "err", err)
+	}
+}
+
 // saveSession сохраняет cookie текущего зеркала и User-Agent — после пропуска Cloudflare и входа.
 // Вызывать без r.mu.
 func (r *Rutracker) saveSession(ctx context.Context) {
 	r.mu.Lock()
-	store := r.sessions
+	store, login := r.sessions, r.login
 	r.mu.Unlock()
 	mirror := r.forum.Mirror()
 	if store == nil || mirror == "" {
@@ -72,7 +90,7 @@ func (r *Rutracker) saveSession(ctx context.Context) {
 	for _, c := range r.jar.Cookies(u) {
 		cookies = append(cookies, &http.Cookie{Name: c.Name, Value: c.Value})
 	}
-	s := Session{Mirror: mirror, Cookies: cookies, UserAgent: r.forum.UserAgent(), SavedAt: r.now()}
+	s := Session{Mirror: mirror, Cookies: cookies, UserAgent: r.forum.UserAgent(), Login: login, SavedAt: r.now()}
 	if err := store.Save(context.WithoutCancel(ctx), Name, s); err != nil {
 		r.log.Warn("Rutracker: сессия не сохранилась", "err", err)
 	}

@@ -47,15 +47,26 @@ func Format(files []File) string {
 	return strings.Join(fs, ", ")
 }
 
-// reFormatLine — строка описания «Формат видео: MKV», «Формат: MKV», «Контейнер: MKV».
-var reFormatLine = regexp.MustCompile(`(?i)(?:формат(?:\s+видео)?|контейнер)\s*:\s*([a-z0-9]+)`)
+// reFormatLine — строка описания «Формат видео: MKV», «Формат: MKV», «Контейнер: MKV». Значение —
+// целиком, до запятой, скобки или конца строки (хвост Х24: «Формат : MPEG-4» из MediaInfo — не «MPEG»).
+var reFormatLine = regexp.MustCompile(`(?i)(?:формат(?:\s+видео)?|контейнер)\s*:\s*([^\r\n,(;]+)`)
+
+// formatAliases — значения поля, которые не расширение файла.
+var formatAliases = map[string]string{"mpeg-ps": "MPG"}
 
 // FormatInText — формат из описания раздачи: первая строка «Формат видео: …», «Формат: …» или
-// «Контейнер: …», где значение — формат видео. «Формат: AC3» у звука и «Формат: 16:9» пропускаются.
-// "" — не найден.
+// «Контейнер: …», где значение — ровно формат видео. «Формат: AC3» у звука, «Формат: 16:9» и
+// «Формат : MPEG Audio» / «MPEG-4» / «MPEG-TS» MediaInfo пропускаются. "" — не найден.
 func FormatInText(text string) string {
 	for _, m := range reFormatLine.FindAllStringSubmatch(text, -1) {
-		if f := formatByExt["."+strings.ToLower(m[1])]; f != "" {
+		v := strings.ToLower(strings.TrimSpace(m[1]))
+		if f := formatAliases[v]; f != "" {
+			return f
+		}
+		if strings.ContainsAny(v, " .") {
+			continue
+		}
+		if f := formatByExt["."+v]; f != "" {
 			return f
 		}
 	}
