@@ -1,5 +1,6 @@
-// «Настройки → Параметры»: Rutracker, Rutor (адреса вводит пользователь — этап 11a), прокси, Кинопоиск,
-// хранение, плеер и формат в приоритете.
+// «Настройки → Параметры»: Rutracker, Rutor (адреса вводит пользователь — этап 11a), прокси, хранение,
+// плеер и формат в приоритете; в «Дополнительно» — служебные адреса трекеров и запасной ключ Кинопоиска
+// (он работает без ключа — спека 11b, 5.7).
 // «Сохранить» отправляет только изменённые поля; ошибка поля — под полем; не из домашней сети — только
 // чтение (спека этапа 7, разделы 5.1, 6.3, 10.1 и 10.3).
 import { h, icon } from '../ui.js';
@@ -24,6 +25,14 @@ const FIELD = {
   'Формат в приоритете': 'preferredFormat',
 };
 const LOGIN = { none: 'Логин не задан', unknown: 'Вход ещё не проверялся', ok: 'Вход выполнен' };
+
+// kpKeyPatch — ключ Кинопоиска в PUT /settings: «Стереть» — пустой ключ (Х22); введён — он; пусто — не
+// менять (null).
+export function kpKeyPatch(value, erase) {
+  if (erase) return { key: '' };
+  const v = String(value || '').trim();
+  return v ? { key: v } : null;
+}
 
 export function render(root, r, ctx) {
   const saveBtn = h('button', { class: 'btn inv', type: 'submit', form: 'params', 'data-key': 'save' }, icon('save'), 'Сохранить');
@@ -97,11 +106,17 @@ export function render(root, r, ctx) {
     errs.preferredFormat = h('div', { class: 'error field-error' });
     errs.general = h('div', { class: 'error' });
     const loginBtn = h('button', { class: 'btn', type: 'button', disabled: !canEdit, 'data-key': 'login', onclick: relogin }, icon('login'), 'Войти');
-    // «Дополнительно» — служебные адреса трекеров; пусто — по адресу сайта. Открыто, если что-то задано.
-    const extra = h('div', { class: 'col', hidden: !(v.rutor.downloadAddress || v.rutracker.apiAddress || v.rutracker.feedAddress) },
+    // «Дополнительно» — служебные адреса трекеров (пусто — по адресу сайта) и запасной ключ Кинопоиска.
+    // Открыто, если что-то задано.
+    const erase = v.kinopoisk.keySet && canEdit
+      ? h('button', { class: 'btn', type: 'button', 'data-key': 'kp-erase', onclick: eraseKey }, icon('delete'), 'Стереть') : null;
+    const extra = h('div', { class: 'col', hidden: !(v.rutor.downloadAddress || v.rutracker.apiAddress || v.rutracker.feedAddress || v.kinopoisk.keySet) },
       field('Адрес .torrent Rutor', 'rutorDownload', input('rutorDownload', v.rutor.downloadAddress)),
       field('Адрес API Rutracker', 'rtApi', input('rtApi', v.rutracker.apiAddress)),
-      field('Адрес ленты Rutracker', 'rtFeed', input('rtFeed', v.rutracker.feedAddress)));
+      field('Адрес ленты Rutracker', 'rtFeed', input('rtFeed', v.rutracker.feedAddress)),
+      field('Ключ API Кинопоиска', 'kpKey', h('div', { class: 'row gap10' }, secret('kpKey', v.kinopoisk.keySet), erase)),
+      kp.badKey ? h('div', { class: 'small', style: { color: 'var(--yellow)' } }, 'Ключ не подошёл')
+        : kp.keySet ? h('div', { class: 'muted small' }, `${kp.dailyUsed} из ${kp.dailyLimit} запросов за сутки`) : '');
     const extraBtn = h('button', { class: 'link', type: 'button', 'data-key': 'extra', 'aria-expanded': String(!extra.hidden), onclick: (e) => {
       extra.hidden = !extra.hidden;
       e.currentTarget.setAttribute('aria-expanded', String(!extra.hidden));
@@ -122,15 +137,11 @@ export function render(root, r, ctx) {
             h('div', { class: 'two' }, field('Логин', 'rtLogin', input('rtLogin', v.rutracker.login, { autocomplete: 'off' })), field('Пароль', 'rtPassword', secret('rtPassword', v.rutracker.passwordSet))),
             h('div', { class: 'row gap10' }, (loginEl = loginLine(login)), loginBtn)),
           h('div', { class: 'card' }, h('div', { class: 'h' }, 'Rutor'),
-            field('Адрес сайта или зеркала', 'rutorAddress', input('rutorAddress', v.rutor.address, { autocomplete: 'off', inputmode: 'url' })),
-            extraBtn, extra),
+            field('Адрес сайта или зеркала', 'rutorAddress', input('rutorAddress', v.rutor.address, { autocomplete: 'off', inputmode: 'url' }))),
           h('div', { class: 'card' }, h('div', { class: 'h' }, 'Прокси для трекеров'), proxyType,
             field('Адрес', 'proxyAddress', input('proxyAddress', v.proxy.address, { placeholder: '192.168.1.20:3128' })),
             h('div', { class: 'two' }, field('Логин', 'proxyLogin', input('proxyLogin', v.proxy.login, { autocomplete: 'off' })), field('Пароль', 'proxyPassword', secret('proxyPassword', v.proxy.passwordSet)))),
-          h('div', { class: 'card' }, h('div', { class: 'h' }, 'Кинопоиск'),
-            field('Ключ API', 'kpKey', secret('kpKey', v.kinopoisk.keySet)),
-            kp.badKey ? h('div', { class: 'small', style: { color: 'var(--yellow)' } }, 'Ключ не подошёл')
-              : kp.keySet ? h('div', { class: 'muted small' }, `${kp.dailyUsed} из ${kp.dailyLimit} запросов за сутки`) : '')),
+          h('div', { class: 'card' }, extraBtn, extra)),
         h('div', { class: 'col' },
           h('div', { class: 'card' }, h('div', { class: 'h' }, 'Хранение'),
             field('Папка загрузок', 'downloadsDir', h('div', { class: 'row gap10' }, input('downloadsDir', v.storage.downloadsDir), browse)),
@@ -144,6 +155,19 @@ export function render(root, r, ctx) {
             h('div', { class: 'fld' }, 'Формат в приоритете', formats, errs.preferredFormat)))),
     );
     saveBtn.disabled = !canEdit;
+  }
+
+  // eraseKey — «Стереть» ключ Кинопоиска: без него Кинопоиск работает без токена.
+  async function eraseKey() {
+    errs.general.textContent = '';
+    try {
+      view = await put('/settings', { kinopoisk: kpKeyPatch('', true) });
+      status = await get('/status');
+    } catch (e) {
+      errs.general.textContent = e.message;
+      return;
+    }
+    if (alive) draw();
   }
 
   // markSeg — выбранный тип прокси подсвечен.
@@ -180,7 +204,8 @@ export function render(root, r, ctx) {
       p.proxy = { type: ptype, address: val('proxyAddress'), login: val('proxyLogin') };
       if (val('proxyPassword')) p.proxy.password = inputs.proxyPassword.value;
     }
-    if (val('kpKey')) set('kinopoisk', 'key', val('kpKey'));
+    const kpk = kpKeyPatch(val('kpKey'), false);
+    if (kpk) p.kinopoisk = kpk;
     if (val('downloadsDir') !== v.storage.downloadsDir) set('storage', 'downloadsDir', val('downloadsDir'));
     for (const [k, min, text] of [['keepDays', 1, 'Хранить, дней: нужно целое число от 1'], ['minFreeGB', 0, 'Запас места, ГБ: нужно целое число от 0'],
       ['keepBehind', 0, 'Серий позади при нехватке места: нужно целое число от 0']]) {

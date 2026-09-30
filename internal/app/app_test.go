@@ -625,6 +625,18 @@ func TestSettingsApplyWithoutRestart(t *testing.T) {
 	if !a.kp.HasKey() {
 		t.Fatal("ключ Кинопоиска не дошёл до клиента")
 	}
+	// Х22: ключ стирается пустым значением — Кинопоиск работает без токена, проблема ключа снята.
+	a.DB.SetProblem(ctx, meta.ProblemKinopoiskKey, meta.ErrBadKey.Error())
+	if code, body := putJSON(t, url, map[string]any{"kinopoisk": map[string]any{"key": ""}}); code != 200 {
+		t.Fatalf("стереть ключ: %d %s", code, body)
+	}
+	if a.kp.HasKey() {
+		t.Fatal("ключ не стёрся")
+	}
+	if ps, _ := a.DB.Problems(ctx); slices.ContainsFunc(ps, func(p store.Problem) bool { return p.ID == meta.ProblemKinopoiskKey }) {
+		t.Fatal("проблема ключа осталась")
+	}
+	putJSON(t, url, map[string]any{"kinopoisk": map[string]any{"key": "key-SECRET"}})
 	blocker := filepath.Join(t.TempDir(), "file")
 	os.WriteFile(blocker, nil, 0o644)
 	code, body = putJSON(t, url, map[string]any{"storage": map[string]any{"downloadsDir": filepath.Join(blocker, "sub")}})
@@ -1013,7 +1025,11 @@ func TestStatusThroughAPI(t *testing.T) {
 			Login *rutracker.LoginInfo `json:"login"`
 		} `json:"trackers"`
 		Kinopoisk struct {
-			KeySet bool `json:"keySet"`
+			KeySet  bool `json:"keySet"`
+			Keyless *struct {
+				PausedUntil *time.Time `json:"pausedUntil"`
+				Today       int        `json:"today"`
+			} `json:"keyless"`
 		} `json:"kinopoisk"`
 		Disk    torrents.DiskInfo `json:"disk"`
 		Streams struct {
@@ -1023,6 +1039,9 @@ func TestStatusThroughAPI(t *testing.T) {
 	getJSON(t, "http://"+a.API.Addr()+"/api/v1/status", &st)
 	if rt, ok := st.Trackers["rutracker"]; !st.Local || !ok || rt.Login == nil || rt.Login.State != rutracker.LoginNone || st.Trackers["rutor"].State == "" {
 		t.Fatalf("трекеры: %+v", st.Trackers)
+	}
+	if st.Kinopoisk.Keyless == nil || st.Kinopoisk.Keyless.PausedUntil != nil {
+		t.Fatalf("Кинопоиск без токена: %+v", st.Kinopoisk.Keyless)
 	}
 	if st.Kinopoisk.KeySet || st.Disk.FreeBytes <= 0 || st.Disk.TotalBytes < st.Disk.FreeBytes || st.Disk.MinFreeBytes != 20<<30 ||
 		st.Streams.Count != 0 {

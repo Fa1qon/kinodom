@@ -1,5 +1,5 @@
-// Мастер начальных настроек (спека этапа 11a, раздел 7): раздачи, Кинопоиск, каналы, медиатека,
-// «Готово». Открывается сам после установки, пока не пройден; снова — «Параметры → Открыть мастер».
+// Мастер начальных настроек (спека этапа 11a, раздел 7): раздачи, каналы, медиатека, «Готово» (шага
+// «Кинопоиск» нет — он работает без ключа, спека 11b, 5.7). Открывается сам после установки, пока не пройден; снова — «Параметры → Открыть мастер».
 // У каждого шага «Назад», «Пропустить», «Далее»; поля заполнены текущими настройками.
 import { h, fill, icon, poll, keepFocus, fileBase64 } from '../ui.js';
 import { get, put, post } from '../api.js';
@@ -8,7 +8,6 @@ import { pickFolder, grantControl } from './folders.js';
 
 export const STEPS = [
   { id: 'trackers', title: 'Раздачи' },
-  { id: 'kinopoisk', title: 'Кинопоиск' },
   { id: 'channels', title: 'Каналы' },
   { id: 'library', title: 'Медиатека' },
   { id: 'done', title: 'Готово' },
@@ -24,12 +23,6 @@ export function shouldOpenSetup(status, hash) {
   const p = String(hash || '').replace(/^#\/?/, '');
   return p === '' || p === 'catalog' || p.startsWith('catalog/');
 }
-
-// kpInstruction — как получить ключ Кинопоиска (решение заказчика: инструкция прямо в мастере).
-export const kpInstruction = {
-  link: 'https://kinopoiskapiunofficial.tech',
-  items: ['Зарегистрируйтесь на сайте kinopoiskapiunofficial.tech', 'В профиле скопируйте ключ API', 'Вставьте его сюда и нажмите «Проверить»'],
-};
 
 export function render(root, r, ctx) {
   const idx = Math.max(0, STEPS.findIndex((s) => s.id === r.parts[1]));
@@ -139,32 +132,6 @@ export function render(root, r, ctx) {
         h('div', { class: 'card' }, h('div', { class: 'h' }, 'Прокси для трекеров'), ptype, field('Адрес', f.proxyAddress),
           h('div', { class: 'two' }, field('Логин', f.proxyLogin), field('Пароль', f.proxyPassword))),
       ];
-    },
-
-    // Кинопоиск: инструкция, ключ, «Проверить».
-    async kinopoisk() {
-      const v = await get('/settings');
-      const key = secret('kpKey', v.kinopoisk.keySet);
-      const res = result();
-      const save = async () => {
-        if (key.value.trim()) Object.assign(v, await put('/settings', { kinopoisk: { key: key.value.trim() } }));
-        key.value = '';
-        key.placeholder = v.kinopoisk.keySet ? 'задан' : '';
-      };
-      next = async () => {
-        await save();
-        return true;
-      };
-      return h('div', { class: 'card' }, h('div', { class: 'h' }, 'Ключ Кинопоиска'),
-        h('ol', { class: 'kp-steps' }, kpInstruction.items.map((t, i) => h('li', null, i === 0
-          ? [t.replace(/ kinopoiskapiunofficial\.tech$/, ' '), h('a', { href: kpInstruction.link, target: '_blank', rel: 'noopener', 'data-key': 'kp-site' }, 'kinopoiskapiunofficial.tech')]
-          : t))),
-        field('Ключ API', key),
-        h('div', { class: 'row gap10' }, checkBtn('check-kp', async () => {
-          await save();
-          res.textContent = 'Проверяю…';
-          showResult(res, await post('/setup/check', { kinopoisk: true }));
-        }), res));
     },
 
     // Каналы: плейлист ссылкой или файлом; потоки и каналы — по мере разбора.
