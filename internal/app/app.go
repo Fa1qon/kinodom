@@ -45,6 +45,7 @@ const DefaultDownloadsDir = `C:\Kinodom`
 
 type Options struct {
 	Home         string // корневая папка; пусто — config.DefaultHome()
+	Version      string // версия сборки — в «Состоянии» (kinodom check)
 	Console      bool   // дублировать журнал в консоль
 	ListenAddr   string // адрес API; пусто — ":<apiPort>" из kinodom.json
 	Offline      bool   // торрент-движок без сети, на случайном порту (тесты)
@@ -88,6 +89,7 @@ type App struct {
 	History  *history.Service  // история просмотров по устройствам (этап 8c)
 	Library  *library.Library  // медиатека: скачанное и папки заказчика (модуль library, этап 9)
 
+	version   string
 	kp        *meta.Kinopoisk
 	rutor     *rutor.Rutor
 	rutracker *rutracker.Rutracker
@@ -100,7 +102,7 @@ func New(ctx context.Context, o Options) (*App, error) {
 	if home == "" {
 		home = config.DefaultHome()
 	}
-	a := &App{Paths: config.NewPaths(home)}
+	a := &App{Paths: config.NewPaths(home), version: o.Version}
 	if err := a.Paths.Ensure(); err != nil {
 		return nil, fmt.Errorf("папки Kinodom: %w", err)
 	}
