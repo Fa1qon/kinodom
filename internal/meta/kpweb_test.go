@@ -384,3 +384,84 @@ func TestKPWebBackgroundWaitsForNormal(t *testing.T) {
 		t.Fatalf("порядок: %v", order)
 	}
 }
+
+// Ревью 11b-Б, Important 3: вместо JSON — страница (вход, заглушка) без слова «captcha» — тоже отказ:
+// пауза, причина в Status.
+func TestKPWebNonJSONPauses(t *testing.T) {
+	f := newFakeKPWeb(t)
+	f.body = `<html><body>Войдите в аккаунт</body></html>`
+	clk := &clock{t: time.Date(2026, 9, 30, 12, 0, 0, 0, time.Local)}
+	w := newKPWebFor(f, clk, nil)
+	if _, err := w.Suggest(ctx, KPNormal, "Удар"); !errors.Is(err, ErrKPBlocked) {
+		t.Fatalf("страница вместо JSON: %v", err)
+	}
+	if st := w.Status(); !st.PausedUntil.Equal(clk.now().Add(6*time.Hour)) || st.Reason == "" {
+		t.Fatalf("состояние: %+v", st)
+	}
+}
+
+// Ревью 11b-Б, Important 3: сбои без отказа (5xx, сеть, 400) — три подряд — пауза на час; удачный
+// ответ счёт обнуляет.
+func TestKPWebTroublesInARowPause(t *testing.T) {
+	f := newFakeKPWeb(t)
+	f.suggest["Удар"] = "kpweb-suggest-udar.json"
+	clk := &clock{t: time.Date(2026, 9, 30, 12, 0, 0, 0, time.Local)}
+	w := newKPWebFor(f, clk, nil)
+	fail := func(n int) error {
+		f.set(func() { f.status = http.StatusBadGateway })
+		var err error
+		for range n {
+			_, err = w.Suggest(ctx, KPNormal, "Удар")
+		}
+		f.set(func() { f.status = 0 })
+		return err
+	}
+	if err := fail(2); err == nil || errors.Is(err, ErrKPBlocked) {
+		t.Fatalf("два сбоя — ещё не пауза: %v", err)
+	}
+	if _, err := w.Suggest(ctx, KPNormal, "Удар"); err != nil {
+		t.Fatal(err)
+	}
+	if err := fail(2); errors.Is(err, ErrKPBlocked) {
+		t.Fatal("после удачного ответа счёт заново")
+	}
+	if err := fail(1); !errors.Is(err, ErrKPBlocked) {
+		t.Fatalf("третий сбой подряд — пауза: %v", err)
+	}
+	if st := w.Status(); !st.PausedUntil.Equal(clk.now().Add(time.Hour)) || !strings.Contains(st.Reason, "502") {
+		t.Fatalf("состояние: %+v", st)
+	}
+}
+
+// Ревью 11b-Б, Important 5: очередь каталога не выбирает суточный предел целиком — резерв остаётся правке
+// из пульта и медиатеке; предел исчерпан — в Status пауза до полуночи (не отказ).
+func TestKPWebReserveForUrgent(t *testing.T) {
+	f := newFakeKPWeb(t)
+	f.suggest["Удар"] = "kpweb-suggest-udar.json"
+	clk := &clock{t: time.Date(2026, 9, 30, 12, 0, 0, 0, time.Local)}
+	w := newKPWebFor(f, clk, func(o *KPWebOptions) { o.DailyLimit, o.Reserve = 4, 2 })
+	for range 2 {
+		if _, err := w.Suggest(ctx, KPNormal, "Удар"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := w.Suggest(ctx, KPNormal, "Удар"); !errors.Is(err, ErrKPDailyLimit) {
+		t.Fatalf("каталог сверх своей доли: %v", err)
+	}
+	if st := w.Status(); !st.PausedUntil.IsZero() {
+		t.Fatalf("резерв есть — не пауза: %+v", st)
+	}
+	if _, err := w.Suggest(ctx, KPUrgent, "Удар"); err != nil {
+		t.Fatalf("правка из пульта — из резерва: %v", err)
+	}
+	if _, err := w.Suggest(ctx, KPBackground, "Удар"); err != nil {
+		t.Fatalf("медиатека — из резерва: %v", err)
+	}
+	if _, err := w.Suggest(ctx, KPUrgent, "Удар"); !errors.Is(err, ErrKPDailyLimit) {
+		t.Fatalf("сверх предела: %v", err)
+	}
+	st := w.Status()
+	if !st.Limit || st.PausedUntil != time.Date(2026, 10, 1, 0, 0, 0, 0, time.Local) || st.Reason == "" {
+		t.Fatalf("предел исчерпан — пауза до полуночи: %+v", st)
+	}
+}

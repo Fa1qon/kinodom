@@ -20,13 +20,13 @@ type KPAny struct {
 
 type urgentKey struct{}
 
-// Urgent — запросы этого ctx ждёт человек (правка единицы в пульте): очередь каталога, а не медиатеки.
+// Urgent — запросы этого ctx ждёт человек (правка единицы в пульте): раньше медиатеки, из резерва суток.
 func Urgent(ctx context.Context) context.Context { return context.WithValue(ctx, urgentKey{}, true) }
 
-// class — очередь запроса: срочный ctx — KPNormal, иначе KPBackground (медиатека после каталога).
+// class — очередь запроса: срочный ctx — KPUrgent, иначе KPBackground (медиатека после каталога).
 func (a *KPAny) class(ctx context.Context) KPClass {
 	if u, _ := ctx.Value(urgentKey{}).(bool); u {
-		return KPNormal
+		return KPUrgent
 	}
 	return KPBackground
 }
