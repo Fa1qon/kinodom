@@ -101,7 +101,9 @@ type Catalog struct {
 	retries     map[string]retryState // «poster:<id>», «torrent:<id>» → повтор после сбоя (хвост Х7)
 	forced      map[int64]bool        // открыли раздачу без картинки — постер без паузы
 	posterWG    sync.WaitGroup        // постеры и .torrent, которые качаются вне шага догрузки (тесты ждут их)
-	posterSem   chan struct{}         // не больше двух постеров одновременно
+	posterSem   chan struct{}         // фоновые постеры: не больше двух одновременно
+	urgentSem   chan struct{}         // постеры открытых и найденных: свои два места, не за фоновыми
+	bgWaiting   int                   // фоновых постеров ждут места
 	failures    int                   // неудачных проходов подряд
 	forumPaused map[string]time.Time  // трекер → до какого времени не ходить за страницами раздач
 	runCtx      context.Context       // для фонового поиска: живёт, пока работает модуль
@@ -120,7 +122,7 @@ func New(o Options) *Catalog {
 		ratings: o.Ratings, images: o.Images, kpPoster: o.KinopoiskPoster, keepImages: o.KeepImages, log: o.Log, now: time.Now,
 		refreshNow: make(chan struct{}, 1), sectionsChanged: make(chan struct{}, 1), enrichWake: map[string]chan struct{}{},
 		postersWake: make(chan struct{}, 1), urgent: map[string][]int64{}, found: map[string][]int64{}, torrentNow: map[int64]bool{}, yield: map[string]func(){}, retries: map[string]retryState{}, forced: map[int64]bool{},
-		posterSem:   make(chan struct{}, 2),
+		posterSem: make(chan struct{}, 2), urgentSem: make(chan struct{}, 2),
 		forumPaused: map[string]time.Time{}, searches: map[string]*searchRun{}, torrentFormat: o.TorrentFormat,
 		preferred: o.PreferredFormat}
 	// До первого прохода (там дерево и раскрытие «+») — разделы как записаны, без подразделов.

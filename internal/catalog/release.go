@@ -300,21 +300,45 @@ func (c *Catalog) succeeded(kind string, id int64) {
 	c.mu.Unlock()
 }
 
+// bgPostersQueued — сколько фоновых постеров может ждать места.
+const bgPostersQueued = 4
+
 // posterLater — постер раздачи вне шага догрузки (хвост Х8): срочная раздача не ждёт чужой медленный
-// хостинг. Не больше двух одновременно.
-func (c *Catalog) posterLater(ctx context.Context, id int64, url string, kp int) {
+// хостинг. urgent (открытая, найденная) — свои два места, не за фоновыми (ревью 11b-А); фоновых — два
+// места и не больше bgPostersQueued ждущих, остальные подберёт fixPosters.
+func (c *Catalog) posterLater(ctx context.Context, id int64, url string, kp int, urgent bool) {
 	if c.images == nil || (url == "" && (kp == 0 || c.kpPoster == nil)) {
 		return
+	}
+	sem := c.urgentSem
+	if !urgent {
+		c.mu.Lock()
+		if c.bgWaiting >= bgPostersQueued {
+			c.mu.Unlock()
+			return // очередь фоновых полна: постер подберёт fixPosters
+		}
+		c.bgWaiting++
+		c.mu.Unlock()
+		sem = c.posterSem
+	}
+	waited := func() {
+		if !urgent {
+			c.mu.Lock()
+			c.bgWaiting--
+			c.mu.Unlock()
+		}
 	}
 	c.posterWG.Add(1)
 	go func() {
 		defer c.posterWG.Done()
 		select {
-		case c.posterSem <- struct{}{}:
+		case sem <- struct{}{}:
+			waited()
 		case <-ctx.Done():
+			waited()
 			return
 		}
-		defer func() { <-c.posterSem }()
+		defer func() { <-sem }()
 		key := c.fetchPoster(ctx, url, kp)
 		if ctx.Err() != nil {
 			return

@@ -1,10 +1,12 @@
 package catalog
 
 import (
+	"context"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"slices"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -133,6 +135,58 @@ func TestUrgentWorkInterruptsBackgroundTorrent(t *testing.T) {
 	if !c.due("torrent", bg, c.now()) {
 		t.Fatal("прерванный .torrent — не сбой: при открытии его качают сразу")
 	}
+}
+
+// Постер открытой или найденной раздачи не ждёт фоновые постеры с мёртвого хостинга (спека 4.6; ревью
+// 11b-А: общая очередь на два места — найденное стояло за сотней чужих постеров).
+func TestUrgentPosterNotBehindBackground(t *testing.T) {
+	pic := pngBytes(t)
+	hang := make(chan struct{})
+	t.Cleanup(func() { close(hang) })
+	host := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasPrefix(r.URL.Path, "/slow/") {
+			select {
+			case <-hang:
+			case <-r.Context().Done():
+			}
+			return
+		}
+		w.Write(pic)
+	}))
+	t.Cleanup(host.Close)
+	im, err := meta.NewImages(meta.ImagesOptions{Dir: t.TempDir(), Rate: 1000, AllowPrivate: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	rutor := newFake("rutor")
+	var rels []source.Release
+	for i := range 7 {
+		rels = append(rels, rel("rutor", fmt.Sprint(100+i), fmt.Sprintf("Ф%d (2020) WEB-DL", i), 5, 1, fmt.Sprintf("h%d", i)))
+	}
+	c, _ := newCatalog(t, openDB(t), func(o *Options) { o.Images = im }, rutor)
+	ids, err := c.st.saveFound(ctx, rels, c.now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	bctx, cancel := context.WithCancel(ctx)
+	t.Cleanup(cancel)
+	for i, id := range ids[:6] {
+		c.posterLater(bctx, id, fmt.Sprintf("%s/slow/%d.jpg", host.URL, i), 0, false)
+	}
+	c.posterLater(ctx, ids[6], host.URL+"/fast.jpg", 0, true)
+	deadline := time.Now().Add(3 * time.Second)
+	for {
+		r, err := c.Release(ctx, ids[6])
+		if err == nil && r.ImageKey != "" {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("постер найденной раздачи ждёт фоновые постеры с мёртвого хостинга")
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	cancel()
+	c.posterWG.Wait()
 }
 
 // .torrent открытой раздачи не скачался — экран раздачи не ждёт его до следующего повтора: открывается
