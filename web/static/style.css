@@ -263,6 +263,24 @@ a.res-row:hover { background: var(--hover); }
 .dlg-row { display: flex; align-items: center; gap: 12px; min-height: 44px; padding: 0 12px; border: 0; background: transparent; color: var(--text); font: inherit; text-align: left; cursor: pointer; }
 .dlg-row:hover { background: var(--bg-input); }
 .right { text-align: right; }
+/* Мастер начальных настроек (этап 11a). */
+.setup { display: flex; flex-direction: column; gap: 20px; max-width: 760px; }
+.steps { display: flex; flex-wrap: wrap; gap: 8px 24px; margin: 0; padding: 0; list-style: none; color: var(--muted); }
+.steps li { display: flex; align-items: center; gap: 8px; }
+.steps .num { display: inline-flex; align-items: center; justify-content: center; width: 26px; height: 26px; border: 1px solid var(--line-strong); font-size: 13px; }
+.steps li.on { color: var(--text); font-weight: 700; }
+.steps li.on .num { border-color: var(--text); }
+.steps li.past .num { color: var(--green); border-color: var(--green); }
+.setup-body { display: flex; flex-direction: column; gap: 16px; }
+.setup-foot { padding-top: 4px; }
+.check-result.good { color: var(--green); }
+.check-result.bad { color: var(--yellow); }
+.kp-steps { margin: 0; padding-left: 22px; display: flex; flex-direction: column; gap: 6px; }
+.kp-steps a { color: var(--text); text-decoration: underline; }
+.setup > .error:empty, .dlg .error:empty { display: none; }
+.row.folder-row { flex-wrap: nowrap; }
+.folder-row .ellipsis { min-width: 0; }
+.setup-addr { font-size: clamp(18px, 5.5vw, 32px); font-weight: 700; letter-spacing: .01em; overflow-wrap: anywhere; }
 .crumb { padding: 2px 4px; border: 0; background: transparent; color: var(--soft); font: inherit; cursor: pointer; }
 .card.tight .h { margin-bottom: 6px; }
 .mod { display: flex; align-items: center; gap: 14px; padding: 11px 0; border-bottom: 1px solid var(--line-soft); font-size: 15px; }

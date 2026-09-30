@@ -19,7 +19,7 @@ var required = []string{
 	"views/catalog.js", "views/release.js", "views/search.js", "views/downloads.js",
 	"views/settings-layout.js", "views/settings-status.js", "views/settings-params.js", "views/settings-sections.js",
 	"views/channels.js", "views/channel.js", "views/channel-settings.js", "views/tvkit.js", "views/settings-iptv.js", "views/settings-unrecognized.js",
-	"views/history.js", "views/library.js", "views/library-card.js", "views/settings-library.js", "views/folders.js",
+	"views/history.js", "views/library.js", "views/library-card.js", "views/settings-library.js", "views/folders.js", "views/setup.js",
 }
 
 // scripts — все модули пульта.
@@ -540,6 +540,42 @@ const checks = [
   [JSON.stringify(grantView({ local: false }, noAccess, 8090)), JSON.stringify({ hint: 'Откройте пульт на ПК с Kinodom, чтобы разрешить доступ' })],
   [grantView({ local: true }, { path: 'D:\\A', problem: '' }, 8090), null],
   [grantView({ local: true }, { path: 'D:\\A', problem: 'not_found' }, 8090), null],
+];
+for (const [got, want] of checks) {
+  if (got !== want) {
+    console.error(JSON.stringify(got), '≠', JSON.stringify(want));
+    process.exitCode = 1;
+  }
+}
+`
+	cmd := exec.Command(node, "--input-type=module", "--no-warnings", "-e", script)
+	cmd.Dir = "static"
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Errorf("%v\n%s", err, out)
+	}
+}
+
+// Мастер начальных настроек (спека этапа 11a, раздел 7): пять шагов; открывается сам только из
+// домашней сети, пока не пройден, и только вместо каталога — ссылка на раздачу ведёт на раздачу;
+// у шага Кинопоиска — инструкция из трёх пунктов со ссылкой на сайт ключей.
+func TestPultSetup(t *testing.T) {
+	node := lookNode(t)
+	script := `
+import { STEPS, nextStep, prevStep, shouldOpenSetup, kpInstruction } from './views/setup.js';
+const home = { canEdit: true, setupDone: false };
+const checks = [
+  [STEPS.map((s) => s.id).join(','), 'trackers,kinopoisk,channels,library,done'],
+  [nextStep(0), 1], [nextStep(STEPS.length - 1), STEPS.length - 1], [prevStep(0), 0], [prevStep(3), 2],
+  [shouldOpenSetup(home, ''), true],
+  [shouldOpenSetup(home, '#/'), true],
+  [shouldOpenSetup(home, '#/catalog/rutor'), true],
+  [shouldOpenSetup(home, '#/release/12'), false],
+  [shouldOpenSetup(home, '#/settings/params'), false],
+  [shouldOpenSetup({ canEdit: false, setupDone: false }, ''), false],
+  [shouldOpenSetup({ canEdit: true, setupDone: true }, ''), false],
+  [shouldOpenSetup(null, ''), false],
+  [kpInstruction.items.length, 3],
+  [kpInstruction.link.startsWith('https://'), true],
 ];
 for (const [got, want] of checks) {
   if (got !== want) {

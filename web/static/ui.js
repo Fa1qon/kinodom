@@ -58,6 +58,16 @@ export function offWarn(text) {
     h('a', { class: 'btn', href: '#/settings/params', 'data-key': 'to-params' }, 'Параметры'));
 }
 
+// fileBase64 — файл (плейлист) в base64: изменяющие запросы к API — только JSON.
+export function fileBase64(file) {
+  return new Promise((resolve, reject) => {
+    const rd = new FileReader();
+    rd.onload = () => resolve(String(rd.result).replace(/^data:[^,]*,/, ''));
+    rd.onerror = () => reject(new Error('файл не читается'));
+    rd.readAsDataURL(file);
+  });
+}
+
 // clear — убрать всё содержимое элемента.
 export function clear(el) {
   el.replaceChildren();

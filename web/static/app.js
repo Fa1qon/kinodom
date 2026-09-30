@@ -16,9 +16,10 @@ import * as settingsLibrary from './views/settings-library.js';
 import * as channel from './views/channel.js';
 import * as settingsIPTV from './views/settings-iptv.js';
 import * as settingsUnrecognized from './views/settings-unrecognized.js';
+import * as setup from './views/setup.js';
 
 // views — экраны по первой части адреса; у «Настроек» — по второй.
-const views = { catalog, release, search, downloads, channels, channel, history, library };
+const views = { catalog, release, search, downloads, channels, channel, history, library, setup };
 const settingsViews = { status: settingsStatus, params: settingsParams, sections: settingsSections, iptv: settingsIPTV, unrecognized: settingsUnrecognized,
   library: settingsLibrary };
 
@@ -147,11 +148,18 @@ window.addEventListener('hashchange', () => {
 render();
 
 // «Состояние» раз в 15 с: отметка проблем в меню и свежие данные экранам (спека этапа 7, раздел 4).
+// setupChecked — мастер начальных настроек предлагается один раз за загрузку страницы: переходы из
+// мастера в каталог не возвращают в него (спека этапа 11a, раздел 7).
+let setupChecked = false;
 statusPoll = poll(async () => {
   try {
     ctx.status = await get('/status');
   } catch {
     ctx.status = null;
+  }
+  if (!setupChecked && ctx.status) {
+    setupChecked = true;
+    if (setup.shouldOpenSetup(ctx.status, location.hash)) location.replace('#/setup');
   }
   updateHeader(route());
   for (const fn of ctx.listeners) fn(ctx.status);
