@@ -565,6 +565,68 @@ for (const [got, want] of checks) {
 	}
 }
 
+// Каталог подгружается при прокрутке (замечание № 9 этапа 11b): следующая порция — одна за раз; конец
+// списка — больше не просим; ошибка порции — можно попросить снова.
+func TestPultCatalogPortions(t *testing.T) {
+	node := lookNode(t)
+	script := `
+import { portions } from './views/catalog.js';
+const e = (id) => ({ id });
+let s = portions(undefined, { type: 'init' });
+const checks = [];
+s = portions(s, { type: 'more' });
+checks.push(['первая порция просится', s.loading === true && s.page === 0]);
+checks.push(['вторая просьба во время загрузки — без изменений', portions(s, { type: 'more' }) === s]);
+s = portions(s, { type: 'loaded', list: { entries: [e(1), e(2)], page: 1, pages: 2 } });
+checks.push(['порция 1', s.loaded.length === 2 && !s.loading && s.page === 1]);
+s = portions(s, { type: 'more' });
+s = portions(s, { type: 'failed', error: 'нет сети' });
+checks.push(['ошибка — не загружается, текст есть', !s.loading && s.error === 'нет сети' && s.loaded.length === 2]);
+s = portions(s, { type: 'more' });
+checks.push(['после ошибки можно снова', s.loading === true && s.error === '']);
+s = portions(s, { type: 'loaded', list: { entries: [e(3)], page: 2, pages: 2 } });
+checks.push(['порция 2', s.loaded.map((x) => x.id).join() === '1,2,3' && s.page === 2]);
+checks.push(['конец списка — больше не просим', portions(s, { type: 'more' }) === s]);
+for (const [name, ok] of checks) {
+  if (!ok) {
+    console.error('не выполнено:', name);
+    process.exitCode = 1;
+  }
+}
+`
+	cmd := exec.Command(node, "--input-type=module", "--no-warnings", "-e", script)
+	cmd.Dir = "static"
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Errorf("%v\n%s", err, out)
+	}
+}
+
+// Исключение внутри опроса пульта (хвост Х19) — в консоль, опрос идёт дальше.
+func TestPultPollSurvivesError(t *testing.T) {
+	node := lookNode(t)
+	script := `
+globalThis.document = { hidden: false, addEventListener() {}, removeEventListener() {} };
+console.error = () => {};
+const { poll } = await import('./ui.js');
+let calls = 0;
+const p = poll(async () => {
+  calls++;
+  if (calls === 1) throw new Error('сервер ответил не то');
+}, 10);
+await new Promise((r) => setTimeout(r, 80));
+p.stop();
+if (calls < 3) {
+  process.stderr.write('опрос остановился после исключения: вызовов ' + calls + '\n');
+  process.exitCode = 1;
+}
+`
+	cmd := exec.Command(node, "--input-type=module", "--no-warnings", "-e", script)
+	cmd.Dir = "static"
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Errorf("%v\n%s", err, out)
+	}
+}
+
 // Разделы каталога деревом: строка настройки читается и пишется без потерь; категория целиком —
 // «cN+», раздел со всеми подразделами — «раздел+», только собственные раздачи раздела — «раздел».
 func TestPultSectionsEncoding(t *testing.T) {
