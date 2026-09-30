@@ -114,6 +114,9 @@ func (c *Catalog) Release(ctx context.Context, id int64) (Release, error) {
 		out.DetailsPending = true
 		c.enrichSoon(r.Tracker, r.ID)
 	}
+	if !r.DetailsAt.IsZero() && !removed && out.Torrent == nil && c.torrentOnOpen(r) {
+		out.DetailsPending = true
+	}
 	if out.ImageKey == "" && !r.DetailsAt.IsZero() {
 		// Картинки нет, а человек открыл раздачу — постер (страницы или Кинопоиска) без паузы повтора.
 		c.mu.Lock()
@@ -139,26 +142,92 @@ func (c *Catalog) enrichSoon(tracker string, id int64) {
 	}
 }
 
-// nextUrgent — раздача из догрузки вне очереди; false — таких нет.
-func (c *Catalog) nextUrgent(ctx context.Context, tracker string) (row, bool, error) {
+// findSoon ставит найденное поиском в догрузку вне очереди — после открытых в пульте.
+func (c *Catalog) findSoon(tracker string, id int64) {
+	c.mu.Lock()
+	if !slices.Contains(c.found[tracker], id) {
+		c.found[tracker] = append(c.found[tracker], id)
+	}
+	c.mu.Unlock()
+	if ch, ok := c.enrichWake[tracker]; ok {
+		select {
+		case ch <- struct{}{}:
+		default:
+		}
+	}
+}
+
+// nextUrgent — раздача из догрузки вне очереди: сначала открытые в пульте (opened), потом найденные
+// поиском; ok = false — таких нет.
+func (c *Catalog) nextUrgent(ctx context.Context, tracker string) (r row, opened, ok bool, err error) {
 	for {
 		c.mu.Lock()
-		ids := c.urgent[tracker]
+		q, isOpened := c.urgent, true
+		if len(q[tracker]) == 0 {
+			q, isOpened = c.found, false
+		}
+		ids := q[tracker]
 		if len(ids) == 0 {
 			c.mu.Unlock()
-			return row{}, false, nil
+			return row{}, false, false, nil
 		}
 		id := ids[0]
-		c.urgent[tracker] = ids[1:]
+		q[tracker] = ids[1:]
 		c.mu.Unlock()
 		rs, err := c.st.rowsByID(ctx, []int64{id})
 		if err != nil {
-			return row{}, false, err
+			return row{}, false, false, err
 		}
 		if r, ok := rs[id]; ok && r.DetailsAt.IsZero() {
-			return r, true, nil
+			return r, isOpened, true, nil
 		}
 	}
+}
+
+// torrentOnOpen — открыли раздачу, догруженную без .torrent (найдена поиском): .torrent качается
+// сразу, экран раздачи ждёт его, как страницу (без него сериал Rutor показался бы без серий). true —
+// качается; false — не нужен или недавно не скачался (раздача откроется по magnet, повтор в фоне).
+func (c *Catalog) torrentOnOpen(r row) bool {
+	tf, ok := c.sources[r.Tracker].(torrentFetcher)
+	if !ok || !c.configured(r.Tracker) || !c.due("torrent", r.ID, c.now()) {
+		return false
+	}
+	c.mu.Lock()
+	if c.torrentNow[r.ID] {
+		c.mu.Unlock()
+		return true
+	}
+	c.torrentNow[r.ID] = true
+	base := c.runCtx
+	c.mu.Unlock()
+	if base == nil {
+		base = context.Background()
+	}
+	c.posterWG.Add(1)
+	go func() {
+		defer c.posterWG.Done()
+		defer func() {
+			c.mu.Lock()
+			delete(c.torrentNow, r.ID)
+			c.mu.Unlock()
+		}()
+		ctx, cancel := context.WithTimeout(base, torrentWait)
+		b, err := tf.Torrent(ctx, r.TopicID)
+		cancel()
+		if base.Err() != nil {
+			return
+		}
+		if err != nil {
+			c.log.Warn("каталог: .torrent открытой раздачи не скачался — откроется по magnet", "tracker", r.Tracker, "topic", r.TopicID, "err", err)
+			c.failed("torrent", r.ID, c.now())
+			return
+		}
+		c.succeeded("torrent", r.ID)
+		if err := c.st.saveTorrent(context.WithoutCancel(base), r.ID, b); err != nil {
+			c.log.Warn("каталог: .torrent не записался", "err", err)
+		}
+	}()
+	return true
 }
 
 // Постеры и .torrent про запас (спека, раздел 8; хвосты 5c и Х7): номер фильма нашёлся очередью

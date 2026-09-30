@@ -145,7 +145,8 @@ func (c *Catalog) runSearch(ctx context.Context, cancel context.CancelFunc, run 
 // экрана поиска (замечание № 10 этапа 11b).
 const searchToEnrich = 20
 
-// enqueueFound — найденное трекером name без страницы раздачи — в срочную догрузку в порядке выдачи.
+// enqueueFound — найденное трекером name без страницы раздачи — в догрузку вне очереди (после
+// открытых в пульте) в порядке выдачи.
 // Трекер выключен или форум на паузе — нет: догрузка всё равно не пойдёт.
 func (c *Catalog) enqueueFound(ctx context.Context, name string, ids []int64) {
 	if !c.configured(name) || c.forumPausedUntil(name).After(c.now()) {
@@ -159,7 +160,7 @@ func (c *Catalog) enqueueFound(ctx context.Context, name string, ids []int64) {
 	n := 0
 	for _, id := range ids {
 		if r, ok := byID[id]; ok && r.DetailsAt.IsZero() {
-			c.enrichSoon(name, id)
+			c.findSoon(name, id)
 			if n++; n == searchToEnrich {
 				return
 			}

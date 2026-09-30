@@ -26,7 +26,7 @@ func TestSearchEnqueuesFoundForDetails(t *testing.T) {
 		t.Fatalf("найдено %d", len(st.Results))
 	}
 	c.mu.Lock()
-	urgent := slices.Clone(c.urgent["rutor"])
+	urgent := slices.Clone(c.found["rutor"])
 	c.mu.Unlock()
 	if len(urgent) != searchToEnrich {
 		t.Fatalf("в срочной догрузке %d, нужно %d", len(urgent), searchToEnrich)
@@ -47,10 +47,72 @@ func TestSearchEnqueuesFoundForDetails(t *testing.T) {
 	c2.pauseForum("rutor", c2.now().Add(time.Hour))
 	waitSearch(t, c2, "найдено")
 	c2.mu.Lock()
-	n := len(c2.urgent["rutor"])
+	n := len(c2.found["rutor"])
 	c2.mu.Unlock()
 	if n != 0 {
 		t.Fatalf("форум на паузе, а в срочной догрузке %d", n)
+	}
+}
+
+// Найденное поиском догружается без .torrent (найдено вживую, 11b-А): .torrent идёт через тот же
+// ограничитель «1 запрос в секунду» и вдвое замедлял постеры поиска; открыли раздачу — .torrent сразу,
+// и экран раздачи ждёт его как часть догрузки (без него сериал показался бы без серий).
+func TestFoundEnrichedWithoutTorrentUntilOpened(t *testing.T) {
+	rutor := newFake("rutor")
+	found := rel("rutor", "77", "Сериал [S01] (2026) WEB-DL", 5, 1<<30, "77aa")
+	rutor.details["77"] = source.Details{Release: found, Description: "Описание"}
+	rutor.torrents["77"] = []byte("d4:infoe")
+	c, _ := newCatalog(t, openDB(t), nil, rutor)
+	ids, err := c.st.saveFound(ctx, []source.Release{found}, c.now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	c.enqueueFound(ctx, "rutor", ids)
+	if did, err := c.enrichStep(ctx, "rutor"); !did || err != nil {
+		t.Fatal(did, err)
+	}
+	if rutor.Calls("details") != 1 || rutor.Calls("torrent") != 0 {
+		t.Fatalf("найденное: страниц %d, .torrent %d — .torrent не нужен до открытия", rutor.Calls("details"), rutor.Calls("torrent"))
+	}
+	r, err := c.Release(ctx, ids[0])
+	if err != nil || !r.DetailsPending {
+		t.Fatalf("открыли без .torrent — экран должен ждать: pending=%v, %v", r.DetailsPending, err)
+	}
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		r, _ = c.Release(ctx, ids[0])
+		if !r.DetailsPending && r.Torrent != nil {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf(".torrent открытой раздачи не пришёл: pending=%v, %d байт", r.DetailsPending, len(r.Torrent))
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+}
+
+// .torrent открытой раздачи не скачался — экран раздачи не ждёт его до следующего повтора: открывается
+// по magnet.
+func TestOpenedTorrentFailedStopsWaiting(t *testing.T) {
+	rutor := newFake("rutor")
+	found := rel("rutor", "78", "Фильм (2026) WEB-DL", 5, 1<<30, "78aa")
+	rutor.details["78"] = source.Details{Release: found, Description: "Описание"}
+	c, _ := newCatalog(t, openDB(t), nil, rutor)
+	ids, err := c.st.saveFound(ctx, []source.Release{found}, c.now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	c.enqueueFound(ctx, "rutor", ids)
+	if did, err := c.enrichStep(ctx, "rutor"); !did || err != nil {
+		t.Fatal(did, err)
+	}
+	if r, _ := c.Release(ctx, ids[0]); !r.DetailsPending {
+		t.Fatal("первое открытие без .torrent — ждём его")
+	}
+	c.posterWG.Wait()
+	r, err := c.Release(ctx, ids[0])
+	if err != nil || r.DetailsPending || rutor.Calls("torrent") != 1 {
+		t.Fatalf(".torrent не скачался: pending=%v, попыток %d — экран не должен ждать, повтор — по паузе", r.DetailsPending, rutor.Calls("torrent"))
 	}
 }
 

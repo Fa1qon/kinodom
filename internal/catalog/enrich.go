@@ -60,8 +60,8 @@ func (c *Catalog) enrichStep(ctx context.Context, tracker string) (bool, error) 
 	if !c.configured(tracker) || c.forumPausedUntil(tracker).After(now) {
 		return false, nil
 	}
-	// Сначала раздачи, открытые в пульте: их страницу ждёт человек (хвост 5c).
-	r, urgent, err := c.nextUrgent(ctx, tracker)
+	// Сначала раздачи, открытые в пульте: их страницу ждёт человек (хвост 5c); потом найденные поиском.
+	r, opened, urgent, err := c.nextUrgent(ctx, tracker)
 	if err != nil {
 		return false, err
 	}
@@ -106,9 +106,10 @@ func (c *Catalog) enrichStep(ctx context.Context, tracker string) (bool, error) 
 	kpID, _ := strconv.Atoi(d.KinopoiskID)
 	// .torrent — до отметки «страница загружена»: экран раздачи перестаёт ждать догрузку и сразу
 	// показывает серии Rutor. Постер — после: медленный хостинг не держит экран раздачи
-	// (финальное ревью 7a).
+	// (финальное ревью 7a). Найденному поиском .torrent — когда откроют (Release): он идёт через тот
+	// же ограничитель «запрос в секунду» и вдвое замедлял бы постеры поиска (11b-А, вживую).
 	var torrent []byte
-	if tf, ok := src.(torrentFetcher); ok {
+	if tf, ok := src.(torrentFetcher); ok && (!urgent || opened) {
 		tctx, cancel := context.WithTimeout(ctx, torrentWait)
 		b, err := tf.Torrent(tctx, r.TopicID)
 		cancel()
