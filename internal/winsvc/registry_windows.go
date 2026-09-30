@@ -47,6 +47,33 @@ func (c classes) DeleteProtocol(scheme string) error {
 	return nil
 }
 
+// autorunKey — автозапуск при входе любого пользователя.
+const autorunKey = `Software\Microsoft\Windows\CurrentVersion\Run`
+
+func (c classes) SetAutorun(name, command string) error {
+	k, _, err := registry.CreateKey(c.root, autorunKey, registry.SET_VALUE)
+	if err != nil {
+		return err
+	}
+	defer k.Close()
+	return k.SetStringValue(name, command)
+}
+
+func (c classes) DeleteAutorun(name string) error {
+	k, err := registry.OpenKey(c.root, autorunKey, registry.SET_VALUE)
+	if errors.Is(err, registry.ErrNotExist) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	defer k.Close()
+	if err := k.DeleteValue(name); err != nil && !errors.Is(err, registry.ErrNotExist) {
+		return err
+	}
+	return nil
+}
+
 func (c classes) Protocol(scheme string) (string, error) {
 	k, err := registry.OpenKey(c.root, c.key(scheme, "shell", "open", "command"), registry.QUERY_VALUE)
 	if errors.Is(err, registry.ErrNotExist) {

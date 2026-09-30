@@ -47,6 +47,12 @@ func TestInstallerScript(t *testing.T) {
 		"CurStep = ssPostInstall",
 		"'/VERYSILENT /SUPPRESSMSGBOXES /NORESTART'",
 		"Check: InstallSucceeded",
+		// Значок в трее и логотип (спека этапа 11a, раздел 5.2).
+		"SetupIconFile=kinodom.ico",
+		`Source: "kinodom.ico"`,
+		`IconFilename: "{app}\kinodom.ico"`,
+		`Parameters: "tray --open"`,
+		`Parameters: "tray"; Flags: runasoriginaluser nowait`,
 	} {
 		if !strings.Contains(s, want) {
 			t.Errorf("в kinodom.iss нет %q", want)

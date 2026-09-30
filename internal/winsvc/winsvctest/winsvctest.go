@@ -24,12 +24,14 @@ type Fake struct {
 	PortOwner string // "" — порт свободен
 	Rules     map[string]winsvc.FirewallRule
 	Protocols map[string]string
+	Autoruns  map[string]string
+	UserCtl   map[string]bool // службам разрешено управление интерактивным пользователям
 }
 
 // New — администратор, служб, правил и ссылок нет, порт свободен.
 func New() *Fake {
 	return &Fake{Admin: true, Services: map[string]winsvc.ServiceConfig{}, Running: map[string]bool{},
-		Rules: map[string]winsvc.FirewallRule{}, Protocols: map[string]string{}}
+		Rules: map[string]winsvc.FirewallRule{}, Protocols: map[string]string{}, Autoruns: map[string]string{}, UserCtl: map[string]bool{}}
 }
 
 func (f *Fake) Lock()   { f.mu.Lock() }
@@ -51,7 +53,7 @@ func (f *Fake) Reset() { f.mu.Lock(); f.acts = nil; f.mu.Unlock() }
 
 // System — подделка как winsvc.System.
 func (f *Fake) System() winsvc.System {
-	return winsvc.System{SCM: fakeSCM{f}, ACL: fakeACL{f}, Firewall: fakeFW{f}, Registry: fakeReg{f}, Ports: fakePorts{f},
+	return winsvc.System{SCM: fakeSCM{f}, ACL: fakeACL{f}, Firewall: fakeFW{f}, Registry: fakeReg{f}, Ports: fakePorts{f}, Procs: fakeProcs{f},
 		IsAdmin: func() bool { return f.Admin }}
 }
 
@@ -99,6 +101,28 @@ func (s fakeSCM) Stop(name string, wait time.Duration) error {
 		return errors.New("служба не остановилась за 60 с")
 	}
 	s.Running[name] = false
+	return nil
+}
+
+func (s fakeSCM) Halt(name string, wait time.Duration) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if _, ok := s.Services[name]; !ok {
+		return winsvc.ErrNotInstalled
+	}
+	s.act("scm.halt %s", name)
+	if s.Stuck && s.Running[name] {
+		return errors.New("служба не остановилась")
+	}
+	s.Running[name] = false
+	return nil
+}
+
+func (s fakeSCM) AllowUserControl(name string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.act("scm.allow %s", name)
+	s.UserCtl[name] = true
 	return nil
 }
 
@@ -185,10 +209,35 @@ func (r fakeReg) DeleteProtocol(scheme string) error {
 	return nil
 }
 
+func (r fakeReg) SetAutorun(name, command string) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.act("reg.autorun %s %s", name, command)
+	r.Autoruns[name] = command
+	return nil
+}
+
+func (r fakeReg) DeleteAutorun(name string) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.act("reg.noautorun %s", name)
+	delete(r.Autoruns, name)
+	return nil
+}
+
 func (r fakeReg) Protocol(scheme string) (string, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	return r.Protocols[scheme], nil
+}
+
+type fakeProcs struct{ *Fake }
+
+func (p fakeProcs) Close(exe string) error {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.act("procs.close %s", exe)
+	return nil
 }
 
 type fakePorts struct{ *Fake }

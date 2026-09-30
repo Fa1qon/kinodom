@@ -32,6 +32,7 @@ const (
 	RuleAPI            = "Kinodom — пульт"
 	RuleTorrents       = "Kinodom — раздачи"
 	Scheme             = "kinodom"
+	AutorunName        = "Kinodom" // значок в трее при входе любого пользователя
 )
 
 // StopWait — сколько ждать остановки службы.
@@ -101,6 +102,10 @@ func Install(ctx context.Context, sys winsvc.System, o InstallOptions, log func(
 	if err != nil {
 		return fmt.Errorf("служба Kinodom: %w", err)
 	}
+	// Значок в трее запускает и останавливает службу от имени пользователя, без окна прав.
+	if err := sys.SCM.AllowUserControl(ServiceName); err != nil {
+		return fmt.Errorf("служба Kinodom, права пользователей: %w", err)
+	}
 
 	log("Выдаю права на папки")
 	if err := os.MkdirAll(paths.Data, 0o755); err != nil {
@@ -147,6 +152,9 @@ func Install(ctx context.Context, sys winsvc.System, o InstallOptions, log func(
 	if err := sys.Registry.SetProtocol(Scheme, OpenCommand(o.ProgramDir)); err != nil {
 		return fmt.Errorf("ссылки kinodom://: %w", err)
 	}
+	if err := sys.Registry.SetAutorun(AutorunName, TrayCommand(o.ProgramDir)); err != nil {
+		return fmt.Errorf("значок в трее: %w", err)
+	}
 	if o.NoStart {
 		return nil
 	}
@@ -175,6 +183,12 @@ func rollback(sys winsvc.System) {
 	sys.Firewall.Delete(RuleAPI)
 	sys.Firewall.Delete(RuleTorrents)
 	sys.Registry.DeleteProtocol(Scheme)
+	sys.Registry.DeleteAutorun(AutorunName)
+}
+
+// TrayCommand — значок в трее при входе в Windows (спека этапа 11a, раздел 5.2).
+func TrayCommand(programDir string) string {
+	return `"` + filepath.Join(programDir, "kinodomw.exe") + `" tray`
 }
 
 // OpenCommand — команда ссылок kinodom://: программа без консоли.
