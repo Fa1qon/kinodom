@@ -2,6 +2,7 @@ package iptv
 
 import (
 	"context"
+	"net/http"
 	"slices"
 	"sync"
 	"time"
@@ -214,12 +215,13 @@ func (h *blackHold) blip() bool {
 }
 
 // settle — конец прохода: сбой сети — ⚫ отбрасываются и проблема в «Состоянии»; иначе ⚫ применяются, а
-// проблема снимается.
+// проблема снимается. Почти все молчат, а контрольный адрес отвечает — умер провайдер большого
+// плейлиста, а не наша сеть: ⚫ применяются (ревью 11b-А).
 func (m *Module) settle(ctx context.Context, level string, h *blackHold) {
 	if ctx.Err() != nil || h.total == 0 {
 		return
 	}
-	if h.blip() {
+	if h.blip() && !m.online(ctx) {
 		m.log.Warn("iptv: почти все источники не ответили — похоже, пропадал интернет; результаты прохода не применены",
 			"level", level, "checked", h.total, "black", len(h.black))
 		if err := m.d.SetProblem(ctx, problemNetwork, "Каналы: почти все источники не ответили — похоже, пропадал интернет"); err != nil {
@@ -233,6 +235,26 @@ func (m *Module) settle(ctx context.Context, level string, h *blackHold) {
 	for _, b := range h.black {
 		m.record(ctx, b.id, level, b.r)
 	}
+}
+
+// reachable — контрольный адрес отвечает (любым HTTP-ответом): база iptv-org или телепрограмма.
+func (m *Module) reachable(ctx context.Context) bool {
+	m.mu.Lock()
+	epg := m.epgURL
+	m.mu.Unlock()
+	for _, u := range []string{m.o.OrgBase, epg} {
+		cctx, cancel := context.WithTimeout(ctx, 15*time.Second)
+		req, err := http.NewRequestWithContext(cctx, http.MethodHead, u, nil)
+		if err == nil {
+			if resp, err := m.client.Do(req); err == nil {
+				resp.Body.Close()
+				cancel()
+				return true
+			}
+		}
+		cancel()
+	}
+	return false
 }
 
 // check — проверить источники не больше parallel одновременно; результаты применяются сразу.

@@ -109,7 +109,8 @@ func TestNetworkBlipKeepsChannels(t *testing.T) {
 	ctx := context.Background()
 	ch := &blackChecker{black: func(string) bool { return false }}
 	m, ids := moduleWithStreams(t, 25, ch)
-	m.runLight(ctx, ids) // все живы
+	m.online = func(context.Context) bool { return false } // контрольный адрес тоже не отвечает
+	m.runLight(ctx, ids)                                   // все живы
 	ch.black = func(url string) bool { return !strings.HasSuffix(url, "/0.m3u8") }
 	m.runLight(ctx, ids) // моргнул интернет
 	states := func() (alive, silent int) {
@@ -137,6 +138,35 @@ func TestNetworkBlipKeepsChannels(t *testing.T) {
 	m.runLight(ctx, ids)
 	if a, s := states(); a != 23 || s != 2 || problem() {
 		t.Fatalf("нормальный проход: живых %d, молчат %d, проблема %v", a, s, problem())
+	}
+}
+
+// Почти все молчат, а контрольный адрес (база iptv-org, телепрограмма) отвечает — это умер провайдер
+// большого плейлиста, а не наша сеть: результаты применяются, проблемы «пропадал интернет» нет (ревью
+// 11b-А: иначе мёртвые источники оставались «работает» навсегда).
+func TestDeadProviderIsNotNetworkBlip(t *testing.T) {
+	ctx := context.Background()
+	ch := &blackChecker{black: func(string) bool { return false }}
+	m, ids := moduleWithStreams(t, 25, ch)
+	m.online = func(context.Context) bool { return true }
+	m.runLight(ctx, ids)
+	ch.black = func(url string) bool { return !strings.HasSuffix(url, "/0.m3u8") }
+	m.runLight(ctx, ids)
+	alive, silent := 0, 0
+	for _, s := range m.pool.streams {
+		switch s.State {
+		case StateAlive:
+			alive++
+		case StateSilent:
+			silent++
+		}
+	}
+	ps, err := m.d.Problems(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if alive != 1 || silent != 24 || slices.ContainsFunc(ps, func(p store.Problem) bool { return p.ID == problemNetwork }) {
+		t.Fatalf("умер провайдер: живых %d, молчат %d, проблемы %+v", alive, silent, ps)
 	}
 }
 
