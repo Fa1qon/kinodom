@@ -11,6 +11,7 @@ export const GRADE = {
   unrated: { color: '', label: 'ещё не проверен' },
   black: { color: 'var(--faint)', label: 'не отвечает' },
   alive: { color: '', label: 'ещё не проверен' },
+  hidden: { color: '', label: 'скрыт' }, // источник скрыт вручную и плееру не предлагается (Х32)
 };
 
 // gradeMark — квадрат оценки с подписью для экранного диктора.

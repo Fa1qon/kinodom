@@ -204,7 +204,7 @@ func TestPultChannelsFilter(t *testing.T) {
 import { filterChannels, sections, UNKNOWN, filtersFrom } from './views/channels.js';
 import { progressOf, hhmm } from './views/tvkit.js';
 import { dateStr } from './views/channel.js';
-import { labelPatch, sourceMarks, sourceButtons } from './views/channel-settings.js';
+import { labelPatch, sourceMarks, sourceButtons, sourceGrade } from './views/channel-settings.js';
 const c = (key, block, category, categoryName, country, languages) => ({ key, block, category, categoryName, country, languages });
 const all = [
   c('bbc', 'favorite', 'news', 'Новости', 'GB', ['eng']),
@@ -257,11 +257,18 @@ const checks = [
   [sourceButtons({ offered: true }, 0, [{ offered: true }, { offered: false }]).join(), 'keep,hide-last,other'],
   [sourceButtons({ offered: false }, 1, [{ offered: true }, { offered: false }]).join(), 'hide,other'],
   [sourceButtons({ offered: false, hidden: true }, 1, [{ offered: true }, { offered: false, hidden: true }]).join(), 'show'],
-  // Правка меток — только изменённые поля (финальное ревью этапа 8).
-  [JSON.stringify(labelPatch({ category: 'news', country: 'RU', languages: ['rus'] }, { category: 'news', country: 'RU', lang: 'rus' })), '{}'],
-  [JSON.stringify(labelPatch({ category: 'news', country: 'RU', languages: ['rus'] }, { category: '', country: 'RU', lang: 'rus' })), '{"category":""}'],
-  [JSON.stringify(labelPatch({ category: 'news', country: 'RU', languages: [] }, { category: 'news', country: 'UA', lang: 'ukr' })), '{"country":"UA","languages":["ukr"]}'],
-  [JSON.stringify(labelPatch({ category: 'news', country: 'RU', languages: ['rus', 'eng'] }, { category: 'news', country: 'RU', lang: '' })), '{"languages":[]}'],
+  // Правка меток — только изменённые поля (финальное ревью этапа 8); языки — списком (хвост Х31).
+  [JSON.stringify(labelPatch({ category: 'news', country: 'RU', languages: ['rus'] }, { category: 'news', country: 'RU', langs: ['rus'] })), '{}'],
+  [JSON.stringify(labelPatch({ category: 'news', country: 'RU', languages: ['rus'] }, { category: '', country: 'RU', langs: ['rus'] })), '{"category":""}'],
+  [JSON.stringify(labelPatch({ category: 'news', country: 'RU', languages: [] }, { category: 'news', country: 'UA', langs: ['ukr'] })), '{"country":"UA","languages":["ukr"]}'],
+  [JSON.stringify(labelPatch({ category: 'news', country: 'RU', languages: ['rus', 'eng'] }, { category: 'news', country: 'RU', langs: [] })), '{"languages":[]}'],
+  [JSON.stringify(labelPatch({ category: 'news', country: 'RU', languages: ['rus', 'eng'] }, { category: 'news', country: 'RU', langs: ['eng', 'rus'] })), '{}'],
+  [JSON.stringify(labelPatch({ category: 'news', country: 'RU', languages: ['rus'] }, { category: 'news', country: 'RU', langs: ['rus', 'eng'] })), '{"languages":["rus","eng"]}'],
+  // Скрытый вручную источник, который плееру не предлагается, — «скрыт», а не ⚫ «не отвечает» (Х32).
+  [sourceGrade({ offered: false, hidden: true, state: 'alive' }), 'hidden'],
+  [sourceGrade({ offered: false, state: 'silent' }), 'black'],
+  [sourceGrade({ offered: true, grade: 'green' }), 'green'],
+  [sourceGrade({ offered: true, hidden: true, grade: 'yellow' }), 'yellow'],
 ];
 for (const [got, want] of checks) {
   if (got !== want) {
