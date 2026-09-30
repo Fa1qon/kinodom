@@ -86,10 +86,71 @@ func TestParseTitleSeason(t *testing.T) {
 		"Большой куш. Бангкок [02x13 из 13] [Эфир от 27.09] (2026) HDTV 1080р от Files-x":                                                                        "02x13 из 13",
 		"Сезон охоты / Open Season (2006) BDRip": "",
 		"Матрица / The Matrix (1999) BDRip":      "",
+		// Исследование 22.3: «26 сезон: 10 серии» — сезон 26, не 10; «[01-04 из 04]» — серии.
+		"Расследования авиакатастроф / Mayday [26 сезон: 10 серии] (2026) HDTVRip": "26 сезон",
+		"1812 [01-04 из 04] (2012) HDTVRip 720p от New-Team":                       "01-04 из 04",
 	}
 	for in, want := range cases {
 		if got := ParseTitle(in).Season; got != want {
 			t.Errorf("%q: сезон %q, нужно %q", in, got, want)
 		}
+	}
+}
+
+// Части «Сезон: 1», «Серии: 1-13 из 13» — не названия (\b в Go — только ASCII, хвост Х2), а «Сезон охоты» —
+// название; хвост «- Episode 3» у названия отрезается.
+func TestParseTitleNamesWithoutSeasonParts(t *testing.T) {
+	cases := map[string][]string{
+		"Космос: Пространство и время / Cosmos: A SpaceTime Odyssey (Билл Поуп / Bill Pope) / Сезон: 1 / Серии: 1-13 из 13 [2014, Документальный, WEB-DL 1080p]": {"Космос: Пространство и время", "Cosmos: A SpaceTime Odyssey"},
+		"Сезон охоты / Open Season (2006) BDRip":                     {"Сезон охоты", "Open Season"},
+		"Шоу / The Show - Episode 3 (2026) WEB-DL 1080p":             {"Шоу", "The Show"},
+		"Пацаны / The Boys / Season 5 / Episodes 1-3 [2026, WEB-DL]": {"Пацаны", "The Boys"},
+	}
+	for in, want := range cases {
+		if got := ParseTitle(in).Names; !slices.Equal(got, want) {
+			t.Errorf("%q: названия %q, нужно %q", in, got, want)
+		}
+	}
+}
+
+// Сериал — по сезону, серии, «N из M», хвосту «- Episode N»; фильм — без них.
+func TestParseTitleSeries(t *testing.T) {
+	cases := map[string]bool{
+		"Динозавры / The Dinosaurs [S01] (2026) WEB-DL 720p": true,
+		"1812 [01-04 из 04] (2012) HDTVRip 720p от New-Team": true,
+		"Шоу / The Show - Episode 3 (2026) WEB-DL 1080p":     true,
+		"Вселенная (1-5 серий из 5) / Universe [2021, DVB]":  true,
+		"Матрица / The Matrix (1999) BDRip":                  false,
+		"Сезон охоты / Open Season (2006) BDRip":             false,
+		"Холод (2026) WEB-DL 1080p":                          false,
+	}
+	for in, want := range cases {
+		if got := ParseTitle(in).Series; got != want {
+			t.Errorf("%q: сериал %v, нужно %v", in, got, want)
+		}
+	}
+}
+
+// Ключ произведения (спека 11b, 5.1 и 5.3): название без знаков и регистра, ё как е, год, фильм или
+// сериал. Разные рипы одного — один ключ; фильм и сериал с одним названием и годом — разные.
+func TestWorkKey(t *testing.T) {
+	k := func(s string) string { return WorkKey(ParseTitle(s)) }
+	if a, b := k("Ёлки / Yolki (2010) BDRip 720p"), k("ЕЛКИ (2010) WEB-DL 1080p от Group"); a != b || a == "" {
+		t.Errorf("один фильм: %q и %q", a, b)
+	}
+	if a, b := k("Холод [S01] (2026) WEB-DL 1080p"), k("Холод [01-08 из 08] (2026) WEB-DL 2160p"); a != b {
+		t.Errorf("один сериал разного качества: %q и %q", a, b)
+	}
+	if a, b := k("Удар [S01] (2026) WEB-DL"), k("Удар / La frappe (2026) WEB-DL"); a == b {
+		t.Errorf("сериал и фильм с одним названием и годом: %q", a)
+	}
+	if a, b := k("Холод [S01] (2026) WEB-DL"), k("Холод [S02] (2027) WEB-DL"); a == b {
+		t.Errorf("сезоны разных лет: %q", a)
+	}
+	if got := k("Матрица / The Matrix (1999) BDRip"); got != "матрица|1999|f" {
+		t.Errorf("вид ключа: %q", got)
+	}
+	if got := WorkKey(Title{}); got != "" {
+		t.Errorf("без названия: %q", got)
 	}
 }
