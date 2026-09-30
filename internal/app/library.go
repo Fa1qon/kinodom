@@ -3,6 +3,7 @@ package app
 import (
 	"context"
 	"errors"
+	"net/http"
 
 	"kinodom/internal/library"
 	"kinodom/internal/meta"
@@ -19,6 +20,7 @@ func (a *App) initLibrary(ctx context.Context) {
 	}
 	a.Library = library.New(o)
 	a.Library.Register(a.API)
+	a.API.HandleLocal("GET /api/v1/library/access", a.Library.Name(), http.HandlerFunc(a.handleAccess)) // «Разрешить доступ» (этап 11a)
 	a.Sup.Add(a.Library, a.ModuleEnabled(ctx, a.Library.Name()))
 }
 

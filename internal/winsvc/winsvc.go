@@ -17,8 +17,10 @@ const (
 	ServiceAccount = `NT SERVICE\Kinodom`
 )
 
-// ErrNotInstalled — службы с таким именем нет.
-var ErrNotInstalled = errors.New("служба не установлена")
+var (
+	ErrNotInstalled = errors.New("служба не установлена")                   // службы с таким именем нет
+	ErrCancelled    = errors.New("в окне прав администратора нажали «Нет»") // Elevate
+)
 
 // ServiceConfig — служба Windows.
 type ServiceConfig struct {
