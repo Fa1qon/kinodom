@@ -13,6 +13,7 @@ import (
 // required — файлы пульта, без которых он не работает (спека этапа 7, раздел 6.1).
 var required = []string{
 	"index.html", "style.css", "app.js", "api.js", "ui.js", "icons.js", "nav.js",
+	"favicon.ico", "icon-192.png", "logo-icon.png", "logo-text.png",
 	"fonts/golos-text-cyrillic.woff2", "fonts/golos-text-latin.woff2",
 	"fonts/unbounded-cyrillic.woff2", "fonts/unbounded-latin.woff2",
 	"fonts/OFL-golos-text.txt", "fonts/OFL-unbounded.txt",
