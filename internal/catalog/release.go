@@ -133,6 +133,7 @@ func (c *Catalog) enrichSoon(tracker string, id int64) {
 	if !slices.Contains(c.urgent[tracker], id) {
 		c.urgent[tracker] = append(c.urgent[tracker], id)
 	}
+	c.interruptLocked(tracker)
 	c.mu.Unlock()
 	if ch, ok := c.enrichWake[tracker]; ok {
 		select {
@@ -148,12 +149,36 @@ func (c *Catalog) findSoon(tracker string, id int64) {
 	if !slices.Contains(c.found[tracker], id) {
 		c.found[tracker] = append(c.found[tracker], id)
 	}
+	c.interruptLocked(tracker)
 	c.mu.Unlock()
 	if ch, ok := c.enrichWake[tracker]; ok {
 		select {
 		case ch <- struct{}{}:
 		default:
 		}
+	}
+}
+
+// yieldTo — фоновый шаг трекера ждёт .torrent: срочная работа (открыли раздачу, нашли поиском) его
+// прерывает (d.rutor.info отдаёт .torrent 4–10 с, бывает и 20). Уже пришедшая — сразу. nil — шаг
+// дождался.
+func (c *Catalog) yieldTo(tracker string, interrupt func()) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if interrupt == nil {
+		delete(c.yield, tracker)
+		return
+	}
+	c.yield[tracker] = interrupt
+	if len(c.urgent[tracker])+len(c.found[tracker]) > 0 {
+		c.interruptLocked(tracker)
+	}
+}
+
+func (c *Catalog) interruptLocked(tracker string) {
+	if f := c.yield[tracker]; f != nil {
+		f()
+		delete(c.yield, tracker)
 	}
 }
 

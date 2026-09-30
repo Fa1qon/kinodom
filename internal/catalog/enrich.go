@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"strconv"
+	"sync/atomic"
 	"time"
 
 	"kinodom/internal/meta"
@@ -111,14 +112,24 @@ func (c *Catalog) enrichStep(ctx context.Context, tracker string) (bool, error) 
 	var torrent []byte
 	if tf, ok := src.(torrentFetcher); ok && (!urgent || opened) {
 		tctx, cancel := context.WithTimeout(ctx, torrentWait)
+		var interrupted atomic.Bool
+		if !urgent {
+			c.yieldTo(tracker, func() { interrupted.Store(true); cancel() })
+		}
 		b, err := tf.Torrent(tctx, r.TopicID)
+		if !urgent {
+			c.yieldTo(tracker, nil)
+		}
 		cancel()
-		if err == nil {
+		switch {
+		case err == nil:
 			if err := c.st.saveTorrent(ctx, r.ID, b); err != nil {
 				return false, err
 			}
 			torrent = b
-		} else if ctx.Err() == nil {
+		case interrupted.Load():
+			// Не сбой: повтор в фоне или сразу при открытии раздачи.
+		case ctx.Err() == nil:
 			c.log.Warn("каталог: .torrent не скачался — раздача откроется по magnet, повтор позже", "tracker", tracker, "topic", r.TopicID, "err", err)
 			c.failed("torrent", r.ID, now)
 		}

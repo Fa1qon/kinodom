@@ -91,6 +91,50 @@ func TestFoundEnrichedWithoutTorrentUntilOpened(t *testing.T) {
 	}
 }
 
+// Фоновый шаг ждёт медленный .torrent Rutor (d.rutor.info отдаёт его 4–10 с, бывает и 20): найденное
+// поиском или открытое в пульте его прерывает — страница фоновой раздачи уже есть, .torrent докачается
+// повтором или при открытии (найдено вживую, 11b-А: постеры поиска стояли до 20 с).
+func TestUrgentWorkInterruptsBackgroundTorrent(t *testing.T) {
+	rutor := newFake("rutor")
+	rutor.top["12"] = []source.Release{rel("rutor", "1", "Фон (2020) WEB-DL", 9, 1, "h1")}
+	rutor.details["1"] = source.Details{Release: source.Release{Title: "Фон (2020) WEB-DL"}, Description: "Фон"}
+	rutor.torrents["1"] = []byte("d4:infoe")
+	rutor.torrentBlock = make(chan struct{})
+	t.Cleanup(func() { close(rutor.torrentBlock) })
+	found := rel("rutor", "2", "Найдено (2026) WEB-DL", 5, 1, "h2")
+	rutor.details["2"] = source.Details{Release: found, Description: "Найдено"}
+	c, _ := newCatalog(t, openDB(t), nil, rutor)
+	refresh(t, c, true)
+	done := make(chan error, 1)
+	go func() { _, err := c.enrichStep(ctx, "rutor"); done <- err }()
+	for deadline := time.Now().Add(5 * time.Second); rutor.Calls("torrent") == 0; time.Sleep(5 * time.Millisecond) {
+		if time.Now().After(deadline) {
+			t.Fatal("фоновый шаг не дошёл до .torrent")
+		}
+	}
+	ids, err := c.st.saveFound(ctx, []source.Release{found}, c.now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	c.enqueueFound(ctx, "rutor", ids)
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("найденное ждёт, пока фоновый шаг дождётся .torrent")
+	}
+	bg := releaseID(t, c.db, "rutor", "1")
+	r, err := c.Release(ctx, bg)
+	if err != nil || r.Description != "Фон" {
+		t.Fatalf("страница фоновой раздачи не записалась: %q, %v", r.Description, err)
+	}
+	if !c.due("torrent", bg, c.now()) {
+		t.Fatal("прерванный .torrent — не сбой: при открытии его качают сразу")
+	}
+}
+
 // .torrent открытой раздачи не скачался — экран раздачи не ждёт его до следующего повтора: открывается
 // по magnet.
 func TestOpenedTorrentFailedStopsWaiting(t *testing.T) {

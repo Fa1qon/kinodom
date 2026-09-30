@@ -19,19 +19,20 @@ var ctx = context.Background()
 type fakeSource struct {
 	name string
 
-	mu          sync.Mutex
-	top         map[string][]source.Release // раздел → топ
-	topErr      error
-	details     map[string]source.Details // номер → страница
-	detailsErr  map[string]error
-	torrents    map[string][]byte
-	recent      map[string][]source.Release
-	search      []source.Release
-	searchErr   error
-	searchBlock chan struct{}     // если задан — поиск ждёт его закрытия (или отмены)
-	tree        []source.Category // дерево разделов; nil — по разделам топов, без вложенности
-	off         bool              // адрес трекера не введён (этап 11a)
-	calls       map[string]int
+	mu           sync.Mutex
+	top          map[string][]source.Release // раздел → топ
+	topErr       error
+	details      map[string]source.Details // номер → страница
+	detailsErr   map[string]error
+	torrents     map[string][]byte
+	recent       map[string][]source.Release
+	search       []source.Release
+	searchErr    error
+	searchBlock  chan struct{}     // если задан — поиск ждёт его закрытия (или отмены)
+	torrentBlock chan struct{}     // если задан — .torrent ждёт его закрытия (или отмены)
+	tree         []source.Category // дерево разделов; nil — по разделам топов, без вложенности
+	off          bool              // адрес трекера не введён (этап 11a)
+	calls        map[string]int
 }
 
 func newFake(name string) *fakeSource {
@@ -88,11 +89,20 @@ func (f *fakeSource) Details(_ context.Context, id string) (source.Details, erro
 	return d, nil
 }
 
-func (f *fakeSource) Torrent(_ context.Context, id string) ([]byte, error) {
+func (f *fakeSource) Torrent(ctx context.Context, id string) ([]byte, error) {
 	f.mu.Lock()
-	defer f.mu.Unlock()
 	f.calls["torrent"]++
-	if b, ok := f.torrents[id]; ok {
+	block := f.torrentBlock
+	b, ok := f.torrents[id]
+	f.mu.Unlock()
+	if block != nil {
+		select {
+		case <-block:
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		}
+	}
+	if ok {
 		return b, nil
 	}
 	return nil, errors.New("нет .torrent")

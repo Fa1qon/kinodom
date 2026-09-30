@@ -97,6 +97,7 @@ type Catalog struct {
 	urgent      map[string][]int64    // трекер → раздачи, которые открыли в пульте: догрузить первыми
 	found       map[string][]int64    // трекер → найденное поиском: после открытых, без .torrent
 	torrentNow  map[int64]bool        // .torrent открытой раздачи качается сейчас
+	yield       map[string]func()     // трекер → прервать фоновое ожидание .torrent: пришла срочная работа
 	retries     map[string]retryState // «poster:<id>», «torrent:<id>» → повтор после сбоя (хвост Х7)
 	forced      map[int64]bool        // открыли раздачу без картинки — постер без паузы
 	posterWG    sync.WaitGroup        // постеры и .torrent, которые качаются вне шага догрузки (тесты ждут их)
@@ -118,7 +119,7 @@ func New(o Options) *Catalog {
 	c := &Catalog{st: catalogStore{o.DB}, db: o.DB, sources: map[string]source.Source{}, sections: o.Sections,
 		ratings: o.Ratings, images: o.Images, kpPoster: o.KinopoiskPoster, keepImages: o.KeepImages, log: o.Log, now: time.Now,
 		refreshNow: make(chan struct{}, 1), sectionsChanged: make(chan struct{}, 1), enrichWake: map[string]chan struct{}{},
-		postersWake: make(chan struct{}, 1), urgent: map[string][]int64{}, found: map[string][]int64{}, torrentNow: map[int64]bool{}, retries: map[string]retryState{}, forced: map[int64]bool{},
+		postersWake: make(chan struct{}, 1), urgent: map[string][]int64{}, found: map[string][]int64{}, torrentNow: map[int64]bool{}, yield: map[string]func(){}, retries: map[string]retryState{}, forced: map[int64]bool{},
 		posterSem:   make(chan struct{}, 2),
 		forumPaused: map[string]time.Time{}, searches: map[string]*searchRun{}, torrentFormat: o.TorrentFormat,
 		preferred: o.PreferredFormat}
