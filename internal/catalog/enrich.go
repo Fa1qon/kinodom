@@ -137,7 +137,7 @@ func (c *Catalog) enrichStep(ctx context.Context, tracker string) (bool, error) 
 	if err := c.st.saveDetails(ctx, r.ID, d, kpID, "", c.formatOf(d.Description, torrent), now); err != nil {
 		return false, err
 	}
-	c.posterLater(ctx, r.ID, d.PosterURL, kpID)
+	c.posterLater(ctx, r.ID, d.PosterURL, kpID, urgent)
 	if c.ratings != nil {
 		r.Title, r.KinopoiskID, r.IMDbID = firstNonEmpty(d.Title, r.Title), kpID, d.IMDbID
 		pos := 0 // открытую раздачу — в рейтинги первой
