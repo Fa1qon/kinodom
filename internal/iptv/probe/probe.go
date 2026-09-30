@@ -48,6 +48,7 @@ type Result struct {
 	Ratio  float64       // запас скорости у HLS; 0 — не мерили
 	Mbps   float64       // битрейт, Мбит/с; 0 — неизвестен
 	Height int           // высота кадра лучшего варианта HLS; 0 — неизвестна
+	Audio  *bool         // есть ли звук (полная проверка); nil — не понять
 	Error  string        // текст для человека; "" — нет ошибки
 }
 
@@ -242,8 +243,11 @@ func (p *Prober) start(ctx context.Context, t Target, full bool) (Result, *playl
 	pl := parsePlaylist(string(body))
 	if len(pl.variants) > 0 {
 		v := pl.variants[0] // лёгкая — первый вариант
+		separate := false
 		if full {
 			v = pl.best()
+			r.Audio = codecsAudio(v.codecs, v.audio != "" && pl.audioMedia)
+			separate = v.audio != "" && pl.audioURI[v.audio]
 		}
 		for _, x := range pl.variants {
 			r.Height = max(r.Height, x.height)
@@ -258,7 +262,7 @@ func (p *Prober) start(ctx context.Context, t Target, full bool) (Result, *playl
 			return fail(r, err)
 		}
 		media := parsePlaylist(string(b))
-		media.bandwidth = v.bandwidth
+		media.bandwidth, media.separateAudio = v.bandwidth, separate
 		pl, base = media, final
 	}
 	if len(pl.segments) == 0 {
@@ -291,12 +295,17 @@ func (p *Prober) segment(ctx context.Context, t Target, r Result, pl *playlist, 
 		return r
 	}
 	start := time.Now()
-	n, err := io.CopyN(io.Discard, resp.Body, p.segmentCap()-1)
+	data := bytes.NewBuffer(first)
+	n, err := io.CopyN(data, resp.Body, p.segmentCap()-1)
 	elapsed := time.Since(start)
 	whole := errors.Is(err, io.EOF)
 	if err != nil && !whole {
 		r.Grade, r.Error = GradeRed, "сегмент не скачался"
 		return r
+	}
+	// Таблица дорожек сегмента точнее CODECS — кроме звука отдельной дорожкой: в сегментах видео его нет.
+	if a := tsAudio(data.Bytes()); a != nil && !pl.separateAudio {
+		r.Audio = a
 	}
 	got := float64(n + 1)
 	// Битрейт, байт/с: BANDWIDTH варианта, иначе размер сегмента ÷ длительность, иначе 4 Мбит/с.
@@ -332,19 +341,26 @@ func (p *Prober) segment(ctx context.Context, t Target, r Result, pl *playlist, 
 // live — приём живого потока LiveFor от первого байта: паузы дольше Pause — остановки.
 func (p *Prober) live(ctx context.Context, body io.Reader, r Result) Result {
 	type chunk struct {
-		n   int
-		at  time.Time
-		err error
+		n    int
+		data []byte // копия — пока не набрали начало потока для таблицы дорожек
+		at   time.Time
+		err  error
 	}
 	ch := make(chan chunk, 16)
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 	go func() {
 		buf := make([]byte, 32<<10)
+		kept := 0
 		for {
 			n, err := body.Read(buf)
+			var data []byte
+			if kept < liveHead {
+				data = append([]byte(nil), buf[:n]...)
+				kept += n
+			}
 			select {
-			case ch <- chunk{n, time.Now(), err}:
+			case ch <- chunk{n, data, time.Now(), err}:
 			case <-ctx.Done():
 				return
 			}
@@ -355,7 +371,12 @@ func (p *Prober) live(ctx context.Context, body io.Reader, r Result) Result {
 	}()
 	var first, last time.Time
 	var total int64
+	var head []byte
 	pauses := 0
+	grade := func(r Result, pauses int, total int64, d time.Duration) Result {
+		r.Audio = tsAudio(head)
+		return grade(r, pauses, total, d)
+	}
 	timer := time.NewTimer(p.timeout())
 	defer timer.Stop()
 	for {
@@ -382,6 +403,7 @@ func (p *Prober) live(ctx context.Context, body io.Reader, r Result) Result {
 				}
 				last = c.at
 				total += int64(c.n)
+				head = append(head, c.data...)
 			}
 			if c.err != nil {
 				if first.IsZero() || c.at.Sub(first) < p.liveFor()/2 {
@@ -417,7 +439,12 @@ type variant struct {
 	uri       string
 	bandwidth int64
 	height    int
+	codecs    string // CODECS; "" — не указаны
+	audio     string // группа AUDIO (EXT-X-MEDIA); "" — нет
 }
+
+// liveHead — сколько начала живого потока держать для таблицы дорожек (звук).
+const liveHead = 1 << 20
 
 type segment struct {
 	uri      string
@@ -425,9 +452,14 @@ type segment struct {
 }
 
 type playlist struct {
-	variants  []variant
-	segments  []segment
-	bandwidth int64 // у плейлиста варианта — BANDWIDTH из мастер-плейлиста
+	variants   []variant
+	segments   []segment
+	bandwidth  int64 // у плейлиста варианта — BANDWIDTH из мастер-плейлиста
+	audioMedia bool  // у мастер-плейлиста есть EXT-X-MEDIA:TYPE=AUDIO
+	// audioURI — группы AUDIO, у которых звук отдельной дорожкой (EXT-X-MEDIA с URI).
+	audioURI map[string]bool
+	// separateAudio — у плейлиста варианта звук отдельной дорожкой: в его сегментах звука нет.
+	separateAudio bool
 }
 
 func (pl playlist) best() variant {
@@ -438,6 +470,17 @@ func (pl playlist) best() variant {
 		}
 	}
 	return b
+}
+
+// mediaAttr — значение атрибута тега без кавычек; ok — атрибут есть.
+func mediaAttr(line, name string) (string, bool) {
+	_, attrs, _ := strings.Cut(line, ":")
+	for _, kv := range splitAttrs(attrs) {
+		if k, val, _ := strings.Cut(kv, "="); strings.EqualFold(k, name) {
+			return strings.Trim(val, `"`), true
+		}
+	}
+	return "", false
 }
 
 func parsePlaylist(s string) playlist {
@@ -459,9 +502,23 @@ func parsePlaylist(s string) playlist {
 					if _, h, ok := strings.Cut(val, "x"); ok {
 						v.height, _ = strconv.Atoi(h)
 					}
+				case "CODECS":
+					v.codecs = strings.Trim(val, `"`)
+				case "AUDIO":
+					v.audio = strings.Trim(val, `"`)
 				}
 			}
 			pending = &v
+		case strings.HasPrefix(line, "#EXT-X-MEDIA:") && strings.Contains(strings.ToUpper(line), "TYPE=AUDIO"):
+			pl.audioMedia = true
+			if group, ok := mediaAttr(line, "GROUP-ID"); ok {
+				if _, uri := mediaAttr(line, "URI"); uri {
+					if pl.audioURI == nil {
+						pl.audioURI = map[string]bool{}
+					}
+					pl.audioURI[group] = true
+				}
+			}
 		case strings.HasPrefix(line, "#EXTINF:"):
 			d, _, _ := strings.Cut(strings.TrimPrefix(line, "#EXTINF:"), ",")
 			dur, _ = strconv.ParseFloat(strings.TrimSpace(d), 64)

@@ -42,9 +42,13 @@ type Channel struct {
 	Federal int       // номер кнопки 1–20; 0 — не федеральный
 	Sources []*Stream // предлагаемые источники по порядку
 	Others  []*Stream // остальные привязанные: молчат, мертвы, новые
-	Grade   string    // оценка первого источника: green, yellow, red, unrated; "" — источников нет
-	Hidden  string    // почему скрыт (без учёта избранного); "" — на экране
-	Pinned  string    // закреплённая ссылка
+	// Rejected — скрытые у канала вручную («Скрыть» в настройках канала): не предлагаются и полной
+	// проверкой в фоне не проверяются (лёгкой — да: они запасные). Других предлагаемых нет — живые
+	// скрытые переходят в Sources запасными, чтобы канал не пропал вместе с кнопкой «Вернуть».
+	Rejected []*Stream
+	Grade    string // оценка первого источника: green, yellow, red, unrated; "" — источников нет
+	Hidden   string // почему скрыт (без учёта избранного); "" — на экране
+	Pinned   string // закреплённая ссылка
 }
 
 // Offered — у канала есть что предложить плееру.
@@ -307,10 +311,24 @@ func build(in buildInput) *Lineup {
 			c = newChannel(r.key, in.epg)
 			l.ByKey[r.key] = c
 		}
-		if offered(s, limited) {
+		switch {
+		case slices.Contains(p.overrides[r.key].HiddenURLs, s.URL):
+			c.Rejected = append(c.Rejected, s)
+		case offered(s, limited):
 			c.Sources = append(c.Sources, s)
-		} else {
+		default:
 			c.Others = append(c.Others, s)
+		}
+	}
+	for _, c := range l.ByKey {
+		if len(c.Sources) == 0 {
+			c.Rejected = slices.DeleteFunc(c.Rejected, func(s *Stream) bool {
+				if offered(s, limited) {
+					c.Sources = append(c.Sources, s)
+					return true
+				}
+				return false
+			})
 		}
 	}
 	for _, g := range groups {
@@ -497,8 +515,8 @@ func classRank(s *Stream) int {
 	return 2 // жив, полной проверки не было
 }
 
-// sortSources — порядок источников (спека этапа 8, раздел 5.9): закреплённый, оценка, доля хороших
-// проверок за неделю, качество, время до данных.
+// sortSources — порядок источников (спека этапа 8, раздел 5.9): закреплённый; без звука — после всех
+// (отзыв заказчика 2026-09-30); оценка, доля хороших проверок за неделю, качество, время до данных.
 func sortSources(c *Channel, share map[int64]float64) {
 	ttfb := func(s *Stream) int {
 		if s.TTFB <= 0 {
@@ -509,6 +527,7 @@ func sortSources(c *Channel, share map[int64]float64) {
 	slices.SortStableFunc(c.Sources, func(a, b *Stream) int {
 		return cmp.Or(
 			cmp.Compare(b2i(b.URL == c.Pinned && c.Pinned != ""), b2i(a.URL == c.Pinned && c.Pinned != "")),
+			cmp.Compare(b2i(silent(a)), b2i(silent(b))),
 			cmp.Compare(classRank(a), classRank(b)),
 			cmp.Compare(share[b.ID], share[a.ID]),
 			cmp.Compare(qualityRank[streamQuality(b)], qualityRank[streamQuality(a)]),
@@ -517,6 +536,7 @@ func sortSources(c *Channel, share map[int64]float64) {
 		)
 	})
 	slices.SortStableFunc(c.Others, func(a, b *Stream) int { return cmp.Compare(a.ID, b.ID) })
+	slices.SortStableFunc(c.Rejected, func(a, b *Stream) int { return cmp.Compare(a.ID, b.ID) })
 	c.Grade = ""
 	if len(c.Sources) > 0 {
 		c.Grade = c.Sources[0].Grade
@@ -525,6 +545,9 @@ func sortSources(c *Channel, share map[int64]float64) {
 		}
 	}
 }
+
+// silent — проверка нашла, что звука нет.
+func silent(s *Stream) bool { return s.Audio != nil && !*s.Audio }
 
 func b2i(b bool) int {
 	if b {

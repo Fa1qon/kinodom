@@ -4,7 +4,7 @@
 import { h, fill, icon, poll, keepFocus, ago, plural } from '../ui.js';
 import { get, put, post, del } from '../api.js';
 import { layout, remoteNote } from './settings-layout.js';
-import { CATEGORIES } from './channel.js';
+import { CATEGORIES } from './channel-settings.js';
 
 // fileBase64 — файл плейлиста в base64: изменяющие запросы к API — только JSON.
 function fileBase64(file) {
