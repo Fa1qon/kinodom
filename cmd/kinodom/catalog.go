@@ -42,12 +42,12 @@ func cmdCatalog(args []string, stdout, stderr io.Writer) int {
 	category := fs.String("category", "", "только этот раздел")
 	proxy := fs.String("proxy", "", "прокси для трекеров")
 	var t app.Trackers
-	t1URL := fs.String("t1", "", "зеркало t1 вместо встроенных")
-	rtURL := fs.String("t2", "", "зеркало t2 вместо встроенных")
-	fs.StringVar(&t.t1Download, "t1-download", "", "адрес .torrent t1 вместо встроенного")
-	fs.StringVar(&t.t2API, "t2-api", "", "API t2 вместо встроенного")
+	t1URL := fs.String("t1", "", "адрес t1 вместо настройки t1.address")
+	rtURL := fs.String("t2", "", "адрес t2 вместо настройки t2.address")
+	fs.StringVar(&t.t1Download, "t1-download", "", "адрес .torrent t1; пусто — по правилу из адреса сайта")
+	fs.StringVar(&t.t2API, "t2-api", "", "API t2; пусто — по правилу из адреса сайта")
 	kinopoisk := fs.String("kinopoisk", "", "API и рейтинги Кинопоиска вместо настоящих")
-	fs.StringVar(&t.t2Feed, "t2-feed", "", "лента t2 вместо встроенной")
+	fs.StringVar(&t.t2Feed, "t2-feed", "", "лента t2; пусто — по правилу из адреса сайта")
 	fs.BoolVar(&t.NoEdge, "no-edge", false, "без Edge: пропуск Cloudflare не добывать")
 	if err := fs.Parse(args[1:]); err != nil {
 		return 2

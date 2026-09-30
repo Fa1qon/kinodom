@@ -14,6 +14,8 @@ import (
 // View — настройки для пульта. Секретов в ответе нет: только признак «задан».
 type View struct {
 	t2 t2View `json:"t2"`
+	t1     t1View     `json:"t1"`
+	Setup     SetupView     `json:"setup"`
 	Proxy     ProxyView     `json:"proxy"`
 	Kinopoisk KinopoiskView `json:"kinopoisk"`
 	Storage   StorageView   `json:"storage"`
@@ -25,6 +27,18 @@ type View struct {
 type t2View struct {
 	Login       string `json:"login"`
 	PasswordSet bool   `json:"passwordSet"`
+	Address     string `json:"address"`     // "" — t2 выключен
+	APIAddress  string `json:"apiAddress"`  // "" — по правилу из адреса сайта
+	FeedAddress string `json:"feedAddress"` // "" — по правилу из адреса сайта
+}
+
+type t1View struct {
+	Address         string `json:"address"`         // "" — t1 выключен
+	DownloadAddress string `json:"downloadAddress"` // "" — по правилу из адреса сайта
+}
+
+type SetupView struct {
+	Done bool `json:"done"` // мастер начальных настроек пройден
 }
 
 type ProxyView struct {
@@ -65,7 +79,10 @@ type IPTVView struct {
 func (v Values) View() View {
 	p := splitProxy(v.Proxy)
 	return View{
-		t2: t2View{Login: v.t2Login, PasswordSet: v.t2Password != ""},
+		t2: t2View{Login: v.t2Login, PasswordSet: v.t2Password != "",
+			Address: v.t2Address, APIAddress: v.t2API, FeedAddress: v.t2Feed},
+		t1:     t1View{Address: v.t1Address, DownloadAddress: v.t1Download},
+		Setup:     SetupView{Done: v.SetupDone},
 		Proxy:     ProxyView{Type: p.Type, Address: p.Address, Login: p.Login, PasswordSet: p.password != ""},
 		Kinopoisk: KinopoiskView{KeySet: v.KinopoiskKey != ""},
 		Storage:   StorageView{DownloadsDir: v.DownloadsDir, KeepDays: v.KeepDays, KeepBehind: v.KeepBehind, MinFreeGB: v.MinFreeGB, UploadLimitMBps: v.UploadMBps},
@@ -79,6 +96,8 @@ func (v Values) View() View {
 // Patch — изменения из пульта: только присланные поля. Секрет: поля нет — не меняется, "" — стереть.
 type Patch struct {
 	t2 *t2Patch `json:"t2"`
+	t1     *t1Patch     `json:"t1"`
+	Setup     *SetupPatch     `json:"setup"`
 	Proxy     *ProxyPatch     `json:"proxy"`
 	Kinopoisk *KinopoiskPatch `json:"kinopoisk"`
 	Storage   *StoragePatch   `json:"storage"`
@@ -88,8 +107,20 @@ type Patch struct {
 }
 
 type t2Patch struct {
-	Login    *string `json:"login"`
-	Password *string `json:"password"`
+	Login       *string `json:"login"`
+	Password    *string `json:"password"`
+	Address     *string `json:"address"`
+	APIAddress  *string `json:"apiAddress"`
+	FeedAddress *string `json:"feedAddress"`
+}
+
+type t1Patch struct {
+	Address         *string `json:"address"`
+	DownloadAddress *string `json:"downloadAddress"`
+}
+
+type SetupPatch struct {
+	Done *bool `json:"done"`
 }
 
 type ProxyPatch struct {

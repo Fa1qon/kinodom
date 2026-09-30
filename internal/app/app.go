@@ -53,13 +53,14 @@ type Options struct {
 	// Settings — поверх настроек из базы и не сохраняются: тесты и kinodom catalog (логин, пароль
 	// t2 и ключ Кинопоиска — из переменных окружения, не в базу).
 	Settings map[string]string
-	Trackers Trackers // адреса трекеров вместо настоящих (тесты, kinodom catalog)
+	Trackers Trackers // адреса трекеров вместо настроек (тесты, kinodom catalog)
 	// LocalImages — тесты: картинки с адресов этого ПК (фейковые хостинги). В работе адреса этого ПК
 	// и домашней сети в картинках не скачиваются.
 	LocalImages bool
 }
 
-// Trackers — адреса трекеров вместо встроенных. Пусто — встроенные.
+// Trackers — адреса трекеров вместо настроек при старте. Пусто — из настроек (t1.address,
+// t2.address и служебные); в программе адресов трекеров нет (этап 11a).
 type Trackers struct {
 	t1Mirrors     []string
 	t1Download    string
@@ -88,6 +89,7 @@ type App struct {
 	Library  *library.Library  // медиатека: скачанное и папки заказчика (модуль library, этап 9)
 
 	kp        *meta.Kinopoisk
+	t1     *t1.t1
 	t2 *t2.t2
 	proxy     *netx.Proxy // прокси для трекеров: один на всех, меняется в пульте на ходу
 	closers   []io.Closer // закрываются в обратном порядке
@@ -278,14 +280,23 @@ func (a *App) initCatalog(ctx context.Context, o Options, v settings.Values) err
 	} else {
 		a.clearProblem(ctx, "catalog.categories")
 	}
-	t1Src, err := t1.New(t1.Options{Proxy: a.proxy, Mirrors: o.Trackers.t1Mirrors,
-		DownloadBase: o.Trackers.t1Download, Rate: o.Trackers.Rate, Log: log})
+	// Адреса — из настроек; без адреса источник выключен (этап 11a). Trackers — тесты и kinodom catalog.
+	ro := t1.Options{Proxy: a.proxy, Mirrors: oneAddress(v.t1Address), DownloadBase: v.t1Download,
+		Rate: o.Trackers.Rate, Log: log}
+	if len(o.Trackers.t1Mirrors) > 0 {
+		ro.Mirrors, ro.DownloadBase = o.Trackers.t1Mirrors, o.Trackers.t1Download
+	}
+	t1Src, err := t1.New(ro)
 	if err != nil {
 		return err
 	}
-	rto := t2.Options{Proxy: a.proxy, Mirrors: o.Trackers.t2Mirrors, APIBase: o.Trackers.t2API,
-		FeedBase: o.Trackers.t2Feed, Rate: o.Trackers.Rate, Log: log,
+	a.t1 = t1Src
+	rto := t2.Options{Proxy: a.proxy, Mirrors: oneAddress(v.t2Address), APIBase: v.t2API,
+		FeedBase: v.t2Feed, Rate: o.Trackers.Rate, Log: log,
 		Login: v.t2Login, Password: v.t2Password, OnLogin: a.t2Login}
+	if len(o.Trackers.t2Mirrors) > 0 {
+		rto.Mirrors, rto.APIBase, rto.FeedBase = o.Trackers.t2Mirrors, o.Trackers.t2API, o.Trackers.t2Feed
+	}
 	edgeOn := !o.Trackers.NoEdge && a.ModuleEnabled(ctx, "edge")
 	if edgeOn {
 		// UA — только начальный: Edge пересчитывает его на каждый проход, и источник переключается
@@ -323,6 +334,14 @@ func (a *App) initCatalog(ctx context.Context, o Options, v settings.Values) err
 	a.API.Handle("POST /api/v1/releases/{id}/download", a.Torrents.Name(), http.HandlerFunc(a.handleDownload))
 	a.Sup.Add(a.Catalog, a.ModuleEnabled(ctx, a.Catalog.Name()))
 	return nil
+}
+
+// oneAddress — адрес сайта из настроек списком зеркал; "" — пустой список (трекер выключен).
+func oneAddress(site string) []string {
+	if site == "" {
+		return nil
+	}
+	return []string{site}
 }
 
 // initIPTV — модуль iptv (спека этапа 8): плейлисты, каналы, проверки. Логотипы каналов — в своём кэше
@@ -635,6 +654,23 @@ func (a *App) Apply(ctx context.Context, old, n settings.Values) {
 	}
 	if n.t2Login != old.t2Login || n.t2Password != old.t2Password {
 		a.t2.SetCredentials(n.t2Login, n.t2Password)
+	}
+	// Адреса трекеров — без перезапуска: источник переключается, каталог обновляется сразу.
+	trackersChanged := false
+	if n.t1Address != old.t1Address || n.t1Download != old.t1Download {
+		if err := a.t1.SetAddresses(n.t1Address, n.t1Download); err != nil {
+			a.Log.Error("адрес t1 не применился", "err", err)
+		}
+		trackersChanged = true
+	}
+	if n.t2Address != old.t2Address || n.t2API != old.t2API || n.t2Feed != old.t2Feed {
+		if err := a.t2.SetAddresses(n.t2Address, n.t2API, n.t2Feed); err != nil {
+			a.Log.Error("адрес t2 не применился", "err", err)
+		}
+		trackersChanged = true
+	}
+	if trackersChanged {
+		a.Catalog.Refresh()
 	}
 	a.Log.Info("настройки изменены в пульте") // без значений: среди них пароли и ключ
 }
