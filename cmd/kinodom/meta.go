@@ -20,6 +20,8 @@ import (
 const metaUsage = `Использование:
   kinodom meta title <название раздачи>
   kinodom meta kp quota | film <номер> | imdb <tt…> | search [--year N] <название> | rating <номер>
+  kinodom meta kpweb search <название> | film <номер> | series <номер>   (без ключа, сайт Кинопоиска)
+      флаг kpweb: --web URL (вместо graphql.kinopoisk.ru и www.kinopoisk.ru)
   kinodom meta rate [--kp N] [--imdb tt…] <название раздачи>
   kinodom meta image [--proxy URL] [--direct] <адрес картинки> | poster <номер Кинопоиска>
       флаги kp, rate, poster: --api URL (вместо kinopoiskapiunofficial.tech и rating.kinopoisk.ru)
@@ -41,9 +43,10 @@ func cmdMeta(args []string, stdout, stderr io.Writer) int {
 	imdb := fs.String("imdb", "", "номер IMDb из описания раздачи")
 	proxy := fs.String("proxy", "", "прокси для картинок раздач: socks5://… или http://…")
 	direct := fs.Bool("direct", false, "качать картинку напрямую, как постеры Кинопоиска")
+	web := fs.String("web", "", "адрес сайта Кинопоиска вместо настоящего (GraphQL — <адрес>/graphql/)")
 	action, rest := args[0], args[1:]
-	if action == "kp" {
-		action, rest = "kp "+args[1], args[2:]
+	if action == "kp" || action == "kpweb" {
+		action, rest = action+" "+args[1], args[2:]
 	}
 	if err := fs.Parse(rest); err != nil {
 		return 2
@@ -117,6 +120,37 @@ func cmdMeta(args []string, stdout, stderr io.Writer) int {
 		for _, f := range films {
 			printFilm(stdout, f)
 		}
+		return 0
+	case "kpweb search", "kpweb film", "kpweb series":
+		o := meta.KPWebOptions{}
+		if *web != "" {
+			o.GraphQL, o.Site = strings.TrimRight(*web, "/")+"/graphql/", *web
+		}
+		w := meta.NewKPWeb(o)
+		if action == "kpweb search" {
+			if arg == "" {
+				break
+			}
+			films, err := w.Suggest(ctx, meta.KPNormal, arg)
+			if err != nil {
+				return fail(stderr, err)
+			}
+			fmt.Fprintf(stdout, "Найдено %d\n", len(films))
+			for _, f := range films {
+				printFilm(stdout, f)
+			}
+			return 0
+		}
+		id, ok := number()
+		if !ok {
+			break
+		}
+		d, err := w.Details(ctx, meta.KPNormal, id, action == "kpweb series")
+		if err != nil {
+			return fail(stderr, err)
+		}
+		printFilm(stdout, d.Film)
+		fmt.Fprintf(stdout, "Жанры: %s\nПостер: %s\nОписание: %s\n", orDash(strings.Join(d.Genres, ", ")), orDash(d.PosterURL), orDash(d.Description))
 		return 0
 	case "rate":
 		if arg == "" && *kpID == 0 && *imdb == "" {

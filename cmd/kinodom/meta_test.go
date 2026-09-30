@@ -88,3 +88,30 @@ func TestMetaUsage(t *testing.T) {
 		}
 	}
 }
+
+// Кинопоиск без ключа: поиск и карточка через сайт (фейковый GraphQL).
+func TestMetaKPWeb(t *testing.T) {
+	s := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/graphql/" || r.Header.Get("service-id") != "25" {
+			http.NotFound(w, r)
+			return
+		}
+		switch r.URL.Query().Get("operationName") {
+		case "SuggestSearch":
+			io.WriteString(w, `{"data":{"suggest":{"top":{"topResult":{"global":{"__typename":"Film","id":301,"title":{"russian":"Матрица","original":"The Matrix"},"productionYear":1999,"rating":{"kinopoisk":{"value":8.501}}}},"movies":[]}}}}`)
+		case "FilmBaseInfo":
+			io.WriteString(w, `{"data":{"film":{"__typename":"Film","id":301,"title":{"russian":"Матрица","original":"The Matrix"},"productionYear":1999,"synopsis":"Жизнь Томаса Андерсона","genres":[{"name":"фантастика"}]}}}`)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	t.Cleanup(s.Close)
+	code, out, errOut := runMeta(t, "kpweb", "search", "--web", s.URL, "Матрица")
+	if code != 0 || !strings.Contains(out, "301  Матрица / The Matrix (1999) FILM · рейтинг 8.5") {
+		t.Fatalf("поиск: %d %q %q", code, out, errOut)
+	}
+	code, out, errOut = runMeta(t, "kpweb", "film", "--web", s.URL, "301")
+	if code != 0 || !strings.Contains(out, "Жанры: фантастика") || !strings.Contains(out, "Описание: Жизнь Томаса Андерсона") {
+		t.Fatalf("карточка: %d %q %q", code, out, errOut)
+	}
+}

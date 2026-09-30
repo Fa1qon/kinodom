@@ -31,6 +31,8 @@ func Main(m *testing.M) {
 	}))
 	meta.DefaultKinopoiskAPI = trip.URL
 	meta.DefaultRatingBase = trip.URL
+	meta.DefaultKPGraphQL = trip.URL + "/graphql/"
+	meta.DefaultKPSite = trip.URL
 	// Телепрограмма и база iptv-org: модуль IPTV скачивает их сам при старте — это не забытый адрес,
 	// а обычная работа. Заглушка отвечает 404 и в «растяжку» не считается.
 	stub := httptest.NewServer(http.NotFoundHandler())

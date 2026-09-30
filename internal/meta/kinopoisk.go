@@ -103,7 +103,8 @@ type Film struct {
 	IMDbID     string
 	NameRu     string
 	NameOrig   string // nameOriginal, иначе nameEn
-	Year       int    // 0 — неизвестен
+	Year       int    // 0 — неизвестен; у сериала — год начала
+	YearEnd    int    // у сериала — год конца; 0 — идёт или неизвестен (Кинопоиск без токена)
 	Type       string // FILM, TV_SERIES, MINI_SERIES, TV_SHOW, VIDEO
 	Rating     float64
 	RatingIMDb float64 // 0 — рейтинга нет (фильм не вышел или мало оценок)
