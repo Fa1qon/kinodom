@@ -1044,3 +1044,107 @@ for (const [name, ok] of checks) {
 		t.Errorf("%v\n%s", err, out)
 	}
 }
+
+// Возврат в каталог, который стал короче (склейка карточек, новый топ), — без бесконечного цикла:
+// глубина — не больше, чем есть у сервера, и порция, которая не пришла, не просится снова (ревью 11b-А).
+func TestPultRestoreDepth(t *testing.T) {
+	node := lookNode(t)
+	script := `
+import { restoreDepth } from './views/catalog.js';
+const checks = [];
+const run = async (name, start, serverPages, saved, pageOnMore) => {
+  let state = { ...start };
+  let calls = 0;
+  const more = async () => {
+    calls++;
+    if (calls > 50) throw new Error('цикл');
+    state = pageOnMore(state);
+  };
+  const t = setTimeout(() => { console.error(name, ': завис'); process.exit(1); }, 2000);
+  await restoreDepth(more, () => state, saved);
+  clearTimeout(t);
+  return { state, calls };
+};
+const grow = (pages) => (s) => (s.page < pages ? { ...s, page: s.page + 1, pages } : s);
+let r = await run('каталог стал короче', { page: 4, pages: 4, error: '' }, 4, 5, grow(4));
+checks.push(['короче — сразу выход', r.calls === 0]);
+r = await run('догрузка до сохранённой', { page: 1, pages: 9, error: '' }, 9, 3, grow(9));
+checks.push(['до сохранённой глубины', r.state.page === 3 && r.calls === 2]);
+r = await run('сервер отдаёт меньше', { page: 1, pages: 2, error: '' }, 2, 5, grow(2));
+checks.push(['не глубже сервера', r.state.page === 2 && r.calls === 1]);
+r = await run('порция не пришла', { page: 1, pages: 5, error: '' }, 5, 4, (s) => s);
+checks.push(['без изменений — выход после одной просьбы', r.calls === 1]);
+r = await run('ошибка', { page: 1, pages: 5, error: 'нет сети' }, 5, 4, grow(5));
+checks.push(['ошибка — выход', r.calls === 0]);
+for (const [name, ok] of checks) {
+  if (!ok) {
+    console.error('не выполнено:', name);
+    process.exitCode = 1;
+  }
+}
+`
+	cmd := exec.Command(node, "--input-type=module", "--no-warnings", "-e", script)
+	cmd.Dir = "static"
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Errorf("%v\n%s", err, out)
+	}
+}
+
+// Повтор порции после ошибки — прокруткой или «вниз» из последнего ряда, когда низ сетки рядом (Review
+// Focus 1; ревью 11b-А: наблюдатель пересечения второй раз не срабатывает, пока низ не ушёл из зоны).
+func TestPultRetryDue(t *testing.T) {
+	node := lookNode(t)
+	script := `
+import { retryDue } from './views/catalog.js';
+const failed = { error: 'нет сети', loading: false, page: 2, pages: 5 };
+const checks = [
+  ['ошибка, низ рядом — повтор', retryDue(failed, 900, 800), true],
+  ['ошибка, низ далеко — нет', retryDue(failed, 2000, 800), false],
+  ['без ошибки — наблюдатель сам', retryDue({ ...failed, error: '' }, 900, 800), false],
+  ['идёт загрузка — нет', retryDue({ ...failed, loading: true }, 900, 800), false],
+  ['список кончился — нет', retryDue({ ...failed, page: 5 }, 900, 800), false],
+  ['первая порция не пришла — повтор', retryDue({ error: 'нет сети', loading: false, page: 0, pages: 1 }, 100, 800), true],
+];
+for (const [name, got, want] of checks) {
+  if (got !== want) {
+    console.error(name, ': получили', got, 'ждали', want);
+    process.exitCode = 1;
+  }
+}
+`
+	cmd := exec.Command(node, "--input-type=module", "--no-warnings", "-e", script)
+	cmd.Dir = "static"
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Errorf("%v\n%s", err, out)
+	}
+}
+
+// Обратно в колонку — на элемент, с которого ушли, даже если экран его пересоздал (строки серий
+// перерисовываются раз в 1–3 с): по data-key (ревью 11b-А).
+func TestPultRememberedByKey(t *testing.T) {
+	node := lookNode(t)
+	script := `
+import { rememberedIndex } from './nav.js';
+const el = (key) => ({ dataset: { key } });
+const a = el('ep-1'), b = el('ep-2'), c = el('ep-3');
+const redrawn = [el('ep-1'), el('ep-2'), el('ep-3')];
+const checks = [
+  ['тот же элемент', rememberedIndex([a, b, c], { el: b, key: 'ep-2' }), 1],
+  ['перерисовали — по ключу', rememberedIndex(redrawn, { el: b, key: 'ep-2' }), 1],
+  ['ключа больше нет', rememberedIndex([a, c], { el: b, key: 'ep-2' }), -1],
+  ['не уходили', rememberedIndex([a, b], undefined), -1],
+  ['без ключа, элемент пересоздан', rememberedIndex(redrawn, { el: b, key: '' }), -1],
+];
+for (const [name, got, want] of checks) {
+  if (got !== want) {
+    console.error(name, ': получили', got, 'ждали', want);
+    process.exitCode = 1;
+  }
+}
+`
+	cmd := exec.Command(node, "--input-type=module", "--no-warnings", "-e", script)
+	cmd.Dir = "static"
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Errorf("%v\n%s", err, out)
+	}
+}
