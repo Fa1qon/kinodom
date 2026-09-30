@@ -43,7 +43,8 @@ func filmsFixture(t *testing.T) (*Catalog, *store.DB, map[string]int64) {
 	enrichAll(t, c, "rutracker")
 	// Очередь рейтингов нашла фильм 301 для раздачи 3 и — по ошибке — для 6: у неё в описании 302.
 	mustExec(t, db, `INSERT INTO kp_films(kp_id, name_ru) VALUES (301, 'Матрица'), (302, 'Матрица: Перезагрузка')`)
-	mustExec(t, db, `INSERT INTO kp_releases(release_id, kp_id) VALUES ('rutor:3', 301), ('rutor:6', 301)`)
+	// rutor:3 — тот же фильм, что rutor:1 с номером в описании: номер соседа ему уже поставлен при постановке.
+	mustExec(t, db, `INSERT OR REPLACE INTO kp_releases(release_id, kp_id) VALUES ('rutor:3', 301), ('rutor:6', 301)`)
 	ids := map[string]int64{}
 	rows, err := db.R.Query(`SELECT topic_id, id FROM releases`)
 	if err != nil {
@@ -272,5 +273,23 @@ func TestEntryHasDescriptionNumber(t *testing.T) {
 		if e.TopicID == "7" && e.Rating.KinopoiskID != 5325705 {
 			t.Fatalf("номер из описания: %+v", e.Rating)
 		}
+	}
+}
+
+// Ревью 11b-Б, Important 4: карточка с номером, в которую склеена раздача без номера, показывает её в
+// «Других раздачах» — иначе на карточке «2 раздачи», а выбрать можно одну.
+func TestVariantsOfNumberedIncludeNeighbor(t *testing.T) {
+	c, db := workFixture(t)
+	es, err := c.Variants(ctx, releaseID(t, db, "rutor", "7"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got []string
+	for _, e := range es {
+		got = append(got, e.TopicID)
+	}
+	slices.Sort(got)
+	if strings.Join(got, ",") != "7,8" {
+		t.Fatalf("другие раздачи: %v", got)
 	}
 }

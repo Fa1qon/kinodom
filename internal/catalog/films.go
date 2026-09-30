@@ -186,7 +186,13 @@ func (c *Catalog) variantsOf(ctx context.Context, id int64) (row, []row, error) 
 		if err != nil {
 			return row{}, nil, err
 		}
-		rs = withCurrent(vs[film], r, c.PreferredFormat())
+		same, err := c.unnumberedOfWork(ctx, r.Tracker, append(vs[film], r))
+		if err != nil {
+			return row{}, nil, err
+		}
+		all := collapse(append(vs[film], same...))
+		preferFirst(all, c.PreferredFormat())
+		rs = withCurrent(all, r, c.PreferredFormat())
 	} else if wk := workKey(r); wk != "" {
 		// Без номера — раздачи того же произведения в каталоге этого трекера (спека 11b, 5.3).
 		all, err := c.st.catalogRows(ctx, c.enabled())
@@ -204,6 +210,47 @@ func (c *Catalog) variantsOf(ctx context.Context, id int64) (row, []row, error) 
 		rs = withCurrent(same, r, c.PreferredFormat())
 	}
 	return r, rs, nil
+}
+
+// unnumberedOfWork — раздачи каталога трекера без номера Кинопоиска с тем же ключом произведения, что у
+// раздач group этого трекера: films() склеивает их в карточку номера, и «Другие раздачи» её должны
+// показывать, пока очередь рейтингов номер им не дала (ревью 11b-Б, Important 4).
+func (c *Catalog) unnumberedOfWork(ctx context.Context, tracker string, group []row) ([]row, error) {
+	keys := map[string]bool{}
+	in := map[int64]bool{}
+	for _, x := range group {
+		in[x.ID] = true
+		if x.Tracker == tracker {
+			if wk := workKey(x); wk != "" {
+				keys[wk] = true
+			}
+		}
+	}
+	if len(keys) == 0 {
+		return nil, nil
+	}
+	all, err := c.st.catalogRows(ctx, c.enabled())
+	if err != nil {
+		return nil, err
+	}
+	var cand []row
+	for _, x := range all {
+		if x.Tracker == tracker && x.KinopoiskID == 0 && !in[x.ID] && keys[workKey(x)] {
+			in[x.ID] = true
+			cand = append(cand, x)
+		}
+	}
+	kp, err := c.kinopoiskIDs(ctx, cand)
+	if err != nil {
+		return nil, err
+	}
+	var out []row
+	for _, x := range cand {
+		if kp[x.ID] == 0 {
+			out = append(out, x)
+		}
+	}
+	return out, nil
 }
 
 // withCurrent — открытая раздача r в списке раздач фильма: пульт отмечает в нём текущую. Если её
