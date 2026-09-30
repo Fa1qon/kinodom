@@ -229,6 +229,9 @@ func (d db) syncTorrents(ctx context.Context, tus []TorrentUnit, now time.Time) 
 	seen := map[string]bool{}
 	for _, tu := range tus {
 		seen[tu.Hash] = true
+		if tu.Missing { // хранимые файлы есть, раздача ещё не загружена — единица остаётся как была
+			continue
+		}
 		p := ParseName(tu.Name)
 		kp := 0
 		if tu.Release != nil {
@@ -249,8 +252,8 @@ func (d db) syncTorrents(ctx context.Context, tus []TorrentUnit, now time.Time) 
 				return err
 			}
 		} else if _, err := tx.ExecContext(ctx, `UPDATE lib_units SET name = ?, title = ?, year = ?,
-				kp_id = CASE WHEN ? > 0 AND state != 'manual' THEN ? ELSE kp_id END,
-				state = CASE WHEN ? > 0 AND state != 'manual' THEN 'found' ELSE state END
+				kp_id = CASE WHEN ? > 0 AND state NOT IN ('manual', 'linked') THEN ? ELSE kp_id END,
+				state = CASE WHEN ? > 0 AND state NOT IN ('manual', 'linked') THEN 'found' ELSE state END
 			WHERE id = ?`, tu.Name, p.Title, p.Year, kp, kp, kp, id); err != nil {
 			return err
 		}
@@ -289,7 +292,7 @@ func (l *Library) recognizePending(ctx context.Context, tus []TorrentUnit) error
 	}
 	rows, err := l.d.R.QueryContext(ctx, `SELECT u.id, u.source, u.key, u.name, COALESCE(c.layout, ''), COALESCE(c.kinopoisk, 1)
 		FROM lib_units u LEFT JOIN lib_folders f ON f.id = u.folder LEFT JOIN lib_categories c ON c.id = f.category
-		WHERE u.state IN ('new', 'wait') AND u.missing = 0 ORDER BY u.id`)
+		WHERE (u.state = 'new' OR (u.state = 'wait' AND u.search_at <= ?)) AND u.missing = 0 ORDER BY u.id`, ms(l.now()))
 	if err != nil {
 		return err
 	}
@@ -329,11 +332,20 @@ func (l *Library) recognizePending(ctx context.Context, tus []TorrentUnit) error
 		if err != nil {
 			return err
 		}
-		if _, err := l.d.W.ExecContext(ctx, `UPDATE lib_units SET kp_id = ?, state = ? WHERE id = ? AND state IN ('new', 'wait')`,
-			res.KP, res.State, p.id); err != nil {
+		if res.State == StateRetry { // сбой на этой единице — она позже, остальные идут дальше
+			if _, err := l.d.W.ExecContext(ctx, `UPDATE lib_units SET attempts = attempts + 1,
+					state = CASE WHEN attempts + 1 >= ? THEN 'unrecognized' ELSE 'wait' END, search_at = ?
+				WHERE id = ? AND state IN ('new', 'wait')`, maxAttempts, ms(l.now().Add(retryAfter)), p.id); err != nil {
+				return err
+			}
+			continue
+		}
+		if _, err := l.d.W.ExecContext(ctx, `UPDATE lib_units SET kp_id = ?, state = ?, search_at = 0,
+				attempts = CASE WHEN ? = 'wait' THEN attempts ELSE 0 END
+			WHERE id = ? AND state IN ('new', 'wait')`, res.KP, res.State, res.State, p.id); err != nil {
 			return err
 		}
-		if res.State == StateWait {
+		if res.State == StateWait { // квота, ключ — пауза для всех
 			l.mu.Lock()
 			l.kpPause = l.now().Add(kpPauseAfter)
 			l.mu.Unlock()

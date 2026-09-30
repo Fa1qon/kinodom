@@ -26,8 +26,10 @@ CREATE TABLE lib_devices (
     PRIMARY KEY (device, category)
 );
 
+-- AUTOINCREMENT у единиц и файлов: номер не выдаётся повторно — на номерах держится история
+-- просмотров (lib-<единица>, номер файла), новый фильм не должен унаследовать место удалённого.
 CREATE TABLE lib_units (
-    id           INTEGER PRIMARY KEY,
+    id           INTEGER PRIMARY KEY AUTOINCREMENT,
     source       TEXT NOT NULL,          -- folder, torrent
     key          TEXT NOT NULL UNIQUE,   -- полный путь папки или файла / infohash
     folder       INTEGER REFERENCES lib_folders(id) ON DELETE CASCADE, -- NULL у раздачи
@@ -35,7 +37,9 @@ CREATE TABLE lib_units (
     title        TEXT NOT NULL DEFAULT '', -- разобранное название
     year         INTEGER NOT NULL DEFAULT 0,
     kp_id        INTEGER NOT NULL DEFAULT 0,
-    state        TEXT NOT NULL DEFAULT 'new', -- new, found, unrecognized, manual, wait, plain (без Кинопоиска)
+    state        TEXT NOT NULL DEFAULT 'new', -- new, found, linked (ссылка из пульта), unrecognized, manual, wait, plain
+    attempts     INTEGER NOT NULL DEFAULT 0,  -- неудачных поисков подряд (Кинопоиск сбоит)
+    search_at    INTEGER NOT NULL DEFAULT 0,  -- ждёт повтора поиска не раньше; 0 — сразу
     manual_title TEXT NOT NULL DEFAULT '',
     manual_year  INTEGER NOT NULL DEFAULT 0,
     missing      INTEGER NOT NULL DEFAULT 0, -- папка категории недоступна: единица не показывается
@@ -44,7 +48,7 @@ CREATE TABLE lib_units (
 CREATE INDEX lib_units_kp ON lib_units(kp_id);
 
 CREATE TABLE lib_files (
-    id       INTEGER PRIMARY KEY,
+    id       INTEGER PRIMARY KEY AUTOINCREMENT,
     unit     INTEGER NOT NULL REFERENCES lib_units(id) ON DELETE CASCADE,
     path     TEXT NOT NULL,              -- полный путь (папки) или путь внутри раздачи
     tindex   INTEGER NOT NULL DEFAULT -1, -- номер файла раздачи; -1 у файла из папки

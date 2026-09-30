@@ -288,12 +288,20 @@ func TestPlay(t *testing.T) {
 func TestMediaLead(t *testing.T) {
 	quick(t)
 	mediaExtraLead = 100
-	e, file, unit, _ := withFile(t, "film.mkv", make([]byte, 1000))
-	get(t, mediaMux(e.l), mediaURL(file, "film.mkv"), fromPhone, "Range", "bytes=0-499")
+	e, file, unit, _ := withFile(t, "film.mkv", make([]byte, 10000))
+	get(t, mediaMux(e.l), mediaURL(file, "film.mkv"), fromPhone, "Range", "bytes=0-4099")
 	e.clk.add(time.Minute)
 	e.l.tracker.Tick(e.clk.now())
 	fs, _ := e.hist.Files(ctx, "192.168.0.50", "lib-"+strconv.FormatInt(unit, 10))
 	if len(fs) != 1 || fs[0].Fraction != 0.4 {
 		t.Errorf("место с поправкой: %+v", fs)
+	}
+	mediaExtraLead = 1 << 20 // больше 2 % файла — поправка 2 %
+	get(t, mediaMux(e.l), mediaURL(file, "film.mkv"), "192.168.0.51:5000", "Range", "bytes=0-4199")
+	e.clk.add(time.Minute)
+	e.l.tracker.Tick(e.clk.now())
+	fs, _ = e.hist.Files(ctx, "192.168.0.51", "lib-"+strconv.FormatInt(unit, 10))
+	if len(fs) != 1 || fs[0].Fraction != 0.4 {
+		t.Errorf("поправка не больше 2 %%: %+v", fs)
 	}
 }

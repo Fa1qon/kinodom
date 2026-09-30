@@ -48,7 +48,7 @@ func (l *Library) LinkKP(ctx context.Context, unit int64, link string) error {
 	if err != nil {
 		return err
 	}
-	if err := l.d.setUnit(ctx, unit, `UPDATE lib_units SET kp_id = ?, state = 'found', manual_title = '', manual_year = 0 WHERE id = ?`, kp); err != nil {
+	if err := l.d.setUnit(ctx, unit, `UPDATE lib_units SET kp_id = ?, state = 'linked', manual_title = '', manual_year = 0 WHERE id = ?`, kp); err != nil {
 		return err
 	}
 	return l.refresh(ctx, false)
@@ -69,7 +69,7 @@ func (l *Library) MarkManual(ctx context.Context, unit int64, title string, year
 
 // SearchAgain — «Искать снова»: единица снова ищется на Кинопоиске (пауза по квоте — снимается).
 func (l *Library) SearchAgain(ctx context.Context, unit int64) error {
-	if err := l.d.setUnit(ctx, unit, `UPDATE lib_units SET state = 'new' WHERE state IN ('unrecognized', 'wait', 'new') AND id = ?`); err != nil {
+	if err := l.d.setUnit(ctx, unit, `UPDATE lib_units SET state = 'new', attempts = 0, search_at = 0 WHERE state IN ('unrecognized', 'wait', 'new') AND id = ?`); err != nil {
 		var n int
 		if l.d.R.QueryRowContext(ctx, `SELECT COUNT(*) FROM lib_units WHERE id = ?`, unit).Scan(&n); n == 0 {
 			return ErrNoUnit
@@ -80,7 +80,7 @@ func (l *Library) SearchAgain(ctx context.Context, unit int64) error {
 
 // ResetUnit — вернуть автоматику: снять ссылку и ручную разметку, искать заново.
 func (l *Library) ResetUnit(ctx context.Context, unit int64) error {
-	if err := l.d.setUnit(ctx, unit, `UPDATE lib_units SET kp_id = 0, manual_title = '', manual_year = 0, state = 'new' WHERE id = ?`); err != nil {
+	if err := l.d.setUnit(ctx, unit, `UPDATE lib_units SET kp_id = 0, manual_title = '', manual_year = 0, state = 'new', attempts = 0, search_at = 0 WHERE id = ?`); err != nil {
 		return err
 	}
 	return l.refresh(ctx, true)

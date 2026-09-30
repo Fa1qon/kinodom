@@ -3,7 +3,9 @@ package library
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
+	"runtime/debug"
 	"strconv"
 	"strings"
 	"sync"
@@ -58,6 +60,9 @@ type TorrentUnit struct {
 	Files      []TorrentFile
 	LastOpened time.Time    // последнее открытие любого файла; нулевое — ни разу
 	Release    *ReleaseData // nil — раздачи нет в каталоге
+	// Missing — у раздачи есть хранимые файлы, но она ещё не загружена (старт, отключённый диск):
+	// единица остаётся, но не показывается.
+	Missing bool
 }
 
 // Downloads — скачанное (адаптер приложения над torrents и catalog).
@@ -121,8 +126,10 @@ var ErrNoCard = errors.New("такой карточки в медиатеке н
 // Пределы обхода (спека, раздел 5.2).
 var (
 	scanEvery    = time.Hour
-	scanMinGap   = time.Minute // обход по открытию медиатеки — не чаще
-	kpPauseAfter = time.Hour   // квота кончилась — следующая попытка
+	scanMinGap   = time.Minute   // обход по открытию медиатеки — не чаще
+	kpPauseAfter = time.Hour     // квота кончилась — следующая попытка
+	retryAfter   = 6 * time.Hour // Кинопоиск сбоит на единице — её повтор
+	maxAttempts  = 3             // столько сбоев подряд — «Не распознано»
 )
 
 func New(o Options) *Library {
@@ -188,12 +195,17 @@ func (l *Library) startScan(force bool) ScanState {
 	l.scanning = true
 	ctx := l.runCtx
 	go func() {
+		defer func() {
+			if p := recover(); p != nil { // обход не должен ронять сервер вместе с идущими фильмами
+				l.log.Error("медиатека: сбой обхода", "panic", fmt.Sprint(p), "stack", string(debug.Stack()))
+			}
+			l.mu.Lock()
+			l.scanning, l.lastScan = false, l.now()
+			l.mu.Unlock()
+		}()
 		if err := l.scanNow(ctx); err != nil && ctx.Err() == nil {
 			l.log.Warn("медиатека: обход не удался", "err", err)
 		}
-		l.mu.Lock()
-		l.scanning, l.lastScan = false, l.now()
-		l.mu.Unlock()
 	}()
 	return ScanState{Running: true, LastAt: l.lastScan}
 }
@@ -220,7 +232,11 @@ func (l *Library) scanNow(ctx context.Context) error {
 	now := l.now()
 	for _, c := range cats {
 		for _, f := range c.Folders {
+			dl := l.o.DownloadsDir()
 			skip := func(p string) bool {
+				if dl != "" && pathKey(p) == pathKey(dl) { // скачанное и так в медиатеке, недокачанное — пустое
+					return true
+				}
 				id, ok := folders[pathKey(p)]
 				return ok && id != f.ID
 			}

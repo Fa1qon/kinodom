@@ -92,7 +92,7 @@ func TestRecognize(t *testing.T) {
 		{"квота — ждать", nil, map[string]error{"*": meta.ErrQuota}, Parsed{Title: "Malahit"}, nil, LayoutSeries, true, Result{0, StateWait}},
 		{"500 на варианте — следующий", map[string][]meta.Film{"трудно быть богом": {film(7, "Трудно быть богом", "", 2026, "TV_SERIES")}},
 			map[string]error{"трудно быт богом": &meta.ServiceError{Status: 500}}, Parsed{Title: "Trudno byt bogom", Year: 2026}, nil, LayoutSeries, true, Result{7, StateFound}},
-		{"все 500 — ждать", nil, map[string]error{"*": &meta.ServiceError{Status: 500}}, Parsed{Title: "Trudno byt bogom"}, nil, LayoutSeries, true, Result{0, StateWait}},
+		{"все 500 — повторить эту позже", nil, map[string]error{"*": &meta.ServiceError{Status: 500}}, Parsed{Title: "Trudno byt bogom"}, nil, LayoutSeries, true, Result{0, StateRetry}},
 		// Вживую 2026-09-30: «Silo» — два точных совпадения («Укрытие» 2023 и «Сило» 2017); транслит
 		// «сило» нашёл одно — ложная привязка. Неоднозначность — сразу «Не распознано».
 		{"неоднозначно — дальше не искать", map[string][]meta.Film{
