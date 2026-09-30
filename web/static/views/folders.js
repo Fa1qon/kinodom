@@ -34,6 +34,9 @@ export function grantControl(ctx, folder, key) {
   return h('a', { class: 'btn', href: g.link, 'data-key': key }, icon('lock_open'), 'Разрешить доступ');
 }
 
+// PROFILE — русские названия папок профиля (их предлагает сервер, когда профиль службе не виден).
+const PROFILE = { Desktop: 'Рабочий стол', Downloads: 'Загрузки', Videos: 'Видео' };
+
 // pickFolder — окно обзора папок; start — с какой папки начать ("" — со списка дисков). Возвращает
 // выбранный путь или null (закрыли).
 export function pickFolder(start = '') {
@@ -83,8 +86,10 @@ export function pickFolder(start = '') {
       const rows = [];
       if (current) {
         rows.push(h('button', { class: 'dlg-row', type: 'button', 'data-key': 'dlg-up', onclick: () => open(v.parent) }, icon('arrow_upward'), 'Вверх'));
+        if (v.denied) rows.push(h('div', { class: 'dlg-row muted' }, icon('warning'), 'Нет доступа'));
         for (const d of v.dirs) {
-          rows.push(h('button', { class: 'dlg-row', type: 'button', 'data-key': `dir-${d}`, onclick: () => open(current.replace(/\\$/, '') + '\\' + d) }, icon('folder'), d));
+          rows.push(h('button', { class: 'dlg-row', type: 'button', 'data-key': `dir-${d}`, onclick: () => open(current.replace(/\\$/, '') + '\\' + d) },
+            icon('folder'), v.denied && PROFILE[d] ? [PROFILE[d], h('span', { class: 'muted small' }, d)] : d));
         }
       } else {
         for (const d of v.drives || []) {

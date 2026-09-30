@@ -193,3 +193,36 @@ func TestErrorsKeepLast200(t *testing.T) {
 		t.Fatalf("хранится %d, первая %q, последняя %q", len(es), es[0].Text, es[len(es)-1].Text)
 	}
 }
+
+// OpenAsIs — база прежней версии открывается без миграций: установщик при обновлении читает и
+// пишет настройки, но схему переводит только новая служба (этап 11a, ревью I2: откат обновления не
+// должен оставить базу новее программы).
+func TestOpenAsIsKeepsSchema(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "kinodom.db")
+	ms, _ := loadMigrations()
+	old, err := openWith(context.Background(), path, ms[:5])
+	if err != nil {
+		t.Fatal(err)
+	}
+	old.SetSetting(context.Background(), "downloads.dir", `D:\K`)
+	old.Close()
+	db, err := OpenAsIs(context.Background(), path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	var v int
+	db.R.QueryRow("PRAGMA user_version").Scan(&v)
+	if v != 5 {
+		t.Fatalf("версия схемы %d — установщик перевёл базу", v)
+	}
+	if got, ok, err := db.Setting(context.Background(), "downloads.dir"); err != nil || !ok || got != `D:\K` {
+		t.Fatalf("настройка: %q %v %v", got, ok, err)
+	}
+	if err := db.SetSetting(context.Background(), "downloads.dir", `E:\K`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := OpenAsIs(context.Background(), filepath.Join(t.TempDir(), "нет.db")); err == nil {
+		t.Fatal("несуществующая база открылась")
+	}
+}

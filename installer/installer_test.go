@@ -28,7 +28,13 @@ func TestInstallerScript(t *testing.T) {
 		"function PrepareToInstall",
 		"Exec(Exe, 'stop'",
 		"'install --result '",
-		"' --downloads '",
+		"' --downloads-default '",               // сохранённую папку загрузок не перезаписывает (ревью C1)
+		`Uninstall\{' + '{#AppGuid}' + '}_is1'`, // ключ удаления — со скобками, как AppId (ревью C1)
+		`{commonappdata}\Kinodom\data\kinodom.db`,
+		"StoppedByUs := True", // остановил службу — вернёт её, если установка не дошла до конца (I3)
+		"Exec(ExpandConstant('{app}\\kinodom.exe'), 'install', ",
+		"function InitializeUninstall", // отказ kinodom uninstall останавливает удаление файлов (I4)
+		"Result := False;",
 		"'uninstall --purge'",
 		"Удалить также скачанное и настройки?",
 		"MB_DEFBUTTON2",

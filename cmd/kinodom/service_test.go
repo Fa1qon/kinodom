@@ -21,6 +21,7 @@ import (
 
 	"kinodom/internal/config"
 	"kinodom/internal/setup"
+	"kinodom/internal/store"
 	"kinodom/internal/winsvc"
 	"kinodom/internal/winsvc/winsvctest"
 )
@@ -233,6 +234,48 @@ func TestInstallWritesResultFile(t *testing.T) {
 	f.PortOwner = ""
 	if code, _, errOut := runCmd(cmdInstall, "--result", res, "--no-start"); code != 0 {
 		t.Fatalf("код %d: %s", code, errOut)
+	}
+	if b, _ := os.ReadFile(res); len(b) != 0 {
+		t.Fatalf("после успеха в файле %q", b)
+	}
+}
+
+// Установщик передаёт папку загрузок как «по умолчанию»: сохранённая не перезаписывается (ревью C1).
+func TestInstallDownloadsDefaultFlag(t *testing.T) {
+	withFake(t)
+	first, second := filepath.Join(t.TempDir(), "A"), filepath.Join(t.TempDir(), "B")
+	for _, dl := range []string{first, second} {
+		if code, _, errOut := runCmd(cmdInstall, "--downloads-default", dl, "--no-start"); code != 0 {
+			t.Fatalf("код %d: %s", code, errOut)
+		}
+	}
+	home := os.Getenv(config.EnvHome)
+	db, err := store.Open(context.Background(), config.NewPaths(home).DB)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	if v, _, _ := db.Setting(context.Background(), "downloads.dir"); v != first {
+		t.Fatalf("папка загрузок %q", v)
+	}
+}
+
+// Программа удаления читает отказ kinodom uninstall из файла --result и не удаляет файлы, пока
+// служба на месте (ревью I4).
+func TestUninstallWritesResultFile(t *testing.T) {
+	f, _ := withFake(t)
+	f.Services[setup.ServiceName] = winsvc.ServiceConfig{Name: setup.ServiceName}
+	f.Running[setup.ServiceName], f.Stuck = true, true
+	res := filepath.Join(t.TempDir(), "result.txt")
+	if code, _, _ := runCmd(cmdUninstall, "--result", res); code != 1 {
+		t.Fatalf("код %d", code)
+	}
+	if b, err := os.ReadFile(res); err != nil || !strings.Contains(string(b), "не остановилась") {
+		t.Fatalf("файл результата %q, %v", b, err)
+	}
+	f.Stuck = false
+	if code, _, _ := runCmd(cmdUninstall, "--result", res); code != 0 {
+		t.Fatalf("код %d", code)
 	}
 	if b, _ := os.ReadFile(res); len(b) != 0 {
 		t.Fatalf("после успеха в файле %q", b)

@@ -206,3 +206,52 @@ func TestSetupRoutesHomeOnly(t *testing.T) {
 		}
 	}
 }
+
+// Папка, которую служба не читает (обычно — в профиле пользователя), не тупик: обзор отвечает «нет
+// доступа», её можно выбрать и потом «Разрешить доступ»; в профиле — обычные папки пользователя
+// (ревью I6: фильмы у друга — в «Видео» и «Загрузках»).
+func TestFolderBrowserDenied(t *testing.T) {
+	a := startApp(t)
+	users := t.TempDir()
+	profile := filepath.Join(users, "alice")
+	os.Mkdir(profile, 0o755)
+	closed := filepath.Join(t.TempDir(), "Закрыто")
+	os.Mkdir(closed, 0o755)
+	videos := filepath.Join(profile, "Videos")
+	savedRead, savedStat, savedUsers := readDir, statDir, usersRoot
+	readDir = func(dir string) ([]os.DirEntry, error) {
+		if dir == profile || dir == closed {
+			return nil, os.ErrPermission
+		}
+		return os.ReadDir(dir)
+	}
+	statDir = func(dir string) (os.FileInfo, error) {
+		if dir == videos { // внутри закрытого профиля служба не видит даже саму папку
+			return nil, os.ErrPermission
+		}
+		return os.Stat(dir)
+	}
+	usersRoot = func() string { return users }
+	t.Cleanup(func() { readDir, statDir, usersRoot = savedRead, savedStat, savedUsers })
+	get := func(path string) (int, dirsView) {
+		req := httptest.NewRequest("GET", "/api/v1/fs/dirs?path="+url.QueryEscape(path), nil)
+		req.Host, req.RemoteAddr = "localhost", "127.0.0.1:50000"
+		rec := httptest.NewRecorder()
+		a.API.Handler().ServeHTTP(rec, req)
+		var v dirsView
+		json.Unmarshal(rec.Body.Bytes(), &v)
+		return rec.Code, v
+	}
+	code, v := get(closed)
+	if code != http.StatusOK || !v.Denied || v.Path != closed || len(v.Dirs) != 0 {
+		t.Fatalf("закрытая папка: %d %+v", code, v)
+	}
+	code, v = get(profile)
+	if code != http.StatusOK || !v.Denied || strings.Join(v.Dirs, ",") != "Desktop,Downloads,Videos" {
+		t.Fatalf("профиль: %d %+v", code, v)
+	}
+	code, v = get(videos)
+	if code != http.StatusOK || !v.Denied || v.Path != videos || v.Parent != profile {
+		t.Fatalf("папка в профиле: %d %+v", code, v)
+	}
+}

@@ -91,12 +91,22 @@ func TestACLGrantAndRestrict(t *testing.T) {
 		t.Fatal(err)
 	}
 	me := tu.User.Sid.String()
-	if err := (acl{}).Restrict(dir, []string{SIDSystem, me}); err != nil {
+	if !isAdmin() {
+		t.Skip("владельца Administrators ставит только администратор")
+	}
+	if err := (acl{}).Restrict(dir, []string{SIDSystem, me}, []string{users}); err != nil {
 		t.Fatal(err)
 	}
 	got, protected := aces(t, dir)
-	if !protected || len(got) != 2 || got[SIDSystem] == 0 || got[me] == 0 {
+	if !protected || len(got) != 3 || got[SIDSystem] == 0 || got[me] == 0 || got[users]&windows.FILE_WRITE_DATA != 0 || got[users]&windows.FILE_READ_DATA == 0 {
 		t.Fatalf("после ограничения: защищено %v, записи %v", protected, got)
+	}
+	sd, err := windows.GetNamedSecurityInfo(dir, windows.SE_FILE_OBJECT, windows.OWNER_SECURITY_INFORMATION)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if owner, _, _ := sd.Owner(); owner.String() != SIDAdmins {
+		t.Fatalf("владелец %s", owner)
 	}
 	if _, err := sidOf(`NT SERVICE\KinodomNoSuchService-7f3a`); err == nil {
 		t.Log("учётная запись несуществующей службы нашлась — Windows считает SID служб сама")

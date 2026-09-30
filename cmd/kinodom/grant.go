@@ -93,6 +93,9 @@ func cmdGrant(args []string, stdout, stderr io.Writer) int {
 	if !filepath.IsAbs(dir) || torrents.IsNetworkPath(dir) {
 		return report(stderr, "Доступ не выдан: папка не на диске этого компьютера.", fmt.Errorf("не папка на диске этого ПК: %s", dir))
 	}
+	if clean := filepath.Clean(dir); clean == filepath.VolumeName(clean)+`\` {
+		return report(stderr, "Доступ не выдан: выберите папку, а не весь диск.", fmt.Errorf("весь диск: %s", dir))
+	}
 	if fi, err := os.Stat(dir); err != nil || !fi.IsDir() {
 		return report(stderr, "Доступ не выдан: папки нет.", fmt.Errorf("папки нет: %s", dir))
 	}

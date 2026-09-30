@@ -1,6 +1,8 @@
 package app
 
 import (
+	"errors"
+	"io/fs"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -21,13 +23,30 @@ type driveView struct {
 }
 
 // dirsView — папка в обзоре: полный путь, родитель ("" — у корня диска: выше — список дисков) и
-// имена подпапок.
+// имена подпапок. Denied — служба папку не читает: её можно выбрать и «Разрешить доступ».
 type dirsView struct {
 	Path   string      `json:"path,omitempty"`
 	Parent string      `json:"parent"`
 	Dirs   []string    `json:"dirs"`
+	Denied bool        `json:"denied,omitempty"`
 	Drives []driveView `json:"drives,omitempty"`
 }
+
+// readDir — чтение папки от имени службы; usersRoot — папка профилей (тесты подменяют).
+var (
+	readDir   = os.ReadDir
+	statDir   = os.Stat
+	usersRoot = func() string {
+		d := os.Getenv("SystemDrive")
+		if d == "" {
+			d = "C:"
+		}
+		return d + `\Users`
+	}
+)
+
+// profileFolders — обычные папки пользователя: профиль службе не виден, а фильмы у людей — там.
+var profileFolders = []string{"Desktop", "Downloads", "Videos"}
 
 // handleDirs — обзор папок (спека этапа 11a, раздел 7): без path — диски этого ПК; иначе — подпапки
 // по имени, без скрытых и системных. Файлов и их содержимого нет; сетевых путей — тоже.
@@ -42,18 +61,30 @@ func handleDirs(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	dir := filepath.Clean(p)
-	if fi, err := os.Stat(dir); err != nil || !fi.IsDir() {
-		httpx.WriteError(w, http.StatusBadRequest, "папки "+dir+" нет")
-		return
-	}
-	entries, err := os.ReadDir(dir)
-	if err != nil {
-		httpx.WriteError(w, http.StatusBadRequest, "папка "+dir+" не открывается")
-		return
-	}
 	out := dirsView{Path: dir, Dirs: []string{}}
 	if parent := filepath.Dir(dir); parent != dir {
 		out.Parent = parent
+	}
+	fi, err := statDir(dir)
+	if err != nil && !errors.Is(err, fs.ErrPermission) || err == nil && !fi.IsDir() {
+		httpx.WriteError(w, http.StatusBadRequest, "папки "+dir+" нет")
+		return
+	}
+	var entries []os.DirEntry
+	if err == nil { // внутри закрытой папки служба не видит даже саму папку — это тоже «нет доступа»
+		entries, err = readDir(dir)
+	}
+	if errors.Is(err, fs.ErrPermission) {
+		out.Denied = true
+		if strings.EqualFold(filepath.Dir(dir), filepath.Clean(usersRoot())) {
+			out.Dirs = slices.Clone(profileFolders)
+		}
+		httpx.WriteJSON(w, http.StatusOK, out)
+		return
+	}
+	if err != nil {
+		httpx.WriteError(w, http.StatusBadRequest, "папка "+dir+" не открывается")
+		return
 	}
 	for _, e := range entries {
 		if e.IsDir() && !hiddenEntry(e) {

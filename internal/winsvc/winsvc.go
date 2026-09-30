@@ -14,6 +14,7 @@ import (
 const (
 	SIDSystem      = "S-1-5-18"     // SYSTEM
 	SIDAdmins      = "S-1-5-32-544" // Administrators / Администраторы
+	SIDUsers       = "S-1-5-32-545" // Users / Пользователи
 	ServiceAccount = `NT SERVICE\Kinodom`
 )
 
@@ -57,9 +58,10 @@ type SCM interface {
 type ACL interface {
 	// Grant добавляет права учётной записи на папку с наследованием: чтение или изменение.
 	Grant(path, account string, write bool) error
-	// Restrict оставляет на папке только полный доступ перечисленных учётных записей, без
-	// наследования от родителя.
-	Restrict(path string, accounts []string) error
+	// Restrict оставляет на папке только перечисленные права — полный доступ full и чтение read, без
+	// наследования от родителя; владелец — Administrators (иначе создавший папку заранее пользователь
+	// сохранил бы право менять её права).
+	Restrict(path string, full, read []string) error
 }
 
 // FirewallRule — входящее правило брандмауэра для всех профилей.
