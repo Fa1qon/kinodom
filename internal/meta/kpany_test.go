@@ -19,10 +19,11 @@ func newKPAny(t *testing.T, w *fakeKPWeb, f *fakeKP, key string, types func(int)
 	return a
 }
 
-// Правка единицы из пульта ждёт человек — срочная очередь, а не после каталога (11b-Б, вживую).
+// Правка единицы из пульта ждёт человек — срочная очередь, а не после каталога (11b-Б, вживую), и из
+// резерва суток (ревью 11b-Б, Important 5).
 func TestKPAnyUrgentClass(t *testing.T) {
 	a := &KPAny{}
-	if a.class(ctx) != KPBackground || a.class(Urgent(ctx)) != KPNormal {
+	if a.class(ctx) != KPBackground || a.class(Urgent(ctx)) != KPUrgent {
 		t.Fatalf("классы: обычный %v, срочный %v", a.class(ctx), a.class(Urgent(ctx)))
 	}
 }

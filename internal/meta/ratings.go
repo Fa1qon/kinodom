@@ -89,7 +89,8 @@ type Ratings struct {
 	badKey      bool
 	fails       int            // ответов 5xx подряд (каждый платный)
 	webUntil    time.Time      // суточный предел без токена — до полуночи
-	blocked     bool           // проблема kinopoisk.blocked записана
+	blockedText string         // текст записанной проблемы kinopoisk.blocked; "" — снята
+	blockSynced bool           // проблема сверена с паузой сайта хоть раз (запись прошлого запуска снята)
 	kwFrom      map[string]int // раздача → с какого ключевого слова продолжить поиск по ключу (после 402/429)
 }
 
@@ -112,6 +113,8 @@ func (r *Ratings) Enqueue(ctx context.Context, prio int, it Item) error {
 		if err := r.seedTitle(ctx, it); err != nil {
 			return err
 		}
+	} else if err := r.linkNeighbor(ctx, it); err != nil {
+		return err
 	}
 	id, retryAt, found, err := r.st.releaseLink(ctx, it.Release)
 	if err != nil {
@@ -161,12 +164,40 @@ func (r *Ratings) seedTitle(ctx context.Context, it Item) error {
 	return r.st.setTitle(ctx, wk, t.Year, it.KinopoiskID, time.Time{})
 }
 
+// linkNeighbor — раздача без номера, чьё произведение уже знает номер (соседняя раздача с номером в
+// описании или найденная раньше), связывается сразу, без сети: во время паузы сайта очередь такую задачу
+// не выдаёт, а карточка каталога её уже склеила (ревью 11b-Б, Important 4).
+func (r *Ratings) linkNeighbor(ctx context.Context, it Item) error {
+	id, _, found, err := r.st.releaseLink(ctx, it.Release)
+	if err != nil || (found && id != 0) {
+		return err
+	}
+	t := ParseTitle(it.Title)
+	wk := WorkKey(t)
+	if wk == "" {
+		return nil
+	}
+	kp, _, ok, err := r.st.titleLink(ctx, wk, t.Year)
+	if err != nil || !ok || kp == 0 {
+		return err
+	}
+	return r.st.link(ctx, it.Release, kp, time.Time{})
+}
+
 // EnqueueCatalog ставит раздачи основного каталога в его порядке: место в списке — приоритет.
 // Стоявшие в очереди, но выпавшие из каталога, уходят в конец очереди (не удаляются: их мог
 // поставить и поиск), — квота в дни первичного наполнения тратится на нынешний топ (ревью 5b).
+// Номера из описаний — сначала: соседняя раздача выше по списку получает номер сразу.
 func (r *Ratings) EnqueueCatalog(ctx context.Context, items []Item) error {
 	if err := r.st.demoteAll(ctx); err != nil {
 		return err
+	}
+	for _, it := range items {
+		if it.KinopoiskID != 0 {
+			if err := r.seedTitle(ctx, it); err != nil {
+				return err
+			}
+		}
 	}
 	for i, it := range items {
 		if err := r.Enqueue(ctx, i, it); err != nil {
@@ -239,6 +270,7 @@ func (r *Ratings) Run(ctx context.Context) error {
 // Step делает одну задачу очереди; did = false — делать сейчас нечего. Ошибки Кинопоиска
 // задачу откладывают, а не роняют модуль; ошибка — только у базы.
 func (r *Ratings) Step(ctx context.Context) (did bool, err error) {
+	r.syncBlocked(ctx)
 	now := r.now()
 	web, key := r.ways(now)
 	it, ok, err := r.st.next(ctx, now, !web && !key)
@@ -365,28 +397,36 @@ func (r *Ratings) webPaused(ctx context.Context, err error) {
 		r.mu.Lock()
 		r.webUntil = time.Date(y, m, d+1, 0, 0, 0, 0, now.Location())
 		r.mu.Unlock()
-		return
 	}
-	st := r.web.Status()
-	text := "Кинопоиск не отвечает — " + st.Reason
-	if !st.PausedUntil.IsZero() {
-		text += ", пауза до " + st.PausedUntil.Format("15:04")
-	}
-	r.mu.Lock()
-	r.blocked = true
-	r.mu.Unlock()
-	if err := r.db.SetProblem(ctx, ProblemKinopoiskBlocked, text); err != nil {
-		r.log.Error("не удалось записать проблему", "id", ProblemKinopoiskBlocked, "err", err)
-	}
+	r.syncBlocked(ctx)
 }
 
 // webOK — запрос без токена прошёл: проблема отказа снимается.
-func (r *Ratings) webOK(ctx context.Context) {
+func (r *Ratings) webOK(ctx context.Context) { r.syncBlocked(ctx) }
+
+// syncBlocked — проблема kinopoisk.blocked повторяет паузу сайта (спека 11b, 5.2): отказ — в «Состоянии»,
+// кто бы его ни поймал (очередь, медиатека, правка из пульта); пауза кончилась — снята и при пустой
+// очереди (шаг очереди — не реже idlePoll). Пауза сайта живёт в памяти, поэтому запись прошлого запуска
+// снимается первым же шагом (ревью 11b-Б, Important 2). Суточный предел — не отказ.
+func (r *Ratings) syncBlocked(ctx context.Context) {
+	if r.web == nil {
+		return
+	}
+	st := r.web.Status()
+	text := ""
+	if !st.PausedUntil.IsZero() && !st.Limit {
+		text = "Кинопоиск не отвечает — " + st.Reason + ", пауза до " + st.PausedUntil.Format("15:04")
+	}
 	r.mu.Lock()
-	was := r.blocked
-	r.blocked = false
+	was, synced := r.blockedText, r.blockSynced
+	r.blockedText, r.blockSynced = text, true
 	r.mu.Unlock()
-	if was {
+	switch {
+	case text != "" && text != was:
+		if err := r.db.SetProblem(ctx, ProblemKinopoiskBlocked, text); err != nil {
+			r.log.Error("не удалось записать проблему", "id", ProblemKinopoiskBlocked, "err", err)
+		}
+	case text == "" && (was != "" || !synced):
 		if err := r.db.ClearProblem(ctx, ProblemKinopoiskBlocked); err != nil {
 			r.log.Error("не удалось снять проблему", "id", ProblemKinopoiskBlocked, "err", err)
 		}
@@ -440,8 +480,9 @@ func (r *Ratings) resolve(ctx context.Context, it queued, web, key bool) error {
 		return err
 	}
 	// Фильм нашёлся поиском по названию записью без года, а в карточке год есть и чужой — это не
-	// тот фильм: без рейтинга лучше, чем с чужим (ревью 5b, M1).
-	if t := ParseTitle(it.Title); it.KinopoiskID == 0 && it.IMDbID == "" && t.Year != 0 && f.Year != 0 && abs(f.Year-t.Year) > 1 {
+	// тот фильм: без рейтинга лучше, чем с чужим (ревью 5b, M1). У сериала год карточки — год начала:
+	// поздний сезон в него не укладывается, сверка — по годам выхода (ревью 11b-Б, Important 1).
+	if t := ParseTitle(it.Title); it.KinopoiskID == 0 && it.IMDbID == "" && t.Year != 0 && f.Year != 0 && !YearFits(f, t.Year) {
 		if err := r.st.link(ctx, it.Release, 0, now.Add(notFoundRetry)); err != nil {
 			return err
 		}

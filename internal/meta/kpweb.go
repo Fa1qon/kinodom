@@ -41,13 +41,15 @@ var (
 	errKPOpPaused   = errors.New("Кинопоиск: запрос отложен — сайт его не принимает")
 )
 
-// KPClass — очередь запроса: каталог и открытое в пульте (KPNormal) идут раньше медиатеки
-// (KPBackground; спека 11b, раздел 5.2).
+// KPClass — очередь запроса: каталог (KPNormal) и правка в пульте (KPUrgent) идут раньше медиатеки
+// (KPBackground; спека 11b, раздел 5.2). Каталогу — суточный предел без резерва: резерв — правке и
+// медиатеке (ревью 11b-Б, Important 5).
 type KPClass int
 
 const (
 	KPNormal KPClass = iota
 	KPBackground
+	KPUrgent
 )
 
 type KPWebOptions struct {
@@ -55,6 +57,7 @@ type KPWebOptions struct {
 	Site       string        // "" — DefaultKPSite
 	Every      time.Duration // 0 — 3 с между запросами (GraphQL и страницы вместе)
 	DailyLimit int           // 0 — 500 запросов в сутки
+	Reserve    int           // из них — только правке в пульте и медиатеке; 0 — пятая часть, < 0 — нет
 	Pause      time.Duration // 0 — 6 ч после отказа
 	Timeout    time.Duration // 0 — 30 с
 	Now        func() time.Time
@@ -66,6 +69,7 @@ type KPWebStatus struct {
 	PausedUntil time.Time `json:"pausedUntil"`
 	Reason      string    `json:"reason"`
 	Today       int       `json:"today"`
+	Limit       bool      `json:"limit"` // пауза — суточный предел, а не отказ сайта
 }
 
 // KPWeb — клиент сайта Кинопоиска без токена. Безопасен для одновременного использования.
@@ -78,8 +82,9 @@ type KPWeb struct {
 	normalWaiting int
 	day           string
 	today         int
-	blockedUntil  time.Time // отказ всему сайту: 403, 429, капча
+	blockedUntil  time.Time // отказ всему сайту: 403, 429, капча, страница вместо JSON, сбои подряд
 	blockReason   string
+	troubles      int                  // сбоев без отказа подряд (сеть, 5xx, непонятный ответ)
 	opPaused      map[string]time.Time // запрос, который сайт больше не принимает
 }
 
@@ -97,6 +102,12 @@ func NewKPWeb(o KPWebOptions) *KPWeb {
 	if o.DailyLimit == 0 {
 		o.DailyLimit = 500
 	}
+	switch {
+	case o.Reserve == 0:
+		o.Reserve = o.DailyLimit / 5
+	case o.Reserve < 0:
+		o.Reserve = 0
+	}
 	if o.Pause == 0 {
 		o.Pause = 6 * time.Hour
 	}
@@ -112,20 +123,27 @@ func NewKPWeb(o KPWebOptions) *KPWeb {
 	return &KPWeb{o: o, http: &http.Client{Transport: netx.NewTransport(nil), Timeout: o.Timeout}, opPaused: map[string]time.Time{}}
 }
 
-// Status — пауза поиска без токена и запросов за сегодня.
+// Status — пауза поиска без токена и запросов за сегодня. Суточный предел исчерпан — пауза до полуночи
+// (Limit: это не отказ сайта; ревью 11b-Б).
 func (w *KPWeb) Status() KPWebStatus {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 	now := w.o.Now()
 	w.rollDay(now)
-	until, reason := w.blockedUntil, w.blockReason
+	until, reason, limit := w.blockedUntil, w.blockReason, false
 	if t := w.opPaused[opSuggest]; t.After(until) {
 		until, reason = t, "не принимает запросы поиска"
 	}
 	if !until.After(now) {
 		until, reason = time.Time{}, ""
 	}
-	return KPWebStatus{PausedUntil: until, Reason: reason, Today: w.today}
+	if w.today >= w.o.DailyLimit {
+		y, m, d := now.Date()
+		if midnight := time.Date(y, m, d+1, 0, 0, 0, 0, now.Location()); midnight.After(until) {
+			until, reason, limit = midnight, "суточный предел", true
+		}
+	}
+	return KPWebStatus{PausedUntil: until, Reason: reason, Today: w.today, Limit: limit}
 }
 
 func (w *KPWeb) rollDay(now time.Time) {
@@ -134,10 +152,14 @@ func (w *KPWeb) rollDay(now time.Time) {
 	}
 }
 
-// acquire — ворота: не чаще Every, не больше DailyLimit в сутки; KPBackground ждёт, пока есть
-// ждущие KPNormal.
+// acquire — ворота: не чаще Every, не больше DailyLimit в сутки (каталогу — без резерва); KPBackground
+// ждёт, пока есть ждущие KPNormal и KPUrgent.
 func (w *KPWeb) acquire(ctx context.Context, class KPClass) error {
+	limit := w.o.DailyLimit
 	if class == KPNormal {
+		limit -= w.o.Reserve
+	}
+	if class != KPBackground {
 		w.mu.Lock()
 		w.normalWaiting++
 		w.mu.Unlock()
@@ -150,7 +172,7 @@ func (w *KPWeb) acquire(ctx context.Context, class KPClass) error {
 	for {
 		w.mu.Lock()
 		w.rollDay(w.o.Now())
-		if w.today >= w.o.DailyLimit {
+		if w.today >= limit {
 			w.mu.Unlock()
 			return ErrKPDailyLimit
 		}
@@ -191,9 +213,9 @@ func (w *KPWeb) paused(op string) error {
 	return nil
 }
 
-func (w *KPWeb) block(reason string) {
+func (w *KPWeb) block(reason string, d time.Duration) {
 	w.mu.Lock()
-	w.blockedUntil, w.blockReason = w.o.Now().Add(w.o.Pause), reason
+	w.blockedUntil, w.blockReason, w.troubles = w.o.Now().Add(d), reason, 0
 	until := w.blockedUntil
 	w.mu.Unlock()
 	w.o.Log.Warn("Кинопоиск без токена: пауза", "причина", reason, "до", until.Format("15:04"))
@@ -214,8 +236,50 @@ const (
 
 var reCaptcha = regexp.MustCompile(`(?i)captcha`)
 
+// Сбои без отказа (ревью 11b-Б, Important 3): столько подряд — пауза. Иначе сайт, который отвечает не
+// так, как ждали (без российского адреса — неизвестно как), съедал бы суточный предел и откладывал
+// задачи очереди на неделю, а «Состояние» показывало бы «работает».
+const (
+	kpTroubleLimit = 3
+	kpTroublePause = time.Hour
+)
+
+// kpTrouble — сбой без отказа: сеть, 5xx, ответ не того вида. Текст — без адреса.
+type kpTrouble struct {
+	text string
+	err  error
+}
+
+func (e kpTrouble) Error() string { return "Кинопоиск: " + e.text }
+func (e kpTrouble) Unwrap() error { return e.err }
+
+// settle — итог запроса для счёта сбоев подряд: kpTroubleLimit-й подряд — пауза, и вызывающий получает
+// ErrKPBlocked; ответ по делу (данные, «нет такого», «не принимает запрос») счёт обнуляет.
+func (w *KPWeb) settle(ctx context.Context, err error) error {
+	var tr kpTrouble
+	switch {
+	case errors.As(err, &tr):
+		if ctx.Err() != nil {
+			return err
+		}
+		w.mu.Lock()
+		w.troubles++
+		n := w.troubles
+		w.mu.Unlock()
+		if n >= kpTroubleLimit {
+			w.block("сбои подряд — "+tr.text, kpTroublePause)
+			return ErrKPBlocked
+		}
+	case err == nil || errors.Is(err, errKPMaybeNotFound) || errors.Is(err, ErrNotFound) || errors.Is(err, errKPNotAllowed):
+		w.mu.Lock()
+		w.troubles = 0
+		w.mu.Unlock()
+	}
+	return err
+}
+
 // gql — запрос op с переменными vars; data ответа — в out.
-func (w *KPWeb) gql(ctx context.Context, class KPClass, op string, vars map[string]any, out any) error {
+func (w *KPWeb) gql(ctx context.Context, class KPClass, op string, vars map[string]any, out any) (err error) {
 	if err := w.paused(op); err != nil {
 		return err
 	}
@@ -234,6 +298,7 @@ func (w *KPWeb) gql(ctx context.Context, class KPClass, op string, vars map[stri
 	if err := w.acquire(ctx, class); err != nil {
 		return err
 	}
+	defer func() { err = w.settle(ctx, err) }()
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, w.o.GraphQL+"?operationName="+op, bytes.NewReader(body))
 	if err != nil {
 		return err
@@ -256,14 +321,20 @@ func (w *KPWeb) gql(ctx context.Context, class KPClass, op string, vars map[stri
 		} `json:"errors"`
 	}
 	if err := json.Unmarshal(b, &env); err != nil {
-		if bytes.HasPrefix(bytes.TrimSpace(b), []byte("<")) && reCaptcha.Match(b) {
-			w.block("капча")
+		page := bytes.HasPrefix(bytes.TrimSpace(b), []byte("<"))
+		switch {
+		case page && reCaptcha.Match(b):
+			w.block("капча", w.o.Pause)
 			return ErrKPBlocked
+		case status >= 500:
+			return kpTrouble{text: fmt.Sprintf("сбой сервиса (ответ %d)", status)}
+		case page:
+			// Вход, заглушка, отказ по адресу — сайт не даёт данных (ревью 11b-Б, Important 3).
+			w.block(fmt.Sprintf("вместо данных — страница (ответ %d)", status), w.o.Pause)
+		default:
+			w.block(fmt.Sprintf("непонятный ответ (%d)", status), w.o.Pause)
 		}
-		if status >= 500 {
-			return fmt.Errorf("Кинопоиск: сбой сервиса (ответ %d)", status)
-		}
-		return fmt.Errorf("Кинопоиск: непонятный ответ (%d)", status)
+		return ErrKPBlocked
 	}
 	notFound := false
 	for _, e := range env.Errors {
@@ -273,13 +344,13 @@ func (w *KPWeb) gql(ctx context.Context, class KPClass, op string, vars map[stri
 		notFound = notFound || e.Extensions.Code == "NotFoundError"
 	}
 	if status != http.StatusOK {
-		return fmt.Errorf("Кинопоиск: ответ %d", status)
+		return kpTrouble{text: fmt.Sprintf("ответ %d", status)}
 	}
 	if len(env.Data) == 0 || string(env.Data) == "null" {
-		return fmt.Errorf("Кинопоиск: пустой ответ")
+		return kpTrouble{text: "пустой ответ"}
 	}
 	if err := json.Unmarshal(env.Data, out); err != nil {
-		return fmt.Errorf("Кинопоиск: непонятный ответ: %w", err)
+		return kpTrouble{text: "непонятный ответ: " + err.Error(), err: err}
 	}
 	if notFound {
 		return errKPMaybeNotFound
@@ -299,16 +370,16 @@ func (w *KPWeb) do(req *http.Request) ([]byte, int, error) {
 		if errors.As(err, &ue) {
 			err = ue.Err
 		}
-		return nil, 0, fmt.Errorf("Кинопоиск: %w", err)
+		return nil, 0, kpTrouble{text: err.Error(), err: err}
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode == http.StatusForbidden || resp.StatusCode == http.StatusTooManyRequests {
-		w.block("ответ " + strconv.Itoa(resp.StatusCode))
+		w.block("ответ "+strconv.Itoa(resp.StatusCode), w.o.Pause)
 		return nil, resp.StatusCode, ErrKPBlocked
 	}
 	b, err := io.ReadAll(io.LimitReader(resp.Body, 8<<20))
 	if err != nil {
-		return nil, resp.StatusCode, fmt.Errorf("Кинопоиск: ответ оборвался")
+		return nil, resp.StatusCode, kpTrouble{text: "ответ оборвался"}
 	}
 	return b, resp.StatusCode, nil
 }
@@ -497,7 +568,7 @@ var reLDJSON = regexp.MustCompile(`(?s)<script[^>]*type="application/ld\+json"[^
 
 // page — карточка со страницы фильма (данные в JSON-LD); cookie disable_server_sso_redirect=1
 // убирает переход на вход Яндекса (исследование 22.4).
-func (w *KPWeb) page(ctx context.Context, class KPClass, id int, series bool) (FilmDetails, error) {
+func (w *KPWeb) page(ctx context.Context, class KPClass, id int, series bool) (_ FilmDetails, err error) {
 	if err := w.paused(""); err != nil {
 		return FilmDetails{}, err
 	}
@@ -508,6 +579,7 @@ func (w *KPWeb) page(ctx context.Context, class KPClass, id int, series bool) (F
 	if err := w.acquire(ctx, class); err != nil {
 		return FilmDetails{}, err
 	}
+	defer func() { err = w.settle(ctx, err) }()
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, w.o.Site+"/"+kind+"/"+strconv.Itoa(id)+"/", nil)
 	if err != nil {
 		return FilmDetails{}, err
@@ -559,8 +631,8 @@ func (w *KPWeb) page(ctx context.Context, class KPClass, id int, series bool) (F
 		return d, nil
 	}
 	if reCaptcha.Match(b) {
-		w.block("капча")
+		w.block("капча", w.o.Pause)
 		return FilmDetails{}, ErrKPBlocked
 	}
-	return FilmDetails{}, fmt.Errorf("Кинопоиск: на странице нет данных фильма (ответ %d)", status)
+	return FilmDetails{}, kpTrouble{text: fmt.Sprintf("на странице нет данных фильма (ответ %d)", status)}
 }

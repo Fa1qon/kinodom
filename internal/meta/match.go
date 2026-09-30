@@ -69,7 +69,7 @@ func MatchKP(hits []Film, t Title) (Film, bool) {
 				continue
 			}
 		} else {
-			if !yearFits(h, t.Year) || (!exact && !soft) {
+			if !YearFits(h, t.Year) || (!exact && !soft) {
 				continue
 			}
 			if !exact {
@@ -104,9 +104,9 @@ func MatchKP(hits []Film, t Title) (Film, bool) {
 	return Film{}, false
 }
 
-// yearFits — год раздачи подходит фильму: у фильма ±1, у сериала — от года начала −1 до года конца +1
+// YearFits — год раздачи (папки медиатеки) подходит фильму: у фильма ±1, у сериала — от года начала −1 до года конца +1
 // (сериал идёт — без верхней границы).
-func yearFits(h Film, year int) bool {
+func YearFits(h Film, year int) bool {
 	if h.Year == 0 {
 		return false
 	}
