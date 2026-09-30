@@ -46,8 +46,10 @@ export function render(root, r, ctx) {
     }, s.name)));
     bar.querySelector('.on')?.scrollIntoView({ block: 'nearest', inline: 'nearest' });
     if (list.section) store.set('catalog', `#/catalog/${tracker}/${encodeURIComponent(list.section)}`);
+    const off = ctx.status && ctx.status.trackers && ctx.status.trackers[tracker] && ctx.status.trackers[tracker].state === 'off';
     if (sections.length === 0) {
-      grid.replaceChildren(h('p', { class: 'muted' }, 'Каталог ещё пуст — идёт первое обновление'));
+      // Трекер без адреса (этап 11a) не обновляется — об этом строка «Укажите адрес» выше.
+      grid.replaceChildren(off ? '' : h('p', { class: 'muted' }, 'Каталог ещё пуст — идёт первое обновление'));
     } else if (list.entries.length === 0) {
       grid.replaceChildren(h('p', { class: 'muted' }, 'Здесь пусто'));
     } else {
