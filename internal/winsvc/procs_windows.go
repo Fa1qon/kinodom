@@ -14,6 +14,9 @@ import (
 type procs struct{}
 
 func (procs) Close(exe string) error {
+	// Значки других вошедших пользователей: без SeDebugPrivilege администратор их не завершит — в
+	// DACL процесса пользователя группы Administrators нет. Не вышло — закроются только свои.
+	enableDebugPrivilege()
 	snap, err := windows.CreateToolhelp32Snapshot(windows.TH32CS_SNAPPROCESS, 0)
 	if err != nil {
 		return err
@@ -41,6 +44,30 @@ func (procs) Close(exe string) error {
 		windows.CloseHandle(h)
 	}
 	return errors.Join(errs...)
+}
+
+// enableDebugPrivilege включает SeDebugPrivilege в токене процесса (есть у администратора, выключена
+// по умолчанию).
+func enableDebugPrivilege() error {
+	var luid windows.LUID
+	if err := windows.LookupPrivilegeValue(nil, windows.StringToUTF16Ptr("SeDebugPrivilege"), &luid); err != nil {
+		return err
+	}
+	var tok windows.Token
+	if err := windows.OpenProcessToken(windows.CurrentProcess(), windows.TOKEN_ADJUST_PRIVILEGES|windows.TOKEN_QUERY, &tok); err != nil {
+		return err
+	}
+	defer tok.Close()
+	tp := windows.Tokenprivileges{PrivilegeCount: 1}
+	tp.Privileges[0] = windows.LUIDAndAttributes{Luid: luid, Attributes: windows.SE_PRIVILEGE_ENABLED}
+	if err := windows.AdjustTokenPrivileges(tok, false, &tp, 0, nil, nil); err != nil {
+		return err
+	}
+	// AdjustTokenPrivileges «успешна» и без привилегии в токене — тогда ERROR_NOT_ALL_ASSIGNED.
+	if errno := windows.GetLastError(); errno == windows.ERROR_NOT_ALL_ASSIGNED {
+		return errno
+	}
+	return nil
 }
 
 func baseName(p string) string {

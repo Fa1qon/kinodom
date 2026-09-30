@@ -33,8 +33,13 @@ func TestInstallerScript(t *testing.T) {
 		`{commonappdata}\Kinodom\data\kinodom.db`,
 		"StoppedByUs := True", // остановил службу — вернёт её, если установка не дошла до конца (I3)
 		"Exec(ExpandConstant('{app}\\kinodom.exe'), 'install', ",
-		"function InitializeUninstall", // отказ kinodom uninstall останавливает удаление файлов (I4)
-		"Result := False;",
+		// Неудача после копирования без прежней программы (а база от «удаления без данных» может
+		// быть) — удаление себя, иначе полуустановка (второе ревью, I-1).
+		`else if CopyStarted and FileExists(ExpandConstant('{app}\unins000.exe')) then`,
+		// kinodom uninstall — после стандартного «Вы действительно хотите удалить?»; отказ — Abort
+		// до удаления файлов (второе ревью, I-2).
+		"procedure CurUninstallStepChanged", "CurUninstallStep <> usUninstall",
+		"Abort;",
 		"'uninstall --purge'",
 		"Удалить также скачанное и настройки?",
 		"MB_DEFBUTTON2",
@@ -61,7 +66,8 @@ func TestInstallerScript(t *testing.T) {
 			t.Errorf("в kinodom.iss нет %q", want)
 		}
 	}
-	for _, banned := range []string{"AfterInstall:", "RaiseException(", `Parameters: "tray"; Flags: runasoriginaluser`} {
+	for _, banned := range []string{"AfterInstall:", "RaiseException(", `Parameters: "tray"; Flags: runasoriginaluser`,
+		"function InitializeUninstall", "CopyStarted and not WasInstalled"} {
 		if strings.Contains(s, banned) {
 			t.Errorf("в kinodom.iss есть %q — см. комментарии к списку обязательного", banned)
 		}

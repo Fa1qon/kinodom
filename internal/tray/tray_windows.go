@@ -4,6 +4,7 @@ import (
 	"errors"
 	"runtime"
 	"sync/atomic"
+	"time"
 	"unsafe"
 
 	"golang.org/x/sys/windows"
@@ -139,7 +140,10 @@ func Run(o Options) error {
 	nid := notifyIconData{uID: 1, uFlags: nifMsg | nifIcon | nifTip, uCallbackMessage: wmTray, hIcon: icon}
 	nid.cbSize = uint32(unsafe.Sizeof(nid))
 	copy(nid.szTip[:len(nid.szTip)-1], windows.StringToUTF16(o.Tip))
-	add := func() { procShellNotifyIcon.Call(nimAdd, uintptr(unsafe.Pointer(&nid))) }
+	add := func() bool {
+		r, _, _ := procShellNotifyIcon.Call(nimAdd, uintptr(unsafe.Pointer(&nid)))
+		return r != 0
+	}
 
 	wndProc := windows.NewCallback(func(hwnd, m, wParam, lParam uintptr) uintptr {
 		switch {
@@ -175,8 +179,13 @@ func Run(o Options) error {
 		return e
 	}
 	nid.hWnd = hwnd
+	// При входе в Windows проводник может ещё не принимать значки — повторять до 30 с. Не вышло —
+	// выйти: невидимый процесс держал бы «один значок на сеанс», и ярлык значок бы не вернул.
+	if !retry(add, 30, time.Second) {
+		procDestroyWindow.Call(hwnd)
+		return errors.New("проводник Windows не принял значок")
+	}
 	window.Store(hwnd)
-	add()
 	var m msg
 	for {
 		r, _, _ := procGetMessage.Call(uintptr(unsafe.Pointer(&m)), 0, 0, 0)

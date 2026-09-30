@@ -591,3 +591,36 @@ for (const [got, want] of checks) {
 		t.Errorf("%v\n%s", err, out)
 	}
 }
+
+// «Разрешить доступ» сообщает экрану о нажатии: мастер снова опрашивает медиатеку, иначе после окна
+// Windows «Да/Нет» папка так и показывалась бы «нет доступа» (второе ревью, мелочь 1).
+func TestPultGrantControlNotifies(t *testing.T) {
+	node := lookNode(t)
+	script := `
+const mk = (tag) => ({ tag, attrs: {}, listeners: {}, children: [], style: {},
+  setAttribute(k, v) { this.attrs[k] = v; }, addEventListener(k, f) { this.listeners[k] = f; }, append(...k) { this.children.push(...k); } });
+globalThis.document = { createElement: mk, createElementNS: (ns, tag) => mk(tag) };
+globalThis.Node = class {};
+const { grantControl } = await import('./views/folders.js');
+let pressed = 0;
+const link = grantControl({ local: true }, { path: 'D:\\A', problem: 'no_access' }, 'grant-1', () => pressed++);
+link.listeners.click();
+const hint = grantControl({ local: false }, { path: 'D:\\A', problem: 'no_access' }, 'grant-1', () => pressed++);
+const checks = [
+  [link.attrs.href.startsWith('kinodom://grant?'), true],
+  [pressed, 1],
+  [hint.listeners.click, undefined],
+];
+for (const [got, want] of checks) {
+  if (got !== want) {
+    console.error(JSON.stringify(got), '≠', JSON.stringify(want));
+    process.exitCode = 1;
+  }
+}
+`
+	cmd := exec.Command(node, "--input-type=module", "--no-warnings", "-e", script)
+	cmd.Dir = "static"
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Errorf("%v\n%s", err, out)
+	}
+}

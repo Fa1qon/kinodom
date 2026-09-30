@@ -6,7 +6,21 @@ import (
 	_ "embed"
 	"encoding/binary"
 	"errors"
+	"time"
 )
+
+// retry повторяет do до успеха, не больше tries раз, с паузой между попытками.
+func retry(do func() bool, tries int, pause time.Duration) bool {
+	for i := range tries {
+		if do() {
+			return true
+		}
+		if i < tries-1 {
+			time.Sleep(pause)
+		}
+	}
+	return false
+}
 
 // Icon — значок Kinodom: иконка логотипа в чёрном квадрате, 16–256 px (assets/logo/cut.py).
 //
