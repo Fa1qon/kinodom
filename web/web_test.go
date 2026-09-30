@@ -19,7 +19,7 @@ var required = []string{
 	"views/catalog.js", "views/release.js", "views/search.js", "views/downloads.js",
 	"views/settings-layout.js", "views/settings-status.js", "views/settings-params.js", "views/settings-sections.js",
 	"views/channels.js", "views/channel.js", "views/channel-settings.js", "views/tvkit.js", "views/settings-iptv.js", "views/settings-unrecognized.js",
-	"views/history.js", "views/library.js", "views/library-card.js", "views/settings-library.js",
+	"views/history.js", "views/library.js", "views/library-card.js", "views/settings-library.js", "views/folders.js",
 }
 
 // scripts — все модули пульта.
@@ -508,6 +508,38 @@ const checks = [
   [libraryPlayerLink(res, true, 'Mozilla/5.0 (Windows NT 10.0)'), res.m3uUrl],
   [libraryPlayerLink(res, true, android).startsWith('intent://192.168.0.2:8090/m3u/library/7.m3u8?start=600#Intent;scheme=http;type=audio/x-mpegurl;package=org.videolan.vlc;'), true],
   [libraryPlayerLink(res, false, android).startsWith('intent://192.168.0.2:8090/media/7/film.mkv#Intent;scheme=http;type=video/*;package=org.videolan.vlc;l.position=600000;'), true],
+];
+for (const [got, want] of checks) {
+  if (got !== want) {
+    console.error(JSON.stringify(got), '≠', JSON.stringify(want));
+    process.exitCode = 1;
+  }
+}
+`
+	cmd := exec.Command(node, "--input-type=module", "--no-warnings", "-e", script)
+	cmd.Dir = "static"
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Errorf("%v\n%s", err, out)
+	}
+}
+
+// Обзор папок и «Разрешить доступ» (спека этапа 11a, разделы 4.7 и 7): части пути для «Вверх» и
+// строки пути; кнопка доступа — только на ПК с Kinodom, с телефона — строка (Review Focus 5).
+func TestPultFolders(t *testing.T) {
+	node := lookNode(t)
+	script := `
+import { crumbs, grantView } from './views/folders.js';
+const c = (p) => crumbs(p).map((x) => x.name + '=' + x.path).join(' | ');
+const noAccess = { path: 'D:\\Share\\Мои фильмы', problem: 'no_access' };
+const checks = [
+  [c('D:\\Share\\Movies'), 'D:=D:\\ | Share=D:\\Share | Movies=D:\\Share\\Movies'],
+  [c('C:\\'), 'C:=C:\\'],
+  [c('e:\\A\\'), 'E:=E:\\ | A=E:\\A'],
+  [c(''), ''],
+  [JSON.stringify(grantView({ local: true }, noAccess, 8090)), JSON.stringify({ link: 'kinodom://grant?path=D%3A%5CShare%5C%D0%9C%D0%BE%D0%B8+%D1%84%D0%B8%D0%BB%D1%8C%D0%BC%D1%8B&port=8090' })],
+  [JSON.stringify(grantView({ local: false }, noAccess, 8090)), JSON.stringify({ hint: 'Откройте пульт на ПК с Kinodom, чтобы разрешить доступ' })],
+  [grantView({ local: true }, { path: 'D:\\A', problem: '' }, 8090), null],
+  [grantView({ local: true }, { path: 'D:\\A', problem: 'not_found' }, 8090), null],
 ];
 for (const [got, want] of checks) {
   if (got !== want) {

@@ -52,6 +52,12 @@ export function keepFocus(root, draw) {
   }
 }
 
+// offWarn — трекер выключен: адрес не введён (этап 11a). Строка из «Состояния» и путь в «Параметры».
+export function offWarn(text) {
+  return h('div', { class: 'warn' }, icon('warning'), h('span', { class: 'grow' }, text),
+    h('a', { class: 'btn', href: '#/settings/params', 'data-key': 'to-params' }, 'Параметры'));
+}
+
 // clear — убрать всё содержимое элемента.
 export function clear(el) {
   el.replaceChildren();
