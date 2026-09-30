@@ -64,6 +64,7 @@ type Stream struct {
 	Ratio   float64
 	Mbps    float64
 	Error   string
+	Audio   *bool // есть ли звук, по полной проверке; nil — не знаем
 	Entries []Entry
 }
 
@@ -75,15 +76,16 @@ type Rule struct {
 
 // Override — ручные правки канала; nil / пусто — не правили.
 type Override struct {
-	Hidden    bool
-	Category  *string
-	Country   *string
-	Languages []string // nil — не правили
-	PinnedURL string
+	Hidden     bool
+	Category   *string
+	Country    *string
+	Languages  []string // nil — не правили
+	PinnedURL  string
+	HiddenURLs []string // скрытые у канала источники: не предлагаются, пока есть другие
 }
 
 func (o Override) empty() bool {
-	return !o.Hidden && o.Category == nil && o.Country == nil && o.Languages == nil && o.PinnedURL == ""
+	return !o.Hidden && o.Category == nil && o.Country == nil && o.Languages == nil && o.PinnedURL == "" && len(o.HiddenURLs) == 0
 }
 
 // pool — всё, из чего собирается состав каналов: плейлисты, источники с записями, правки.
@@ -142,18 +144,22 @@ func (d db) load(ctx context.Context) (*pool, error) {
 		p.playlists[pl.ID] = &pl
 	}
 	rows.Close()
-	rows, err = tx.QueryContext(ctx, `SELECT id, url, kind, quality, state, fails, grade, light_at, full_at, ttfb_ms, ratio, mbps, error FROM iptv_streams`)
+	rows, err = tx.QueryContext(ctx, `SELECT id, url, kind, quality, state, fails, grade, light_at, full_at, ttfb_ms, ratio, mbps, error, audio FROM iptv_streams`)
 	if err != nil {
 		return nil, err
 	}
 	for rows.Next() {
 		var s Stream
 		var light, full int64
-		if err := rows.Scan(&s.ID, &s.URL, &s.Kind, &s.Quality, &s.State, &s.Fails, &s.Grade, &light, &full, &s.TTFB, &s.Ratio, &s.Mbps, &s.Error); err != nil {
+		var audio sql.NullBool
+		if err := rows.Scan(&s.ID, &s.URL, &s.Kind, &s.Quality, &s.State, &s.Fails, &s.Grade, &light, &full, &s.TTFB, &s.Ratio, &s.Mbps, &s.Error, &audio); err != nil {
 			rows.Close()
 			return nil, err
 		}
 		s.LightAt, s.FullAt = fromMS(light), fromMS(full)
+		if audio.Valid {
+			s.Audio = &audio.Bool
+		}
 		p.streams[s.ID] = &s
 		p.byURL[s.URL] = &s
 	}
@@ -199,7 +205,7 @@ func (d db) load(ctx context.Context) (*pool, error) {
 		}
 		rows.Close()
 	}
-	rows, err = tx.QueryContext(ctx, `SELECT channel, hidden, category, country, languages, pinned_url FROM iptv_channel_overrides`)
+	rows, err = tx.QueryContext(ctx, `SELECT channel, hidden, category, country, languages, pinned_url, hidden_urls FROM iptv_channel_overrides`)
 	if err != nil {
 		return nil, err
 	}
@@ -208,8 +214,12 @@ func (d db) load(ctx context.Context) (*pool, error) {
 		var k string
 		var o Override
 		var cat, country, langs sql.NullString
-		if err := rows.Scan(&k, &o.Hidden, &cat, &country, &langs, &o.PinnedURL); err != nil {
+		var hiddenURLs string
+		if err := rows.Scan(&k, &o.Hidden, &cat, &country, &langs, &o.PinnedURL, &hiddenURLs); err != nil {
 			return nil, err
+		}
+		if hiddenURLs != "" {
+			o.HiddenURLs = strings.Split(hiddenURLs, "\n")
 		}
 		if cat.Valid {
 			o.Category = &cat.String
@@ -357,8 +367,8 @@ func (d db) saveCheck(ctx context.Context, s *Stream, c check) error {
 	}
 	defer tx.Rollback()
 	if _, err := tx.ExecContext(ctx, `UPDATE iptv_streams SET kind = ?, quality = ?, state = ?, fails = ?, grade = ?, light_at = ?, full_at = ?,
-		ttfb_ms = ?, ratio = ?, mbps = ?, error = ? WHERE id = ?`,
-		s.Kind, s.Quality, s.State, s.Fails, s.Grade, ms(s.LightAt), ms(s.FullAt), s.TTFB, s.Ratio, s.Mbps, s.Error, s.ID); err != nil {
+		ttfb_ms = ?, ratio = ?, mbps = ?, error = ?, audio = ? WHERE id = ?`,
+		s.Kind, s.Quality, s.State, s.Fails, s.Grade, ms(s.LightAt), ms(s.FullAt), s.TTFB, s.Ratio, s.Mbps, s.Error, s.Audio, s.ID); err != nil {
 		return err
 	}
 	if _, err := tx.ExecContext(ctx, `INSERT INTO probe_results (stream_id, at, level, grade, ratio, ttfb_ms, mbps, error) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
@@ -477,10 +487,11 @@ func (d db) setOverride(ctx context.Context, channel string, o Override) error {
 	if o.Languages != nil {
 		langs = strings.Join(o.Languages, ",")
 	}
-	_, err := d.W.ExecContext(ctx, `INSERT INTO iptv_channel_overrides (channel, hidden, category, country, languages, pinned_url) VALUES (?, ?, ?, ?, ?, ?)
+	_, err := d.W.ExecContext(ctx, `INSERT INTO iptv_channel_overrides (channel, hidden, category, country, languages, pinned_url, hidden_urls)
+		VALUES (?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT(channel) DO UPDATE SET hidden = excluded.hidden, category = excluded.category, country = excluded.country,
-		languages = excluded.languages, pinned_url = excluded.pinned_url`,
-		channel, o.Hidden, o.Category, o.Country, langs, o.PinnedURL)
+		languages = excluded.languages, pinned_url = excluded.pinned_url, hidden_urls = excluded.hidden_urls`,
+		channel, o.Hidden, o.Category, o.Country, langs, o.PinnedURL, strings.Join(o.HiddenURLs, "\n"))
 	return err
 }
 

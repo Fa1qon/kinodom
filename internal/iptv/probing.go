@@ -270,6 +270,9 @@ func applyResult(s *Stream, level string, r probe.Result, now time.Time) {
 	if r.TTFB > 0 {
 		s.TTFB = int(r.TTFB.Milliseconds())
 	}
+	if r.Audio != nil {
+		s.Audio = r.Audio
+	}
 	if level == "full" {
 		s.FullAt = now
 	} else {

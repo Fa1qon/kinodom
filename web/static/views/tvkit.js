@@ -1,6 +1,6 @@
 // Общее для экранов каналов (спека этапа 8, раздел 6): оценка проверки, время передач, «Смотреть»,
 // избранное устройства, логотип.
-import { h, icon } from '../ui.js';
+import { h, icon, openPlayer } from '../ui.js';
 import { get, put, del } from '../api.js';
 
 // GRADE — оценка первого источника канала: цвет и подпись (цвет считает сервер).
@@ -19,10 +19,19 @@ export function gradeMark(grade) {
   return h('span', { class: g.color ? 'grade' : 'grade none', style: g.color ? { background: g.color } : null, role: 'img', 'aria-label': g.label, title: g.label });
 }
 
-// hhmm — «19:30» по местному времени устройства.
-export function hhmm(iso) {
-  const d = new Date(iso);
-  return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
+// inZone — момент как «часы на стене» в поясе UTC+offset: читать через getUTC…. Без offset — пояс
+// устройства.
+export function inZone(t, offset) {
+  const ms = new Date(t).getTime();
+  if (typeof offset !== 'number') return new Date(ms - new Date(ms).getTimezoneOffset() * 60000);
+  return new Date(ms + offset * 3600000);
+}
+
+// hhmm — «19:30» по поясу каналов из настроек (utcOffset в ответах сервера): у заказчика на ПК
+// московское время, а каналы — по UTC+7.
+export function hhmm(iso, offset) {
+  const d = inZone(iso, offset);
+  return `${String(d.getUTCHours()).padStart(2, '0')}:${String(d.getUTCMinutes()).padStart(2, '0')}`;
 }
 
 // progressOf — сколько процентов передачи прошло к моменту now.
@@ -48,7 +57,7 @@ export function logo(c, cls = 'ch-logo') {
 export async function watchChannel(key, ctx) {
   const res = await get(`/channels/${encodeURIComponent(key)}/play`);
   if (ctx.local && res.launchUrl) {
-    location.href = res.launchUrl;
+    openPlayer(res.launchUrl, res.m3uUrl); // обработчика kinodom:// нет — скачается .m3u8
     return;
   }
   location.href = channelPlayerLink(res);
@@ -69,8 +78,8 @@ export async function toggleFavorite(isFavorite, key) {
   else await put(path, {});
 }
 
-// starButton — ★ в строке и карточке канала.
+// starButton — ★ на странице канала (в списке каналов её нет — отзыв заказчика 2026-09-30).
 export function starButton(on, onclick, key) {
-  return h('button', { class: on ? 'sq star on' : 'sq star', type: 'button', 'data-key': key, 'aria-pressed': String(on),
-    'aria-label': on ? 'Убрать из избранного' : 'В избранное', onclick }, icon(on ? 'star' : 'star_border'));
+  return h('button', { class: on ? 'btn big star on' : 'btn big star', type: 'button', 'data-key': key, 'aria-pressed': String(on),
+    title: on ? 'Убрать из избранного' : null, onclick }, icon(on ? 'star' : 'star_border'), on ? 'В избранном' : 'В избранное');
 }

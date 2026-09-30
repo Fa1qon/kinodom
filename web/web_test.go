@@ -18,7 +18,7 @@ var required = []string{
 	"fonts/OFL-golos-text.txt", "fonts/OFL-unbounded.txt",
 	"views/catalog.js", "views/release.js", "views/search.js", "views/downloads.js",
 	"views/settings-layout.js", "views/settings-status.js", "views/settings-params.js", "views/settings-sections.js",
-	"views/channels.js", "views/channel.js", "views/tvkit.js", "views/settings-iptv.js", "views/settings-unrecognized.js",
+	"views/channels.js", "views/channel.js", "views/channel-settings.js", "views/tvkit.js", "views/settings-iptv.js", "views/settings-unrecognized.js",
 	"views/history.js",
 }
 
@@ -200,9 +200,10 @@ for (const [got, want] of lines) {
 func TestPultChannelsFilter(t *testing.T) {
 	node := lookNode(t)
 	script := `
-import { filterChannels, sections, UNKNOWN } from './views/channels.js';
-import { progressOf } from './views/tvkit.js';
-import { dateStr, labelPatch } from './views/channel.js';
+import { filterChannels, sections, UNKNOWN, filtersFrom } from './views/channels.js';
+import { progressOf, hhmm } from './views/tvkit.js';
+import { dateStr } from './views/channel.js';
+import { labelPatch, sourceMarks, sourceButtons } from './views/channel-settings.js';
 const c = (key, block, category, categoryName, country, languages) => ({ key, block, category, categoryName, country, languages });
 const all = [
   c('bbc', 'favorite', 'news', 'Новости', 'GB', ['eng']),
@@ -222,12 +223,39 @@ const checks = [
   [keys(filterChannels(all, { tab: 'all', lang: 'eng' })), 'bbc euro'],
   [keys(filterChannels(all, { tab: 'all', lang: UNKNOWN })), 'local'],
   [keys(filterChannels(all, { tab: 'sports', lang: 'fra' })), 'euro'],
+  // «Федеральные» — каналы с номером кнопки, в том числе из избранного (отзыв заказчика 2026-09-30).
+  [keys(filterChannels(all.map((x) => ({ ...x, number: { pervy: 1, match: 3, bbc: 0 }[x.key] || 0 })), { tab: 'federal' })), 'pervy match'],
+  // Фильтры: из адреса, а без параметра — запомненные; «Все» в адресе сильнее запомненной вкладки.
+  [JSON.stringify(filtersFrom(new URLSearchParams('tab=all&country=&lang='), { tab: 'science', country: 'RU', lang: 'rus' })), '{"tab":"all","country":"","lang":""}'],
+  [JSON.stringify(filtersFrom(new URLSearchParams(''), { tab: 'science', country: 'RU' })), '{"tab":"science","country":"RU","lang":""}'],
+  [JSON.stringify(filtersFrom(new URLSearchParams(''), {})), '{"tab":"all","country":"","lang":""}'],
   [sections(all, 'all').map((s) => s.title + ':' + s.items.length).join(' | '), 'Избранные:1 | Федеральные:2 | Фильмы и сериалы:1 | Спорт:1 | Без категории:1'],
   [sections(filterChannels(all, { tab: 'sports' }), 'sports').map((s) => s.title + ':' + s.items.length).join(' | '), ':2'],
   [sections([], 'sports').length, 0],
   [progressOf({ start: '2026-09-29T19:00:00+07:00', stop: '2026-09-29T20:00:00+07:00' }, Date.parse('2026-09-29T19:15:00+07:00')), 25],
   [progressOf({ start: '2026-09-29T19:00:00+07:00', stop: '2026-09-29T20:00:00+07:00' }, Date.parse('2026-09-29T21:00:00+07:00')), 100],
-  [dateStr(1, new Date(2026, 8, 30, 23, 30)), '2026-10-01'],
+  // Время и день программы — по поясу каналов из настроек, а не по часам устройства (отзыв заказчика
+  // 2026-09-30: на ПК московское время, в настройках UTC+7).
+  [hhmm('2026-09-29T16:00:00Z', 7), '23:00'],
+  [hhmm('2026-09-29T16:00:00Z', 3), '19:00'],
+  [hhmm('2026-09-29T20:30:00+03:00', 7), '00:30'],
+  [dateStr(1, 7, new Date(Date.UTC(2026, 8, 30, 17, 30))), '2026-10-02'],
+  [dateStr(1, 3, new Date(Date.UTC(2026, 8, 30, 17, 30))), '2026-10-01'],
+  // Источники в настройках канала: «основной», «без звука», «скрыт»; «Сделать основным», «Скрыть»,
+  // «Вернуть» (отзыв заказчика 2026-09-30).
+  [sourceMarks({ offered: true, audio: true }, 0).join(), 'основной'],
+  [sourceMarks({ offered: true, pinned: true, audio: false }, 0).join(), 'основной — выбран вручную,без звука'],
+  [sourceMarks({ offered: true, audio: null }, 1).join(), ''],
+  [sourceMarks({ offered: false, hidden: true }, 3).join(), 'скрыт'],
+  // Скрытый, но других рабочих нет — плеер получит его запасным (финальное ревью).
+  [sourceMarks({ offered: true, hidden: true, audio: false }, 0).join(), 'скрыт, но других рабочих нет — плеер получит его,без звука'],
+  [sourceButtons({ offered: true, hidden: true }, 0, [{ offered: true, hidden: true }]).join(), 'show'],
+  [sourceButtons({ offered: true }, 0, [{ offered: true }, { offered: true }]).join(), 'keep,hide,other'],
+  [sourceButtons({ offered: true }, 1, [{ offered: true }, { offered: true }]).join(), 'main,hide,other'],
+  [sourceButtons({ offered: true, pinned: true }, 0, [{ offered: true }, { offered: true }]).join(), 'unpin,hide,other'],
+  [sourceButtons({ offered: true }, 0, [{ offered: true }, { offered: false }]).join(), 'keep,hide-last,other'],
+  [sourceButtons({ offered: false }, 1, [{ offered: true }, { offered: false }]).join(), 'hide,other'],
+  [sourceButtons({ offered: false, hidden: true }, 1, [{ offered: true }, { offered: false, hidden: true }]).join(), 'show'],
   // Правка меток — только изменённые поля (финальное ревью этапа 8).
   [JSON.stringify(labelPatch({ category: 'news', country: 'RU', languages: ['rus'] }, { category: 'news', country: 'RU', lang: 'rus' })), '{}'],
   [JSON.stringify(labelPatch({ category: 'news', country: 'RU', languages: ['rus'] }, { category: '', country: 'RU', lang: 'rus' })), '{"category":""}'],
@@ -269,6 +297,43 @@ const checks = [
   [resumeIndex([3, 1, 2], [p(3, 1, true, '2026-09-29T10:00:00Z'), p(1, 1, true, '2026-09-29T11:00:00Z')]), 2],
   [resumeIndex([3, 1, 2], [p(2, 1, true, '2026-09-29T12:00:00Z')]), null],
   [resumeIndex([3, 1, 2], [p(1, 0.2, false, '2026-09-29T09:00:00Z'), p(3, 1, true, '2026-09-29T12:00:00Z')]), 1],
+];
+for (const [got, want] of checks) {
+  if (got !== want) {
+    console.error(JSON.stringify(got), '≠', JSON.stringify(want));
+    process.exitCode = 1;
+  }
+}
+`
+	cmd := exec.Command(node, "--input-type=module", "--no-warnings", "-e", script)
+	cmd.Dir = "static"
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Errorf("%v\n%s", err, out)
+	}
+}
+
+// «Смотреть» на этом ПК: ссылка kinodom://; если браузер за время ожидания не отдал фокус плееру
+// (обработчик ссылки не установлен) — запасной адрес .m3u8 (отзыв заказчика 2026-09-30).
+func TestPultOpenPlayer(t *testing.T) {
+	node := lookNode(t)
+	script := `
+import { openPlayer } from './ui.js';
+const env = () => {
+  const e = { listeners: {}, loc: { href: '' }, doc: { hidden: false }, timers: [] };
+  e.win = { addEventListener: (n, f) => { e.listeners[n] = f; }, removeEventListener: (n) => { delete e.listeners[n]; } };
+  e.wait = (f) => e.timers.push(f);
+  return e;
+};
+const a = env();
+openPlayer('kinodom://play?x', '/m3u/a.m3u8', a);
+a.timers.forEach((f) => f());
+const b = env();
+openPlayer('kinodom://play?x', '/m3u/a.m3u8', b);
+b.listeners.blur();
+b.timers.forEach((f) => f());
+const checks = [
+  [a.loc.href, '/m3u/a.m3u8'], // плеер не открылся — скачать .m3u8
+  [b.loc.href, 'kinodom://play?x'], // плеер забрал фокус — ничего больше
 ];
 for (const [got, want] of checks) {
   if (got !== want) {
