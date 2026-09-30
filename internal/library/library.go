@@ -105,6 +105,10 @@ type Library struct {
 	mu       sync.Mutex
 	runCtx   context.Context
 	scanning bool
+	rescan   bool // во время обхода попросили обязательный — ещё один после (Х17)
+	// dlRetry — загрузки не прочитались (движок ещё не поднялся после старта): повтор обхода в это
+	// время, а не через час (хвост Х21); ноль — не нужен.
+	dlRetry  time.Time
 	lastScan time.Time
 	problems map[int64]string // папка категории → not_found, no_access
 	kpPause  time.Time        // квота Кинопоиска кончилась — распознавание не раньше
@@ -173,6 +177,7 @@ func (l *Library) Run(ctx context.Context) error {
 			l.startScan(true)
 		case <-sec.C:
 			l.tracker.Tick(l.now())
+			l.retryDownloads(l.now())
 		}
 	}
 }
@@ -183,31 +188,67 @@ func (l *Library) start(ctx context.Context) {
 	l.mu.Unlock()
 }
 
+// downloadsRetry — через сколько повторить обход, если загрузки не прочитались (хвост Х21).
+const downloadsRetry = 30 * time.Second
+
+// retryDownloads — пора повторить обход после неудачи чтения загрузок.
+func (l *Library) retryDownloads(now time.Time) {
+	l.mu.Lock()
+	due := !l.dlRetry.IsZero() && !now.Before(l.dlRetry)
+	l.mu.Unlock()
+	if due {
+		l.startScan(true)
+	}
+}
+
 // Scan — обход папок в фоне по открытию медиатеки: не чаще раза в минуту, один за раз.
 func (l *Library) Scan() ScanState { return l.startScan(false) }
 
+// startScan — обход в фоне; force — обязательный (часовой, смена папок): если обход уже идёт, после него
+// будет ещё один — иначе новая папка из настроек появилась бы только через час (хвост Х17).
 func (l *Library) startScan(force bool) ScanState {
 	l.mu.Lock()
 	defer l.mu.Unlock()
-	if l.runCtx == nil || l.runCtx.Err() != nil || l.scanning || (!force && l.now().Sub(l.lastScan) < scanMinGap) {
+	if l.runCtx == nil || l.runCtx.Err() != nil {
 		return ScanState{Running: l.scanning, LastAt: l.lastScan}
+	}
+	if l.scanning {
+		l.rescan = l.rescan || force
+		return ScanState{Running: true, LastAt: l.lastScan}
+	}
+	if !force && l.now().Sub(l.lastScan) < scanMinGap {
+		return ScanState{Running: false, LastAt: l.lastScan}
 	}
 	l.scanning = true
 	ctx := l.runCtx
 	go func() {
-		defer func() {
-			if p := recover(); p != nil { // обход не должен ронять сервер вместе с идущими фильмами
-				l.log.Error("медиатека: сбой обхода", "panic", fmt.Sprint(p), "stack", string(debug.Stack()))
-			}
+		for {
+			l.scanOnce(ctx)
 			l.mu.Lock()
-			l.scanning, l.lastScan = false, l.now()
+			l.lastScan = l.now()
+			if l.rescan && ctx.Err() == nil {
+				l.rescan = false
+				l.mu.Unlock()
+				continue
+			}
+			l.scanning, l.rescan = false, false
 			l.mu.Unlock()
-		}()
-		if err := l.scanNow(ctx); err != nil && ctx.Err() == nil {
-			l.log.Warn("медиатека: обход не удался", "err", err)
+			return
 		}
 	}()
 	return ScanState{Running: true, LastAt: l.lastScan}
+}
+
+// scanOnce — один обход; паника не роняет сервер вместе с идущими фильмами.
+func (l *Library) scanOnce(ctx context.Context) {
+	defer func() {
+		if p := recover(); p != nil {
+			l.log.Error("медиатека: сбой обхода", "panic", fmt.Sprint(p), "stack", string(debug.Stack()))
+		}
+	}()
+	if err := l.scanNow(ctx); err != nil && ctx.Err() == nil {
+		l.log.Warn("медиатека: обход не удался", "err", err)
+	}
 }
 
 func (l *Library) scanState() ScanState {
@@ -263,8 +304,18 @@ func (l *Library) scanNow(ctx context.Context) error {
 		return err
 	}
 	tus, err := l.torrents(ctx)
+	l.mu.Lock()
+	warned := !l.dlRetry.IsZero()
 	if err != nil {
-		l.log.Warn("медиатека: скачанное не читается", "err", err)
+		l.dlRetry = now.Add(downloadsRetry)
+	} else {
+		l.dlRetry = time.Time{}
+	}
+	l.mu.Unlock()
+	if err != nil {
+		if !warned { // при старте движок поднимается за секунды — предупреждение один раз
+			l.log.Warn("медиатека: скачанное не читается — обход повторится через 30 с", "err", err)
+		}
 	} else if err := l.d.syncTorrents(ctx, tus, now); err != nil {
 		return err
 	}

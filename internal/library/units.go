@@ -83,6 +83,9 @@ func (d db) syncFolder(ctx context.Context, folder int64, c Category, units []Sc
 	for _, u := range units {
 		p := ParseName(u.Name)
 		id, ok := existing[u.Key]
+		if !ok && len(u.Files) == 0 {
+			continue // одни копирующиеся файлы — единицы ещё нет, появится, когда докопируются
+		}
 		if !ok {
 			state := StateNew
 			if !c.Kinopoisk {
@@ -107,7 +110,7 @@ func (d db) syncFolder(ctx context.Context, folder int64, c Category, units []Sc
 		for i, f := range u.Files {
 			files[i] = fileRow{Path: f.Path, TIndex: -1, Season: f.Season, Section: f.Section, Episode: f.Episode, Size: f.Size, MTime: ms(f.ModTime)}
 		}
-		if err := syncFiles(ctx, tx, id, files); err != nil {
+		if err := syncFiles(ctx, tx, id, files, u.Copying); err != nil {
 			return err
 		}
 	}
@@ -130,9 +133,13 @@ type fileRow struct {
 	Size, MTime int64
 }
 
-// syncFiles — файлы единицы в порядке показа; строки с тем же путём сохраняют номер.
-func syncFiles(ctx context.Context, tx *sql.Tx, unit int64, files []fileRow) error {
+// syncFiles — файлы единицы в порядке показа; строки с тем же путём сохраняют номер. copying — файлы,
+// которые ещё копируются: их строки не трогаются (не удаляются и не добавляются) — хвост Х14.
+func syncFiles(ctx context.Context, tx *sql.Tx, unit int64, files []fileRow, copying []string) error {
 	keep := map[string]bool{}
+	for _, p := range copying {
+		keep[p] = true
+	}
 	for i, f := range files {
 		keep[f.Path] = true
 		if _, err := tx.ExecContext(ctx, `INSERT INTO lib_files (unit, path, tindex, season, section, episode, position, size, mtime)
@@ -257,7 +264,7 @@ func (d db) syncTorrents(ctx context.Context, tus []TorrentUnit, now time.Time) 
 			WHERE id = ?`, tu.Name, p.Title, p.Year, kp, kp, kp, id); err != nil {
 			return err
 		}
-		if err := syncFiles(ctx, tx, id, torrentFiles(tu)); err != nil {
+		if err := syncFiles(ctx, tx, id, torrentFiles(tu), nil); err != nil {
 			return err
 		}
 	}
