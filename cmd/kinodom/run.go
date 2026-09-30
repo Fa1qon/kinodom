@@ -45,5 +45,5 @@ func runOptions(args []string) (app.Options, error) {
 	if fs.NArg() > 0 {
 		return app.Options{}, fmt.Errorf("лишние аргументы: %v", fs.Args())
 	}
-	return app.Options{Console: true, DownloadsDir: *downloads}, nil
+	return app.Options{Console: true, DownloadsDir: *downloads, Version: version}, nil
 }

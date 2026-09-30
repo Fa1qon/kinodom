@@ -19,6 +19,7 @@ import (
 
 	"kinodom/internal/iptv/labels"
 	"kinodom/internal/netx"
+	"kinodom/internal/source"
 	"kinodom/internal/store"
 )
 
@@ -26,16 +27,23 @@ import (
 const (
 	Keyt2Login    = "t2.login"
 	Keyt2Password = "t2.password"
-	KeyProxy             = "proxy.trackers"
-	KeyKinopoisk         = "kinopoisk.key"
-	KeyDownloadsDir      = "downloads.dir"
-	KeyKeepDays          = "torrents.keepDays"
-	KeyKeepBehind        = "torrents.keepBehind"
-	KeyMinFreeGB         = "torrents.minFreeGB"
-	KeyUploadLimit       = "torrents.uploadLimitMBps"
-	KeyPlayer            = "player"
-	KeySections          = "catalog.categories"
-	KeyPreferredFormat   = "catalog.preferredFormat"
+	// Адреса трекеров вводит пользователь (спека этапа 11a, раздел 6); служебные "" — по правилу.
+	Keyt2Address = "t2.address"
+	Keyt2API     = "t2.apiAddress"
+	Keyt2Feed    = "t2.feedAddress"
+	Keyt1Address     = "t1.address"
+	Keyt1Download    = "t1.downloadAddress"
+	KeySetupDone        = "setup.done" // мастер начальных настроек пройден
+	KeyProxy            = "proxy.trackers"
+	KeyKinopoisk        = "kinopoisk.key"
+	KeyDownloadsDir     = "downloads.dir"
+	KeyKeepDays         = "torrents.keepDays"
+	KeyKeepBehind       = "torrents.keepBehind"
+	KeyMinFreeGB        = "torrents.minFreeGB"
+	KeyUploadLimit      = "torrents.uploadLimitMBps"
+	KeyPlayer           = "player"
+	KeySections         = "catalog.categories"
+	KeyPreferredFormat  = "catalog.preferredFormat"
 	// Каналы (спека этапа 8, раздел 5.6); списки — JSON.
 	KeyEPGURL           = "iptv.epgUrl"
 	KeyHiddenCategories = "iptv.hiddenCategories"
@@ -65,6 +73,12 @@ var Formats = []string{"", "MKV", "MP4", "AVI"}
 type Values struct {
 	t2Login    string
 	t2Password string
+	t2Address  string // «схема://хост»; "" — t2 выключен
+	t2API      string // "" — по правилу из адреса сайта
+	t2Feed     string // "" — по правилу из адреса сайта
+	t1Address      string // «схема://хост»; "" — t1 выключен
+	t1Download     string // адрес .torrent; "" — по правилу из адреса сайта
+	SetupDone         bool
 	Proxy             string // адрес целиком: http:// или socks5://, с логином и паролем; "" — нет
 	KinopoiskKey      string
 	DownloadsDir      string
@@ -125,6 +139,14 @@ func Load(ctx context.Context, db *store.DB, def Defaults, overrides map[string]
 	collect(err)
 	v.t2Password, err = str(Keyt2Password, "")
 	collect(err)
+	for key, dst := range map[string]*string{Keyt2Address: &v.t2Address, Keyt2API: &v.t2API,
+		Keyt2Feed: &v.t2Feed, Keyt1Address: &v.t1Address, Keyt1Download: &v.t1Download} {
+		*dst, err = str(key, "")
+		collect(err)
+	}
+	done, err := str(KeySetupDone, "false")
+	collect(err)
+	v.SetupDone = done == "true"
 	v.Proxy, err = str(KeyProxy, "")
 	collect(err)
 	v.KinopoiskKey, err = str(KeyKinopoisk, "")
@@ -208,6 +230,12 @@ func (v Values) entries() map[string]string {
 	return map[string]string{
 		Keyt2Login:    v.t2Login,
 		Keyt2Password: v.t2Password,
+		Keyt2Address:  v.t2Address,
+		Keyt2API:      v.t2API,
+		Keyt2Feed:     v.t2Feed,
+		Keyt1Address:      v.t1Address,
+		Keyt1Download:     v.t1Download,
+		KeySetupDone:         strconv.FormatBool(v.SetupDone),
 		KeyProxy:             v.Proxy,
 		KeyKinopoisk:         v.KinopoiskKey,
 		KeyDownloadsDir:      v.DownloadsDir,
@@ -270,6 +298,27 @@ func (v Values) With(p Patch) (Values, error) {
 		if r.Password != nil {
 			n.t2Password = *r.Password
 		}
+		for _, f := range []struct {
+			in    *string
+			dst   *string
+			field string
+		}{{r.Address, &n.t2Address, "Адрес t2"}, {r.APIAddress, &n.t2API, "Адрес API t2"},
+			{r.FeedAddress, &n.t2Feed, "Адрес ленты t2"}} {
+			if err := setAddress(f.in, f.dst, f.field); err != nil {
+				return v, err
+			}
+		}
+	}
+	if r := p.t1; r != nil {
+		if err := setAddress(r.Address, &n.t1Address, "Адрес t1"); err != nil {
+			return v, err
+		}
+		if err := setAddress(r.DownloadAddress, &n.t1Download, "Адрес .torrent t1"); err != nil {
+			return v, err
+		}
+	}
+	if st := p.Setup; st != nil && st.Done != nil {
+		n.SetupDone = *st.Done
 	}
 	if pp := p.Proxy; pp != nil {
 		proxy, err := composeProxy(v.Proxy, *pp)
@@ -339,6 +388,24 @@ func (v Values) With(p Patch) (Values, error) {
 		n.Sections = s
 	}
 	return n, nil
+}
+
+// setAddress — адрес сайта из поля пульта: нет поля — не менять, пусто — стереть, иначе —
+// приведённый к «схема://хост» (source.SiteAddress).
+func setAddress(in, dst *string, field string) error {
+	if in == nil {
+		return nil
+	}
+	if strings.TrimSpace(*in) == "" {
+		*dst = ""
+		return nil
+	}
+	a, err := source.SiteAddress(*in)
+	if err != nil {
+		return fieldErr(field, "%v", err)
+	}
+	*dst = a
+	return nil
 }
 
 // composeProxy — адрес прокси из полей пульта. Поля, которых нет в запросе, берутся из прежнего

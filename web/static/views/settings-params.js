@@ -1,12 +1,19 @@
-// «Настройки → Параметры»: t2, прокси, Кинопоиск, хранение, плеер и формат в приоритете.
+// «Настройки → Параметры»: t2, t1 (адреса вводит пользователь — этап 11a), прокси, Кинопоиск,
+// хранение, плеер и формат в приоритете.
 // «Сохранить» отправляет только изменённые поля; ошибка поля — под полем; не из домашней сети — только
 // чтение (спека этапа 7, разделы 5.1, 6.3, 10.1 и 10.3).
 import { h, icon } from '../ui.js';
 import { get, put, post } from '../api.js';
 import { layout, remoteNote } from './settings-layout.js';
+import { pickFolder } from './folders.js';
 
 // FIELD — поле формы по названию поля в тексте ошибки сервера («Прокси: …»).
 const FIELD = {
+  'Адрес t2': 'rtAddress',
+  'Адрес API t2': 'rtApi',
+  'Адрес ленты t2': 'rtFeed',
+  'Адрес t1': 't1Address',
+  'Адрес .torrent t1': 't1Download',
   'Прокси': 'proxyAddress',
   'Хранить, дней': 'keepDays',
   'Запас места, ГБ': 'minFreeGB',
@@ -21,7 +28,8 @@ const LOGIN = { none: 'Логин не задан', unknown: 'Вход ещё н
 export function render(root, r, ctx) {
   const saveBtn = h('button', { class: 'btn inv', type: 'submit', form: 'params', 'data-key': 'save' }, icon('save'), 'Сохранить');
   const saved = h('span', { class: 'muted small', role: 'status' });
-  const content = layout(root, 'params', 'Параметры', saved, saveBtn);
+  const wizardBtn = h('a', { class: 'btn', href: '#/setup', 'data-key': 'wizard', hidden: true }, 'Открыть мастер');
+  const content = layout(root, 'params', 'Параметры', saved, wizardBtn, saveBtn);
   // Одна форма на всё: Enter в поле — «Сохранить».
   const form = h('form', { id: 'params', class: 'set-content', novalidate: true, onsubmit: (e) => {
     e.preventDefault();
@@ -89,6 +97,20 @@ export function render(root, r, ctx) {
     errs.preferredFormat = h('div', { class: 'error field-error' });
     errs.general = h('div', { class: 'error' });
     const loginBtn = h('button', { class: 'btn', type: 'button', disabled: !canEdit, 'data-key': 'login', onclick: relogin }, icon('login'), 'Войти');
+    // «Дополнительно» — служебные адреса трекеров; пусто — по адресу сайта. Открыто, если что-то задано.
+    const extra = h('div', { class: 'col', hidden: !(v.t1.downloadAddress || v.t2.apiAddress || v.t2.feedAddress) },
+      field('Адрес .torrent t1', 't1Download', input('t1Download', v.t1.downloadAddress)),
+      field('Адрес API t2', 'rtApi', input('rtApi', v.t2.apiAddress)),
+      field('Адрес ленты t2', 'rtFeed', input('rtFeed', v.t2.feedAddress)));
+    const extraBtn = h('button', { class: 'link', type: 'button', 'data-key': 'extra', 'aria-expanded': String(!extra.hidden), onclick: (e) => {
+      extra.hidden = !extra.hidden;
+      e.currentTarget.setAttribute('aria-expanded', String(!extra.hidden));
+    } }, 'Дополнительно');
+    const browse = h('button', { class: 'btn', type: 'button', disabled: !canEdit, 'data-key': 'browse-downloads', onclick: async () => {
+      const p = await pickFolder(inputs.downloadsDir.value.trim());
+      if (p) inputs.downloadsDir.value = p;
+    } }, icon('folder_open'), 'Обзор');
+    wizardBtn.hidden = !canEdit;
 
     form.replaceChildren(
       canEdit ? '' : remoteNote(),
@@ -96,8 +118,12 @@ export function render(root, r, ctx) {
       h('div', { class: 'two-cols' },
         h('div', { class: 'col' },
           h('div', { class: 'card' }, h('div', { class: 'h' }, 't2'),
+            field('Адрес сайта', 'rtAddress', input('rtAddress', v.t2.address, { autocomplete: 'off', inputmode: 'url' })),
             h('div', { class: 'two' }, field('Логин', 'rtLogin', input('rtLogin', v.t2.login, { autocomplete: 'off' })), field('Пароль', 'rtPassword', secret('rtPassword', v.t2.passwordSet))),
             h('div', { class: 'row gap10' }, (loginEl = loginLine(login)), loginBtn)),
+          h('div', { class: 'card' }, h('div', { class: 'h' }, 't1'),
+            field('Адрес сайта или зеркала', 't1Address', input('t1Address', v.t1.address, { autocomplete: 'off', inputmode: 'url' })),
+            extraBtn, extra),
           h('div', { class: 'card' }, h('div', { class: 'h' }, 'Прокси для трекеров'), proxyType,
             field('Адрес', 'proxyAddress', input('proxyAddress', v.proxy.address, { placeholder: '192.168.1.20:3128' })),
             h('div', { class: 'two' }, field('Логин', 'proxyLogin', input('proxyLogin', v.proxy.login, { autocomplete: 'off' })), field('Пароль', 'proxyPassword', secret('proxyPassword', v.proxy.passwordSet)))),
@@ -107,7 +133,7 @@ export function render(root, r, ctx) {
               : kp.keySet ? h('div', { class: 'muted small' }, `${kp.dailyUsed} из ${kp.dailyLimit} запросов за сутки`) : '')),
         h('div', { class: 'col' },
           h('div', { class: 'card' }, h('div', { class: 'h' }, 'Хранение'),
-            field('Папка загрузок', 'downloadsDir', input('downloadsDir', v.storage.downloadsDir)),
+            field('Папка загрузок', 'downloadsDir', h('div', { class: 'row gap10' }, input('downloadsDir', v.storage.downloadsDir), browse)),
             h('div', { class: 'three' },
               field('Хранить, дней', 'keepDays', input('keepDays', String(v.storage.keepDays), { inputmode: 'numeric' })),
               field('Запас места, ГБ', 'minFreeGB', input('minFreeGB', String(v.storage.minFreeGB), { inputmode: 'numeric' })),
@@ -142,6 +168,11 @@ export function render(root, r, ctx) {
       p[group] = p[group] || {};
       p[group][key] = value;
     };
+    for (const [k, group, key, was] of [['rtAddress', 't2', 'address', v.t2.address], ['rtApi', 't2', 'apiAddress', v.t2.apiAddress],
+      ['rtFeed', 't2', 'feedAddress', v.t2.feedAddress], ['t1Address', 't1', 'address', v.t1.address],
+      ['t1Download', 't1', 'downloadAddress', v.t1.downloadAddress]]) {
+      if (val(k) !== was) set(group, key, val(k));
+    }
     if (val('rtLogin') !== v.t2.login) set('t2', 'login', val('rtLogin'));
     if (val('rtPassword')) set('t2', 'password', inputs.rtPassword.value);
     const ptype = inputs.proxyType.querySelector('input:checked').value;

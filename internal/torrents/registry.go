@@ -6,6 +6,7 @@ import (
 	"errors"
 	"time"
 
+	"github.com/anacrolix/torrent/bencode"
 	"github.com/anacrolix/torrent/metainfo"
 
 	"kinodom/internal/store"
@@ -126,6 +127,38 @@ func (r *Registry) Restorable(ctx context.Context) ([]Record, error) {
 			return nil, err
 		}
 		out = append(out, rec)
+	}
+	return out, rows.Err()
+}
+
+// Folders — папки всех раздач с метаинфо на диске: у раздачи со своей папкой загрузок — в ней, у
+// раздачи без папки — в defaultDir. Для удаления Kinodom «со скачанным» (этап 11a): удаляются
+// только папки раздач, чужие файлы в папке загрузок остаются.
+func (r *Registry) Folders(ctx context.Context, defaultDir string) ([]string, error) {
+	rows, err := r.db.R.QueryContext(ctx, `SELECT infohash, metainfo, dir FROM torrents WHERE metainfo IS NOT NULL`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []string
+	for rows.Next() {
+		var hexHash, dir string
+		var mi []byte
+		if err := rows.Scan(&hexHash, &mi, &dir); err != nil {
+			return nil, err
+		}
+		var ih metainfo.Hash
+		if err := ih.FromHexString(hexHash); err != nil {
+			return nil, err
+		}
+		var info metainfo.Info
+		if err := bencode.Unmarshal(mi, &info); err != nil {
+			continue // испорченная метаинфо: папку не вычислить, раздача и не восстановится
+		}
+		if dir == "" {
+			dir = defaultDir
+		}
+		out = append(out, torrentDir(dir, &info, ih))
 	}
 	return out, rows.Err()
 }
