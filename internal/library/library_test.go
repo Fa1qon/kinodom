@@ -22,6 +22,7 @@ type fakeDownloads struct {
 	units []TorrentUnit
 	calls int
 	block chan struct{} // не nil — TorrentUnits ждёт, пока канал не закроют (обход «идёт»)
+	err   error
 }
 
 func (f *fakeDownloads) TorrentUnits(context.Context) ([]TorrentUnit, error) {
@@ -34,7 +35,7 @@ func (f *fakeDownloads) TorrentUnits(context.Context) ([]TorrentUnit, error) {
 	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	return slices.Clone(f.units), nil
+	return slices.Clone(f.units), f.err
 }
 
 func (f *fakeDownloads) set(us ...TorrentUnit) {
@@ -331,6 +332,12 @@ func TestHiddenCategoryEverywhere(t *testing.T) {
 	if len(v.Cards) != 0 || len(v.Continue) != 0 || len(info) != 0 || !errors.Is(cardErr, ErrNoCard) {
 		t.Errorf("скрытая видна: карточки %d, продолжить %d, история %d, карточка %v", len(v.Cards), len(v.Continue), len(info), cardErr)
 	}
+	if hidden, _ := e.l.HiddenHashes(ctx, "pc", []string{hash, "ffff"}); !hidden[hash] || hidden["ffff"] {
+		t.Errorf("скрытые «раздачи» истории: %v", hidden)
+	}
+	if names, n, _ := e.l.HistoryFiles(ctx, hash); n != 1 || names[int(file)] != "film.mkv" {
+		t.Errorf("файлы для истории: %v %d", names, n)
+	}
 	if err := e.d.setDeviceCategory(ctx, "pc", adult, true); err != nil {
 		t.Fatal(err)
 	}
@@ -338,6 +345,9 @@ func TestHiddenCategoryEverywhere(t *testing.T) {
 	info, _ = e.l.HistoryInfo(ctx, "pc", []string{hash})
 	if len(v.Cards) != 1 || len(v.Continue) != 1 || len(info) != 1 {
 		t.Errorf("включённая на устройстве: карточки %d, продолжить %d, история %d", len(v.Cards), len(v.Continue), len(info))
+	}
+	if hidden, _ := e.l.HiddenHashes(ctx, "pc", []string{hash}); hidden[hash] {
+		t.Errorf("включённая считается скрытой")
 	}
 	if v := e.list(t, "192.168.0.60", 0); len(v.Cards) != 0 {
 		t.Errorf("на другом устройстве видна")
@@ -368,6 +378,18 @@ func TestMissingFolderKeepsUnits(t *testing.T) {
 	if cs, _ := e.l.Categories(ctx, "pc"); cs[0].Folders[0].Problem != "not_found" {
 		t.Errorf("проблема папки: %+v", cs[0].Folders)
 	}
+	problem := func() string {
+		ps, _ := e.d.Problems(ctx)
+		for _, p := range ps {
+			if strings.HasPrefix(p.ID, "library.folder.") {
+				return p.Text
+			}
+		}
+		return ""
+	}
+	if p := problem(); !strings.Contains(p, dir) || !strings.Contains(p, "Фильмы") {
+		t.Errorf("проблема в «Состоянии»: %q", p)
+	}
 	os.Rename(moved, dir)
 	e.scan(t)
 	var after []int64
@@ -380,6 +402,9 @@ func TestMissingFolderKeepsUnits(t *testing.T) {
 	rows.Close()
 	if v := e.list(t, "pc", 0); len(v.Cards) != 2 || !slices.Equal(before, after) {
 		t.Errorf("папка вернулась: карточек %d, файлы %v → %v", len(v.Cards), before, after)
+	}
+	if p := problem(); p != "" {
+		t.Errorf("проблема осталась: %q", p)
 	}
 }
 
@@ -480,5 +505,47 @@ func TestLocalPoster(t *testing.T) {
 	}
 	if p := e.l.LocalPoster(ctx, unit); filepath.Base(p) != "folder.jpg" {
 		t.Errorf("путь постера: %q", p)
+	}
+}
+
+// Загрузки недоступны (движок не запустился) — медиатека работает: папки видны, скачанное — нет,
+// а единицы скачанного из базы не удаляются.
+func TestDownloadsDown(t *testing.T) {
+	e := newEnv(t)
+	e.folder(t, catFilms, "Movies", "a.mkv")
+	e.dl.set(malahit(5))
+	e.scan(t)
+	e.dl.err = errors.New("движок не запустился")
+	e.scan(t)
+	v, err := e.l.List(ctx, "pc", 0)
+	if err != nil || len(v.Cards) != 1 {
+		t.Fatalf("без загрузок: %v %+v", err, v.Cards)
+	}
+	var n int
+	e.d.R.QueryRow(`SELECT COUNT(*) FROM lib_units WHERE source = 'torrent'`).Scan(&n)
+	if n != 1 {
+		t.Errorf("единица скачанного удалена, пока загрузки недоступны")
+	}
+}
+
+// Скачали новое — оно появляется при следующем открытии медиатеки, даже если обход был только что:
+// список загрузок изменился — обход сразу.
+func TestNewDownloadAppears(t *testing.T) {
+	e := newEnv(t)
+	runCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	e.l.start(runCtx)
+	e.scan(t)
+	e.l.mu.Lock()
+	e.l.lastScan = e.clk.now()
+	e.l.mu.Unlock()
+	e.dl.set(malahit(5))
+	e.list(t, "pc", 0) // пульт открыл медиатеку
+	deadline := time.Now().Add(5 * time.Second)
+	for len(e.list(t, "pc", 0).Cards) != 1 {
+		if time.Now().After(deadline) {
+			t.Fatal("новая раздача не появилась")
+		}
+		time.Sleep(20 * time.Millisecond)
 	}
 }

@@ -3,6 +3,7 @@ package app
 import (
 	"errors"
 	"net/http"
+	"regexp"
 	"strconv"
 	"strings"
 
@@ -11,6 +12,7 @@ import (
 	"kinodom/internal/catalog"
 	"kinodom/internal/history"
 	"kinodom/internal/httpx"
+	"kinodom/internal/library"
 )
 
 // initHistory — история просмотров по устройствам (спека этапа 8, раздел 7): место по потоку
@@ -23,12 +25,14 @@ func (a *App) initHistory() {
 	a.API.HandleHome("DELETE /api/v1/history/{hash}", "", http.HandlerFunc(a.handleHistoryDelete))
 }
 
-// historyItem — раздача в истории устройства: раздача каталога и последний файл с именем.
+// historyItem — раздача в истории устройства: раздача каталога или карточка медиатеки и последний
+// файл с именем.
 type historyItem struct {
 	history.Item
-	Release *catalog.ReleaseRef `json:"release"` // null — раздачи нет в каталоге
-	File    string              `json:"file"`    // имя последнего файла без папок; "" — неизвестно
-	Count   int                 `json:"count"`   // видеофайлов в раздаче; 0 — неизвестно
+	Release *catalog.ReleaseRef  `json:"release"` // null — раздачи нет в каталоге
+	Library *library.CardSummary `json:"library"` // карточка медиатеки; null — не в медиатеке
+	File    string               `json:"file"`    // имя последнего файла без папок; "" — неизвестно
+	Count   int                  `json:"count"`   // видеофайлов в раздаче; 0 — неизвестно
 }
 
 func (a *App) handleHistory(w http.ResponseWriter, r *http.Request) {
@@ -46,12 +50,40 @@ func (a *App) handleHistory(w http.ResponseWriter, r *http.Request) {
 		httpx.WriteError(w, http.StatusInternalServerError, "история не читается: "+err.Error())
 		return
 	}
-	out := make([]historyItem, len(items))
-	for i, it := range items {
-		out[i].Item = it
-		if ref, ok := refs[it.Hash]; ok {
-			out[i].Release = &ref
+	cards, hidden := map[string]library.CardSummary{}, map[string]bool{}
+	if a.Library != nil {
+		device := httpx.Device(r)
+		if cards, err = a.Library.HistoryInfo(r.Context(), device, hashes); err == nil {
+			hidden, err = a.Library.HiddenHashes(r.Context(), device, hashes)
 		}
+		if err != nil {
+			httpx.WriteError(w, http.StatusInternalServerError, "история не читается: "+err.Error())
+			return
+		}
+	}
+	out := make([]historyItem, 0, len(items))
+	for _, it := range items {
+		c, inLibrary := cards[it.Hash]
+		// Скрытая категория на этом устройстве и файлы медиатеки, которых больше нет, — не показываются.
+		if hidden[it.Hash] || (isLibraryHash(it.Hash) && !inLibrary) {
+			continue
+		}
+		x := historyItem{Item: it}
+		if inLibrary {
+			x.Library = &c
+		}
+		if ref, ok := refs[it.Hash]; ok {
+			x.Release = &ref
+		}
+		if isLibraryHash(it.Hash) {
+			if names, n, err := a.Library.HistoryFiles(r.Context(), it.Hash); err == nil {
+				x.File, x.Count = names[it.Last.Index], n
+			}
+			out = append(out, x)
+			continue
+		}
+		out = append(out, x)
+		i := len(out) - 1
 		var ih metainfo.Hash
 		if ih.FromHexString(it.Hash) != nil {
 			continue
@@ -68,9 +100,17 @@ func (a *App) handleHistory(w http.ResponseWriter, r *http.Request) {
 	httpx.WriteJSON(w, http.StatusOK, map[string]any{"items": out})
 }
 
+// isLibraryHash — «раздача» файлов из папок медиатеки: lib-<единица> (спека этапа 9, раздел 5.7).
+func isLibraryHash(h string) bool { return reLibraryHash.MatchString(h) }
+
+var reLibraryHash = regexp.MustCompile(`^lib-[1-9][0-9]*$`)
+
 func historyHash(w http.ResponseWriter, r *http.Request) (string, bool) {
 	var ih metainfo.Hash
 	h := strings.ToLower(r.PathValue("hash"))
+	if isLibraryHash(h) {
+		return h, true
+	}
 	if ih.FromHexString(h) != nil {
 		httpx.WriteError(w, http.StatusBadRequest, "неверный идентификатор раздачи")
 		return "", false
