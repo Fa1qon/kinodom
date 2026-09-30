@@ -206,7 +206,7 @@ func TestLineupHidden(t *testing.T) {
 	want := map[string]string{
 		"match-tv":   "",             // федеральный — скрытие категорий не трогает
 		"bbc":        "",             // английский
-		"aljazeera":  "",             // арабский и английский — не все языки скрыты
+		"aljazeera":  HiddenLanguage, // арабский и английский — арабский скрыт (любой язык, этап 11b)
 		"tet-ua":     HiddenCategory, // категория поправлена на «Спорт»
 		"local-news": HiddenCategory, // «Без категории» скрыта
 		"ntv":        HiddenChannel,  // поштучно — даже федеральный
@@ -227,6 +227,33 @@ func TestLineupHidden(t *testing.T) {
 	if got := len(l.WithFavorites(nil, true)); got != 6 {
 		t.Errorf("со скрытыми: %d каналов, нужно 6", got)
 	}
+}
+
+// Скрытие по языку (замечание № 6 этапа 11b): канал скрыт, если скрыт хотя бы один его язык; без языков —
+// если скрыт «Язык не указан»; ручная правка «Язык не указан» ([]) — так же; федеральный не скрывается.
+func TestLineupHiddenAnyLanguage(t *testing.T) {
+	p := testPool(src{name: "BBC News"}, src{name: "Al Jazeera"}, src{name: "Местные новости"}, src{name: "НТВ"})
+	p.overrides["bbc"] = Override{Languages: []string{}} // вручную: «Язык не указан»
+	check := func(h Hidden, want map[string]string) {
+		t.Helper()
+		l := buildTest(t, p, h, 4)
+		for k, w := range want {
+			if got := l.ByKey[k].Hidden; got != w {
+				t.Errorf("%+v, %s: скрыт %q, нужно %q (языки %v)", h, k, got, w, l.ByKey[k].Labels.Languages)
+			}
+		}
+	}
+	check(Hidden{Languages: []string{"eng", ""}}, map[string]string{
+		"aljazeera":  HiddenLanguage, // арабский и английский — английский скрыт
+		"bbc":        HiddenLanguage, // правка «без языка», «Язык не указан» скрыт
+		"local-news": HiddenLanguage, // без языков
+		"ntv":        "",             // федеральный
+	})
+	check(Hidden{Languages: []string{"ara"}}, map[string]string{
+		"aljazeera":  HiddenLanguage,
+		"bbc":        "",
+		"local-news": "",
+	})
 }
 
 // Источник: жив — предлагается; молчит, мёртв, новый — нет; новый из «ограниченного» плейлиста —

@@ -290,6 +290,13 @@ func (m *Module) Guide() *xmltv.Guide {
 	return m.guide
 }
 
+// hiddenNow — настройки скрытия сейчас.
+func (m *Module) hiddenNow() Hidden {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.hidden
+}
+
 // SetHidden — настройки скрытия поменяли в пульте.
 func (m *Module) SetHidden(h Hidden) {
 	m.mu.Lock()

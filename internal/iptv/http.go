@@ -189,6 +189,17 @@ func (m *Module) handleChannels(w http.ResponseWriter, r *http.Request) {
 			out.Categories = append(out.Categories, Facet{id, labels.CategoryName(id), n})
 		}
 	}
+	if !all {
+		// Скрытое в настройках в фильтрах не показывается, даже если канал с ним виден (избранное,
+		// федеральный блок) — замечание № 6 этапа 11b. ?all=1 — экран скрытия: там нужно всё.
+		h := m.hiddenNow()
+		for _, id := range h.Countries {
+			delete(countries, id)
+		}
+		for _, id := range h.Languages {
+			delete(langs, id)
+		}
+	}
 	out.Countries = facets(countries, labels.CountryName)
 	out.Languages = facets(langs, labels.LanguageName)
 	httpx.WriteJSON(w, http.StatusOK, out)
