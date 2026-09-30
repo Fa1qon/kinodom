@@ -50,6 +50,7 @@
   --inv-text: #111315;
   --yellow: #F0C040;
   --blue: #3F8EF0;
+  --focus: #3490FF; /* рамка фокуса — синий «DOM» логотипа: белую не видно на светлой кнопке (11b) */
   --green: #4CC777;
   --red: #E5534B; /* каналы: «будет тормозить» (спека этапа 8) */
   --warn-bg: #1A1508;
@@ -71,8 +72,8 @@ a:hover { color: #FFFFFF; }
 button, input { font: inherit; color: inherit; }
 /* Фокус пульта ТВ и клавиатуры виден издалека: светлая рамка с тёмным зазором — на любом фоне,
    в том числе на светлой выбранной кнопке. */
-:focus-visible { outline: none; box-shadow: 0 0 0 3px var(--bg), 0 0 0 6px var(--text); }
-.field:focus-within { box-shadow: 0 0 0 3px var(--bg), 0 0 0 6px var(--text); }
+:focus-visible { outline: none; box-shadow: 0 0 0 3px var(--bg), 0 0 0 6px var(--focus); }
+.field:focus-within { box-shadow: 0 0 0 3px var(--bg), 0 0 0 6px var(--focus); }
 .field input:focus-visible { box-shadow: none; }
 .ic { display: inline-block; flex-shrink: 0; }
 .muted { color: var(--muted); }
@@ -306,7 +307,7 @@ a.res-row:hover { background: var(--hover); }
 .seg label + label { border-left: 1px solid var(--line-strong); }
 .seg label.on { background: var(--inv-bg); color: var(--inv-text); }
 .seg input { position: absolute; inset: 0; opacity: 0; margin: 0; cursor: pointer; }
-.seg label:has(input:focus-visible) { box-shadow: 0 0 0 3px var(--bg), 0 0 0 6px var(--text); }
+.seg label:has(input:focus-visible) { box-shadow: 0 0 0 3px var(--bg), 0 0 0 6px var(--focus); }
 .checks { display: flex; gap: 28px; }
 .check { display: flex; align-items: center; gap: 10px; font-size: 15px; color: var(--soft); cursor: pointer; }
 .check input { width: 18px; height: 18px; margin: 0; accent-color: var(--inv-bg); }
