@@ -392,6 +392,119 @@ for (const [got, want] of checks) {
 	}
 }
 
+// Колонки экрана (спека 11b, 4.1): стрелка вправо из строки основной колонки, когда в своём ряду справа
+// ничего нет, — в соседнюю колонку (боковую панель раздачи) на её главную кнопку; влево из панели —
+// обратно на строку, с которой пришли; колонка без элементов пропускается; на узком экране (панель под
+// основной колонкой) прыжка вбок нет.
+func TestPultColumnJump(t *testing.T) {
+	node := lookNode(t)
+	script := `
+import { nextColumn, enterColumn } from './nav.js';
+const r = (left, top, w, hh) => ({ left, top, right: left + w, bottom: top + hh });
+const cover = r(0, 100, 280, 400), main = r(300, 100, 900, 1200), panel = r(1220, 100, 360, 200);
+const checks = [
+  ['из основной вправо — панель', nextColumn(main, [cover, panel], 'right'), 1],
+  ['из панели влево — основная', nextColumn(panel, [cover, main], 'left'), 1],
+  ['из основной влево — постер', nextColumn(main, [cover, panel], 'left'), 0],
+  ['из панели вправо — ничего', nextColumn(panel, [cover, main], 'right'), -1],
+  ['узкий экран: панель под основной — вбок ничего', nextColumn(r(0, 100, 390, 800), [r(0, 950, 390, 200)], 'right'), -1],
+  ['вход: запомненный важнее главного', enterColumn([r(0, 0, 10, 10), r(0, 50, 10, 10)], r(0, 55, 5, 5), 0, 1), 1],
+  ['вход: главный, если не помним', enterColumn([r(0, 0, 10, 10), r(0, 50, 10, 10)], r(0, 55, 5, 5), 0, -1), 0],
+  ['вход: ближайший по высоте', enterColumn([r(0, 0, 10, 10), r(0, 50, 10, 10)], r(0, 52, 5, 5), -1, -1), 1],
+  ['вход в пустую колонку', enterColumn([], r(0, 0, 5, 5), -1, -1), -1],
+];
+for (const [name, got, want] of checks) {
+  if (got !== want) {
+    console.error(name, ': получили', got, 'ждали', want);
+    process.exitCode = 1;
+  }
+}
+`
+	cmd := exec.Command(node, "--input-type=module", "--no-warnings", "-e", script)
+	cmd.Dir = "static"
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Errorf("%v\n%s", err, out)
+	}
+}
+
+// Escape в поле ввода (хвост Х25): фокус остаётся на поле, а следующая стрелка влево или вправо уводит
+// с поля, а не двигает курсор; без Escape — курсор двигается, пока не упрётся в край.
+func TestPultNavEscapeKeepsField(t *testing.T) {
+	node := lookNode(t)
+	script := `
+import { arrowMoves } from './nav.js';
+const field = { tagName: 'INPUT', type: 'text', value: 'абв', selectionStart: 1, selectionEnd: 1 };
+const btn = { tagName: 'BUTTON' };
+const checks = [
+  ['кнопка — стрелка двигает фокус', arrowMoves('right', btn, null), true],
+  ['поле, курсор в середине — стрелка двигает курсор', arrowMoves('right', field, null), false],
+  ['поле после Escape — стрелка уходит с поля', arrowMoves('right', field, field), true],
+  ['поле, вниз — всегда уходит', arrowMoves('down', field, null), true],
+  ['поле, курсор в конце — вправо уходит', arrowMoves('right', { ...field, selectionStart: 3, selectionEnd: 3 }, null), true],
+];
+for (const [name, got, want] of checks) {
+  if (got !== want) {
+    console.error(name, ': получили', got, 'ждали', want);
+    process.exitCode = 1;
+  }
+}
+`
+	cmd := exec.Command(node, "--input-type=module", "--no-warnings", "-e", script)
+	cmd.Dir = "static"
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Errorf("%v\n%s", err, out)
+	}
+}
+
+// Окно подтверждения (спека 11b, 4.1): «Да» — true, Escape — false; пока окно открыто, остальное
+// недоступно (inert), фокус — на «Да»; после — фокус там, где был, inert снят.
+func TestPultDialog(t *testing.T) {
+	node := lookNode(t)
+	script := `
+class El {
+  constructor(tag) { this.tagName = tag.toUpperCase(); this.children = []; this.attrs = {}; this.listeners = {}; this.style = {}; this.dataset = {}; this.parent = null; this.inert = false; }
+  append(...kids) { for (const k of kids) { const c = typeof k === 'string' ? Object.assign(new El('#text'), { text: k }) : k; c.parent = this; this.children.push(c); } }
+  remove() { if (this.parent) this.parent.children = this.parent.children.filter((c) => c !== this); this.parent = null; }
+  setAttribute(k, v) { this.attrs[k] = v; if (k.startsWith('data-')) this.dataset[k.slice(5).replace(/-(.)/g, (_, c) => c.toUpperCase())] = v; }
+  getAttribute(k) { return this.attrs[k] ?? null; }
+  addEventListener(type, fn) { (this.listeners[type] ||= []).push(fn); }
+  focus() { document.activeElement = this; }
+  find(key) { if (this.dataset.key === key) return this; for (const c of this.children) { const f = c.find && c.find(key); if (f) return f; } return null; }
+  fire(type, ev = {}) { const e = { key: ev.key, target: this, preventDefault() {}, stopPropagation() { this.stopped = true; } }; for (let n = this; n && !e.stopped; n = n.parent) for (const fn of n.listeners[type] || []) fn(e); }
+}
+globalThis.Node = El;
+const body = new El('body');
+globalThis.document = { body, activeElement: body, createElement: (t) => new El(t), createElementNS: (_, t) => new El(t) };
+const view = new El('main'); body.append(view);
+const before = new El('button'); view.append(before); before.focus();
+const { confirmDialog } = await import('./ui.js');
+const checks = [];
+let p = confirmDialog({ title: 'Скачать «Фонари» — 19,4 ГБ?' });
+checks.push(['пока окно открыто, экран недоступен', view.inert === true]);
+const yes = body.find('dlg-yes');
+checks.push(['фокус на «Да»', document.activeElement === yes]);
+yes.fire('click');
+checks.push(['«Да» — true', (await p) === true]);
+checks.push(['окно убрано', body.children.length === 1 && view.inert === false]);
+checks.push(['фокус вернулся', document.activeElement === before]);
+p = confirmDialog({ title: 'Скачать?' });
+body.find('dlg-no').fire('keydown', { key: 'Escape' });
+checks.push(['Escape — false', (await p) === false]);
+checks.push(['после Escape экран доступен', view.inert === false && document.activeElement === before]);
+for (const [name, ok] of checks) {
+  if (!ok) {
+    console.error('не выполнено:', name);
+    process.exitCode = 1;
+  }
+}
+`
+	cmd := exec.Command(node, "--input-type=module", "--no-warnings", "-e", script)
+	cmd.Dir = "static"
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Errorf("%v\n%s", err, out)
+	}
+}
+
 // Разделы каталога деревом: строка настройки читается и пишется без потерь; категория целиком —
 // «cN+», раздел со всеми подразделами — «раздел+», только собственные раздачи раздела — «раздел».
 func TestPultSectionsEncoding(t *testing.T) {

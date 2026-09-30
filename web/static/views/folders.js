@@ -1,7 +1,7 @@
 // Обзор папок (спека этапа 11a, раздел 7): диск → папка → «Выбрать». Окно поверх экрана; управление
 // с пульта ТВ — стрелки и OK, «Назад» закрывает окно. Здесь же — «Разрешить доступ» к папке, которую
 // служба не читает (раздел 4.7).
-import { h, fill, icon, size } from '../ui.js';
+import { h, fill, icon, size, openModal } from '../ui.js';
 import { get } from '../api.js';
 
 // crumbs — части пути для строки пути: 'D:\Share\Movies' → D:, Share, Movies с полными путями.
@@ -42,9 +42,6 @@ const PROFILE = { Desktop: 'Рабочий стол', Downloads: 'Загрузк
 // выбранный путь или null (закрыли).
 export function pickFolder(start = '') {
   return new Promise((resolve) => {
-    const before = document.activeElement;
-    const others = [...document.body.children];
-    for (const el of others) el.inert = true; // стрелки пульта не уходят за окно
     const pathLine = h('div', { class: 'dlg-path' });
     const list = h('div', { class: 'list dlg-list' });
     const err = h('p', { class: 'error' });
@@ -52,21 +49,11 @@ export function pickFolder(start = '') {
     const cancel = h('button', { class: 'btn', type: 'button', 'data-key': 'dlg-cancel', onclick: () => close(null) }, 'Отмена');
     const box = h('div', { class: 'dlg card', role: 'dialog', 'aria-modal': 'true', 'aria-label': 'Выбор папки' },
       h('div', { class: 'h' }, 'Выбор папки'), pathLine, err, list, h('div', { class: 'row gap10' }, choose, cancel));
-    const back = h('div', { class: 'dlg-back', onkeydown: (e) => {
-      const typing = e.target.tagName === 'INPUT';
-      if (e.key === 'Escape' || e.key === 'GoBack' || e.key === 'BrowserBack' || (e.key === 'Backspace' && !typing)) {
-        e.preventDefault(); // «Назад» пульта закрывает окно, а не уходит с экрана
-        e.stopPropagation();
-        close(null);
-      }
-    } }, box);
-    document.body.append(back);
+    const modal = openModal(box, () => close(null)); // «Назад» пульта закрывает окно, а не уходит с экрана
     let current = '';
 
     function close(result) {
-      back.remove();
-      for (const el of others) el.inert = false;
-      if (before && before.focus) before.focus({ preventScroll: true });
+      modal.close();
       resolve(result);
     }
 
