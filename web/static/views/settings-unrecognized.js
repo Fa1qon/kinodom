@@ -1,13 +1,16 @@
-// «Настройки → Не распознано» (спека этапа 8, разделы 5.3 и 6.2): потоки, которые не привязались ни к
-// одному каналу, — по названию; «Назначить» — поиск канала телепрограммы; «Скрыть». Страницы по 50.
+// «Настройки → Каналы → Не распознано» (спека этапа 8, разделы 5.3 и 6.2; этап 11b, замечание № 5):
+// потоки, которые не привязались ни к одному каналу, — по названию; «Назначить» — поиск канала
+// телепрограммы; «Скрыть»; скрытые названия — внизу, с «Вернуть» (хвост Х30). Страницы по 50.
 import { h, fill, icon, keepFocus, plural } from '../ui.js';
 import { get, put } from '../api.js';
-import { layout, remoteNote } from './settings-layout.js';
+import { layout, remoteNote, channelTabs } from './settings-layout.js';
 
 export function render(root, r, ctx) {
   const q = r.query.get('q') || '';
   const page = Math.max(1, Number(r.query.get('page')) || 1);
-  const content = layout(root, 'unrecognized', 'Не распознано');
+  const content = layout(root, 'iptv', 'Каналы');
+  content.append(channelTabs('unrecognized'));
+  let hiddenNames = []; // /iptv/names?hidden=1
   let alive = true;
   let data = null;
   let error = '';
@@ -18,16 +21,18 @@ export function render(root, r, ctx) {
   const pick = h('input', { class: 'input', name: 'channel', placeholder: 'Канал в телепрограмме', 'aria-label': 'Канал в телепрограмме', 'data-key': 'pick-q' });
   const list = h('div', { class: 'un-list' });
   const pages = h('div', { class: 'pages' });
+  const hiddenBox = h('section', { class: 'un-hidden', 'aria-label': 'Скрытые' });
   content.append(
     h('form', { class: 'row gap10', onsubmit: (e) => {
       e.preventDefault();
-      ctx.go('#/settings/unrecognized' + (search.value.trim() ? '?q=' + encodeURIComponent(search.value.trim()) : ''));
+      ctx.go('#/settings/iptv/unrecognized' + (search.value.trim() ? '?q=' + encodeURIComponent(search.value.trim()) : ''));
     } }, h('div', { class: 'grow' }, search), h('button', { class: 'btn', type: 'submit', 'data-key': 'find' }, icon('search'), 'Найти')),
-    list, pages);
+    list, pages, hiddenBox);
 
   async function load() {
     try {
-      data = await get(`/iptv/unrecognized?q=${encodeURIComponent(q)}&page=${page}`);
+      [data, hiddenNames] = await Promise.all([get(`/iptv/unrecognized?q=${encodeURIComponent(q)}&page=${page}`),
+        get('/iptv/names?hidden=1').then((v) => v.items)]);
       error = '';
     } catch (e) {
       error = e.message;
@@ -87,13 +92,17 @@ export function render(root, r, ctx) {
       fill(list, ctx.canEdit ? '' : remoteNote(), error ? h('p', { class: 'error' }, error) : '',
         h('div', { class: 'muted' }, plural(data.total, 'название', 'названия', 'названий')),
         ...(rows.length ? rows : [h('p', { class: 'empty' }, 'Всё распознано')]));
-      const link = (n) => `#/settings/unrecognized?${q ? 'q=' + encodeURIComponent(q) + '&' : ''}page=${n}`;
+      const link = (n) => `#/settings/iptv/unrecognized?${q ? 'q=' + encodeURIComponent(q) + '&' : ''}page=${n}`;
       fill(pages, ...(data.pages > 1 ? [
         page > 1 ? h('a', { class: 'page', href: link(page - 1), 'aria-label': 'Назад', 'data-key': 'prev' }, icon('chevron_left')) : null,
         h('span', { class: 'page on' }, String(page)),
         h('span', { class: 'muted' }, `из ${data.pages}`),
         page < data.pages ? h('a', { class: 'page', href: link(page + 1), 'aria-label': 'Вперёд', 'data-key': 'next' }, icon('chevron_right')) : null,
       ] : []));
+      fill(hiddenBox, ...(hiddenNames.length ? [h('h2', null, 'Скрытые'), h('div', { class: 'un-list' }, hiddenNames.map((n) =>
+        h('div', { class: 'row un' }, h('span', { class: 'grow' }, n.name),
+          ctx.canEdit ? h('button', { class: 'btn', type: 'button', 'data-key': `unhide-${n.name}`,
+            onclick: () => act(() => put('/iptv/names', { name: n.name, hidden: false })) }, icon('visibility'), 'Вернуть') : null)))] : []));
     });
   }
 

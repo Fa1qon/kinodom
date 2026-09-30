@@ -530,6 +530,34 @@ for (const [name, got, want] of checks) {
 	}
 }
 
+// Адреса настроек (замечание № 5 этапа 11b): «Не распознано» — вкладка «Каналов»; старый адрес
+// переадресуется, пустой — «Состояние».
+func TestPultSettingsRoutes(t *testing.T) {
+	node := lookNode(t)
+	script := `
+import { settingsRoute } from './views/settings-layout.js';
+const s = (parts) => JSON.stringify(settingsRoute(parts));
+const checks = [
+  [s([]), '{"view":"status"}'],
+  [s(['iptv']), '{"view":"iptv"}'],
+  [s(['iptv', 'unrecognized']), '{"view":"unrecognized"}'],
+  [s(['unrecognized']), '{"redirect":"#/settings/iptv/unrecognized"}'],
+  [s(['library']), '{"view":"library"}'],
+];
+for (const [got, want] of checks) {
+  if (got !== want) {
+    console.error(got, '≠', want);
+    process.exitCode = 1;
+  }
+}
+`
+	cmd := exec.Command(node, "--input-type=module", "--no-warnings", "-e", script)
+	cmd.Dir = "static"
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Errorf("%v\n%s", err, out)
+	}
+}
+
 // Разделы каталога деревом: строка настройки читается и пишется без потерь; категория целиком —
 // «cN+», раздел со всеми подразделами — «раздел+», только собственные раздачи раздела — «раздел».
 func TestPultSectionsEncoding(t *testing.T) {
