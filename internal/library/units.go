@@ -286,8 +286,9 @@ type pending struct {
 	kinopoisk bool
 }
 
-// recognizePending — поиск на Кинопоиске для новых единиц и тех, что ждали квоту.
-func (l *Library) recognizePending(ctx context.Context, tus []TorrentUnit) error {
+// recognizePending — поиск на Кинопоиске для новых единиц и тех, что ждали квоту; only > 0 — только
+// эта единица (правка из пульта, хвост Х10).
+func (l *Library) recognizePending(ctx context.Context, tus []TorrentUnit, only int64) error {
 	if l.o.KP == nil {
 		return nil
 	}
@@ -299,7 +300,8 @@ func (l *Library) recognizePending(ctx context.Context, tus []TorrentUnit) error
 	}
 	rows, err := l.d.R.QueryContext(ctx, `SELECT u.id, u.source, u.key, u.name, COALESCE(c.layout, ''), COALESCE(c.kinopoisk, 1)
 		FROM lib_units u LEFT JOIN lib_folders f ON f.id = u.folder LEFT JOIN lib_categories c ON c.id = f.category
-		WHERE (u.state = 'new' OR (u.state = 'wait' AND u.search_at <= ?)) AND u.missing = 0 ORDER BY u.id`, ms(l.now()))
+		WHERE (u.state = 'new' OR (u.state = 'wait' AND u.search_at <= ?)) AND u.missing = 0 AND (? = 0 OR u.id = ?) ORDER BY u.id`,
+		ms(l.now()), only, only)
 	if err != nil {
 		return err
 	}
@@ -370,10 +372,19 @@ func cardKey(unit int64, kp int) string {
 	return "u-" + strconv.FormatInt(unit, 10)
 }
 
-// refreshCards — данные карточек: у скачанного — со страницы раздачи (они главнее), у найденного в
-// папках — с Кинопоиска один раз; карточки без единиц забываются.
-func (l *Library) refreshCards(ctx context.Context, tus []TorrentUnit) error {
+// refreshCards — данные карточек: у скачанного — со страницы раздачи (они главнее), вид — с Кинопоиска
+// (Х11); у найденного в папках — с Кинопоиска один раз; карточки без единиц забываются. only > 0 — с
+// Кинопоиска только этот номер (правка единицы, Х10); none — с Кинопоиска ничего.
+func (l *Library) refreshCards(ctx context.Context, tus []TorrentUnit, only int, none bool) error {
 	now := l.now()
+	type relCard struct {
+		id int64
+		kp int
+		r  *ReleaseData
+		tu TorrentUnit
+	}
+	var cards []relCard
+	var kps []int
 	for _, tu := range tus {
 		r := tu.Release
 		if r == nil {
@@ -387,6 +398,23 @@ func (l *Library) refreshCards(ctx context.Context, tus []TorrentUnit) error {
 			}
 			return err
 		}
+		cards = append(cards, relCard{id, kp, r, tu})
+		if kp > 0 {
+			kps = append(kps, kp)
+		}
+	}
+	types := map[int]string{}
+	if l.o.Ratings != nil && len(kps) > 0 {
+		films, err := l.o.Ratings.Films(ctx, kps)
+		if err != nil {
+			return err
+		}
+		for id, f := range films {
+			types[id] = f.Type
+		}
+	}
+	for _, c := range cards {
+		id, kp, r, tu := c.id, c.kp, c.r, c.tu
 		title := r.NameRu
 		if title == "" {
 			title = r.NameOrig
@@ -394,30 +422,34 @@ func (l *Library) refreshCards(ctx context.Context, tus []TorrentUnit) error {
 		if title == "" {
 			title = ParseName(tu.Name).Title
 		}
-		if _, err := l.d.W.ExecContext(ctx, `INSERT INTO lib_cards (key, title, name_orig, year, description, image_key, source, fetched_at)
-			VALUES (?, ?, ?, ?, ?, ?, 'release', ?)
+		if _, err := l.d.W.ExecContext(ctx, `INSERT INTO lib_cards (key, title, name_orig, year, type, description, image_key, source, fetched_at)
+			VALUES (?, ?, ?, ?, ?, ?, ?, 'release', ?)
 			ON CONFLICT(key) DO UPDATE SET title = excluded.title, name_orig = excluded.name_orig, year = excluded.year,
+				type = CASE WHEN excluded.type != '' THEN excluded.type ELSE type END,
 				description = excluded.description, image_key = CASE WHEN excluded.image_key != '' THEN excluded.image_key ELSE image_key END,
 				source = 'release', fetched_at = excluded.fetched_at`,
-			cardKey(id, kp), title, r.NameOrig, r.Year, r.Description, r.ImageKey, ms(now)); err != nil {
+			cardKey(id, kp), title, r.NameOrig, r.Year, types[kp], r.Description, r.ImageKey, ms(now)); err != nil {
 			return err
 		}
 	}
-	if err := l.fetchDetails(ctx); err != nil {
-		return err
+	if !none {
+		if err := l.fetchDetails(ctx, only); err != nil {
+			return err
+		}
 	}
 	_, err := l.d.W.ExecContext(ctx, `DELETE FROM lib_cards WHERE key NOT IN (
 		SELECT CASE WHEN kp_id > 0 THEN 'kp-' || kp_id ELSE 'u-' || id END FROM lib_units)`)
 	return err
 }
 
-// fetchDetails — описание и постер с Кинопоиска для найденных карточек без данных.
-func (l *Library) fetchDetails(ctx context.Context) error {
+// fetchDetails — описание и постер с Кинопоиска для найденных карточек без данных, вид — и для
+// карточек скачанного (Х11); only > 0 — только этот номер. Сбой — повтор с паузой (Х9).
+func (l *Library) fetchDetails(ctx context.Context, only int) error {
 	if l.o.KP == nil {
 		return nil
 	}
-	rows, err := l.d.R.QueryContext(ctx, `SELECT DISTINCT kp_id FROM lib_units WHERE kp_id > 0
-		AND 'kp-' || kp_id NOT IN (SELECT key FROM lib_cards WHERE source != '') ORDER BY kp_id`)
+	rows, err := l.d.R.QueryContext(ctx, `SELECT DISTINCT kp_id FROM lib_units WHERE kp_id > 0 AND (? = 0 OR kp_id = ?)
+		AND 'kp-' || kp_id NOT IN (SELECT key FROM lib_cards WHERE source != '' AND type != '') ORDER BY kp_id`, only, only)
 	if err != nil {
 		return err
 	}
@@ -432,29 +464,37 @@ func (l *Library) fetchDetails(ctx context.Context) error {
 	}
 	rows.Close()
 	for _, id := range ids {
+		now := l.now()
 		l.mu.Lock()
-		paused := l.now().Before(l.kpPause)
+		paused := now.Before(l.kpPause)
 		l.mu.Unlock()
 		if paused {
 			return nil
+		}
+		if !l.due("details", id, now) {
+			continue
 		}
 		d, err := l.o.KP.Details(ctx, id)
 		switch {
 		case ctx.Err() != nil:
 			return ctx.Err()
-		case errors.Is(err, meta.ErrQuota), errors.Is(err, meta.ErrRateLimited):
+		case kpPaused(err):
 			l.mu.Lock()
 			l.kpPause = l.now().Add(kpPauseAfter)
 			l.mu.Unlock()
 			return nil
 		case err != nil:
-			l.log.Warn("медиатека: фильм Кинопоиска не загрузился", "kp", id, "err", err)
+			l.log.Warn("медиатека: фильм Кинопоиска не загрузился — повтор позже", "kp", id, "err", err)
+			l.failed("details", id, now)
 			continue
 		}
+		l.succeeded("details", id)
 		key := ""
 		if d.PosterURL != "" && l.o.Posters != nil {
 			if k, err := l.o.Posters.Fetch(ctx, d.PosterURL, meta.Direct); err == nil {
 				key = k
+			} else {
+				l.failed("poster", id, now)
 			}
 		}
 		title := d.NameRu
@@ -479,5 +519,79 @@ func (l *Library) fetchDetails(ctx context.Context) error {
 			}
 		}
 	}
+	return l.retryPosters(ctx, only)
+}
+
+// retryPosters — карточки с Кинопоиска без постера (не скачался): постер по номеру с паузой повтора, без
+// нового запроса описания (хвост Х9).
+func (l *Library) retryPosters(ctx context.Context, only int) error {
+	if l.o.KPPoster == nil || l.o.Posters == nil {
+		return nil
+	}
+	rows, err := l.d.R.QueryContext(ctx, `SELECT key FROM lib_cards WHERE source = 'kinopoisk' AND image_key = '' AND key LIKE 'kp-%'`)
+	if err != nil {
+		return err
+	}
+	var ids []int
+	for rows.Next() {
+		var key string
+		if err := rows.Scan(&key); err != nil {
+			rows.Close()
+			return err
+		}
+		if id, err := strconv.Atoi(strings.TrimPrefix(key, "kp-")); err == nil && (only == 0 || id == only) {
+			ids = append(ids, id)
+		}
+	}
+	rows.Close()
+	for _, id := range ids {
+		now := l.now()
+		if !l.due("poster", id, now) {
+			continue
+		}
+		k, err := l.o.Posters.Fetch(ctx, l.o.KPPoster(id), meta.Direct)
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+		if err != nil {
+			l.failed("poster", id, now)
+			continue
+		}
+		l.succeeded("poster", id)
+		if _, err := l.d.W.ExecContext(ctx, `UPDATE lib_cards SET image_key = ? WHERE key = ?`, k, "kp-"+strconv.Itoa(id)); err != nil {
+			return err
+		}
+	}
 	return nil
+}
+
+// retry — повтор после сбоя: паузы 10 мин, 1 ч, 6 ч, дальше сутки (в памяти, после перезапуска — заново).
+type retry struct {
+	n    int
+	next time.Time
+}
+
+var libRetry = []time.Duration{10 * time.Minute, time.Hour, 6 * time.Hour, 24 * time.Hour}
+
+func (l *Library) failed(kind string, id int, now time.Time) {
+	k := kind + ":" + strconv.Itoa(id)
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	r := l.retries[k]
+	r.n++
+	r.next = now.Add(libRetry[min(r.n, len(libRetry))-1])
+	l.retries[k] = r
+}
+
+func (l *Library) due(kind string, id int, now time.Time) bool {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	r, ok := l.retries[kind+":"+strconv.Itoa(id)]
+	return !ok || !now.Before(r.next)
+}
+
+func (l *Library) succeeded(kind string, id int) {
+	l.mu.Lock()
+	delete(l.retries, kind+":"+strconv.Itoa(id))
+	l.mu.Unlock()
 }

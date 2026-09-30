@@ -188,7 +188,7 @@ func (s ratingStore) films(ctx context.Context, ids []int) (map[int]Rating, erro
 	for i, id := range ids {
 		args[i] = id
 	}
-	rows, err := s.db.R.QueryContext(ctx, `SELECT kp_id, rating, rating_imdb, name_ru, name_orig, year FROM kp_films
+	rows, err := s.db.R.QueryContext(ctx, `SELECT kp_id, rating, rating_imdb, name_ru, name_orig, year, type FROM kp_films
 		WHERE kp_id IN (?`+strings.Repeat(", ?", len(ids)-1)+`)`, args...)
 	if err != nil {
 		return nil, err
@@ -196,7 +196,7 @@ func (s ratingStore) films(ctx context.Context, ids []int) (map[int]Rating, erro
 	defer rows.Close()
 	for rows.Next() {
 		var r Rating
-		if err := rows.Scan(&r.KinopoiskID, &r.Kinopoisk, &r.IMDb, &r.NameRu, &r.NameOrig, &r.Year); err != nil {
+		if err := rows.Scan(&r.KinopoiskID, &r.Kinopoisk, &r.IMDb, &r.NameRu, &r.NameOrig, &r.Year, &r.Type); err != nil {
 			return nil, err
 		}
 		out[r.KinopoiskID] = r

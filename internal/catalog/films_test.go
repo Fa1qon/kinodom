@@ -263,3 +263,14 @@ func TestVariantsWithoutNumber(t *testing.T) {
 		t.Fatalf("другие раздачи: %v", got)
 	}
 }
+
+// Номер из описания раздачи виден в записи каталога сразу, до очереди рейтингов: медиатека берёт его
+// для скачанного (спека 11b, 5.6).
+func TestEntryHasDescriptionNumber(t *testing.T) {
+	c, _ := workFixture(t)
+	for _, e := range list(t, c, ListOptions{Tracker: "rutor"}) {
+		if e.TopicID == "7" && e.Rating.KinopoiskID != 5325705 {
+			t.Fatalf("номер из описания: %+v", e.Rating)
+		}
+	}
+}

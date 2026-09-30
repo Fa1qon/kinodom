@@ -2,6 +2,7 @@ package library
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"regexp"
 	"strconv"
@@ -51,7 +52,7 @@ func (l *Library) LinkKP(ctx context.Context, unit int64, link string) error {
 	if err := l.d.setUnit(ctx, unit, `UPDATE lib_units SET kp_id = ?, state = 'linked', manual_title = '', manual_year = 0 WHERE id = ?`, kp); err != nil {
 		return err
 	}
-	return l.refresh(ctx, false)
+	return l.refresh(ctx, unit, false)
 }
 
 // MarkManual — «Разметить вручную»: название и год без Кинопоиска.
@@ -64,7 +65,7 @@ func (l *Library) MarkManual(ctx context.Context, unit int64, title string, year
 		title, max(year, 0)); err != nil {
 		return err
 	}
-	return l.refresh(ctx, false)
+	return l.refresh(ctx, unit, false)
 }
 
 // SearchAgain — «Искать снова»: единица снова ищется на Кинопоиске (пауза по квоте — снимается).
@@ -75,7 +76,7 @@ func (l *Library) SearchAgain(ctx context.Context, unit int64) error {
 			return ErrNoUnit
 		}
 	}
-	return l.refresh(ctx, true)
+	return l.refresh(ctx, unit, true)
 }
 
 // ResetUnit — вернуть автоматику: снять ссылку и ручную разметку, искать заново.
@@ -83,11 +84,13 @@ func (l *Library) ResetUnit(ctx context.Context, unit int64) error {
 	if err := l.d.setUnit(ctx, unit, `UPDATE lib_units SET kp_id = 0, manual_title = '', manual_year = 0, state = 'new', attempts = 0, search_at = 0 WHERE id = ?`); err != nil {
 		return err
 	}
-	return l.refresh(ctx, true)
+	return l.refresh(ctx, unit, true)
 }
 
-// refresh — распознавание новых и данные карточек после правки из пульта; again — снять паузу квоты.
-func (l *Library) refresh(ctx context.Context, again bool) error {
+// refresh — после правки единицы из пульта: распознавание и данные карточки только этой единицы (хвост
+// Х10: вся очередь синхронно держала «Привязать» десятки секунд и тратила квоту дважды); остальную
+// очередь разберёт обход — он будится. again — снять паузу квоты.
+func (l *Library) refresh(ctx context.Context, unit int64, again bool) error {
 	if again {
 		l.mu.Lock()
 		l.kpPause = l.now()
@@ -97,10 +100,18 @@ func (l *Library) refresh(ctx context.Context, again bool) error {
 	if err != nil {
 		tus = nil
 	}
-	if err := l.recognizePending(ctx, tus); err != nil {
+	if err := l.recognizePending(ctx, tus, unit); err != nil {
 		return err
 	}
-	return l.refreshCards(ctx, tus)
+	var kp int
+	if err := l.d.R.QueryRowContext(ctx, `SELECT kp_id FROM lib_units WHERE id = ?`, unit).Scan(&kp); err != nil && !errors.Is(err, sql.ErrNoRows) {
+		return err
+	}
+	if err := l.refreshCards(ctx, tus, max(kp, 0), kp == 0); err != nil {
+		return err
+	}
+	l.startScan(true)
+	return nil
 }
 
 // UnrecognizedView — единица на вкладке «Не распознано».

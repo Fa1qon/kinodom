@@ -62,7 +62,7 @@ func recognize(ctx context.Context, kp KP, p Parsed, alt []string, layout Layout
 			if ctx.Err() != nil {
 				return Result{}, ctx.Err()
 			}
-			if errors.Is(err, meta.ErrQuota) || errors.Is(err, meta.ErrRateLimited) || errors.Is(err, meta.ErrNoKey) || errors.Is(err, meta.ErrBadKey) {
+			if kpPaused(err) {
 				return Result{State: StateWait}, nil
 			}
 			troubled = true // 500 на кириллице, сеть — следующий вариант
@@ -79,6 +79,13 @@ func recognize(ctx context.Context, kp KP, p Parsed, alt []string, layout Layout
 		return Result{State: StateRetry}, nil
 	}
 	return Result{State: StateUnrecognized}, nil
+}
+
+// kpPaused — Кинопоиск сейчас не ответит никому: квота, частые запросы, нет или не подходит ключ, сайт
+// без токена на паузе или исчерпал суточный предел (спека 11b, 5.6) — пауза для всех единиц.
+func kpPaused(err error) bool {
+	return errors.Is(err, meta.ErrQuota) || errors.Is(err, meta.ErrRateLimited) || errors.Is(err, meta.ErrNoKey) ||
+		errors.Is(err, meta.ErrBadKey) || errors.Is(err, meta.ErrKPBlocked) || errors.Is(err, meta.ErrKPDailyLimit)
 }
 
 // pick — фильмы выдачи, у которых русское или оригинальное название совпадает с одним из искомых,

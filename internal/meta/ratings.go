@@ -51,6 +51,7 @@ type Rating struct {
 	NameRu      string
 	NameOrig    string
 	Year        int
+	Type        string // FILM, TV_SERIES…; заполняет только Films (медиатека: вид карточки — Х11)
 }
 
 // RatingsStatus — для страницы «Состояние» (этап 7).
