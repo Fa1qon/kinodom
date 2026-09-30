@@ -340,6 +340,22 @@ a.res-row:hover { background: var(--hover); }
 .un { display: flex; flex-direction: column; gap: 10px; padding: 12px 0; border-bottom: 1px solid var(--line-soft); }
 .un-name { min-width: 0; display: flex; flex-direction: column; gap: 3px; }
 
+/* Медиатека (спека этапа 9, раздел 6) */
+.library .cont-row:empty { display: none; }
+.library .fil { gap: 6px; }
+.libcard .ep .num { width: auto; min-width: 48px; flex-shrink: 0; }
+.cont-row { display: flex; flex-direction: column; gap: 12px; }
+.cont-list { display: flex; gap: 16px; overflow-x: auto; padding: 4px 4px 10px; margin: -4px; scrollbar-width: thin; }
+.cont { flex: 0 0 150px; display: flex; flex-direction: column; gap: 6px; padding: 0; background: transparent; border: 0; color: var(--text); text-align: left; cursor: pointer; }
+.poster.small { padding: 10px; }
+.poster.small .ptitle { font-size: 13px; }
+.versions { display: flex; flex-direction: column; gap: 8px; }
+.ver { display: flex; flex-direction: column; gap: 4px; padding: 10px 12px; background: transparent; border: 1px solid var(--line); color: var(--text); text-align: left; cursor: pointer; }
+.ver.on { border-color: var(--text); }
+.path { overflow-wrap: anywhere; }
+.input.year { width: 90px; flex: 0 0 90px; }
+.btn.on { border-color: var(--text); }
+
 @media (max-width: 1200px) {
   :root { --pad: 24px; }
   .top { gap: 24px; }

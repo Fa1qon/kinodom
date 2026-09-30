@@ -1,6 +1,7 @@
 package torrents
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
@@ -130,8 +131,9 @@ func (s *Service) ensureSpace(ctx context.Context, dir string, extra int64) erro
 //     не возвращаются; последние Policy.KeepBehind перед ней остаются — второй телевизор может
 //     отставать; правила 6 часов у них нет, не трогается только открытый поток (решение
 //     заказчика, этап 7a);
-//   - потом самые давно открытые файлы, кроме тех, что смотрят, и выбранных за последние 6 часов —
-//     телевизор, может быть, ещё буферизует их (этап 6).
+//   - потом файлы раздач по давности последнего открытия раздачи (внутри раздачи — давно открытые
+//     первыми), кроме тех, что смотрят, и раздач, открытых за последние 6 часов; ни разу не открытые
+//     файлы — скачанные заранее и только что выбранные — не удаляются (спека этапа 9, раздел 5.8).
 //
 // Если даже удаление всех таких файлов не покроет нехватку short, не удаляет ничего — отказ без
 // потерь.
@@ -150,13 +152,17 @@ func (s *Service) freeUp(ctx context.Context, dir string, extra, short int64) er
 		isBehind[fileRef{f.InfoHash, f.Index}] = true
 		gain += f.Size
 	}
+	opened := releaseOpened(files)
 	for _, f := range files {
-		if volumeOf(f.Path) == vol && !isBehind[fileRef{f.InfoHash, f.Index}] &&
-			!s.watching(s.sessions[f.InfoHash], f.Index, f.LastStream) && s.now().Sub(f.LastOpened) >= watchingFor {
+		if volumeOf(f.Path) == vol && !isBehind[fileRef{f.InfoHash, f.Index}] && !f.LastOpened.IsZero() &&
+			!s.watching(s.sessions[f.InfoHash], f.Index, f.LastStream) && s.now().Sub(opened[f.InfoHash]) >= watchingFor {
 			old = append(old, f)
 			gain += f.Size
 		}
 	}
+	slices.SortStableFunc(old, func(a, b StoredFile) int {
+		return cmp.Or(opened[a.InfoHash].Compare(opened[b.InfoHash]), a.LastOpened.Compare(b.LastOpened))
+	})
 	s.mu.Unlock()
 	if gain < short {
 		return nil

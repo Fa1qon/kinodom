@@ -259,7 +259,7 @@ func TestFocusSurvivesRestart(t *testing.T) {
 	ih := mi.HashInfoBytes()
 	must(t, reg.SaveMetainfo(ctx, ih, "Сериал", torrentBytes(t, mi)))
 	for i := range 3 {
-		must(t, reg.MarkStored(ctx, ih, i, filepath.Join(`D:\K`, "Серия.mkv"), 300_000, time.Now()))
+		must(t, reg.MarkStored(ctx, ih, i, filepath.Join(`D:\K`, "Серия.mkv"), 300_000))
 	}
 	must(t, reg.SetFocus(ctx, ih, 2))
 

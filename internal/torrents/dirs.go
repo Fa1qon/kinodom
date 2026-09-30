@@ -69,7 +69,7 @@ func CheckDownloadsDir(dir string) error {
 }
 
 func checkDownloadsDirWith(dir string, sparse func(path string, size int64) error) error {
-	if isNetworkPath(dir) {
+	if IsNetworkPath(dir) {
 		return fmt.Errorf("папка загрузок %s — на сетевом диске, а торренты качаются только на диски этого компьютера", dir)
 	}
 	if err := os.MkdirAll(dir, 0o755); err != nil {

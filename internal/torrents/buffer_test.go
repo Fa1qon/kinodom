@@ -117,7 +117,7 @@ func TestPrepareAfterRestartKeepsStoredEpisodeQueued(t *testing.T) {
 		torrenttest.File{Path: "Серия 2.mkv", Size: 300_000})
 	ih := mi.HashInfoBytes()
 	must(t, reg.SaveMetainfo(ctx, ih, "Сериал", torrentBytes(t, mi)))
-	must(t, reg.MarkStored(ctx, ih, 0, `D:\K\1.mkv`, 300_000, time.Now()))
+	must(t, reg.MarkStored(ctx, ih, 0, `D:\K\1.mkv`, 300_000))
 
 	s := serviceFor(newOfflineEngine(t), reg)
 	runService(t, s)

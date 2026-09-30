@@ -142,7 +142,7 @@ func (s *Service) storeLocked(ctx context.Context, ss *session, i int) error {
 	ih := ss.t.InfoHash()
 	path := enginePath(s.eng.TorrentDir(ih), info, ih, info.UpvertedFiles()[i])
 	// Запрос телевизора могут отменить, а запись должна дойти.
-	if err := s.reg.MarkStored(context.WithoutCancel(ctx), ih, i, path, ss.t.Files()[i].Length(), s.now()); err != nil {
+	if err := s.reg.MarkStored(context.WithoutCancel(ctx), ih, i, path, ss.t.Files()[i].Length()); err != nil {
 		return err
 	}
 	ss.storedFiles[i] = true
