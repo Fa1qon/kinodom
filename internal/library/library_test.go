@@ -152,11 +152,13 @@ func (e *env) folder(t *testing.T, category int64, name string, files ...string)
 	return dir
 }
 
+// scan — обход и следом цикл распознавания (в работе он идёт отдельно, после обхода).
 func (e *env) scan(t *testing.T) {
 	t.Helper()
 	if err := e.l.scanNow(ctx); err != nil {
 		t.Fatal(err)
 	}
+	e.l.recognizeOnce(ctx)
 }
 
 func (e *env) list(t *testing.T, device string, category int64) ListView {

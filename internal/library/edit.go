@@ -7,6 +7,8 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+
+	"kinodom/internal/meta"
 )
 
 var (
@@ -91,6 +93,7 @@ func (l *Library) ResetUnit(ctx context.Context, unit int64) error {
 // Х10: вся очередь синхронно держала «Привязать» десятки секунд и тратила квоту дважды); остальную
 // очередь разберёт обход — он будится. again — снять паузу квоты.
 func (l *Library) refresh(ctx context.Context, unit int64, again bool) error {
+	ctx = meta.Urgent(ctx) // ждёт человек — очередь каталога, а не медиатеки
 	if again {
 		l.mu.Lock()
 		l.kpPause = l.now()
@@ -110,7 +113,7 @@ func (l *Library) refresh(ctx context.Context, unit int64, again bool) error {
 	if err := l.refreshCards(ctx, tus, max(kp, 0), kp == 0); err != nil {
 		return err
 	}
-	l.startScan(true)
+	l.wakeRecognizer()
 	return nil
 }
 
