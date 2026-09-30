@@ -193,7 +193,7 @@ func loadSettings(ctx context.Context, db *store.DB, o Options) (settings.Values
 		overrides[settings.KeyDownloadsDir] = o.DownloadsDir
 	}
 	return settings.Load(ctx, db, settings.Defaults{DownloadsDir: DefaultDownloadsDir,
-		Sections: catalog.FormatCategories(catalog.DefaultCategories)}, overrides)
+		Sections: catalog.FormatSections(catalog.DefaultSections)}, overrides)
 }
 
 // initProxy — прокси для трекеров, общий для источников, картинок, Edge и анонсов. Неверный адрес в

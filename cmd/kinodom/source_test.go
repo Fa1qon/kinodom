@@ -108,7 +108,7 @@ func TestSourceRutrackerAPI(t *testing.T) {
 		t.Fatalf("categories: код %d\n%s\n%s", code, out, errOut)
 	}
 	code, out, errOut = runRutracker(t, s, "top", "--limit", "3", "2076")
-	if code != 0 || !strings.Contains(out, "Найдено 100 раздач") {
+	if code != 0 || !strings.Contains(out, "Найдено 1203 раздач") { // весь список раздела (11b-Г)
 		t.Fatalf("top: код %d\n%s\n%s", code, out, errOut)
 	}
 	code, out, errOut = runRutracker(t, s, "recent", "--limit", "2", "313")

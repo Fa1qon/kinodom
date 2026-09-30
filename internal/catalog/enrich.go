@@ -187,15 +187,17 @@ func (c *Catalog) recentTitles(ctx context.Context, tracker string) {
 		if cat.Tracker != tracker {
 			continue
 		}
-		rs, err := rf.Recent(ctx, cat.ID)
-		if err != nil {
-			c.log.Info("каталог: лента раздела не ответила", "tracker", tracker, "category", cat.ID, "err", err)
-			continue
-		}
-		for _, r := range rs {
-			if err := c.st.setTitleIfEmpty(ctx, tracker, r.TopicID, r.Title); err != nil {
-				c.log.Error("каталог: название из ленты не записалось", "err", err)
-				return
+		for _, forum := range c.sectionForums(ctx, cat) { // у подраздела Rutracker — лента каждого видеофорума
+			rs, err := rf.Recent(ctx, forum)
+			if err != nil {
+				c.log.Info("каталог: лента раздела не ответила", "tracker", tracker, "category", forum, "err", err)
+				continue
+			}
+			for _, r := range rs {
+				if err := c.st.setTitleIfEmpty(ctx, tracker, r.TopicID, r.Title); err != nil {
+					c.log.Error("каталог: название из ленты не записалось", "err", err)
+					return
+				}
 			}
 		}
 	}

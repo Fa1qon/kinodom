@@ -46,6 +46,7 @@ type row struct {
 	DetailsAt   time.Time
 	RetryAt     time.Time // страница раздачи не загрузилась — не раньше
 	Format      string    // «MKV», «AVI, MKV»; "" — неизвестен или ещё не определяли
+	Section     string    // раздел каталога записи (catalog_entries); у Rutracker — подраздел первого уровня, а CategoryID — форум раздачи
 }
 
 const rowColumns = `r.id, r.tracker, r.topic_id, r.title, r.category_id, r.seeders, r.leechers, r.size,
@@ -167,6 +168,7 @@ func (s catalogStore) catalogRows(ctx context.Context, cats []CategoryRef) ([]ro
 			continue
 		}
 		seen[r.ID] = true
+		r.Section = ref.ID
 		if r.CategoryID == "" {
 			r.CategoryID = ref.ID
 		}

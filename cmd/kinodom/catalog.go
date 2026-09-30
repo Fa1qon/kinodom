@@ -21,7 +21,7 @@ const catalogUsage = `Использование:
   kinodom catalog list --home ПАПКА [--tracker T] [--category N] [--limit 20]
   kinodom catalog search --home ПАПКА <запрос>
       флаги: --proxy URL | --rutor URL | --rutor-download URL | --rutracker URL | --rutracker-api URL |
-             --rutracker-feed URL | --kinopoisk URL | --no-edge
+             --rutracker-feed URL | --kinopoisk URL | --no-edge | --sections «rutor:12,rutracker:46+»
       логин и пароль Rutracker — KINODOM_RUTRACKER_LOGIN и KINODOM_RUTRACKER_PASSWORD, ключ
       Кинопоиска — KINODOM_KP_KEY (в базу не записываются); разделы — настройка catalog.categories
 `
@@ -41,6 +41,7 @@ func cmdCatalog(args []string, stdout, stderr io.Writer) int {
 	tracker := fs.String("tracker", "", "только этот трекер")
 	category := fs.String("category", "", "только этот раздел")
 	proxy := fs.String("proxy", "", "прокси для трекеров")
+	sections := fs.String("sections", "", "разделы каталога вместо настройки catalog.categories")
 	var t app.Trackers
 	rutorURL := fs.String("rutor", "", "адрес Rutor вместо настройки rutor.address")
 	rtURL := fs.String("rutracker", "", "адрес Rutracker вместо настройки rutracker.address")
@@ -68,6 +69,9 @@ func cmdCatalog(args []string, stdout, stderr io.Writer) int {
 		"rutracker.password": os.Getenv("KINODOM_RUTRACKER_PASSWORD"),
 		"kinopoisk.key":      os.Getenv("KINODOM_KP_KEY"),
 		"proxy.trackers":     *proxy,
+	}
+	if *sections != "" {
+		settings["catalog.categories"] = *sections
 	}
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
 	defer stop()

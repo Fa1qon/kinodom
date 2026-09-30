@@ -42,6 +42,21 @@ func TestForumsUnderSearchCategories(t *testing.T) {
 	}
 }
 
+// Весь список раздела (limit ≤ 0) — для каталога без ограничения по количеству (спека 11b, 7.2).
+func TestTopWholeList(t *testing.T) {
+	s := rutrackertest.NewServer(t)
+	r := newRutracker(t, s, nil)
+	rs, err := r.Top(ctx, "56", 0)
+	if err != nil || len(rs) != 1279 {
+		t.Fatalf("весь список: %d, %v", len(rs), err)
+	}
+	for i := 1; i < len(rs); i++ {
+		if rs[i].Seeders > rs[i-1].Seeders {
+			t.Fatal("не по раздающим")
+		}
+	}
+}
+
 func TestTopFromPVC(t *testing.T) {
 	s := rutrackertest.NewServer(t)
 	rs, err := newRutracker(t, s, nil).Top(ctx, "2076", 10)

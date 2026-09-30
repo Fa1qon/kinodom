@@ -3,8 +3,11 @@ package catalog
 import (
 	"context"
 	"fmt"
+	"slices"
 	"strconv"
 	"strings"
+
+	"kinodom/internal/source"
 )
 
 // Section — раздел в настройке catalog.categories (спека этапа 7, раздел 5.4):
@@ -26,14 +29,82 @@ func (s Section) String() string {
 	return s.Tracker + ":" + s.ID
 }
 
-// DefaultSections — разделы по умолчанию (основная спека, раздел 6): каждый — без подразделов.
+// DefaultSections — разделы по умолчанию (спека 11b, 7.1): у Rutracker — подразделы первого уровня со всеми
+// видеоподфорумами.
 var DefaultSections = func() []Section {
 	out := make([]Section, len(DefaultCategories))
 	for i, c := range DefaultCategories {
-		out[i] = Section{Tracker: c.Tracker, ID: c.ID}
+		out[i] = Section{Tracker: c.Tracker, ID: c.ID, All: c.Tracker == "rutracker"}
 	}
 	return out
 }()
+
+// NormalizeSections — выбор разделов по дереву Rutracker (спека 11b, 7.1): у Rutracker раздел каталога —
+// подраздел первого уровня групп «Кино», «Сериалы», «Документалистика» со всеми видеоподфорумами («X+»):
+// подфорум — его подраздел; «X» подраздела — «X+»; «cN+» — все подразделы группы; раздел в другой
+// категории форума (спорт, музыка) — нет; раздела нет в дереве или над ним нет категории (дерева ещё нет) —
+// как есть. Повторы убираются, порядок — первого появления. Rutor — как есть.
+func NormalizeSections(ss []Section, tree []source.Category) []Section {
+	parent := map[string]string{}
+	for _, c := range tree {
+		parent[c.ID] = c.ParentID
+	}
+	groups := firstLevel(tree)
+	inGroups := func(id string) bool {
+		return slices.ContainsFunc(RutrackerGroups, func(g Group) bool { return g.ID == id })
+	}
+	var out []Section
+	add := func(s Section) {
+		if !slices.Contains(out, s) {
+			out = append(out, s)
+		}
+	}
+	for _, s := range ss {
+		if s.Tracker != "rutracker" || len(tree) == 0 {
+			add(s)
+			continue
+		}
+		if strings.HasPrefix(s.ID, "c") {
+			for _, c := range groups[s.ID] {
+				add(Section{s.Tracker, c.ID, true})
+			}
+			continue
+		}
+		if _, ok := parent[s.ID]; !ok {
+			add(s) // дерево о нём не знает
+			continue
+		}
+		// Вверх по дереву до категории: подраздел первого уровня — ребёнок категории на этом пути.
+		id, top := s.ID, ""
+		for {
+			p := parent[id]
+			if p == "" {
+				break
+			}
+			if strings.HasPrefix(p, "c") {
+				top = p
+				break
+			}
+			id = p
+		}
+		switch {
+		case top == "":
+			add(s) // над разделом нет категории — как есть
+		case inGroups(top) && !serviceForum(nameOf(tree, id)):
+			add(Section{s.Tracker, id, true})
+		}
+	}
+	return out
+}
+
+func nameOf(tree []source.Category, id string) string {
+	for _, c := range tree {
+		if c.ID == id {
+			return c.Name
+		}
+	}
+	return ""
+}
 
 // ParseSections — настройка catalog.categories: «rutracker:2110, rutracker:46+, rutor:12». Пусто —
 // разделы по умолчанию. Строки этапов 5–6 («rutracker:2110, rutor:12») читаются так же, как раньше.
@@ -74,46 +145,22 @@ func FormatSections(ss []Section) string {
 	return strings.Join(parts, ",")
 }
 
-// expandSections — разделы, чьи топы составляют каталог: записи с «+» раскрываются по дереву из
-// таблицы categories. Порядок — как в настройке, подразделы — в порядке дерева; повторы убираются.
-// Дерева трекера ещё нет (первый запуск без сети) — раздел с «+» пока только сам по себе; категория
-// без дерева не даёт ничего.
+// expandSections — разделы каталога (что обновлять и что показывать): у Rutracker — подразделы первого
+// уровня по NormalizeSections (их видеоподфорумы берёт обновление), у Rutor — разделы. Порядок — как в
+// настройке; повторы убираются. Дерева Rutracker ещё нет (первый запуск без сети) — разделы как в
+// настройке; категория без дерева не даёт ничего.
 func (c *Catalog) expandSections(ctx context.Context, ss []Section) ([]CategoryRef, error) {
-	children := map[string]map[string][]string{} // трекер → родитель → дети в порядке дерева
+	tree, err := c.st.tree(ctx, "rutracker")
+	if err != nil {
+		return nil, err
+	}
 	var out []CategoryRef
-	seen := map[CategoryRef]bool{}
-	add := func(tracker, id string) {
-		ref := CategoryRef{tracker, id}
-		if strings.HasPrefix(id, "c") || seen[ref] {
-			return // у категорий Rutracker своих раздач нет
+	for _, s := range NormalizeSections(ss, tree) {
+		ref := CategoryRef{s.Tracker, s.ID}
+		if strings.HasPrefix(s.ID, "c") || slices.Contains(out, ref) {
+			continue // у категорий Rutracker своих раздач нет
 		}
-		seen[ref] = true
 		out = append(out, ref)
-	}
-	var walk func(tracker, id string)
-	walk = func(tracker, id string) {
-		add(tracker, id)
-		for _, child := range children[tracker][id] {
-			walk(tracker, child)
-		}
-	}
-	for _, s := range ss {
-		if !s.All {
-			add(s.Tracker, s.ID)
-			continue
-		}
-		if _, ok := children[s.Tracker]; !ok {
-			tree, err := c.st.tree(ctx, s.Tracker)
-			if err != nil {
-				return nil, err
-			}
-			m := map[string][]string{}
-			for _, n := range tree {
-				m[n.ParentID] = append(m[n.ParentID], n.ID)
-			}
-			children[s.Tracker] = m
-		}
-		walk(s.Tracker, s.ID)
 	}
 	return out, nil
 }
@@ -140,6 +187,15 @@ func (c *Catalog) CheckSections(ctx context.Context, ss []Section) error {
 		}
 		if len(ids) > 0 && !ids[s.ID] {
 			return fmt.Errorf("%s: раздела %s нет в дереве разделов", title(s.Tracker), s.ID)
+		}
+		if s.Tracker == "rutracker" && len(ids) > 0 {
+			tree, err := c.st.tree(ctx, s.Tracker)
+			if err != nil {
+				return err
+			}
+			if len(NormalizeSections([]Section{s}, tree)) == 0 {
+				return fmt.Errorf("Rutracker: раздел %s — не из групп «Кино», «Сериалы», «Документалистика»", s.ID)
+			}
 		}
 	}
 	return nil
