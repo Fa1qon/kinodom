@@ -27,7 +27,7 @@ func TestInstallerScript(t *testing.T) {
 		`Source: "..\bin\kinodomw.exe"`,
 		"function PrepareToInstall",
 		"Exec(Exe, 'stop'",
-		"'install --result '",
+		"'install ' + InstallParams(",
 		"' --downloads-default '",               // сохранённую папку загрузок не перезаписывает (ревью C1)
 		`Uninstall\{' + '{#AppGuid}' + '}_is1'`, // ключ удаления — со скобками, как AppId (ревью C1)
 		`{commonappdata}\Kinodom\data\kinodom.db`,
@@ -40,10 +40,21 @@ func TestInstallerScript(t *testing.T) {
 		"MB_DEFBUTTON2",
 		"Kinodom.url",
 		"Открыть Kinodom",
-		"RaiseException(",
+		// Отказ до копирования и без полуустановки (спека этапа 11a, раздел 5.1): исключение в
+		// AfterInstall Inno не откатывает — проверено первой живой установкой.
+		"ExtractTemporaryFile('kinodom.exe')",
+		"'install --check ' + InstallParams(",
+		"CurStep = ssPostInstall",
+		"'/VERYSILENT /SUPPRESSMSGBOXES /NORESTART'",
+		"Check: InstallSucceeded",
 	} {
 		if !strings.Contains(s, want) {
 			t.Errorf("в kinodom.iss нет %q", want)
+		}
+	}
+	for _, banned := range []string{"AfterInstall:", "RaiseException("} {
+		if strings.Contains(s, banned) {
+			t.Errorf("в kinodom.iss есть %q — установка при отказе не откатится", banned)
 		}
 	}
 }

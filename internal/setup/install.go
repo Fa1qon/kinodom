@@ -77,15 +77,8 @@ func Install(ctx context.Context, sys winsvc.System, o InstallOptions, log func(
 		}
 	}
 	// Порт — после остановки своей службы: занят ею — не помеха.
-	busy, program, err := sys.Ports.Owner(o.APIPort)
-	if err != nil {
-		return fmt.Errorf("порт %d: %w", o.APIPort, err)
-	}
-	if busy {
-		if program == "" {
-			program = "другая программа"
-		}
-		return fmt.Errorf("%w: порт %d занят: %s", ErrPortBusy, o.APIPort, program)
+	if err := portFree(sys, o.APIPort); err != nil {
+		return err
 	}
 
 	// Служба — до прав: учётная запись NT SERVICE\Kinodom появляется вместе с ней.

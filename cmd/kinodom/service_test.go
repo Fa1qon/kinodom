@@ -281,3 +281,24 @@ func TestUninstallWritesResultFile(t *testing.T) {
 		t.Fatalf("после успеха в файле %q", b)
 	}
 }
+
+// install --check (установщик до копирования файлов): отказ — в файл результата; ничего не создаёт,
+// даже kinodom.json (спека этапа 11a, раздел 5.1).
+func TestInstallCheckFlag(t *testing.T) {
+	f, home := withFake(t)
+	res := filepath.Join(t.TempDir(), "result.txt")
+	dl := filepath.Join(t.TempDir(), "K")
+	if code, _, errOut := runCmd(cmdInstall, "--check", "--downloads-default", dl, "--result", res); code != 0 {
+		t.Fatalf("код %d: %s", code, errOut)
+	}
+	if entries, _ := os.ReadDir(home); len(entries) != 0 || len(f.Actions()) != 0 {
+		t.Fatalf("проверка оставила файлы %v или действия %v", entries, f.Actions())
+	}
+	f.PortOwner = "other-server.exe"
+	if code, _, _ := runCmd(cmdInstall, "--check", "--result", res); code != 1 {
+		t.Fatalf("занятый порт: код %d", code)
+	}
+	if b, _ := os.ReadFile(res); !strings.Contains(string(b), "other-server.exe") {
+		t.Fatalf("файл результата %q", b)
+	}
+}
