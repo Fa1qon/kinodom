@@ -52,7 +52,7 @@ type searchRun struct {
 // ошибок) и сразу отвечает тем, что уже есть. Найденное сохраняется в базе: карточку можно
 // открыть (этап 7).
 func (c *Catalog) Search(ctx context.Context, query string) (SearchState, error) {
-	run, q, err := c.startSearch(query, false)
+	run, q, err := c.startSearch(query, false, true)
 	if err != nil {
 		return SearchState{}, err
 	}
@@ -61,8 +61,9 @@ func (c *Catalog) Search(ctx context.Context, query string) (SearchState, error)
 
 // startSearch запускает поиск или берёт идущий (законченный без ошибок — не раньше 30 минут назад).
 // poll — повторный опрос того же поиска: законченный с ошибкой трекера поиск он не запускает заново.
-// Возвращает и запрос без лишних пробелов.
-func (c *Catalog) startSearch(query string, poll bool) (*searchRun, string, error) {
+// Возвращает и запрос без лишних пробелов. enrich — найденное без страницы — в срочную догрузку
+// (поиск из строки поиска; у «Искать на трекерах» — своя, только тот же фильм).
+func (c *Catalog) startSearch(query string, poll, enrich bool) (*searchRun, string, error) {
 	q := strings.Join(strings.Fields(query), " ")
 	if q == "" {
 		return nil, "", errors.New("пустой поисковый запрос")
@@ -92,14 +93,14 @@ func (c *Catalog) startSearch(query string, poll bool) (*searchRun, string, erro
 			parent = context.Background()
 		}
 		sctx, cancel := context.WithTimeout(parent, searchLimit)
-		go c.runSearch(sctx, cancel, run, q)
+		go c.runSearch(sctx, cancel, run, q, enrich)
 	}
 	c.mu.Unlock()
 	return run, q, nil
 }
 
 // runSearch — все трекеры одновременно; каждый результат — в базу и в поиск сразу, как пришёл.
-func (c *Catalog) runSearch(ctx context.Context, cancel context.CancelFunc, run *searchRun, q string) {
+func (c *Catalog) runSearch(ctx context.Context, cancel context.CancelFunc, run *searchRun, q string, enrich bool) {
 	defer cancel()
 	var wg sync.WaitGroup
 	run.mu.Lock()
@@ -122,6 +123,8 @@ func (c *Catalog) runSearch(ctx context.Context, cancel context.CancelFunc, run 
 			if serr != nil {
 				c.log.Error("поиск: найденное не записалось", "err", serr)
 				err = errors.Join(err, serr)
+			} else if enrich {
+				c.enqueueFound(context.WithoutCancel(ctx), name, ids)
 			}
 			run.mu.Lock()
 			run.ids = append(run.ids, ids...)
@@ -136,6 +139,32 @@ func (c *Catalog) runSearch(ctx context.Context, cancel context.CancelFunc, run 
 	run.mu.Lock()
 	run.done, run.finished = true, c.now()
 	run.mu.Unlock()
+}
+
+// searchToEnrich — сколько найденных без страницы догружать вне очереди на трекер: постеры первого
+// экрана поиска (замечание № 10 этапа 11b).
+const searchToEnrich = 20
+
+// enqueueFound — найденное трекером name без страницы раздачи — в срочную догрузку в порядке выдачи.
+// Трекер выключен или форум на паузе — нет: догрузка всё равно не пойдёт.
+func (c *Catalog) enqueueFound(ctx context.Context, name string, ids []int64) {
+	if !c.configured(name) || c.forumPausedUntil(name).After(c.now()) {
+		return
+	}
+	byID, err := c.st.rowsByID(ctx, ids)
+	if err != nil {
+		c.log.Warn("поиск: найденное не читается", "err", err)
+		return
+	}
+	n := 0
+	for _, id := range ids {
+		if r, ok := byID[id]; ok && r.DetailsAt.IsZero() {
+			c.enrichSoon(name, id)
+			if n++; n == searchToEnrich {
+				return
+			}
+		}
+	}
 }
 
 // staleWithErrors — поиск закончился с ошибкой трекера и опросы клиента уже получили итог.

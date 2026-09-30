@@ -35,7 +35,7 @@ func (c *Catalog) SearchVariants(ctx context.Context, id int64, poll bool) ([]En
 	if t.Year > 0 {
 		q += " " + strconv.Itoa(t.Year)
 	}
-	run, q, err := c.startSearch(q, poll)
+	run, q, err := c.startSearch(q, poll, false)
 	if err != nil {
 		return nil, SearchState{}, err
 	}
