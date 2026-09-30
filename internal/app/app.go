@@ -269,7 +269,7 @@ func (a *App) initMeta(ctx context.Context, o Options, v settings.Values) error 
 	}
 	a.Images = images
 	a.API.Handle("GET /img/{key}", "", images.Handler())
-	a.kp = meta.NewKinopoisk(meta.KinopoiskOptions{Key: v.KinopoiskKey, APIBase: o.KinopoiskAPI, RatingBase: o.KinopoiskAPI})
+	a.kp = meta.NewKinopoisk(meta.KinopoiskOptions{Key: v.KinopoiskKey, APIBase: o.KinopoiskAPI, RatingBase: o.KinopoiskAPI, PosterBase: o.KinopoiskAPI})
 	wo := meta.KPWebOptions{Log: a.Log.With("module", "kinopoisk")}
 	if o.KinopoiskAPI != "" {
 		wo.GraphQL, wo.Site = strings.TrimRight(o.KinopoiskAPI, "/")+"/graphql/", o.KinopoiskAPI
