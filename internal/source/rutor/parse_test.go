@@ -7,6 +7,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/PuerkitoBio/goquery"
+
 	"kinodom/internal/source"
 	"kinodom/internal/source/rutor/rutortest"
 )
@@ -228,5 +230,19 @@ func TestParseTopicSkipsNonHTTPPoster(t *testing.T) {
 	d, err := parseTopic([]byte(body), u)
 	if err != nil || d.PosterURL != "https://cdn.example/p.jpg" {
 		t.Fatalf("постер %q, %v", d.PosterURL, err)
+	}
+}
+
+// Картинка-рейтинг IMDb — на служебном хосте любого зеркала Rutor, не только основного: адреса
+// сайта в программе нет (этап 11a), фильтр — по пути.
+func TestPosterSkipsImdbRatingOnAnyMirror(t *testing.T) {
+	html := `<div><img src="http://s.new-mirror.org/imdb/pic/0816692.gif"><img src="https://img.example/poster.jpg"></div>`
+	doc, err := goquery.NewDocumentFromReader(strings.NewReader(html))
+	if err != nil {
+		t.Fatal(err)
+	}
+	page, _ := url.Parse("https://new-mirror.org/torrent/1")
+	if got := poster(doc.Find("div"), page); got != "https://img.example/poster.jpg" {
+		t.Fatalf("постер %q", got)
 	}
 }

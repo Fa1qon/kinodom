@@ -186,14 +186,15 @@ func parseTopic(body []byte, pageURL *url.URL) (source.Details, error) {
 	return d, nil
 }
 
-// poster — первая картинка описания по http(s), кроме картинок-рейтингов (s.rutor.info/imdb/pic/…,
-// rating.kinopoisk.ru/…, kinopoisk.ru/rating/…). Так постер находится в 9 раздачах из 9.
+// poster — первая картинка описания по http(s), кроме картинок-рейтингов (…/imdb/pic/… на служебном
+// хосте зеркала, rating.kinopoisk.ru/…, kinopoisk.ru/rating/…). Так постер находится в 9 раздачах из 9.
+// Рейтинг IMDb узнаётся по пути: адреса зеркала в программе нет (этап 11a).
 func poster(desc *goquery.Selection, pageURL *url.URL) string {
 	var out string
 	desc.Find("img[src]").EachWithBreak(func(_ int, img *goquery.Selection) bool {
 		src, _ := img.Attr("src")
 		low := strings.ToLower(src)
-		if strings.Contains(low, "rutor.info/imdb/") || strings.Contains(low, "kinopoisk.ru") {
+		if strings.Contains(low, "/imdb/pic/") || strings.Contains(low, "kinopoisk.ru") {
 			return true
 		}
 		u, err := pageURL.Parse(src)
