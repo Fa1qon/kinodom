@@ -9,11 +9,21 @@ import (
 	"time"
 )
 
-// interfaceAddrs — адреса сетевых интерфейсов ПК (тесты подменяют).
-var interfaceAddrs = net.InterfaceAddrs
+// interfaceAddrs — адреса сетевых интерфейсов ПК, now — часы (тесты подменяют).
+var (
+	interfaceAddrs = net.InterfaceAddrs
+	now            = time.Now
+)
 
-// own — адреса самого ПК. Если адреса запроса среди них нет, список перечитывается, но не чаще раза
-// в 10 с: адрес мог смениться (DHCP, другой Wi-Fi).
+// Когда перечитывать адреса ПК: адрес мог смениться (DHCP, другой Wi-Fi). Промах — не чаще раза в
+// 10 с (чужие устройства спрашивают постоянно); список старше минуты — всегда: ушедший адрес
+// перестаёт быть «этим ПК» (хвост 7b).
+const (
+	ownMissEvery = 10 * time.Second
+	ownMaxAge    = time.Minute
+)
+
+// own — адреса самого ПК. Одна реализация на весь сервер: её же спрашивает проверка Host в API.
 var own struct {
 	mu    sync.Mutex
 	addrs map[string]bool
@@ -26,14 +36,18 @@ func resetOwn() {
 	own.mu.Unlock()
 }
 
+// IsOwnIP — адрес принадлежит этому ПК (loopback сюда не входит).
+func IsOwnIP(ip net.IP) bool { return isOwn(unmap(ip)) }
+
 func isOwn(ip net.IP) bool {
 	key := ip.String()
 	own.mu.Lock()
 	defer own.mu.Unlock()
-	if own.addrs[key] || (own.addrs != nil && time.Since(own.at) < 10*time.Second) {
+	age := now().Sub(own.at)
+	if own.addrs != nil && age < ownMaxAge && (own.addrs[key] || age < ownMissEvery) {
 		return own.addrs[key]
 	}
-	own.addrs, own.at = map[string]bool{}, time.Now()
+	own.addrs, own.at = map[string]bool{}, now()
 	if as, err := interfaceAddrs(); err == nil {
 		for _, a := range as {
 			if n, ok := a.(*net.IPNet); ok {
