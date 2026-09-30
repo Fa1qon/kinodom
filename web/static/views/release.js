@@ -1,7 +1,7 @@
 // Раздача: постер, название, теги, описание; до «Скачать» — одна светлая кнопка, после — у каждого
 // файла прогресс и «Смотреть» цвета готовности, справа — панель файла в фокусе; ниже — «Другие раздачи»
 // фильма и «Искать на трекерах» (спека этапа 7, разделы 5.4, 5.5, 6.3 и 10.7).
-import { h, icon, size, speed, rating, minutes, ready, poll, copyText, store, plural, shortNames, keepFocus, fileFormat, openPlayer } from '../ui.js';
+import { h, icon, size, speed, rating, minutes, ready, poll, copyText, store, plural, shortNames, keepFocus, fileFormat, openPlayer, confirmDialog } from '../ui.js';
 import { get, post, put } from '../api.js';
 import { whereStopped, resumeIndex } from './history.js';
 import { poster } from './catalog.js';
@@ -11,6 +11,16 @@ const TRACKER = { rutor: 'Rutor', rutracker: 'Rutracker' };
 const PENDING_FOR = 120000; // догрузку страницы раздачи ждём не дольше 2 минут (трекер мог лечь)
 const SEARCH_FOR = 30000; // поиск других раздач сервер держит не дольше 30 с
 const FORMATS_FOR = 120000; // формат найденных ждём не дольше 2 минут: их страницы догружаются
+const MISSING_EVERY = 3000; // раздача не открыта (404) — её могут открыть с другого устройства: проверяем раз в 3 с
+const OTHERS_EVERY = 10000; // «Другие раздачи» перечитываются, пока экран открыт
+const COPIED_FOR = 2000; // «Скопировано» видно 2 с, перерисовка панели его не сбивает (Х25)
+
+// episodeAction — OK на строке серии (замечание № 3 этапа 11b): до «Скачать» — окно «Скачать?»,
+// после — выбрать файл панели; пока идёт действие — ничего.
+export function episodeAction(downloadingNow, busyNow) {
+  if (busyNow) return 'none';
+  return downloadingNow ? 'pick' : 'confirm';
+}
 
 export function render(root, r, ctx) {
   const id = r.parts[1];
@@ -31,21 +41,32 @@ export function render(root, r, ctx) {
   let searchError = '';
   let progress = []; // /history/{hash} — где остановились на этом устройстве (спека этапа 8, раздел 7.5)
   let historyPoll = null;
+  let headKey = ''; // данные заголовка при последней отрисовке: пока догрузка, постер не пересоздаётся каждую секунду
+  let missingAt = 0; // когда /torrents/{hash} последний раз ответил 404
+  let copied = null; // { ok, until } — подпись кнопки «Ссылка» после копирования
 
   const back = h('div');
   const cover = h('div', { class: 'rel-cover' });
   const info = h('div', { class: 'rel-info' });
   const live = h('div', { class: 'rel-live' });
-  const side = h('aside', { class: 'panel', 'aria-label': 'Просмотр' });
+  const side = h('aside', { class: 'panel', 'aria-label': 'Просмотр', 'data-nav-column': true });
   const others = h('section', { class: 'others', 'aria-label': 'Другие раздачи' });
   root.append(h('div', { class: 'screen release' }, back,
-    h('div', { class: 'rel-grid' }, cover, h('div', { class: 'rel-main' }, info, live, others), side)));
-  get(`/releases/${id}/variants`).then((v) => {
+    h('div', { class: 'rel-grid' }, cover, h('div', { class: 'rel-main', 'data-nav-column': true }, info, live, others), side)));
+  // «Другие раздачи» — при открытии и дальше раз в 10 с (раздачу того же фильма могли найти или открыть).
+  const othersPoll = poll(async () => {
+    if (searchPoll) return;
+    let v;
+    try {
+      v = await get(`/releases/${id}/variants` + (variants && variants.search ? '?search=1&poll=1' : ''));
+    } catch {
+      return;
+    }
     if (alive && !searchPoll) {
       variants = v;
       drawOthers();
     }
-  }, () => {});
+  }, OTHERS_EVERY);
 
   const releasePoll = poll(async () => {
     try {
@@ -56,7 +77,12 @@ export function render(root, r, ctx) {
       return;
     }
     if (!alive) return;
-    drawHead();
+    const key = JSON.stringify([rel.name, rel.title, rel.imageKey, rel.description, rel.original, rel.year, rel.kinopoisk,
+      rel.seeders, rel.quality, rel.format, rel.size, rel.trackerUrl, rel.detailsPending, rel.category]);
+    if (key !== headKey) {
+      headKey = key;
+      drawHead();
+    }
     drawLive();
     // Найденное поиском догружается при открытии — опрашиваем, пока страница не загрузится.
     if (!rel.detailsPending || Date.now() - started > PENDING_FOR) releasePoll.stop();
@@ -78,18 +104,22 @@ export function render(root, r, ctx) {
 
   const progressOf = (f) => progress.find((p) => p.index === f.index) || null;
 
-  // watchTorrent — состояние раздачи раз в секунду, пока она качается (спека этапа 7, раздел 4).
+  // watchTorrent — состояние раздачи раз в секунду, пока она качается (спека этапа 7, раздел 4). Раздача
+  // не открыта (404) — проверка раз в 3 с: «Скачать» могли нажать на другом устройстве (Х26).
   function watchTorrent() {
     torrentPoll = poll(async () => {
+      if (!st && missingAt && Date.now() - missingAt < MISSING_EVERY) return;
       try {
         st = await get(`/torrents/${rel.hash}`);
+        missingAt = 0;
       } catch (e) {
         st = null;
-        if (e.status !== 404) actionError = e.message;
+        if (e.status === 404) missingAt = Date.now();
+        else actionError = e.message;
       }
       if (!alive) return;
       drawLive();
-      if (!st || finished(st)) {
+      if (st && finished(st)) {
         torrentPoll.stop();
         torrentPoll = null;
       }
@@ -167,17 +197,14 @@ export function render(root, r, ctx) {
         const on = current && f.index === current.index;
         return h('div', { class: on ? 'ep on' : 'ep', style: on && rd.color ? { borderColor: rd.color } : null },
           h('span', { class: 'num' }, String(n + 1)),
-          h('button', { class: 'ep-main', type: 'button', 'data-key': `pick-${f.index}`, 'aria-pressed': String(!!on), onclick: () => {
-            chosen = f.index;
-            drawLive();
-          } },
+          h('button', { class: 'ep-main', type: 'button', 'data-key': `pick-${f.index}`, 'aria-pressed': String(!!on), onclick: () => pickEpisode(f) },
           h('span', { class: 'ep-title' }, progressOf(f) && progressOf(f).watched ? icon('check', 18, 'просмотрено') : null,
             h('span', { class: 'ep-name', title: f.name }, label(f)), h('span', { class: 'muted small' }, [fileInfo(f), whereStopped(progressOf(f))].filter(Boolean).join(' · '))),
           f.stored ? h('div', { class: 'track' }, h('div', { style: { width: `${f.percent}%`, background: rd.color || 'var(--buffer)' } })) : null,
           positionLine(progressOf(f))),
           f.readiness && f.readiness !== 'none' ? watchButton(f, 'btn')
             : downloading() ? h('button', { class: 'btn', type: 'button', disabled: busy, 'data-key': `get-${f.index}`,
-              'aria-label': `Скачать серию ${n + 1}`, onclick: () => download(f.index) }, icon('download'), 'Скачать') : null);
+              'aria-label': `Скачать серию ${n + 1}`, onclick: () => download({ file: f.index }) }, icon('download'), 'Скачать') : null);
       }));
   }
 
@@ -196,7 +223,7 @@ export function render(root, r, ctx) {
     if (!downloading()) {
       // До «Скачать»: одна светлая кнопка; после ошибки («нет раздающих», «мало места») — снова она.
       const waiting = st && !failed && !(st.files && st.files.length);
-      out.push(h('button', { class: 'btn inv big', type: 'button', disabled: busy || waiting, 'data-key': 'download', onclick: download },
+      out.push(h('button', { class: 'btn inv big', type: 'button', disabled: busy || waiting, 'data-key': 'download', 'data-nav-main': true, onclick: () => download() },
         icon('download'), 'Скачать'));
       if (waiting) out.push(h('div', { class: 'muted' }, st.state === 'connecting' ? 'Ищем раздающих…' : 'Получаем список файлов…'));
       if (error) out.push(h('div', { class: 'error' }, error));
@@ -221,8 +248,8 @@ export function render(root, r, ctx) {
       }
       out.push(h('div', { class: 'row pair' },
         h('a', { class: 'btn grow wide-only', href: `/m3u/${rel.hash}/${f.index}.m3u8`, download: '', 'data-key': 'm3u' }, icon('playlist_play'), '.m3u8'),
-        h('button', { class: 'btn grow', type: 'button', 'data-key': 'copy', 'aria-label': 'Скопировать ссылку на поток', onclick: (e) => copyLink(f, e.currentTarget) },
-          icon('link'), h('span', { class: 'wide-only' }, 'Ссылка'))));
+        h('button', { class: 'btn grow', type: 'button', 'data-key': 'copy', 'aria-label': 'Скопировать ссылку на поток', onclick: () => copyLink(f) },
+          ...copyLabel())));
     }
     if (ctx.canEdit && rel.hash) {
       const seen = !!(p && p.watched);
@@ -247,21 +274,38 @@ export function render(root, r, ctx) {
   function watchButton(f, cls) {
     const rd = ready[f.readiness] || ready.none;
     return h('button', { class: cls, type: 'button', disabled: busy, style: { borderColor: rd.color, color: rd.color },
-      'data-key': `${cls.includes('big') ? 'watch' : 'watch-row'}-${f.index}`, 'aria-label': `Смотреть — ${rd.label}`, onclick: () => watch(f) },
+      'data-key': `${cls.includes('big') ? 'watch' : 'watch-row'}-${f.index}`, 'data-nav-main': cls.includes('big'), 'aria-label': `Смотреть — ${rd.label}`, onclick: () => watch(f) },
     icon('play_arrow'), 'Смотреть');
   }
 
+  // pickEpisode — OK на строке серии: до «Скачать» — окно «Скачать «…» — размер?» (замечание № 3 этапа
+  // 11b), «Да» — очередь с этой серии; после «Скачать» — файл панели.
+  async function pickEpisode(f) {
+    const what = episodeAction(downloading(), busy);
+    if (what === 'pick') {
+      chosen = f.index;
+      drawLive();
+    }
+    if (what !== 'confirm') return;
+    const title = rel.name || rel.title || 'раздачу';
+    if (await confirmDialog({ title: `Скачать «${title}»` + (rel.size ? ` — ${size(rel.size)}?` : '?') }) && alive) {
+      chosen = f.index;
+      download({ from: f.index });
+    }
+  }
+
   // download — «Скачать»: раздача открывается и становится в очередь (спека этапа 7, раздел 5.5).
-  // file — одна серия: удалённую (например, при нехватке места) можно скачать снова.
-  async function download(file) {
-    const fromHere = root.contains(document.activeElement);
+  // {file} — одна серия: удалённую (например, при нехватке места) можно скачать снова; {from} — все
+  // серии, первой — эта.
+  async function download(what = {}) {
+    const fromHere = root.contains(document.activeElement) || what.from !== undefined;
     busy = true;
     actionError = '';
     drawLive();
     try {
-      const res = await post(`/releases/${id}/download`, typeof file === 'number' ? { file } : {});
+      const res = await post(`/releases/${id}/download`, what);
       rel.hash = res.hash;
-      if (fromHere) focusNext = typeof file === 'number' ? `watch-row-${file}` : 'watch';
+      if (fromHere) focusNext = what.file !== undefined ? `watch-row-${what.file}` : 'watch';
     } catch (e) {
       actionError = e.message;
     }
@@ -359,19 +403,34 @@ export function render(root, r, ctx) {
     if (alive) drawOthers();
   }
 
-  async function copyLink(f, button) {
+  async function copyLink(f) {
     const name = f.name.split(/[\\/]/).pop();
+    let ok = true;
     try {
       await copyText(`${location.origin}/stream/${rel.hash}/${f.index}/${encodeURIComponent(name)}`);
-      button.replaceChildren(icon('check'), h('span', { class: 'wide-only' }, 'Скопировано'));
     } catch {
-      button.replaceChildren(icon('close'), h('span', { class: 'wide-only' }, 'Не скопировалось'));
+      ok = false;
     }
+    copied = { ok, until: Date.now() + COPIED_FOR };
+    drawLive();
+    setTimeout(() => {
+      if (alive) drawLive();
+    }, COPIED_FOR + 50);
+  }
+
+  // copyLabel — подпись кнопки «Ссылка»: 2 с после копирования — итог.
+  function copyLabel() {
+    if (copied && Date.now() < copied.until) {
+      return copied.ok ? [icon('check'), h('span', { class: 'wide-only' }, 'Скопировано')]
+        : [icon('close'), h('span', { class: 'wide-only' }, 'Не скопировалось')];
+    }
+    return [icon('link'), h('span', { class: 'wide-only' }, 'Ссылка')];
   }
 
   return () => {
     alive = false;
     releasePoll.stop();
+    othersPoll.stop();
     if (torrentPoll) torrentPoll.stop();
     if (searchPoll) searchPoll.stop();
     if (historyPoll) historyPoll.stop();

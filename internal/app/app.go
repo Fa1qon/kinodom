@@ -448,7 +448,8 @@ func metaFiles(fs []torrents.FileInfo) []meta.File {
 
 // handleDownload — «Скачать» (спека этапа 7, раздел 5.5): раздача из каталога открывается —
 // Rutor из заранее скачанного .torrent, иначе по magnet — и все её видеофайлы (или один, {"file": N})
-// встают в очередь загрузки. Работает с любого устройства: телевизор тоже нажимает «Скачать».
+// встают в очередь загрузки; {"from": N} — все, но первой качается серия N (замечание № 3 этапа 11b).
+// Работает с любого устройства: телевизор тоже нажимает «Скачать».
 func (a *App) handleDownload(w http.ResponseWriter, r *http.Request) {
 	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
 	if err != nil {
@@ -457,8 +458,13 @@ func (a *App) handleDownload(w http.ResponseWriter, r *http.Request) {
 	}
 	var req struct {
 		File *int `json:"file"`
+		From *int `json:"from"`
 	}
 	if !httpx.ReadJSON(w, r, &req) {
+		return
+	}
+	if req.File != nil && req.From != nil {
+		httpx.WriteError(w, http.StatusBadRequest, "file и from вместе не задаются")
 		return
 	}
 	rel, err := a.Catalog.Release(r.Context(), id)
@@ -482,7 +488,11 @@ func (a *App) handleDownload(w http.ResponseWriter, r *http.Request) {
 	if req.File != nil {
 		files = []int{*req.File}
 	}
-	switch err := a.Torrents.Download(r.Context(), ih, files); {
+	download := func() error { return a.Torrents.Download(r.Context(), ih, files) }
+	if req.From != nil {
+		download = func() error { return a.Torrents.DownloadFrom(r.Context(), ih, *req.From) }
+	}
+	switch err := download(); {
 	case errors.Is(err, torrents.ErrLowSpace):
 		httpx.WriteError(w, http.StatusInsufficientStorage, err.Error())
 	case errors.Is(err, torrents.ErrNoSuchFile):
