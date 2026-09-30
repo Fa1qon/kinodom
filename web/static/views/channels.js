@@ -8,12 +8,20 @@ import { gradeMark, hhmm, progressOf, logo, watchChannel, toggleFavorite, starBu
 // UNKNOWN — значение переключателя для «страна / язык не указаны».
 export const UNKNOWN = '?';
 
-// filterChannels — каналы вкладки и переключателей: tab — all, fav или id категории; country и lang —
-// "" (все), код или UNKNOWN.
+// filtersFrom — вкладка, страна и язык из адреса; параметра нет — запомненные (saved). Экран пишет в
+// адрес все три параметра, даже «Все», иначе запомненная вкладка перебила бы выбор.
+export function filtersFrom(q, saved) {
+  const pick = (k, def) => (q.has(k) ? q.get(k) : saved[k] ?? def);
+  return { tab: pick('tab', 'all') || 'all', country: pick('country', ''), lang: pick('lang', '') };
+}
+
+// filterChannels — каналы вкладки и переключателей: tab — all, fav, federal или id категории; country и
+// lang — "" (все), код или UNKNOWN.
 export function filterChannels(channels, { tab = 'all', country = '', lang = '' }) {
   return channels.filter((c) => {
     if (tab === 'fav' && c.block !== 'favorite') return false;
-    if (tab !== 'all' && tab !== 'fav' && c.category !== tab) return false;
+    if (tab === 'federal' && !(c.number > 0)) return false;
+    if (tab !== 'all' && tab !== 'fav' && tab !== 'federal' && c.category !== tab) return false;
     if (country && (country === UNKNOWN ? c.country !== '' : c.country !== country)) return false;
     if (lang && (lang === UNKNOWN ? c.languages.length > 0 : !c.languages.includes(lang))) return false;
     return true;
@@ -42,7 +50,7 @@ export function render(root, r, ctx) {
     saved = {};
   }
   const q = r.query;
-  const f = { tab: q.get('tab') || saved.tab || 'all', country: q.get('country') ?? saved.country ?? '', lang: q.get('lang') ?? saved.lang ?? '' };
+  const f = filtersFrom(q, saved);
   store.set('channels', JSON.stringify(f));
   let alive = true;
   let data = null;
@@ -56,11 +64,8 @@ export function render(root, r, ctx) {
 
   const go = (patch) => {
     const n = { ...f, ...patch };
-    const p = new URLSearchParams();
-    if (n.tab !== 'all') p.set('tab', n.tab);
-    if (n.country) p.set('country', n.country);
-    if (n.lang) p.set('lang', n.lang);
-    ctx.go('#/channels' + (p.toString() ? '?' + p : ''));
+    const p = new URLSearchParams({ tab: n.tab, country: n.country, lang: n.lang });
+    ctx.go('#/channels?' + p);
   };
 
   const pollList = poll(async () => {
@@ -112,7 +117,9 @@ export function render(root, r, ctx) {
         h('span', { class: 'muted' }, plural(shown.length, 'канал', 'канала', 'каналов')),
         select('Все страны', f.country, data.countries, 'country'),
         select('Все языки', f.lang, data.languages, 'lang'));
-      const tabs = [['all', 'Все'], ...(hasFav ? [['fav', 'Избранные']] : []), ...data.categories.map((c) => [c.id, c.name])];
+      const hasFed = data.channels.some((c) => c.number > 0);
+      const tabs = [['all', 'Все'], ...(hasFav ? [['fav', 'Избранные']] : []), ...(hasFed ? [['federal', 'Федеральные']] : []),
+        ...data.categories.map((c) => [c.id, c.name])];
       fill(filters, ...tabs.map(([id, t]) => h('a', { class: id === f.tab ? 'fil on' : 'fil', role: 'tab', 'aria-selected': String(id === f.tab),
         href: '#', 'data-key': `tab-${id || 'none'}`, onclick: (e) => {
           e.preventDefault();

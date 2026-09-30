@@ -200,7 +200,7 @@ for (const [got, want] of lines) {
 func TestPultChannelsFilter(t *testing.T) {
 	node := lookNode(t)
 	script := `
-import { filterChannels, sections, UNKNOWN } from './views/channels.js';
+import { filterChannels, sections, UNKNOWN, filtersFrom } from './views/channels.js';
 import { progressOf } from './views/tvkit.js';
 import { dateStr, labelPatch } from './views/channel.js';
 const c = (key, block, category, categoryName, country, languages) => ({ key, block, category, categoryName, country, languages });
@@ -222,6 +222,12 @@ const checks = [
   [keys(filterChannels(all, { tab: 'all', lang: 'eng' })), 'bbc euro'],
   [keys(filterChannels(all, { tab: 'all', lang: UNKNOWN })), 'local'],
   [keys(filterChannels(all, { tab: 'sports', lang: 'fra' })), 'euro'],
+  // «Федеральные» — каналы с номером кнопки, в том числе из избранного (отзыв заказчика 2026-09-30).
+  [keys(filterChannels(all.map((x) => ({ ...x, number: { pervy: 1, match: 3, bbc: 0 }[x.key] || 0 })), { tab: 'federal' })), 'pervy match'],
+  // Фильтры: из адреса, а без параметра — запомненные; «Все» в адресе сильнее запомненной вкладки.
+  [JSON.stringify(filtersFrom(new URLSearchParams('tab=all&country=&lang='), { tab: 'science', country: 'RU', lang: 'rus' })), '{"tab":"all","country":"","lang":""}'],
+  [JSON.stringify(filtersFrom(new URLSearchParams(''), { tab: 'science', country: 'RU' })), '{"tab":"science","country":"RU","lang":""}'],
+  [JSON.stringify(filtersFrom(new URLSearchParams(''), {})), '{"tab":"all","country":"","lang":""}'],
   [sections(all, 'all').map((s) => s.title + ':' + s.items.length).join(' | '), 'Избранные:1 | Федеральные:2 | Фильмы и сериалы:1 | Спорт:1 | Без категории:1'],
   [sections(filterChannels(all, { tab: 'sports' }), 'sports').map((s) => s.title + ':' + s.items.length).join(' | '), ':2'],
   [sections([], 'sports').length, 0],
