@@ -292,11 +292,15 @@ export function openModal(box, onCancel) {
     }
   } }, box);
   document.body.append(back);
+  const key = before && before.dataset ? before.dataset.key || '' : '';
   return {
     close() {
       back.remove();
       for (const el of others) el.inert = false;
-      if (before && before.focus) before.focus({ preventScroll: true });
+      // Экран мог перерисоваться, пока окно было открыто (опрос раздачи): тогда — на элемент с тем же
+      // ключом (найдено вживую, 11b-А).
+      const target = before && before.isConnected ? before : key ? document.querySelector(`[data-key="${CSS.escape(key)}"]`) : null;
+      if (target && target.focus) target.focus({ preventScroll: true });
     },
   };
 }

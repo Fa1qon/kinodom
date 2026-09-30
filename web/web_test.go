@@ -483,15 +483,18 @@ class El {
   setAttribute(k, v) { this.attrs[k] = v; if (k.startsWith('data-')) this.dataset[k.slice(5).replace(/-(.)/g, (_, c) => c.toUpperCase())] = v; }
   getAttribute(k) { return this.attrs[k] ?? null; }
   addEventListener(type, fn) { (this.listeners[type] ||= []).push(fn); }
-  focus() { document.activeElement = this; }
+  focus() { if (this.isConnected) document.activeElement = this; }
+  get isConnected() { let n = this; while (n.parent) n = n.parent; return n === document.body; }
   find(key) { if (this.dataset.key === key) return this; for (const c of this.children) { const f = c.find && c.find(key); if (f) return f; } return null; }
   fire(type, ev = {}) { const e = { key: ev.key, target: this, preventDefault() {}, stopPropagation() { this.stopped = true; } }; for (let n = this; n && !e.stopped; n = n.parent) for (const fn of n.listeners[type] || []) fn(e); }
 }
 globalThis.Node = El;
 const body = new El('body');
-globalThis.document = { body, activeElement: body, createElement: (t) => new El(t), createElementNS: (_, t) => new El(t) };
+globalThis.document = { body, activeElement: body, createElement: (t) => new El(t), createElementNS: (_, t) => new El(t),
+  querySelector: (sel) => { const m = /^\[data-key="(.*)"\]$/.exec(sel); return m ? body.find(m[1]) : null; } };
+globalThis.CSS = { escape: (s) => s };
 const view = new El('main'); body.append(view);
-const before = new El('button'); view.append(before); before.focus();
+const before = new El('button'); before.setAttribute('data-key', 'pick-0'); view.append(before); before.focus();
 const { confirmDialog } = await import('./ui.js');
 const checks = [];
 let p = confirmDialog({ title: 'Скачать «Фонари» — 19,4 ГБ?' });
@@ -506,6 +509,13 @@ p = confirmDialog({ title: 'Скачать?' });
 body.find('dlg-no').fire('keydown', { key: 'Escape' });
 checks.push(['Escape — false', (await p) === false]);
 checks.push(['после Escape экран доступен', view.inert === false && document.activeElement === before]);
+// Экран перерисовался, пока окно было открыто (опрос раздачи): фокус — на новый элемент с тем же ключом.
+p = confirmDialog({ title: 'Скачать?' });
+before.remove();
+const redrawn = new El('button'); redrawn.setAttribute('data-key', 'pick-0'); view.append(redrawn);
+body.find('dlg-no').fire('click');
+await p;
+checks.push(['после перерисовки фокус — на тот же ключ', document.activeElement === redrawn]);
 for (const [name, ok] of checks) {
   if (!ok) {
     console.error('не выполнено:', name);
