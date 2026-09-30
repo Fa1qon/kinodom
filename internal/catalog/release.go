@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"slices"
+	"strconv"
 	"time"
 
 	"kinodom/internal/meta"
@@ -113,7 +114,11 @@ func (c *Catalog) Release(ctx context.Context, id int64) (Release, error) {
 		out.DetailsPending = true
 		c.enrichSoon(r.Tracker, r.ID)
 	}
-	if out.ImageKey == "" && (r.KinopoiskID > 0 || out.Rating.KinopoiskID > 0) {
+	if out.ImageKey == "" && !r.DetailsAt.IsZero() {
+		// Картинки нет, а человек открыл раздачу — постер (страницы или Кинопоиска) без паузы повтора.
+		c.mu.Lock()
+		c.forced[r.ID] = true
+		c.mu.Unlock()
 		c.wakePosters()
 	}
 	return out, nil
@@ -156,12 +161,80 @@ func (c *Catalog) nextUrgent(ctx context.Context, tracker string) (row, bool, er
 	}
 }
 
-// Постеры Кинопоиска про запас (спека, раздел 8; хвост 5c): номер фильма нашёлся очередью рейтингов
-// позже, чем догрузилась страница раздачи, а картинки на ней нет или её хостинг мёртв.
+// Постеры и .torrent про запас (спека, раздел 8; хвосты 5c и Х7): номер фильма нашёлся очередью
+// рейтингов позже, чем догрузилась страница раздачи; хостинг картинки или .torrent Rutor не ответили.
 const (
-	postersEvery = 10 * time.Minute
-	posterRetry  = 24 * time.Hour // постер Кинопоиска не скачался — не раньше чем через сутки
+	postersEvery  = 10 * time.Minute
+	assetsPerPass = 20 // повторов за проход: мёртвый хостинг держит до минуты
 )
+
+// assetRetry — паузы повторов после сбоя: 10 мин, 1 ч, 6 ч, дальше — раз в сутки. В памяти: после
+// перезапуска — снова с 10 минут.
+var assetRetry = []time.Duration{10 * time.Minute, time.Hour, 6 * time.Hour, 24 * time.Hour}
+
+type retryState struct {
+	n    int
+	next time.Time
+}
+
+// failed — постер или .torrent не скачался: следующая попытка — после паузы.
+func (c *Catalog) failed(kind string, id int64, now time.Time) {
+	k := kind + ":" + strconv.FormatInt(id, 10)
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	st := c.retries[k]
+	st.n++
+	st.next = now.Add(assetRetry[min(st.n, len(assetRetry))-1])
+	c.retries[k] = st
+}
+
+// due — пора пробовать: ещё не пробовали, прошла пауза или (постер) раздачу открыли.
+func (c *Catalog) due(kind string, id int64, now time.Time) bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if kind == "poster" && c.forced[id] {
+		delete(c.forced, id)
+		return true
+	}
+	st, ok := c.retries[kind+":"+strconv.FormatInt(id, 10)]
+	return !ok || !now.Before(st.next)
+}
+
+func (c *Catalog) succeeded(kind string, id int64) {
+	c.mu.Lock()
+	delete(c.retries, kind+":"+strconv.FormatInt(id, 10))
+	c.mu.Unlock()
+}
+
+// posterLater — постер раздачи вне шага догрузки (хвост Х8): срочная раздача не ждёт чужой медленный
+// хостинг. Не больше двух одновременно.
+func (c *Catalog) posterLater(ctx context.Context, id int64, url string, kp int) {
+	if c.images == nil || (url == "" && (kp == 0 || c.kpPoster == nil)) {
+		return
+	}
+	c.posterWG.Add(1)
+	go func() {
+		defer c.posterWG.Done()
+		select {
+		case c.posterSem <- struct{}{}:
+		case <-ctx.Done():
+			return
+		}
+		defer func() { <-c.posterSem }()
+		key := c.fetchPoster(ctx, url, kp)
+		if ctx.Err() != nil {
+			return
+		}
+		if key == "" {
+			c.failed("poster", id, c.now())
+			return
+		}
+		c.succeeded("poster", id)
+		if err := c.st.saveImageKey(context.WithoutCancel(ctx), id, key); err != nil {
+			c.log.Warn("каталог: постер не записался", "err", err)
+		}
+	}()
+}
 
 func (c *Catalog) wakePosters() {
 	select {
@@ -186,49 +259,114 @@ func (c *Catalog) postersLoop(ctx context.Context) error {
 	}
 }
 
-// fixPosters — постер Кинопоиска раздачам без картинки, у которых номер фильма известен: из
-// описания или найден очередью рейтингов. Ошибка — только у базы.
+// fixPosters — повтор постеров и .torrent Rutor (хвост Х7): постер страницы, а если его нет или
+// хостинг мёртв — постер Кинопоиска по номеру (из описания или найденному очередью рейтингов);
+// .torrent — у источников, которые его отдают. Сначала открытые в пульте, за проход — не больше
+// assetsPerPass. Ошибка — только у базы.
 func (c *Catalog) fixPosters(ctx context.Context) error {
-	if c.images == nil || c.kpPoster == nil || c.ratings == nil {
-		return nil
-	}
 	now := c.now()
-	rs, err := c.st.missingPosters(ctx, now.Add(-imagesKeepFor))
-	if err != nil || len(rs) == 0 {
-		return err
+	budget := assetsPerPass
+	if c.images != nil {
+		// Картинки, признанные заглушками хостинга (хвост Х6), снимаются с раздач — ниже им постер
+		// страницы (заглушка — «не картинка») или Кинопоиска.
+		if keys := c.images.Stubbed(); len(keys) > 0 {
+			if err := c.st.clearImageKeys(ctx, keys); err != nil {
+				return err
+			}
+		}
+		rs, urls, err := c.st.missingPosters(ctx, now.Add(-imagesKeepFor))
+		if err != nil {
+			return err
+		}
+		kps := make([]int, len(rs))
+		if c.ratings != nil && len(rs) > 0 {
+			keys := make([]string, len(rs))
+			for i, r := range rs {
+				keys[i] = r.Tracker + ":" + r.TopicID
+			}
+			ratings, err := c.ratings.For(ctx, keys)
+			if err != nil {
+				return err
+			}
+			for i, r := range rs {
+				if kps[i] = r.KinopoiskID; kps[i] == 0 {
+					kps[i] = ratings[keys[i]].KinopoiskID
+				}
+			}
+		} else {
+			for i, r := range rs {
+				kps[i] = r.KinopoiskID
+			}
+		}
+		order := make([]int, len(rs))
+		for i := range order {
+			order[i] = i
+		}
+		c.mu.Lock()
+		slices.SortStableFunc(order, func(a, b int) int { return b2i(c.forced[rs[b].ID]) - b2i(c.forced[rs[a].ID]) })
+		c.mu.Unlock()
+		for _, i := range order {
+			r := rs[i]
+			if budget == 0 {
+				break
+			}
+			if (urls[i] == "" && (kps[i] == 0 || c.kpPoster == nil)) || !c.due("poster", r.ID, now) {
+				continue
+			}
+			budget--
+			key := c.fetchPoster(ctx, urls[i], kps[i])
+			if ctx.Err() != nil {
+				return nil
+			}
+			if key == "" {
+				c.failed("poster", r.ID, now)
+				continue
+			}
+			c.succeeded("poster", r.ID)
+			if err := c.st.saveImageKey(ctx, r.ID, key); err != nil {
+				return err
+			}
+		}
 	}
-	keys := make([]string, len(rs))
-	for i, r := range rs {
-		keys[i] = r.Tracker + ":" + r.TopicID
+	var trackers []string
+	for name, src := range c.sources {
+		if _, ok := src.(torrentFetcher); ok && c.configured(name) {
+			trackers = append(trackers, name)
+		}
 	}
-	ratings, err := c.ratings.For(ctx, keys)
+	ts, err := c.st.missingTorrents(ctx, trackers, now.Add(-imagesKeepFor))
 	if err != nil {
 		return err
 	}
-	for i, r := range rs {
-		kp := r.KinopoiskID
-		if kp == 0 {
-			kp = ratings[keys[i]].KinopoiskID
+	for _, r := range ts {
+		if budget == 0 {
+			break
 		}
-		c.mu.Lock()
-		tried := c.posterTried[r.ID]
-		c.mu.Unlock()
-		if kp == 0 || now.Sub(tried) < posterRetry {
+		if !c.due("torrent", r.ID, now) {
 			continue
 		}
-		key, err := c.images.Fetch(ctx, c.kpPoster(kp), meta.Direct)
+		budget--
+		tctx, cancel := context.WithTimeout(ctx, torrentWait)
+		b, err := c.sources[r.Tracker].(torrentFetcher).Torrent(tctx, r.TopicID)
+		cancel()
 		if ctx.Err() != nil {
 			return nil
 		}
 		if err != nil {
-			c.mu.Lock()
-			c.posterTried[r.ID] = now
-			c.mu.Unlock()
+			c.failed("torrent", r.ID, now)
 			continue
 		}
-		if err := c.st.saveImageKey(ctx, r.ID, key); err != nil {
+		c.succeeded("torrent", r.ID)
+		if err := c.st.saveTorrent(ctx, r.ID, b); err != nil {
 			return err
 		}
 	}
 	return nil
+}
+
+func b2i(b bool) int {
+	if b {
+		return 1
+	}
+	return 0
 }

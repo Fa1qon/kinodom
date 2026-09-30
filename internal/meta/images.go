@@ -3,6 +3,7 @@ package meta
 import (
 	"context"
 	"crypto/sha1"
+	"crypto/sha256"
 	"encoding/hex"
 	"errors"
 	"fmt"
@@ -13,6 +14,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -61,7 +63,17 @@ type Images struct {
 	mu      sync.Mutex
 	noImage map[string]time.Time // адрес → когда оказалось, что там не картинка
 	failed  map[string]failure   // адрес → неудача сети (FailFor)
+
+	// Заглушки хостингов (хвост Х6): одна и та же картинка с stubSources разных адресов — заглушка
+	// («Thumbnail Temporarily Unavailable» ImageBam и подобные), а не постер.
+	seen    map[string]map[string]bool // sha256 содержимого → адреса, с которых оно пришло
+	stubs   map[string]bool            // sha256 заглушек (помнятся в stubs.txt)
+	keyHash map[string]string          // ключ → sha256 содержимого (скачанные и проверенные)
+	dropped []string                   // ключи, удалённые как заглушки: каталог снимает их с раздач
 }
+
+// stubSources — с стольких разных адресов одна и та же картинка — заглушка хостинга.
+const stubSources = 3
 
 type failure struct {
 	at  time.Time
@@ -107,7 +119,8 @@ func NewImages(o ImagesOptions) (*Images, error) {
 		proxied.CheckRedirect, direct.CheckRedirect = publicRedirect, publicRedirect
 	}
 	return &Images{o: o, proxied: proxied, direct: direct, lim: rate.NewLimiter(o.Rate, 1),
-		noImage: map[string]time.Time{}, failed: map[string]failure{}}, nil
+		noImage: map[string]time.Time{}, failed: map[string]failure{}, seen: map[string]map[string]bool{},
+		stubs: loadStubs(o.Dir), keyHash: map[string]string{}}, nil
 }
 
 // publicRedirect — редирект картинки на адрес этого ПК или домашней сети не выполняется (M10);
@@ -137,7 +150,10 @@ func (im *Images) Fetch(ctx context.Context, src string, via Via) (string, error
 		return "", ErrNoImage
 	}
 	key := ImageKey(src)
-	if im.find(key) != "" {
+	if p := im.find(key); p != "" {
+		if im.cachedStub(key, p) {
+			return "", ErrNoImage
+		}
 		return key, nil
 	}
 	im.mu.Lock()
@@ -204,6 +220,11 @@ func (im *Images) fetch(ctx context.Context, u *url.URL, src, key string, via Vi
 	if !ok {
 		return "", ErrNoImage
 	}
+	sum := sha256.Sum256(body)
+	h := hex.EncodeToString(sum[:])
+	if im.stubContent(h, src) {
+		return "", ErrNoImage
+	}
 	// Сначала во временный файл: оборванная запись не должна выглядеть готовой картинкой.
 	tmp, err := os.CreateTemp(im.o.Dir, key+"-*.tmp")
 	if err != nil {
@@ -224,10 +245,114 @@ func (im *Images) fetch(ctx context.Context, u *url.URL, src, key string, via Vi
 		}
 		return "", err
 	}
+	im.mu.Lock()
+	im.keyHash[key] = h
+	im.mu.Unlock()
 	return key, nil
 }
 
+// stubContent — картинка с содержимым h пришла с адреса src; true — это заглушка хостинга. Признанная
+// впервые — удаляются уже скачанные картинки с тем же содержимым.
+func (im *Images) stubContent(h, src string) bool {
+	im.mu.Lock()
+	defer im.mu.Unlock()
+	if im.stubs[h] {
+		return true
+	}
+	set := im.seen[h]
+	if set == nil {
+		set = map[string]bool{}
+		im.seen[h] = set
+	}
+	set[src] = true
+	if len(set) < stubSources {
+		return false
+	}
+	im.stubs[h] = true
+	delete(im.seen, h)
+	for k, kh := range im.keyHash {
+		if kh == h {
+			if p := im.find(k); p != "" {
+				os.Remove(p)
+			}
+			delete(im.keyHash, k)
+			im.dropped = append(im.dropped, k)
+		}
+	}
+	for src := range set {
+		k := ImageKey(src)
+		if p := im.find(k); p != "" {
+			os.Remove(p)
+			im.dropped = append(im.dropped, k)
+		}
+	}
+	im.saveStubsLocked()
+	im.o.Log.Info("картинки: заглушка хостинга — с разных адресов одна и та же картинка", "sha256", h[:12])
+	return true
+}
+
+// cachedStub — картинка в кэше (файл p) — признанная заглушка: файл удаляется.
+func (im *Images) cachedStub(key, p string) bool {
+	im.mu.Lock()
+	defer im.mu.Unlock()
+	if len(im.stubs) == 0 {
+		return false
+	}
+	h, ok := im.keyHash[key]
+	if !ok {
+		b, err := os.ReadFile(p)
+		if err != nil {
+			return false
+		}
+		sum := sha256.Sum256(b)
+		h = hex.EncodeToString(sum[:])
+		im.keyHash[key] = h
+	}
+	if !im.stubs[h] {
+		return false
+	}
+	os.Remove(p)
+	delete(im.keyHash, key)
+	im.dropped = append(im.dropped, key)
+	return true
+}
+
+// Stubbed — ключи картинок, удалённых как заглушки с прошлого вызова: каталог снимает их с раздач.
+func (im *Images) Stubbed() []string {
+	im.mu.Lock()
+	defer im.mu.Unlock()
+	out := im.dropped
+	im.dropped = nil
+	return out
+}
+
+const stubsFile = "stubs.txt"
+
+func loadStubs(dir string) map[string]bool {
+	out := map[string]bool{}
+	b, err := os.ReadFile(filepath.Join(dir, stubsFile))
+	if err != nil {
+		return out
+	}
+	for _, line := range strings.Fields(string(b)) {
+		out[line] = true
+	}
+	return out
+}
+
+func (im *Images) saveStubsLocked() {
+	var lines []string
+	for h := range im.stubs {
+		lines = append(lines, h)
+	}
+	slices.Sort(lines)
+	if err := os.WriteFile(filepath.Join(im.o.Dir, stubsFile), []byte(strings.Join(lines, "\n")+"\n"), 0o644); err != nil {
+		im.o.Log.Warn("картинки: список заглушек не записался", "err", err)
+	}
+}
+
 // find — путь к файлу картинки или "".
+
 func (im *Images) find(key string) string {
 	for _, ext := range imageExt {
 		p := filepath.Join(im.o.Dir, key+ext)

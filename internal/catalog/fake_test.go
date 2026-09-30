@@ -202,6 +202,7 @@ func enrichAll(t *testing.T, c *Catalog, tracker string) {
 			t.Fatal(err)
 		}
 		if !did {
+			c.posterWG.Wait() // постеры качаются вне шага
 			return
 		}
 		if i > 200 {

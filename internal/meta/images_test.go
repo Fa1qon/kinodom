@@ -232,6 +232,55 @@ func TestNoImageAddressIsRemembered(t *testing.T) {
 	}
 }
 
+// Заглушка хостинга (хвост Х6): одна и та же картинка с трёх разных адресов — это «Thumbnail
+// Temporarily Unavailable» хостинга, а не постер: третий адрес — ErrNoImage, уже скачанные с тем же
+// содержимым удаляются и отдаются каталогу (Stubbed), чтобы он снял их с раздач; настоящий постер
+// принимается. Признанная заглушка помнится после перезапуска.
+func TestStubImageDetected(t *testing.T) {
+	stub := pngBytes(t)
+	real := append(pngBytes(t), 0) // другое содержимое
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/real.png" {
+			w.Write(real)
+			return
+		}
+		w.Write(stub)
+	}))
+	t.Cleanup(srv.Close)
+	dir := t.TempDir()
+	im, err := NewImages(ImagesOptions{Dir: dir, Rate: 1000, AllowPrivate: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	a, errA := im.Fetch(ctx, srv.URL+"/a.png", Direct)
+	b, errB := im.Fetch(ctx, srv.URL+"/b.png", Direct)
+	if errA != nil || errB != nil {
+		t.Fatalf("первые два адреса: %v %v", errA, errB)
+	}
+	if _, err := im.Fetch(ctx, srv.URL+"/c.png", Direct); !errors.Is(err, ErrNoImage) {
+		t.Fatalf("третий адрес с той же картинкой: %v", err)
+	}
+	if got := im.Stubbed(); !slices.Contains(got, a) || !slices.Contains(got, b) {
+		t.Fatalf("снятые ключи: %v, нужны %s %s", got, a, b)
+	}
+	if im.find(a) != "" || im.find(b) != "" {
+		t.Fatal("файлы заглушки остались в кэше")
+	}
+	if _, err := im.Fetch(ctx, srv.URL+"/a.png", Direct); !errors.Is(err, ErrNoImage) {
+		t.Fatalf("адрес заглушки снова: %v", err)
+	}
+	if _, err := im.Fetch(ctx, srv.URL+"/real.png", Direct); err != nil {
+		t.Fatalf("настоящий постер: %v", err)
+	}
+	again, err := NewImages(ImagesOptions{Dir: dir, Rate: 1000, AllowPrivate: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := again.Fetch(ctx, srv.URL+"/d.png", Direct); !errors.Is(err, ErrNoImage) {
+		t.Fatalf("после перезапуска заглушка забыта: %v", err)
+	}
+}
+
 // Неудача сети или ответ не 200 (хвост Х29): с FailFor адрес не запрашивается снова столько времени —
 // логотип, которого нет, не качается на каждой перерисовке списка каналов; потом — снова.
 func TestFailedFetchRemembered(t *testing.T) {

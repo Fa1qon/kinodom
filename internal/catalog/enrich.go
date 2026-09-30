@@ -15,6 +15,7 @@ const (
 	detailsRetry = 30 * time.Minute // страница раздачи не загрузилась — повтор
 	forumPause   = 10 * time.Minute // форум закрыт проверкой Cloudflare — не ходить (источник помнит неудачу столько же)
 	enrichIdle   = time.Minute      // догружать нечего — заглядывать снова
+	torrentWait  = 20 * time.Second // .torrent Rutor ждём в шаге не дольше: зависший — повтор в фоне (Х8)
 )
 
 // torrentFetcher — источник отдаёт .torrent (Rutor): каталог качает его заранее, чтобы список
@@ -108,23 +109,23 @@ func (c *Catalog) enrichStep(ctx context.Context, tracker string) (bool, error) 
 	// (финальное ревью 7a).
 	var torrent []byte
 	if tf, ok := src.(torrentFetcher); ok {
-		if b, err := tf.Torrent(ctx, r.TopicID); err == nil {
+		tctx, cancel := context.WithTimeout(ctx, torrentWait)
+		b, err := tf.Torrent(tctx, r.TopicID)
+		cancel()
+		if err == nil {
 			if err := c.st.saveTorrent(ctx, r.ID, b); err != nil {
 				return false, err
 			}
 			torrent = b
 		} else if ctx.Err() == nil {
-			c.log.Warn("каталог: .torrent не скачался — раздача откроется по magnet", "tracker", tracker, "topic", r.TopicID, "err", err)
+			c.log.Warn("каталог: .torrent не скачался — раздача откроется по magnet, повтор позже", "tracker", tracker, "topic", r.TopicID, "err", err)
+			c.failed("torrent", r.ID, now)
 		}
 	}
 	if err := c.st.saveDetails(ctx, r.ID, d, kpID, "", c.formatOf(d.Description, torrent), now); err != nil {
 		return false, err
 	}
-	if key := c.fetchPoster(ctx, d.PosterURL, kpID); key != "" {
-		if err := c.st.saveImageKey(ctx, r.ID, key); err != nil {
-			return false, err
-		}
-	}
+	c.posterLater(ctx, r.ID, d.PosterURL, kpID)
 	if c.ratings != nil {
 		r.Title, r.KinopoiskID, r.IMDbID = firstNonEmpty(d.Title, r.Title), kpID, d.IMDbID
 		pos := 0 // открытую раздачу — в рейтинги первой
