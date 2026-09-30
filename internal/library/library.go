@@ -86,7 +86,8 @@ type Options struct {
 	KP           KP // nil — без Кинопоиска
 	Ratings      Ratings
 	Posters      Posters
-	Downloads    Downloads // nil — без скачанного
+	KPPoster     func(id int) string // постер Кинопоиска по номеру — повтор, когда постер карточки не скачался (Х9)
+	Downloads    Downloads           // nil — без скачанного
 	History      History
 	Power        *power.Keeper
 	DownloadsDir func() string // папка загрузок: её нельзя добавить в категорию
@@ -112,6 +113,7 @@ type Library struct {
 	lastScan time.Time
 	problems map[int64]string // папка категории → not_found, no_access
 	kpPause  time.Time        // квота Кинопоиска кончилась — распознавание не раньше
+	retries  map[string]retry // «details:<номер>», «poster:<номер>» → повтор после сбоя (Х9)
 
 	tracker  *watch.Tracker                         // место по чтению потока файлов из папок
 	durTried sync.Map                               // «раздача/номер» → длительность уже пробовали узнать
@@ -149,7 +151,7 @@ func New(o Options) *Library {
 	if o.KeepDays == nil {
 		o.KeepDays = func() int { return 14 }
 	}
-	l := &Library{o: o, d: db{o.DB}, log: o.Log, now: o.Now, problems: map[int64]string{}}
+	l := &Library{o: o, d: db{o.DB}, log: o.Log, now: o.Now, problems: map[int64]string{}, retries: map[string]retry{}}
 	var rep watch.Reporter
 	if o.History != nil {
 		rep = mediaReporter{o.History}
@@ -319,10 +321,10 @@ func (l *Library) scanNow(ctx context.Context) error {
 	} else if err := l.d.syncTorrents(ctx, tus, now); err != nil {
 		return err
 	}
-	if err := l.recognizePending(ctx, tus); err != nil {
+	if err := l.recognizePending(ctx, tus, 0); err != nil {
 		return err
 	}
-	return l.refreshCards(ctx, tus)
+	return l.refreshCards(ctx, tus, 0, false)
 }
 
 // syncProblems — недоступные папки категорий — проблемы в «Состоянии» (спека, раздел 5.11);

@@ -133,6 +133,9 @@ func (c *Catalog) entries(ctx context.Context, rs []row) ([]Entry, error) {
 			CategoryID: r.CategoryID, Category: cmp.Or(names[CategoryRef{r.Tracker, r.CategoryID}], r.CategoryID), Seeders: r.Seeders,
 			Leechers: r.Leechers, Size: r.Size, Added: r.Added, InfoHash: r.InfoHash, ImageKey: r.ImageKey, Format: r.Format,
 			DetailsPending: r.DetailsAt.IsZero(), Rating: ratings[r.Tracker+":"+r.TopicID]}
+		if out[i].Rating.KinopoiskID == 0 && r.KinopoiskID > 0 {
+			out[i].Rating.KinopoiskID = r.KinopoiskID // номер из описания — до очереди рейтингов (медиатека, 11b-Б)
+		}
 	}
 	return out, nil
 }

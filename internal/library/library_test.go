@@ -71,12 +71,17 @@ func (f *fakeRatings) AddFilm(_ context.Context, m meta.Film) error {
 type fakePosters struct {
 	mu      sync.Mutex
 	fetched []string
+	fail    map[string]int // адрес → сколько раз ещё не отдать
 }
 
 func (f *fakePosters) Fetch(_ context.Context, src string, via meta.Via) (string, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.fetched = append(f.fetched, src)
+	if f.fail[src] > 0 {
+		f.fail[src]--
+		return "", errors.New("хостинг не отдал картинку")
+	}
 	if via != meta.Direct {
 		return "", errors.New("постер Кинопоиска — напрямую")
 	}
@@ -283,7 +288,8 @@ func TestCategoriesAndPlain(t *testing.T) {
 	e.clk.add(time.Hour)
 	e.dl.set(malahit(5))
 	e.scan(t)
-	if len(e.kp.calls) != 0 {
+	// Поиска по названию нет; «details» — вид скачанной раздачи (Х11), не своей категории.
+	if slices.ContainsFunc(e.kp.calls, func(c string) bool { return c != "details" }) {
 		t.Errorf("категория без Кинопоиска спрашивала его: %q", e.kp.calls)
 	}
 	v := e.list(t, "pc", 0)
