@@ -143,6 +143,36 @@ func (k *Kinopoisk) Film(ctx context.Context, id int) (Film, error) {
 	return v.film(), nil
 }
 
+// FilmDetails — фильм с описанием, жанрами и постером: карточки медиатеки (спека этапа 9, раздел 5.4).
+type FilmDetails struct {
+	Film
+	Description string
+	Genres      []string
+	PosterURL   string // "" — постера нет
+}
+
+// Details — фильм по номеру с описанием, жанрами и постером (/api/v2.2/films/{id}).
+func (k *Kinopoisk) Details(ctx context.Context, id int) (FilmDetails, error) {
+	var v struct {
+		apiFilm
+		Description *string `json:"description"`
+		PosterURL   *string `json:"posterUrl"`
+		Genres      []struct {
+			Genre string `json:"genre"`
+		} `json:"genres"`
+	}
+	if err := k.getJSON(ctx, "фильм "+strconv.Itoa(id), "/api/v2.2/films/"+strconv.Itoa(id), nil, &v); err != nil {
+		return FilmDetails{}, err
+	}
+	d := FilmDetails{Film: v.film(), Description: str(v.Description), PosterURL: str(v.PosterURL), Genres: []string{}}
+	for _, g := range v.Genres {
+		if g.Genre != "" {
+			d.Genres = append(d.Genres, g.Genre)
+		}
+	}
+	return d, nil
+}
+
 // ByIMDb — фильм по номеру IMDb (/api/v2.2/films?imdbId=): точное совпадение одним запросом.
 func (k *Kinopoisk) ByIMDb(ctx context.Context, imdbID string) (Film, error) {
 	fs, err := k.films(ctx, "поиск по IMDb "+imdbID, url.Values{"imdbId": {imdbID}})

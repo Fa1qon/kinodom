@@ -157,6 +157,53 @@ func (s ratingStore) saveFilm(ctx context.Context, f Film, ratingAt time.Time) e
 	return err
 }
 
+// addFilm — фильм медиатеки: названия, год и тип обновляются; рейтинг — только ненулевой.
+func (s ratingStore) addFilm(ctx context.Context, f Film, now time.Time) error {
+	at := int64(0)
+	if f.Rating > 0 {
+		at = ms(now)
+	}
+	_, err := s.db.W.ExecContext(ctx,
+		`INSERT INTO kp_films(kp_id, imdb_id, name_ru, name_orig, year, type, rating, rating_imdb, rating_at)
+		 VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?)
+		 ON CONFLICT(kp_id) DO UPDATE SET
+		   imdb_id = CASE WHEN excluded.imdb_id != '' THEN excluded.imdb_id ELSE imdb_id END,
+		   name_ru = excluded.name_ru, name_orig = excluded.name_orig,
+		   year = CASE WHEN excluded.year != 0 THEN excluded.year ELSE year END,
+		   type = CASE WHEN excluded.type != '' THEN excluded.type ELSE type END,
+		   rating = CASE WHEN excluded.rating > 0 THEN excluded.rating ELSE rating END,
+		   rating_imdb = CASE WHEN excluded.rating > 0 THEN excluded.rating_imdb ELSE rating_imdb END,
+		   rating_at = CASE WHEN excluded.rating > 0 THEN excluded.rating_at ELSE rating_at END`,
+		f.ID, f.IMDbID, f.NameRu, f.NameOrig, f.Year, f.Type, f.Rating, f.RatingIMDb, at)
+	return err
+}
+
+// films — рейтинги по номерам Кинопоиска.
+func (s ratingStore) films(ctx context.Context, ids []int) (map[int]Rating, error) {
+	out := map[int]Rating{}
+	if len(ids) == 0 {
+		return out, nil
+	}
+	args := make([]any, len(ids))
+	for i, id := range ids {
+		args[i] = id
+	}
+	rows, err := s.db.R.QueryContext(ctx, `SELECT kp_id, rating, rating_imdb, name_ru, name_orig, year FROM kp_films
+		WHERE kp_id IN (?`+strings.Repeat(", ?", len(ids)-1)+`)`, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var r Rating
+		if err := rows.Scan(&r.KinopoiskID, &r.Kinopoisk, &r.IMDb, &r.NameRu, &r.NameOrig, &r.Year); err != nil {
+			return nil, err
+		}
+		out[r.KinopoiskID] = r
+	}
+	return out, rows.Err()
+}
+
 // setRating — только рейтинги (путь без ключа): остальное о фильме не трогаем.
 func (s ratingStore) setRating(ctx context.Context, kpID int, kp, imdb float64, at time.Time) error {
 	_, err := s.db.W.ExecContext(ctx,

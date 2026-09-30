@@ -2,6 +2,8 @@ package torrents
 
 import (
 	"context"
+	"encoding/json"
+	"strings"
 	"testing"
 	"time"
 )
@@ -56,10 +58,23 @@ func TestDownloadsList(t *testing.T) {
 	if w := v.Items[0]; w.Index != ep[2] || w.State != DownloadWatching || w.CanDelete || w.DeleteInDays != nil {
 		t.Fatalf("смотрят: %+v", w)
 	}
-	if d := byIndex[ep[0]]; d.State != DownloadDownloading || !d.CanDelete || d.DeleteInDays != nil || d.File != "Серия 1.mkv" {
+	// Срок — по раздаче целиком (спека этапа 9, раздел 5.8): раздачу открывали 12 дней назад —
+	// удалится через 2 дня вся, и не открытая серия тоже.
+	if d := byIndex[ep[0]]; d.State != DownloadDownloading || !d.CanDelete || d.DeleteInDays == nil || *d.DeleteInDays != 2 || d.File != "Серия 1.mkv" {
 		t.Fatalf("в фокусе: %+v", d)
 	}
 	if q := byIndex[ep[1]]; q.State != DownloadQueued || q.DeleteInDays == nil || *q.DeleteInDays != 2 {
 		t.Fatalf("в очереди, открыт 12 дней назад: %+v", q)
+	}
+}
+
+// Ни разу не открытый файл — без даты открытия в ответе: пульт иначе показал бы «739000 дн. назад».
+func TestDownloadItemNeverOpenedJSON(t *testing.T) {
+	b, err := json.Marshal(DownloadItem{Hash: "h", File: "f.mkv"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(b), "lastOpenedAt") {
+		t.Errorf("нулевая дата открытия в ответе: %s", b)
 	}
 }

@@ -128,7 +128,7 @@ func TestRestartServesDownloadedRangeWithoutPeers(t *testing.T) {
 	}
 	r.Close()
 	path := enginePath(down, t1.Info(), ih, t1.Info().UpvertedFiles()[0])
-	must(t, reg.MarkStored(ctx, ih, 0, path, 16<<20, time.Now()))
+	must(t, reg.MarkStored(ctx, ih, 0, path, 16<<20))
 	s1.saveMetainfoNow(t, ih, mi)
 	e1.Close()
 

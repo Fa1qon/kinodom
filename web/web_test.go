@@ -19,7 +19,7 @@ var required = []string{
 	"views/catalog.js", "views/release.js", "views/search.js", "views/downloads.js",
 	"views/settings-layout.js", "views/settings-status.js", "views/settings-params.js", "views/settings-sections.js",
 	"views/channels.js", "views/channel.js", "views/channel-settings.js", "views/tvkit.js", "views/settings-iptv.js", "views/settings-unrecognized.js",
-	"views/history.js",
+	"views/history.js", "views/library.js", "views/library-card.js", "views/settings-library.js",
 }
 
 // scripts — все модули пульта.
@@ -465,6 +465,53 @@ checks.push(['ушёл сам — старый ключ забыт', document.ac
 for (const [name, ok] of checks) {
   if (!ok) {
     console.error('не выполнено:', name);
+    process.exitCode = 1;
+  }
+}
+`
+	cmd := exec.Command(node, "--input-type=module", "--no-warnings", "-e", script)
+	cmd.Dir = "static"
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Errorf("%v\n%s", err, out)
+	}
+}
+
+// Медиатека (спека этапа 9, раздел 6): вкладки, подписи «Продолжить», сезоны и серии, версия по
+// умолчанию, ссылка плеера на Android (серии подряд — .m3u8, фильм — поток с местом).
+func TestPultLibrary(t *testing.T) {
+	node := lookNode(t)
+	script := `
+import { libraryTabs, continueLabel } from './views/library.js';
+import { seasonsOf, episodeLabel, defaultVersion, libraryPlayerLink } from './views/library-card.js';
+const tabs = (v) => libraryTabs(v).map((x) => x.id + ':' + x.name + ':' + x.count).join(' ');
+const ep = (file, season, section, episode, name) => ({ file, season, section, episode, name });
+const eps = [ep(5, 2, '', 1, 'S02E01.mkv'), ep(1, 1, '', 1, 'S01E01.mkv'), ep(2, 1, '', 2, 'S01E02.mkv'), ep(9, 0, '1. О курсе', 0, 'a.mp4'), ep(8, 0, '', 0, 'intro.mp4')];
+const groups = (list) => seasonsOf(list).map((g) => g.title + '=' + g.items.map((e) => e.file).join(',')).join(' | ');
+const android = 'Mozilla/5.0 (Linux; Android 12) Chrome/120';
+const res = { streamUrl: 'http://192.168.0.2:8090/media/7/film.mkv', m3uUrl: 'http://192.168.0.2:8090/m3u/library/7.m3u8?start=600', title: 'Фильм', startSec: 600 };
+const checks = [
+  [tabs({ categories: [{ id: 1, name: 'Фильмы', count: 3 }, { id: 2, name: 'Сериалы', count: 2 }], unrecognized: 0 }), 'all:Все:5 1:Фильмы:3 2:Сериалы:2'],
+  [tabs({ categories: [{ id: 1, name: 'Фильмы', count: 3 }], unrecognized: 2 }), 'all:Все:3 1:Фильмы:3 unrecognized:Не распознано:2'],
+  [continueLabel({ season: 1, episode: 5, positionSec: 1380 }), '1×05, с 23 мин'],
+  [continueLabel({ season: 0, episode: 0, positionSec: 3730 }), 'с 1:02:10'],
+  [continueLabel({ season: 1, episode: 5, positionSec: 0 }), '1×05'],
+  [continueLabel({ season: 0, episode: 0, positionSec: 0 }), 'Смотреть'],
+  // Без сезона — первыми (вступление курса), потом сезоны по номеру, потом главы — как на сервере.
+  [groups(eps), '=8 | Сезон 1=1,2 | Сезон 2=5 | 1. О курсе=9'],
+  [groups([ep(3, 0, '', 0, 'film.mkv')]), '=3'],
+  [episodeLabel(ep(2, 1, '', 2, 'S01E02.mkv')), '1×02'],
+  [episodeLabel(ep(2, 0, '', 7, 'Серия 7.mp4')), '7'],
+  [episodeLabel(ep(2, 0, 'Глава', 0, 'Урок про слайсы.mp4')), 'Урок про слайсы'],
+  [defaultVersion({ lastVersion: 12, versions: [{ unit: 10, source: 'Фильмы' }, { unit: 11, source: 'Скачано' }, { unit: 12, source: 'Фильмы' }] }), 12],
+  [defaultVersion({ lastVersion: 0, versions: [{ unit: 10, source: 'Фильмы' }, { unit: 11, source: 'Скачано' }] }), 11],
+  [defaultVersion({ lastVersion: 99, versions: [{ unit: 10, source: 'Фильмы' }] }), 10],
+  [libraryPlayerLink(res, true, 'Mozilla/5.0 (Windows NT 10.0)'), res.m3uUrl],
+  [libraryPlayerLink(res, true, android).startsWith('intent://192.168.0.2:8090/m3u/library/7.m3u8?start=600#Intent;scheme=http;type=audio/x-mpegurl;package=org.videolan.vlc;'), true],
+  [libraryPlayerLink(res, false, android).startsWith('intent://192.168.0.2:8090/media/7/film.mkv#Intent;scheme=http;type=video/*;package=org.videolan.vlc;l.position=600000;'), true],
+];
+for (const [got, want] of checks) {
+  if (got !== want) {
+    console.error(JSON.stringify(got), '≠', JSON.stringify(want));
     process.exitCode = 1;
   }
 }

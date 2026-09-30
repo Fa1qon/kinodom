@@ -1107,3 +1107,83 @@ func TestHistoryRoutes(t *testing.T) {
 		t.Errorf("после удаления: %+v", list)
 	}
 }
+
+// Медиатека вместе с загрузками и историей (спека этапа 9): скачанная раздача — карточка с данными
+// раздачи; файл из папки — в истории по «раздаче» lib-<единица>; скрытая категория в «Истории» не
+// видна.
+func TestLibraryThroughAPI(t *testing.T) {
+	a := rutorApp(t)
+	base := "http://" + a.API.Addr() + "/api/v1"
+	id := rutorRelease(t, a)
+	var opened struct{ Hash string }
+	postJSON(t, fmt.Sprintf("%s/releases/%d/download", base, id), struct{}{}, &opened)
+	type list struct {
+		Cards []struct {
+			Key   string `json:"key"`
+			Title string `json:"title"`
+		} `json:"cards"`
+	}
+	var l list
+	waitUntil(t, "скачанная раздача в медиатеке", func() bool {
+		postJSON(t, base+"/library/scan", struct{}{}, nil)
+		getJSON(t, base+"/library", &l)
+		return len(l.Cards) == 1
+	})
+	if !strings.HasPrefix(l.Cards[0].Title, "Динозавры") {
+		t.Errorf("карточка скачанного: %+v", l.Cards)
+	}
+	dir := t.TempDir()
+	film := filepath.Join(dir, "Домашнее.mkv")
+	if err := os.WriteFile(film, []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	old := time.Now().Add(-time.Hour)
+	os.Chtimes(film, old, old)
+	var created struct{ ID int64 }
+	b, _ := json.Marshal(map[string]any{"name": "Дом", "layout": "films", "hidden": true, "folders": []string{dir}})
+	resp, err := http.Post(base+"/library/categories", "application/json", bytes.NewReader(b))
+	if err != nil || resp.StatusCode != http.StatusCreated {
+		t.Fatalf("категория: %v %v", resp, err)
+	}
+	json.NewDecoder(resp.Body).Decode(&created)
+	resp.Body.Close()
+	var unit, file int64
+	waitUntil(t, "файл из папки в медиатеке", func() bool {
+		a.DB.R.QueryRow(`SELECT u.id, f.id FROM lib_units u JOIN lib_files f ON f.unit = u.id WHERE u.source = 'folder'`).Scan(&unit, &file)
+		return unit > 0
+	})
+	h := fmt.Sprintf("lib-%d", unit)
+	if code, body := putJSON(t, fmt.Sprintf("%s/history/%s/%d", base, h, file), map[string]any{"watched": true}); code != http.StatusNoContent {
+		t.Fatalf("отметка файла медиатеки: %d %s", code, body)
+	}
+	type hist struct {
+		Items []struct {
+			Hash    string `json:"hash"`
+			File    string `json:"file"`
+			Library *struct {
+				Key   string `json:"key"`
+				Title string `json:"title"`
+			} `json:"library"`
+		} `json:"items"`
+	}
+	var hs hist
+	getJSON(t, base+"/history", &hs)
+	for _, it := range hs.Items {
+		if it.Hash == h {
+			t.Errorf("скрытая категория в «Истории»: %+v", it)
+		}
+	}
+	if code, body := putJSON(t, fmt.Sprintf("%s/library/categories/%d/device", base, created.ID), struct{}{}); code != http.StatusNoContent {
+		t.Fatalf("показывать на устройстве: %d %s", code, body)
+	}
+	getJSON(t, base+"/history", &hs)
+	found := false
+	for _, it := range hs.Items {
+		if it.Hash == h {
+			found = it.Library != nil && it.Library.Title == "Домашнее" && it.File == "Домашнее.mkv"
+		}
+	}
+	if !found {
+		t.Errorf("файл медиатеки в «Истории»: %+v", hs.Items)
+	}
+}
