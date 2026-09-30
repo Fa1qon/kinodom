@@ -8,6 +8,7 @@ import (
 
 	"kinodom/internal/config"
 	"kinodom/internal/source/t1/t1test"
+	"kinodom/internal/source/t2/t2test"
 	"kinodom/internal/store"
 )
 
@@ -82,5 +83,38 @@ func TestStatusHasVersion(t *testing.T) {
 	getJSON(t, "http://"+a.API.Addr()+"/api/v1/status", &st)
 	if st.Version != "0.11.0-test" {
 		t.Fatalf("версия %q", st.Version)
+	}
+}
+
+// Вход t2 переживает перезапуск приложения (хвост 5c): сессия — в базе (tracker_state).
+func Testt2SessionSurvivesRestart(t *testing.T) {
+	rt := t2test.NewServer(t)
+	rt.Login, rt.Password, rt.TopicNeedsLogin = "user", "pass", true
+	kp := httptest.NewServer(http.NotFoundHandler())
+	t.Cleanup(kp.Close)
+	home := t.TempDir()
+	o := Options{Home: home, ListenAddr: "127.0.0.1:0", Offline: true, DownloadsDir: t.TempDir(), KinopoiskAPI: kp.URL,
+		Settings: map[string]string{"t2.login": "user", "t2.password": "pass"},
+		Trackers: Trackers{t2Mirrors: []string{rt.Forum.URL}, t2API: rt.API.URL, t2Feed: rt.Feed.URL,
+			t1Mirrors: []string{"http://" + closedAddr(t)}, NoEdge: true, Rate: 1000}}
+	ctx, cancel := context.WithCancel(context.Background())
+	a, err := New(ctx, o)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := a.t2.Details(ctx, "6914565"); err != nil {
+		t.Fatal(err)
+	}
+	cancel()
+	a.Close()
+	if rt.Logins() != 1 {
+		t.Fatalf("входов %d", rt.Logins())
+	}
+	a2 := startAppRaw(t, o)
+	if _, err := a2.t2.Details(context.Background(), "6914565"); err != nil {
+		t.Fatal(err)
+	}
+	if rt.Logins() != 1 {
+		t.Fatalf("после перезапуска входов %d — сессия не сохранилась", rt.Logins())
 	}
 }
