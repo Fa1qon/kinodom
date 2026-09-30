@@ -246,8 +246,14 @@ func (im *Images) fetch(ctx context.Context, u *url.URL, src, key string, via Vi
 		return "", err
 	}
 	im.mu.Lock()
+	defer im.mu.Unlock()
+	if im.stubs[h] {
+		// Пока файл писался, то же содержимое с другого адреса признали заглушкой: stubContent этот
+		// файл ещё не видел — убрать самим, ключ не отдавать.
+		os.Remove(filepath.Join(im.o.Dir, key+ext))
+		return "", ErrNoImage
+	}
 	im.keyHash[key] = h
-	im.mu.Unlock()
 	return key, nil
 }
 

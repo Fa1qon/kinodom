@@ -281,6 +281,43 @@ func TestStubImageDetected(t *testing.T) {
 	}
 }
 
+// Заглушку признали, пока другой адрес с тем же содержимым ещё записывал файл: отданный ключ должен
+// попасть в Stubbed (каталог снимет его с раздачи) или не отдаваться вовсе — иначе раздача остаётся с
+// заглушкой навсегда (гонка, найдена нестабильным TestStubPosterReplacedByKinopoisk, 11b-А).
+func TestStubRecognizedDuringConcurrentFetch(t *testing.T) {
+	stub := pngBytes(t)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { w.Write(stub) }))
+	t.Cleanup(srv.Close)
+	for round := range 60 {
+		im, err := NewImages(ImagesOptions{Dir: t.TempDir(), Rate: 1000, AllowPrivate: true})
+		if err != nil {
+			t.Fatal(err)
+		}
+		var wg sync.WaitGroup
+		var mu sync.Mutex
+		var got []string
+		start := make(chan struct{})
+		for _, p := range []string{"/a.png", "/b.png", "/c.png"} {
+			wg.Go(func() {
+				<-start
+				if k, err := im.Fetch(ctx, srv.URL+p, Direct); err == nil {
+					mu.Lock()
+					got = append(got, k)
+					mu.Unlock()
+				}
+			})
+		}
+		close(start)
+		wg.Wait()
+		dropped := im.Stubbed()
+		for _, k := range got {
+			if !slices.Contains(dropped, k) {
+				t.Fatalf("круг %d: ключ %s заглушки отдан, но не снят (снятые %v)", round, k, dropped)
+			}
+		}
+	}
+}
+
 // Неудача сети или ответ не 200 (хвост Х29): с FailFor адрес не запрашивается снова столько времени —
 // логотип, которого нет, не качается на каждой перерисовке списка каналов; потом — снова.
 func TestFailedFetchRemembered(t *testing.T) {
