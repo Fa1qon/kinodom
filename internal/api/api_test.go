@@ -85,6 +85,31 @@ func TestStatusShowsModulesAndProblems(t *testing.T) {
 	}
 }
 
+// «Смотреть» на ПК (хвост Х33): запросу с этого ПК «Состояние» говорит, зарегистрирован ли обработчик
+// kinodom:// — пульт не гадает таймером; другим устройствам — не говорит.
+func TestStatusProtocol(t *testing.T) {
+	s, _ := newTestServer(t)
+	registered := true
+	s.SetProtocolCheck(func() bool { return registered })
+	get := func(remote string) map[string]any {
+		req := httptest.NewRequest("GET", "/api/v1/status", nil)
+		req.RemoteAddr = remote
+		var out map[string]any
+		json.Unmarshal(do(s.Handler(), req).Body.Bytes(), &out)
+		return out
+	}
+	if v, ok := get("127.0.0.1:5000")["protocol"]; !ok || v != true {
+		t.Errorf("с ПК, обработчик есть: %v %v", v, ok)
+	}
+	registered = false
+	if v := get("127.0.0.1:5000")["protocol"]; v != false {
+		t.Errorf("с ПК, обработчика нет: %v", v)
+	}
+	if _, ok := get("192.168.0.50:5000")["protocol"]; ok {
+		t.Error("телефону отдано поле protocol")
+	}
+}
+
 func TestRejectsUnknownHost(t *testing.T) {
 	s, _ := newTestServer(t)
 	req := httptest.NewRequest("GET", "/api/v1/status", nil)

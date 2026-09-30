@@ -12,6 +12,7 @@ import (
 	"net/http"
 	"reflect"
 	"strconv"
+	"sync"
 	"time"
 	"unicode"
 
@@ -37,6 +38,7 @@ import (
 	"kinodom/internal/store"
 	"kinodom/internal/supervisor"
 	"kinodom/internal/torrents"
+	"kinodom/internal/winsvc"
 	"kinodom/web"
 )
 
@@ -173,6 +175,7 @@ func New(ctx context.Context, o Options) (*App, error) {
 	a.initLibrary(ctx)
 	a.initSetup()
 	a.API.SetStatus(a.statusFields)
+	a.API.SetProtocolCheck(cachedCheck(winsvc.KinodomProtocol, time.Minute))
 	// Следующие этапы добавляют сюда свои модули так же: a.Sup.Add(m, a.ModuleEnabled(ctx, m.Name())).
 	return a, nil
 }
@@ -506,6 +509,21 @@ func (a *App) handleDownload(w http.ResponseWriter, r *http.Request) {
 		httpx.WriteError(w, http.StatusInternalServerError, err.Error())
 	default:
 		httpx.WriteJSON(w, http.StatusOK, map[string]string{"hash": ih.HexString()})
+	}
+}
+
+// cachedCheck — проверка раз в every: «Состояние» пульт спрашивает часто, а реестр меняется редко.
+func cachedCheck(check func() bool, every time.Duration) func() bool {
+	var mu sync.Mutex
+	var at time.Time
+	var v bool
+	return func() bool {
+		mu.Lock()
+		defer mu.Unlock()
+		if at.IsZero() || time.Since(at) >= every {
+			v, at = check(), time.Now()
+		}
+		return v
 	}
 }
 

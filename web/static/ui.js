@@ -233,10 +233,19 @@ export function poll(fn, ms) {
   };
 }
 
-// openPlayer — «Смотреть» на этом ПК: ссылка kinodom:// открывает плеер. Если обработчик ссылки не
-// установлен (kinodom protocol install / инсталлятор), браузер молча ничего не делает — тогда через
-// 1,5 с, если плеер не забрал фокус, открывается запасной адрес (.m3u8). env — для тестов.
-export function openPlayer(launchUrl, fallbackUrl, env = { win: window, loc: location, doc: document, wait: (f) => setTimeout(f, 1500) }) {
+// openPlayer — «Смотреть» на этом ПК: ссылка kinodom:// открывает плеер. registered — сервер знает,
+// зарегистрирован ли обработчик (хвост Х33): да — только kinodom://; нет — сразу запасной адрес (.m3u8).
+// Не знает (старый сервер) — как раньше: если за 1,5 с плеер не забрал фокус, запасной адрес. env — для
+// тестов.
+export function openPlayer(launchUrl, fallbackUrl, registered, env = { win: window, loc: location, doc: document, wait: (f) => setTimeout(f, 1500) }) {
+  if (registered === true) {
+    env.loc.href = launchUrl;
+    return;
+  }
+  if (registered === false) {
+    env.loc.href = fallbackUrl;
+    return;
+  }
   let left = false;
   const onBlur = () => {
     left = true;

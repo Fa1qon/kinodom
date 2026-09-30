@@ -52,7 +52,7 @@ export function libraryPlayerLink(res, hasNext, ua = navigator.userAgent) {
 // playFile — «Смотреть» файл медиатеки: на этом ПК — плеер ссылкой kinodom://, иначе — VLC или .m3u8.
 export async function playFile(file, ctx, fromStart = false, hasNext = true) {
   const res = await get(`/library/files/${file}/play` + (fromStart ? '?fromStart=1' : ''));
-  if (ctx.local && res.launchUrl) openPlayer(res.launchUrl, res.m3uUrl);
+  if (ctx.local && res.launchUrl) openPlayer(res.launchUrl, res.m3uUrl, ctx.status && ctx.status.protocol);
   else location.href = libraryPlayerLink(res, hasNext);
   return res;
 }
