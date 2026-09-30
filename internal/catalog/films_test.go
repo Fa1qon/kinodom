@@ -1,7 +1,9 @@
 package catalog
 
 import (
+	"fmt"
 	"net/http"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
@@ -205,5 +207,59 @@ func TestReleasesByHashSeasonAndQuality(t *testing.T) {
 	}
 	if r := refs["bb"]; r.Season != "S02" || r.Quality != "WEB-DL 720p" {
 		t.Fatalf("второй сезон: %+v", r)
+	}
+}
+
+// workFixture — раздачи Rutor: рипы одного фильма без номера, сезоны разных лет, фильм и сериал с одним
+// названием и годом, раздача с номером в описании и раздача того же сериала без номера.
+func workFixture(t *testing.T) (*Catalog, *store.DB) {
+	t.Helper()
+	rutor := newFake("rutor")
+	add := func(id, title string, seeders int, kp string) {
+		r := rel("rutor", id, title, seeders, 1<<30, "h"+id)
+		rutor.top["12"] = append(rutor.top["12"], r)
+		rutor.details[id] = source.Details{Release: r, Description: "Описание", KinopoiskID: kp}
+	}
+	add("1", "Динозавры / The Dinosaurs (2026) WEB-DL 720p", 50, "")
+	add("2", "Динозавры / The Dinosaurs (2026) WEB-DL 2160p", 40, "")
+	add("3", "Холод [S01] (2026) WEB-DL 1080p", 30, "")
+	add("4", "Холод [S02] (2027) WEB-DL 1080p", 29, "")
+	add("5", "Удар [S01] (2026) WEB-DL 1080p", 20, "")
+	add("6", "Удар / La frappe (2026) WEB-DL 1080p", 19, "")
+	add("7", "Законник [S01] (2023) WEB-DL 1080p", 10, "5325705")
+	add("8", "Законник [01-10 из 10] (2023) WEB-DL 2160p", 9, "")
+	db := openDB(t)
+	c, _ := newCatalog(t, db, nil, rutor)
+	refresh(t, c, true)
+	enrichAll(t, c, "rutor")
+	return c, db
+}
+
+// Одна карточка на произведение и без номера Кинопоиска (№ 7, Х5; спека 11b, 5.3; Review Focus 3).
+func TestOneCardPerWork(t *testing.T) {
+	c, _ := workFixture(t)
+	var got []string
+	for _, e := range list(t, c, ListOptions{Tracker: "rutor"}) {
+		got = append(got, fmt.Sprintf("%s:%d", e.TopicID, e.Variants))
+	}
+	if want := "1:2 3:1 4:1 5:1 6:1 7:2"; strings.Join(got, " ") != want {
+		t.Fatalf("карточки %q, нужно %q", strings.Join(got, " "), want)
+	}
+}
+
+// «Другие раздачи» раздачи без номера — раздачи того же произведения на этом трекере.
+func TestVariantsWithoutNumber(t *testing.T) {
+	c, db := workFixture(t)
+	es, err := c.Variants(ctx, releaseID(t, db, "rutor", "2"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got []string
+	for _, e := range es {
+		got = append(got, e.TopicID)
+	}
+	slices.Sort(got)
+	if strings.Join(got, ",") != "1,2" {
+		t.Fatalf("другие раздачи: %v", got)
 	}
 }

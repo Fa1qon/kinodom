@@ -62,7 +62,7 @@ func (c *Catalog) List(ctx context.Context, o ListOptions) (entries []Entry, tot
 	if err != nil {
 		return nil, 0, err
 	}
-	filtered = films(filtered, kp, c.PreferredFormat())
+	filtered, size := films(filtered, kp, c.PreferredFormat())
 	total = len(filtered)
 	if o.Offset >= total {
 		return []Entry{}, total, nil
@@ -82,7 +82,7 @@ func (c *Catalog) List(ctx context.Context, o ListOptions) (entries []Entry, tot
 		return nil, 0, err
 	}
 	for i, r := range page {
-		entries[i].Variants = max(1, len(vs[kp[r.ID]]))
+		entries[i].Variants = max(1, len(vs[kp[r.ID]]), size[r.ID])
 	}
 	return entries, total, nil
 }
