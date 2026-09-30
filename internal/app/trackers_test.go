@@ -72,3 +72,15 @@ func TestTrackersOffUntilAddressIsSet(t *testing.T) {
 		t.Fatalf("мусор в адресе: %d %s", code, body)
 	}
 }
+
+// Версия сервера — в «Состоянии»: её показывает kinodom check (этап 11a).
+func TestStatusHasVersion(t *testing.T) {
+	a := startAppWith(t, Options{Home: t.TempDir(), ListenAddr: "127.0.0.1:0", Offline: true, DownloadsDir: t.TempDir(), Version: "0.11.0-test"})
+	var st struct {
+		Version string `json:"version"`
+	}
+	getJSON(t, "http://"+a.API.Addr()+"/api/v1/status", &st)
+	if st.Version != "0.11.0-test" {
+		t.Fatalf("версия %q", st.Version)
+	}
+}
