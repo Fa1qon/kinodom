@@ -31,6 +31,7 @@ type Category struct {
 	Builtin   string   `json:"builtin"` // films, series — стандартные; "" — своя
 	Position  int      `json:"position"`
 	Folders   []Folder `json:"folders"`
+	OnDevice  bool     `json:"onDevice"` // скрытая показывается на устройстве запроса
 }
 
 // Folder — папка категории.

@@ -65,20 +65,24 @@ type Options struct {
 	// TorrentFormat — формат раздачи по видеофайлам .torrent (приложение: torrents.PlayableFiles и
 	// meta.Format). nil — формат только по описанию.
 	TorrentFormat   func(torrent []byte) string
-	PreferredFormat string       // формат в приоритете (catalog.preferredFormat); "" — нет
-	Log             *slog.Logger // nil — без журнала
+	PreferredFormat string // формат в приоритете (catalog.preferredFormat); "" — нет
+	// KeepImages — картинки других модулей в том же кэше (постеры медиатеки, этап 9): чистка их не
+	// трогает. nil — только картинки каталога.
+	KeepImages func(ctx context.Context) (map[string]bool, error)
+	Log        *slog.Logger // nil — без журнала
 }
 
 // Catalog — модуль «catalog».
 type Catalog struct {
-	st       catalogStore
-	db       *store.DB
-	sources  map[string]source.Source
-	ratings  *meta.Ratings
-	images   *meta.Images
-	kpPoster func(id int) string
-	log      *slog.Logger
-	now      func() time.Time
+	st         catalogStore
+	db         *store.DB
+	sources    map[string]source.Source
+	ratings    *meta.Ratings
+	images     *meta.Images
+	kpPoster   func(id int) string
+	keepImages func(ctx context.Context) (map[string]bool, error)
+	log        *slog.Logger
+	now        func() time.Time
 
 	torrentFormat func(torrent []byte) string // формат по .torrent; nil — только по описанию
 
@@ -107,7 +111,7 @@ func New(o Options) *Catalog {
 		o.Sections = DefaultSections
 	}
 	c := &Catalog{st: catalogStore{o.DB}, db: o.DB, sources: map[string]source.Source{}, sections: o.Sections,
-		ratings: o.Ratings, images: o.Images, kpPoster: o.KinopoiskPoster, log: o.Log, now: time.Now,
+		ratings: o.Ratings, images: o.Images, kpPoster: o.KinopoiskPoster, keepImages: o.KeepImages, log: o.Log, now: time.Now,
 		refreshNow: make(chan struct{}, 1), sectionsChanged: make(chan struct{}, 1), enrichWake: map[string]chan struct{}{},
 		postersWake: make(chan struct{}, 1), urgent: map[string][]int64{}, posterTried: map[int64]time.Time{},
 		forumPaused: map[string]time.Time{}, searches: map[string]*searchRun{}, torrentFormat: o.TorrentFormat,
@@ -412,8 +416,8 @@ func (c *Catalog) imagesLoop(ctx context.Context) error {
 	}
 }
 
-// sweepImages удаляет из кэша картинки, которые каталогу больше не нужны. Сейчас кэшем пользуется
-// только каталог; медиатека и каналы (этапы 8–9) добавят сюда свои картинки.
+// sweepImages удаляет из кэша картинки, которые каталогу больше не нужны; картинки других модулей
+// (Options.KeepImages) остаются.
 func (c *Catalog) sweepImages(ctx context.Context) error {
 	if c.images == nil {
 		return nil
@@ -421,6 +425,15 @@ func (c *Catalog) sweepImages(ctx context.Context) error {
 	keep, err := c.st.imageKeysInUse(ctx, c.now().Add(-imagesKeepFor))
 	if err != nil {
 		return dbError{err}
+	}
+	if c.keepImages != nil {
+		extra, err := c.keepImages(ctx)
+		if err != nil {
+			return dbError{err}
+		}
+		for k := range extra {
+			keep[k] = true
+		}
 	}
 	removed, err := c.images.Sweep(func(k string) bool { return keep[k] }, c.now())
 	if err != nil {

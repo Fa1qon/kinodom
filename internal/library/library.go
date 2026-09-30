@@ -1,0 +1,274 @@
+package library
+
+import (
+	"context"
+	"errors"
+	"log/slog"
+	"sync"
+	"time"
+
+	"kinodom/internal/history"
+	"kinodom/internal/meta"
+	"kinodom/internal/power"
+	"kinodom/internal/store"
+	"kinodom/internal/supervisor"
+)
+
+// Ratings — рейтинги Кинопоиска по номерам (meta.Ratings).
+type Ratings interface {
+	Films(ctx context.Context, ids []int) (map[int]meta.Rating, error)
+	AddFilm(ctx context.Context, f meta.Film) error
+}
+
+// Posters — кэш картинок (meta.Images): постер Кинопоиска скачивается один раз.
+type Posters interface {
+	Fetch(ctx context.Context, src string, via meta.Via) (string, error)
+}
+
+// TorrentFile — видеофайл скачанной раздачи.
+type TorrentFile struct {
+	Index     int
+	Path      string // путь внутри раздачи через «/»
+	Size      int64
+	Done      int64
+	Stored    bool   // хранится и докачивается
+	Readiness string // цвет готовности «Смотреть» (torrents.Readiness)
+}
+
+// ReleaseData — раздача в каталоге: номер Кинопоиска и данные карточки со страницы раздачи.
+type ReleaseData struct {
+	KP          int
+	Title       string // название раздачи целиком
+	NameRu      string
+	NameOrig    string
+	Description string
+	ImageKey    string
+	Quality     string
+	Year        int
+}
+
+// TorrentUnit — скачанная раздача с хотя бы одним хранимым файлом.
+type TorrentUnit struct {
+	Hash       string // infohash, нижний регистр
+	Name       string
+	Dir        string // папка раздачи на диске
+	Files      []TorrentFile
+	LastOpened time.Time    // последнее открытие любого файла; нулевое — ни разу
+	Release    *ReleaseData // nil — раздачи нет в каталоге
+}
+
+// Downloads — скачанное (адаптер приложения над torrents и catalog).
+type Downloads interface {
+	TorrentUnits(ctx context.Context) ([]TorrentUnit, error)
+}
+
+// History — история просмотров по устройствам (history.Service).
+type History interface {
+	Files(ctx context.Context, device, hash string) ([]history.FileProgress, error)
+	List(ctx context.Context, device string) ([]history.Item, error)
+	StartSec(ctx context.Context, device, hash string, index int) int
+}
+
+type Options struct {
+	DB           *store.DB
+	KP           KP // nil — без Кинопоиска
+	Ratings      Ratings
+	Posters      Posters
+	Downloads    Downloads // nil — без скачанного
+	History      History
+	Power        *power.Keeper
+	DownloadsDir func() string // папка загрузок: её нельзя добавить в категорию
+	KeepDays     func() int    // срок хранения скачанного (torrents.keepDays)
+	Log          *slog.Logger
+	Now          func() time.Time
+}
+
+// Library — модуль «library».
+type Library struct {
+	o   Options
+	d   db
+	log *slog.Logger
+	now func() time.Time
+
+	mu       sync.Mutex
+	runCtx   context.Context
+	scanning bool
+	lastScan time.Time
+	problems map[int64]string // папка категории → not_found, no_access
+	kpPause  time.Time        // квота Кинопоиска кончилась — распознавание не раньше
+}
+
+// ScanState — идёт ли обход и когда был последний.
+type ScanState struct {
+	Running bool      `json:"running"`
+	LastAt  time.Time `json:"lastAt"`
+}
+
+// ErrNoCard — карточки нет или она в скрытой на этом устройстве категории.
+var ErrNoCard = errors.New("такой карточки в медиатеке нет")
+
+// Пределы обхода (спека, раздел 5.2).
+var (
+	scanEvery    = time.Hour
+	scanMinGap   = time.Minute // обход по открытию медиатеки — не чаще
+	kpPauseAfter = time.Hour   // квота кончилась — следующая попытка
+)
+
+func New(o Options) *Library {
+	if o.Log == nil {
+		o.Log = slog.New(slog.DiscardHandler)
+	}
+	if o.Now == nil {
+		o.Now = time.Now
+	}
+	if o.DownloadsDir == nil {
+		o.DownloadsDir = func() string { return "" }
+	}
+	if o.KeepDays == nil {
+		o.KeepDays = func() int { return 14 }
+	}
+	return &Library{o: o, d: db{o.DB}, log: o.Log, now: o.Now, problems: map[int64]string{}}
+}
+
+func (l *Library) Name() string { return "library" }
+
+// Run — обход при старте и раз в час; обход по запросу пульта — Scan.
+func (l *Library) Run(ctx context.Context) error {
+	l.start(ctx)
+	supervisor.Ready(ctx)
+	l.startScan(true)
+	t := time.NewTicker(scanEvery)
+	defer t.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return nil
+		case <-t.C:
+			l.startScan(true)
+		}
+	}
+}
+
+func (l *Library) start(ctx context.Context) {
+	l.mu.Lock()
+	l.runCtx = ctx
+	l.mu.Unlock()
+}
+
+// Scan — обход папок в фоне по открытию медиатеки: не чаще раза в минуту, один за раз.
+func (l *Library) Scan() ScanState { return l.startScan(false) }
+
+func (l *Library) startScan(force bool) ScanState {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if l.runCtx == nil || l.runCtx.Err() != nil || l.scanning || (!force && l.now().Sub(l.lastScan) < scanMinGap) {
+		return ScanState{Running: l.scanning, LastAt: l.lastScan}
+	}
+	l.scanning = true
+	ctx := l.runCtx
+	go func() {
+		if err := l.scanNow(ctx); err != nil && ctx.Err() == nil {
+			l.log.Warn("медиатека: обход не удался", "err", err)
+		}
+		l.mu.Lock()
+		l.scanning, l.lastScan = false, l.now()
+		l.mu.Unlock()
+	}()
+	return ScanState{Running: true, LastAt: l.lastScan}
+}
+
+func (l *Library) scanState() ScanState {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return ScanState{Running: l.scanning, LastAt: l.lastScan}
+}
+
+// scanNow — обход папок и скачанного, распознавание новых единиц, данные карточек.
+func (l *Library) scanNow(ctx context.Context) error {
+	cats, err := l.d.categories(ctx)
+	if err != nil {
+		return err
+	}
+	folders := map[string]int64{}
+	for _, c := range cats {
+		for _, f := range c.Folders {
+			folders[pathKey(f.Path)] = f.ID
+		}
+	}
+	problems := map[int64]string{}
+	now := l.now()
+	for _, c := range cats {
+		for _, f := range c.Folders {
+			skip := func(p string) bool {
+				id, ok := folders[pathKey(p)]
+				return ok && id != f.ID
+			}
+			units, err := Scan(f.Path, c.Layout, skip, now)
+			if err != nil {
+				problems[f.ID] = "not_found"
+				if errors.Is(err, ErrFolderAccess) {
+					problems[f.ID] = "no_access"
+				}
+				if err := l.d.markMissing(ctx, f.ID); err != nil {
+					return err
+				}
+				continue
+			}
+			if err := l.d.syncFolder(ctx, f.ID, c, units, now); err != nil {
+				return err
+			}
+		}
+	}
+	l.mu.Lock()
+	l.problems = problems
+	l.mu.Unlock()
+	tus, err := l.torrents(ctx)
+	if err != nil {
+		l.log.Warn("медиатека: скачанное не читается", "err", err)
+	} else if err := l.d.syncTorrents(ctx, tus, now); err != nil {
+		return err
+	}
+	if err := l.recognizePending(ctx, tus); err != nil {
+		return err
+	}
+	return l.refreshCards(ctx, tus)
+}
+
+// torrents — скачанное сейчас; без модуля загрузок — пусто.
+func (l *Library) torrents(ctx context.Context) ([]TorrentUnit, error) {
+	if l.o.Downloads == nil {
+		return nil, nil
+	}
+	return l.o.Downloads.TorrentUnits(ctx)
+}
+
+// FolderProblems — недоступные папки категорий после последнего обхода: для «Состояния».
+func (l *Library) FolderProblems() map[int64]string {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	out := make(map[int64]string, len(l.problems))
+	for k, v := range l.problems {
+		out[k] = v
+	}
+	return out
+}
+
+// Categories — категории с папками, их проблемами и флажком «показывать на этом устройстве».
+func (l *Library) Categories(ctx context.Context, device string) ([]Category, error) {
+	cs, err := l.d.categories(ctx)
+	if err != nil {
+		return nil, err
+	}
+	on, err := l.d.deviceCategories(ctx, device)
+	if err != nil {
+		return nil, err
+	}
+	problems := l.FolderProblems()
+	for i := range cs {
+		cs[i].OnDevice = on[cs[i].ID]
+		for j := range cs[i].Folders {
+			cs[i].Folders[j].Problem = problems[cs[i].Folders[j].ID]
+		}
+	}
+	return cs, nil
+}
