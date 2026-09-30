@@ -6,6 +6,7 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"strings"
 	"time"
 
 	"kinodom/internal/config"
@@ -18,8 +19,9 @@ var (
 	launchPlayer = player.Launch
 )
 
-// cmdOpen — обработчик ссылки kinodom:// (браузер на этом ПК вызывает его в сеансе пользователя):
-// разбирает ссылку строго по спеке, спрашивает у сервера, какой плеер выбран, и запускает его.
+// cmdOpen — обработчик ссылки kinodom:// (браузер на этом ПК вызывает kinodomw.exe в сеансе
+// пользователя): play — разбирает ссылку строго по спеке, спрашивает у сервера, какой плеер выбран,
+// и запускает его; grant — «Разрешить доступ» (openGrant). Ошибки в kinodomw.exe — окном.
 func cmdOpen(args []string, stdout, stderr io.Writer) int {
 	if len(args) != 1 {
 		fmt.Fprintln(stderr, "использование: kinodom open <kinodom://play?url=…>")
@@ -27,18 +29,21 @@ func cmdOpen(args []string, stdout, stderr io.Writer) int {
 	}
 	boot, err := config.LoadBootstrap(config.NewPaths(config.DefaultHome()).Bootstrap)
 	if err != nil {
-		return fail(stderr, err)
+		return report(stderr, "Kinodom не установлен на этом компьютере.", err)
+	}
+	if strings.HasPrefix(strings.ToLower(args[0]), "kinodom://grant") {
+		return openGrant(args[0], boot.APIPort, stdout, stderr)
 	}
 	stream, title, err := player.ParseLaunch(args[0], boot.APIPort)
 	if err != nil {
-		return fail(stderr, err)
+		return report(stderr, "Ссылка не от Kinodom — ничего не открыто.", fmt.Errorf("%w: %s", err, args[0]))
 	}
 	p, err := findPlayer(playerSetting(boot.APIPort))
 	if err != nil {
-		return fail(stderr, err)
+		return report(stderr, err.Error(), err)
 	}
 	if err := launchPlayer(p, stream, title, player.LaunchStart(args[0])); err != nil {
-		return fail(stderr, fmt.Errorf("%s не запустился: %w", p.Name, err))
+		return report(stderr, p.Name+" не запустился.", fmt.Errorf("%s не запустился: %w", p.Name, err))
 	}
 	fmt.Fprintf(stdout, "%s: %s\n", p.Name, title)
 	return 0
