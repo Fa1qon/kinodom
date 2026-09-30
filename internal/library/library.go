@@ -141,7 +141,7 @@ func New(o Options) *Library {
 	l := &Library{o: o, d: db{o.DB}, log: o.Log, now: o.Now, problems: map[int64]string{}}
 	var rep watch.Reporter
 	if o.History != nil {
-		rep = o.History
+		rep = mediaReporter{o.History}
 	}
 	l.tracker = watch.New(rep, l.now)
 	return l

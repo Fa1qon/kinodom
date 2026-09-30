@@ -66,7 +66,8 @@ export function render(root, r, ctx) {
   const key = r.parts[1];
   let alive = true;
   let c = null;
-  let error = '';
+  let error = ''; // карточка не загрузилась
+  let failed = ''; // последнее действие не удалось — видно до следующего действия
   let unit = 0; // выбранная версия
   let group = null; // выбранный сезон или раздел; null — где продолжать
   let descOpen = false;
@@ -80,9 +81,9 @@ export function render(root, r, ctx) {
   const back = h('a', { class: 'back', href: '#/library' }, icon('chevron_left', 18), 'Медиатека');
   const cover = h('div', { class: 'rel-cover' });
   const info = h('div', { class: 'rel-info' });
-  const eps = h('div');
+  const eps = h('div', { class: 'rel-live' }); // на узком экране — под панелью, как у раздачи
   const side = h('aside', { class: 'panel', 'aria-label': 'Версии и правка' });
-  root.append(h('div', { class: 'screen release' }, back, h('div', { class: 'rel-grid' }, cover, h('div', { class: 'rel-main' }, info, eps), side)));
+  root.append(h('div', { class: 'screen release libcard' }, back, h('div', { class: 'rel-grid' }, cover, h('div', { class: 'rel-main' }, info, eps), side)));
 
   const cardPoll = poll(async () => {
     try {
@@ -104,11 +105,14 @@ export function render(root, r, ctx) {
   async function act(fn) {
     try {
       await fn();
-      error = '';
+      failed = '';
     } catch (e) {
-      error = e.message;
+      failed = e.message;
     }
-    if (alive) cardPoll.now();
+    if (alive) {
+      draw();
+      cardPoll.now();
+    }
   }
 
   const version = () => c.versions.find((v) => v.unit === unit) || c.versions[0];
@@ -125,7 +129,7 @@ export function render(root, r, ctx) {
           c.ratingImdb > 0 ? h('span', { class: 'tag' }, 'IMDb ' + rating(c.ratingImdb)) : null,
           c.dupes ? h('span', { class: 'tag' }, 'Есть дубли') : null,
           c.deleteInDays !== null && c.deleteInDays !== undefined ? h('span', { class: 'tag' }, `удалится через ${c.deleteInDays} дн.`) : null),
-        desc, watchBlock(v), error ? h('p', { class: 'error' }, error) : null);
+        desc, watchBlock(v), error || failed ? h('p', { class: 'error' }, failed || error) : null);
       if (desc && !descOpen) {
         requestAnimationFrame(() => {
           if (desc.isConnected && desc.scrollHeight > desc.clientHeight + 2) {

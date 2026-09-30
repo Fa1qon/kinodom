@@ -12,7 +12,8 @@ export function render(root, r, ctx) {
   const content = layout(root, 'library', 'Медиатека');
   let alive = true;
   let cats = null;
-  let error = '';
+  let error = ''; // список не загрузился
+  let failed = ''; // последнее действие не удалось — видно до следующего действия
   let confirm = 0;
   const inputs = new Map(); // поле «папка» по категории: создаётся один раз
   const newName = h('input', { class: 'input', name: 'name', placeholder: 'Название', 'aria-label': 'Название новой категории', 'data-key': 'new-name' });
@@ -33,9 +34,9 @@ export function render(root, r, ctx) {
   async function act(fn) {
     try {
       await fn();
-      error = '';
+      failed = '';
     } catch (e) {
-      error = e.message;
+      failed = e.message;
     }
     await load();
   }
@@ -59,7 +60,7 @@ export function render(root, r, ctx) {
       fill(content, error ? h('p', { class: 'error' }, error) : h('p', { class: 'muted' }, 'Загружается…'));
       return;
     }
-    keepFocus(root, () => fill(content, canEdit() ? null : remoteNote(), error ? h('p', { class: 'error' }, error) : null,
+    keepFocus(root, () => fill(content, canEdit() ? null : remoteNote(), error || failed ? h('p', { class: 'error' }, failed || error) : null,
       cats.map(category), canEdit() ? addCard() : null));
   }
 

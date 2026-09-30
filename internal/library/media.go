@@ -27,6 +27,19 @@ var mediaTypes = map[string]string{
 	".mpeg": "video/mpeg", ".vob": "video/mpeg", ".flv": "video/x-flv", ".3gp": "video/3gpp",
 }
 
+// mediaExtraLead — сверх общей поправки watch.Lead: файл с локального диска VLC читает впереди на весь
+// свой буфер, около 16 МБ (вживую 2026-09-30: записано 86 с при картинке на ~40-й секунде; у раздач
+// скорость ограничена, и VLC впереди на 3–4 МБ). Место медиатеки — с поправкой 16 МБ: лучше повторить
+// несколько секунд, чем пропустить.
+var mediaExtraLead int64 = 12 << 20
+
+// mediaReporter — история с поправкой на чтение впереди для файлов с локального диска.
+type mediaReporter struct{ h History }
+
+func (m mediaReporter) Report(ctx context.Context, device, hash string, index int, offset, size int64) {
+	m.h.Report(ctx, device, hash, index, max(offset-mediaExtraLead, 0), size)
+}
+
 // mediaReader — открытый файл медиатеки (тесты подменяют открытие, чтобы оборвать чтение).
 type mediaReader interface {
 	io.ReadSeeker
