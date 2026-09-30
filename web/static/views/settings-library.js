@@ -4,6 +4,7 @@
 import { h, fill, icon, keepFocus } from '../ui.js';
 import { get, put, post, del } from '../api.js';
 import { layout, remoteNote } from './settings-layout.js';
+import { pickFolder, grantControl } from './folders.js';
 
 const LAYOUTS = [['films', 'Как фильмы — файл или папка = фильм'], ['series', 'Как сериалы — папка = сериал, курс']];
 const PROBLEM = { not_found: 'папка не найдена', no_access: 'папка не читается — нет прав' };
@@ -98,6 +99,7 @@ export function render(root, r, ctx) {
       h('div', { class: 'list' }, c.folders.map((f) => h('div', { class: 'row' },
         icon('folder'), h('span', { class: 'grow ellipsis', title: f.path }, f.path),
         f.problem ? h('span', { class: 'tag warn-tag' }, icon('warning', 16), PROBLEM[f.problem] || f.problem) : null,
+        canEdit() ? grantControl(ctx, f, `grant-${f.id}`) : null,
         canEdit() ? h('button', { class: 'sq', type: 'button', 'aria-label': `Убрать папку ${f.path}`, 'data-key': `unfolder-${f.id}`,
           onclick: () => save(c, { folders: c.folders.filter((x) => x.id !== f.id).map((x) => x.path) }) }, icon('close')) : null))),
       canEdit() ? h('form', { class: 'row gap10', onsubmit: (e) => {
@@ -108,7 +110,12 @@ export function render(root, r, ctx) {
           await put(`/library/categories/${c.id}`, { ...input(c), folders: [...c.folders.map((x) => x.path), p] });
           fin.value = '';
         });
-      } }, fin, h('button', { class: 'btn', type: 'submit', 'data-key': `addfolder-${c.id}` }, icon('add'), 'Добавить')) : null);
+      } }, fin,
+        h('button', { class: 'btn', type: 'button', 'data-key': `browse-${c.id}`, onclick: async () => {
+          const p = await pickFolder(fin.value.trim());
+          if (p) act(() => put(`/library/categories/${c.id}`, { ...input(c), folders: [...c.folders.map((x) => x.path), p] }));
+        } }, icon('folder_open'), 'Обзор'),
+        h('button', { class: 'btn', type: 'submit', 'data-key': `addfolder-${c.id}` }, icon('add'), 'Добавить')) : null);
   }
 
   function addCard() {

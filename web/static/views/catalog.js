@@ -1,6 +1,6 @@
 // Каталог трекера: вкладки Rutracker и Rutor, раздел, сетка постеров по раздающим, страницы
 // (спека этапа 7, разделы 5.4 и 6.3).
-import { h, icon, ago, size, rating, store, plural, keepFocus } from '../ui.js';
+import { h, icon, ago, size, rating, store, plural, keepFocus, offWarn } from '../ui.js';
 import { get } from '../api.js';
 
 export const TRACKERS = [['rutracker', 'Rutracker'], ['rutor', 'Rutor']];
@@ -28,7 +28,8 @@ export function render(root, r, ctx) {
         title, bad ? icon('warning', 18, 'Есть проблемы') : null);
     })));
     const t = trackers[tracker];
-    warn.replaceChildren(t && t.state !== 'ok' && t.text ? h('div', { class: 'warn' }, icon('warning'), t.text) : '');
+    keepFocus(warn, () => warn.replaceChildren(t && t.state === 'off' ? offWarn(t.text)
+      : t && t.state !== 'ok' && t.text ? h('div', { class: 'warn' }, icon('warning'), t.text) : ''));
   };
   ctx.listeners.add(onStatus);
   onStatus(ctx.status);

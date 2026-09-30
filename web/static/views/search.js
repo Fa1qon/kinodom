@@ -1,6 +1,6 @@
 // Поиск: недавние запросы, состояние каждого трекера, таблица найденного (спека этапа 7, разделы
 // 5.4 и 6.3).
-import { h, icon, size, poll, keepFocus } from '../ui.js';
+import { h, icon, size, poll, keepFocus, offWarn } from '../ui.js';
 import { get, del } from '../api.js';
 
 const TRACKER = { rutor: 'Rutor', rutracker: 'Rutracker' };
@@ -11,6 +11,7 @@ export function render(root, r, ctx) {
   let alive = true;
   const history = h('div', { class: 'history' });
   const trackers = h('div', { class: 'tags' });
+  const off = h('div'); // трекеры без адреса (этап 11a): поиск идёт только по остальным
   const table = h('div', { class: 'results' });
   // На узком экране поля поиска в шапке нет — оно здесь.
   const field = h('input', { name: 'q', value: q, placeholder: 'Поиск', 'aria-label': 'Поиск', autocomplete: 'off', enterkeyhint: 'search' });
@@ -19,7 +20,13 @@ export function render(root, r, ctx) {
     const v = field.value.trim();
     if (v) ctx.go('#/search?q=' + encodeURIComponent(v));
   } }, h('label', { class: 'field' }, icon('search'), field));
-  root.append(h('div', { class: 'screen' }, form, h('h1', null, q ? `Поиск: «${q}»` : 'Поиск'), history, trackers, table));
+  root.append(h('div', { class: 'screen' }, form, h('h1', null, q ? `Поиск: «${q}»` : 'Поиск'), history, off, trackers, table));
+  const onStatus = (status) => {
+    const tr = (status && status.trackers) || {};
+    keepFocus(off, () => off.replaceChildren(...Object.keys(TRACKER).filter((t) => tr[t] && tr[t].state === 'off').map((t) => offWarn(tr[t].text))));
+  };
+  ctx.listeners.add(onStatus);
+  onStatus(ctx.status);
 
   const loadHistory = async () => {
     let items = [];
@@ -93,6 +100,7 @@ export function render(root, r, ctx) {
   return () => {
     alive = false;
     search.stop();
+    ctx.listeners.delete(onStatus);
   };
 }
 
