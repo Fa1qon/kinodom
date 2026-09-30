@@ -26,11 +26,11 @@ import (
 const sourceUsage = `Использование:
   kinodom source rutor top|search|details|torrent [флаги] …
       top <категория> · search <запрос> · details <номер> · torrent <номер> <файл>
-      флаги: --proxy URL | --limit N | --mirror URL (можно несколько) | --download URL
+      флаги: --mirror URL — адрес сайта (обязателен, можно несколько) | --proxy URL | --limit N | --download URL
   kinodom source rutracker categories|top|recent|details|search|search-raw [флаги] …
       top <раздел> · recent <раздел> · details <номер> · search <запрос>
       search-raw <параметры tracker.php>… — например "f=313&nm=космос"; без фильтра по категориям
-      флаги: --proxy URL | --limit N | --mirror URL | --api URL | --feed URL | --no-edge | --profile ПАПКА
+      флаги: --mirror URL — адрес сайта (обязателен) | --proxy URL | --limit N | --api URL | --feed URL | --no-edge | --profile ПАПКА
       логин и пароль — переменные окружения KINODOM_RUTRACKER_LOGIN и KINODOM_RUTRACKER_PASSWORD
 `
 
@@ -57,8 +57,8 @@ func cmdSourceRutor(action string, rest []string, stdout, stderr io.Writer) int 
 	proxy := fs.String("proxy", "", "прокси для трекера: socks5://… или http://…; пусто — напрямую")
 	limit := fs.Int("limit", 20, "сколько строк показать")
 	var mirrors listFlag
-	fs.Var(&mirrors, "mirror", "зеркало вместо встроенных; можно несколько раз")
-	download := fs.String("download", "", "адрес для .torrent вместо "+rutor.DefaultDownloadBase)
+	fs.Var(&mirrors, "mirror", "адрес сайта Rutor или зеркала; можно несколько раз")
+	download := fs.String("download", "", "адрес для .torrent; пусто — по правилу из адреса сайта")
 	if err := fs.Parse(rest); err != nil {
 		return 2
 	}
@@ -129,9 +129,9 @@ func cmdSourceRutracker(action string, rest []string, stdout, stderr io.Writer) 
 	proxy := fs.String("proxy", "", "прокси для трекера: socks5://… или http://…; пусто — напрямую")
 	limit := fs.Int("limit", 20, "сколько строк показать")
 	var mirrors listFlag
-	fs.Var(&mirrors, "mirror", "зеркало вместо встроенных; можно несколько раз")
-	apiBase := fs.String("api", "", "адрес API вместо "+rutracker.DefaultAPIBase)
-	feedBase := fs.String("feed", "", "адрес ленты вместо "+rutracker.DefaultFeedBase)
+	fs.Var(&mirrors, "mirror", "адрес сайта Rutracker; можно несколько раз")
+	apiBase := fs.String("api", "", "адрес API; пусто — по правилу из адреса сайта")
+	feedBase := fs.String("feed", "", "адрес ленты; пусто — по правилу из адреса сайта")
 	noEdge := fs.Bool("no-edge", false, "без Edge: пропуск Cloudflare не добывать")
 	profile := fs.String("profile", filepath.Join(os.TempDir(), "kinodom-edge-profile"), "папка профиля Edge")
 	if err := fs.Parse(rest); err != nil {

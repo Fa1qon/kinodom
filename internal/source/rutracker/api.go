@@ -198,7 +198,7 @@ func (r *Rutracker) Recent(ctx context.Context, forumID string) ([]source.Releas
 	if !isNumber(forumID) {
 		return nil, fmt.Errorf("Rutracker: раздел %q — не номер раздела", forumID)
 	}
-	p, err := r.api.Get(ctx, r.feedBase+"/atom/f/"+forumID+".atom")
+	p, err := r.api.Get(ctx, r.feed()+"/atom/f/"+forumID+".atom")
 	if err != nil {
 		return nil, err
 	}

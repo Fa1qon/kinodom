@@ -11,6 +11,7 @@ import (
 	"github.com/anacrolix/torrent/metainfo"
 
 	"kinodom/internal/store"
+	"kinodom/internal/torrents/torrenttest"
 )
 
 func newTestDB(t *testing.T) *store.DB {
@@ -130,5 +131,31 @@ func must(t *testing.T, err error) {
 	t.Helper()
 	if err != nil {
 		t.Fatal(err)
+	}
+}
+
+// Папки раздач из реестра — для удаления «со скачанным» (этап 11a): у раздачи со своей папкой
+// загрузок — в ней, у раздачи без папки — в текущей; без метаинфо на диске ничего нет.
+func TestFoldersOfRegistry(t *testing.T) {
+	ctx := context.Background()
+	r := NewRegistry(newTestDB(t))
+	src := t.TempDir()
+	mi1, _ := torrenttest.MakeTorrent(t, src, "Фильм: 2020", 1<<14, torrenttest.File{Path: "Фильм: 2020", Size: 10})
+	mi2, _ := torrenttest.MakeTorrent(t, src, "Сериал", 1<<14, torrenttest.File{Path: "s01e01.mkv", Size: 10})
+	a, b, c := hashOf(t, "a"), hashOf(t, "b"), hashOf(t, "c")
+	if _, err := r.Remember(ctx, a, "magnet:a", `D:\Old`); err != nil {
+		t.Fatal(err)
+	}
+	must(t, r.SaveMetainfo(ctx, a, "Фильм", mi1.InfoBytes))
+	must(t, r.SaveMetainfo(ctx, b, "Сериал", mi2.InfoBytes))
+	remember(t, r, c, "magnet:c") // метаинфо не пришла
+	got, err := r.Folders(ctx, `E:\Kinodom`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	slices.Sort(got)
+	want := []string{`D:\Old\Фильм_ 2020 [aaaaaaaa]`, `E:\Kinodom\Сериал [bbbbbbbb]`}
+	if !slices.Equal(got, want) {
+		t.Fatalf("папки %q, ждали %q", got, want)
 	}
 }

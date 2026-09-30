@@ -3,16 +3,27 @@ package httpx
 import (
 	"net"
 	"net/http"
+	"slices"
 	"strings"
 	"sync"
 	"time"
 )
 
-// interfaceAddrs — адреса сетевых интерфейсов ПК (тесты подменяют).
-var interfaceAddrs = net.InterfaceAddrs
+// interfaceAddrs — адреса сетевых интерфейсов ПК, now — часы (тесты подменяют).
+var (
+	interfaceAddrs = net.InterfaceAddrs
+	now            = time.Now
+)
 
-// own — адреса самого ПК. Если адреса запроса среди них нет, список перечитывается, но не чаще раза
-// в 10 с: адрес мог смениться (DHCP, другой Wi-Fi).
+// Когда перечитывать адреса ПК: адрес мог смениться (DHCP, другой Wi-Fi). Промах — не чаще раза в
+// 10 с (чужие устройства спрашивают постоянно); список старше минуты — всегда: ушедший адрес
+// перестаёт быть «этим ПК» (хвост 7b).
+const (
+	ownMissEvery = 10 * time.Second
+	ownMaxAge    = time.Minute
+)
+
+// own — адреса самого ПК. Одна реализация на весь сервер: её же спрашивает проверка Host в API.
 var own struct {
 	mu    sync.Mutex
 	addrs map[string]bool
@@ -25,14 +36,18 @@ func resetOwn() {
 	own.mu.Unlock()
 }
 
+// IsOwnIP — адрес принадлежит этому ПК (loopback сюда не входит).
+func IsOwnIP(ip net.IP) bool { return isOwn(unmap(ip)) }
+
 func isOwn(ip net.IP) bool {
 	key := ip.String()
 	own.mu.Lock()
 	defer own.mu.Unlock()
-	if own.addrs[key] || (own.addrs != nil && time.Since(own.at) < 10*time.Second) {
+	age := now().Sub(own.at)
+	if own.addrs != nil && age < ownMaxAge && (own.addrs[key] || age < ownMissEvery) {
 		return own.addrs[key]
 	}
-	own.addrs, own.at = map[string]bool{}, time.Now()
+	own.addrs, own.at = map[string]bool{}, now()
 	if as, err := interfaceAddrs(); err == nil {
 		for _, a := range as {
 			if n, ok := a.(*net.IPNet); ok {
@@ -97,4 +112,38 @@ func Device(r *http.Request) string {
 		return DevicePC
 	}
 	return ip.String()
+}
+
+// HomeAddresses — адреса этого ПК в домашней сети для телефонов и ТВ: частные IPv4, сначала
+// 192.168.* (обычная домашняя сеть), затем 10.* и 172.16–31.*.
+func HomeAddresses() []string {
+	as, err := interfaceAddrs()
+	if err != nil {
+		return nil
+	}
+	rank := func(ip net.IP) int {
+		switch ip[0] {
+		case 192:
+			return 0
+		case 10:
+			return 1
+		}
+		return 2
+	}
+	var ips []net.IP
+	for _, a := range as {
+		n, ok := a.(*net.IPNet)
+		if !ok {
+			continue
+		}
+		if ip := n.IP.To4(); ip != nil && ip.IsPrivate() {
+			ips = append(ips, ip)
+		}
+	}
+	slices.SortStableFunc(ips, func(a, b net.IP) int { return rank(a) - rank(b) })
+	out := make([]string, len(ips))
+	for i, ip := range ips {
+		out[i] = ip.String()
+	}
+	return out
 }

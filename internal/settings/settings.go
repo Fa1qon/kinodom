@@ -19,6 +19,7 @@ import (
 
 	"kinodom/internal/iptv/labels"
 	"kinodom/internal/netx"
+	"kinodom/internal/source"
 	"kinodom/internal/store"
 )
 
@@ -26,16 +27,23 @@ import (
 const (
 	KeyRutrackerLogin    = "rutracker.login"
 	KeyRutrackerPassword = "rutracker.password"
-	KeyProxy             = "proxy.trackers"
-	KeyKinopoisk         = "kinopoisk.key"
-	KeyDownloadsDir      = "downloads.dir"
-	KeyKeepDays          = "torrents.keepDays"
-	KeyKeepBehind        = "torrents.keepBehind"
-	KeyMinFreeGB         = "torrents.minFreeGB"
-	KeyUploadLimit       = "torrents.uploadLimitMBps"
-	KeyPlayer            = "player"
-	KeySections          = "catalog.categories"
-	KeyPreferredFormat   = "catalog.preferredFormat"
+	// Адреса трекеров вводит пользователь (спека этапа 11a, раздел 6); служебные "" — по правилу.
+	KeyRutrackerAddress = "rutracker.address"
+	KeyRutrackerAPI     = "rutracker.apiAddress"
+	KeyRutrackerFeed    = "rutracker.feedAddress"
+	KeyRutorAddress     = "rutor.address"
+	KeyRutorDownload    = "rutor.downloadAddress"
+	KeySetupDone        = "setup.done" // мастер начальных настроек пройден
+	KeyProxy            = "proxy.trackers"
+	KeyKinopoisk        = "kinopoisk.key"
+	KeyDownloadsDir     = "downloads.dir"
+	KeyKeepDays         = "torrents.keepDays"
+	KeyKeepBehind       = "torrents.keepBehind"
+	KeyMinFreeGB        = "torrents.minFreeGB"
+	KeyUploadLimit      = "torrents.uploadLimitMBps"
+	KeyPlayer           = "player"
+	KeySections         = "catalog.categories"
+	KeyPreferredFormat  = "catalog.preferredFormat"
 	// Каналы (спека этапа 8, раздел 5.6); списки — JSON.
 	KeyEPGURL           = "iptv.epgUrl"
 	KeyHiddenCategories = "iptv.hiddenCategories"
@@ -65,6 +73,12 @@ var Formats = []string{"", "MKV", "MP4", "AVI"}
 type Values struct {
 	RutrackerLogin    string
 	RutrackerPassword string
+	RutrackerAddress  string // «схема://хост»; "" — Rutracker выключен
+	RutrackerAPI      string // "" — по правилу из адреса сайта
+	RutrackerFeed     string // "" — по правилу из адреса сайта
+	RutorAddress      string // «схема://хост»; "" — Rutor выключен
+	RutorDownload     string // адрес .torrent; "" — по правилу из адреса сайта
+	SetupDone         bool
 	Proxy             string // адрес целиком: http:// или socks5://, с логином и паролем; "" — нет
 	KinopoiskKey      string
 	DownloadsDir      string
@@ -125,6 +139,14 @@ func Load(ctx context.Context, db *store.DB, def Defaults, overrides map[string]
 	collect(err)
 	v.RutrackerPassword, err = str(KeyRutrackerPassword, "")
 	collect(err)
+	for key, dst := range map[string]*string{KeyRutrackerAddress: &v.RutrackerAddress, KeyRutrackerAPI: &v.RutrackerAPI,
+		KeyRutrackerFeed: &v.RutrackerFeed, KeyRutorAddress: &v.RutorAddress, KeyRutorDownload: &v.RutorDownload} {
+		*dst, err = str(key, "")
+		collect(err)
+	}
+	done, err := str(KeySetupDone, "false")
+	collect(err)
+	v.SetupDone = done == "true"
 	v.Proxy, err = str(KeyProxy, "")
 	collect(err)
 	v.KinopoiskKey, err = str(KeyKinopoisk, "")
@@ -208,6 +230,12 @@ func (v Values) entries() map[string]string {
 	return map[string]string{
 		KeyRutrackerLogin:    v.RutrackerLogin,
 		KeyRutrackerPassword: v.RutrackerPassword,
+		KeyRutrackerAddress:  v.RutrackerAddress,
+		KeyRutrackerAPI:      v.RutrackerAPI,
+		KeyRutrackerFeed:     v.RutrackerFeed,
+		KeyRutorAddress:      v.RutorAddress,
+		KeyRutorDownload:     v.RutorDownload,
+		KeySetupDone:         strconv.FormatBool(v.SetupDone),
 		KeyProxy:             v.Proxy,
 		KeyKinopoisk:         v.KinopoiskKey,
 		KeyDownloadsDir:      v.DownloadsDir,
@@ -270,6 +298,27 @@ func (v Values) With(p Patch) (Values, error) {
 		if r.Password != nil {
 			n.RutrackerPassword = *r.Password
 		}
+		for _, f := range []struct {
+			in    *string
+			dst   *string
+			field string
+		}{{r.Address, &n.RutrackerAddress, "Адрес Rutracker"}, {r.APIAddress, &n.RutrackerAPI, "Адрес API Rutracker"},
+			{r.FeedAddress, &n.RutrackerFeed, "Адрес ленты Rutracker"}} {
+			if err := setAddress(f.in, f.dst, f.field); err != nil {
+				return v, err
+			}
+		}
+	}
+	if r := p.Rutor; r != nil {
+		if err := setAddress(r.Address, &n.RutorAddress, "Адрес Rutor"); err != nil {
+			return v, err
+		}
+		if err := setAddress(r.DownloadAddress, &n.RutorDownload, "Адрес .torrent Rutor"); err != nil {
+			return v, err
+		}
+	}
+	if st := p.Setup; st != nil && st.Done != nil {
+		n.SetupDone = *st.Done
 	}
 	if pp := p.Proxy; pp != nil {
 		proxy, err := composeProxy(v.Proxy, *pp)
@@ -339,6 +388,24 @@ func (v Values) With(p Patch) (Values, error) {
 		n.Sections = s
 	}
 	return n, nil
+}
+
+// setAddress — адрес сайта из поля пульта: нет поля — не менять, пусто — стереть, иначе —
+// приведённый к «схема://хост» (source.SiteAddress).
+func setAddress(in, dst *string, field string) error {
+	if in == nil {
+		return nil
+	}
+	if strings.TrimSpace(*in) == "" {
+		*dst = ""
+		return nil
+	}
+	a, err := source.SiteAddress(*in)
+	if err != nil {
+		return fieldErr(field, "%v", err)
+	}
+	*dst = a
+	return nil
 }
 
 // composeProxy — адрес прокси из полей пульта. Поля, которых нет в запросе, берутся из прежнего

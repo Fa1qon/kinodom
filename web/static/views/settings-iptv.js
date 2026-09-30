@@ -1,20 +1,10 @@
 // «Настройки → Каналы» (спека этапа 8, раздел 6.2): плейлисты (ссылкой и файлом, «ограничено»,
 // «Обновить», «Проверить», корзина), телепрограмма, ход проверок, часовой пояс каналов, скрытие
 // категорий, стран и языков, скрытые поштучно каналы, избранное этого устройства.
-import { h, fill, icon, poll, keepFocus, ago, plural } from '../ui.js';
+import { h, fill, icon, poll, keepFocus, ago, plural, fileBase64 } from '../ui.js';
 import { get, put, post, del } from '../api.js';
 import { layout, remoteNote } from './settings-layout.js';
 import { CATEGORIES } from './channel-settings.js';
-
-// fileBase64 — файл плейлиста в base64: изменяющие запросы к API — только JSON.
-function fileBase64(file) {
-  return new Promise((resolve, reject) => {
-    const rd = new FileReader();
-    rd.onload = () => resolve(String(rd.result).replace(/^data:[^,]*,/, ''));
-    rd.onerror = () => reject(new Error('файл не читается'));
-    rd.readAsDataURL(file);
-  });
-}
 
 // progressLine — «лёгкая: 1200 из 19 000» или «последняя — 2 ч назад».
 export function progressLine(name, p) {

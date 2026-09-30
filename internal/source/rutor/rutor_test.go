@@ -329,17 +329,58 @@ func TestChallengedMirrorIsSkipped(t *testing.T) {
 	}
 }
 
-// Список зеркал по умолчанию не делится с клиентами: его правка не меняет работающий источник.
-func TestNewCopiesDefaultMirrors(t *testing.T) {
-	r, err := New(Options{})
+// Адрес Rutor не введён (этап 11a): источник есть, но выключен — ни одного запроса, каждое
+// действие отвечает ErrNotConfigured, ссылки «На трекере» нет.
+func TestNotConfigured(t *testing.T) {
+	r, err := New(Options{Rate: 1000})
 	if err != nil {
 		t.Fatal(err)
 	}
-	saved := DefaultMirrors[0]
-	DefaultMirrors[0] = "https://evil.example"
-	defer func() { DefaultMirrors[0] = saved }()
-	if r.Mirror() != saved {
-		t.Fatalf("зеркало источника изменилось: %s", r.Mirror())
+	if r.Configured() || r.Mirror() != "" || r.TopicURL("1") != "" {
+		t.Fatalf("настроен %v, зеркало %q, ссылка %q", r.Configured(), r.Mirror(), r.TopicURL("1"))
+	}
+	_, errTop := r.Top(ctx, "12", 10)
+	_, errSearch := r.Search(ctx, "дюна")
+	_, errDetails := r.Details(ctx, "1")
+	_, errTorrent := r.Torrent(ctx, "1")
+	for name, err := range map[string]error{"Top": errTop, "Search": errSearch, "Details": errDetails, "Torrent": errTorrent} {
+		if !errors.Is(err, source.ErrNotConfigured) {
+			t.Errorf("%s: %v", name, err)
+		}
+	}
+}
+
+// Адрес ввели или поменяли в пульте — источник работает без перезапуска; адрес .torrent — явный
+// или по правилу (у адреса-IP — сам сайт).
+func TestSetAddresses(t *testing.T) {
+	s := rutortest.NewServer(t)
+	r, err := New(Options{Rate: 1000})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := r.SetAddresses(s.Mirror.URL, s.Download.URL); err != nil {
+		t.Fatal(err)
+	}
+	if !r.Configured() || r.Mirror() != s.Mirror.URL {
+		t.Fatalf("зеркало %q", r.Mirror())
+	}
+	if _, err := r.Top(ctx, "12", 10); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := r.Torrent(ctx, "1077013"); err != nil {
+		t.Fatalf(".torrent по явному адресу: %v", err)
+	}
+	if err := r.SetAddresses(s.Mirror.URL, ""); err != nil {
+		t.Fatal(err)
+	}
+	if got := r.torrentURL("5"); got != s.Mirror.URL+"/download/5" {
+		t.Fatalf("адрес .torrent по правилу для IP: %s", got)
+	}
+	if err := r.SetAddresses("", ""); err != nil || r.Configured() {
+		t.Fatalf("сброс: %v, настроен %v", err, r.Configured())
+	}
+	if _, err := r.Top(ctx, "12", 10); !errors.Is(err, source.ErrNotConfigured) {
+		t.Fatalf("после сброса: %v", err)
 	}
 }
 
@@ -394,5 +435,26 @@ func TestTitleWithSpacesIsRutor(t *testing.T) {
 	p := &netx.Page{URL: &url.URL{Path: "/search/0/1/100/2/x"}, Status: http.StatusOK, Header: http.Header{"Content-Type": {"text/html"}}, Body: body}
 	if v := classify(p); v != netx.OK {
 		t.Fatalf("вывод %d", v)
+	}
+}
+
+// «Проверить» в мастере (этап 11a): список раздела открывается — трекер отвечает; вместо трекера
+// чужой сайт — ErrNotTracker; адреса нет — ErrNotConfigured.
+func TestCheck(t *testing.T) {
+	s := rutortest.NewServer(t)
+	if err := newRutor(t, s).Check(ctx); err != nil {
+		t.Fatal(err)
+	}
+	shop := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/html; charset=UTF-8")
+		io.WriteString(w, "<html><title>Магазин</title></html>")
+	}))
+	t.Cleanup(shop.Close)
+	if err := newRutor(t, s, shop.URL).Check(ctx); !errors.Is(err, netx.ErrNotTracker) {
+		t.Fatalf("чужой сайт: %v", err)
+	}
+	r, _ := New(Options{Rate: 1000})
+	if err := r.Check(ctx); !errors.Is(err, source.ErrNotConfigured) {
+		t.Fatalf("без адреса: %v", err)
 	}
 }

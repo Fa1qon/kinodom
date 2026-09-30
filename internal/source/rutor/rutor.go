@@ -24,12 +24,6 @@ import (
 	"kinodom/internal/source/htmltext"
 )
 
-// Встроенные зеркала и адрес .torrent (спека, раздел 5).
-var (
-	DefaultMirrors      = []string{"https://rutor.info", "https://rutor.is"}
-	DefaultDownloadBase = "https://d.rutor.info"
-)
-
 // userAgent — обычный браузер: с ним снимались образцы страниц (spikes/misc/cmd/fetch).
 const userAgent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/140.0 Safari/537.36"
 
@@ -44,10 +38,12 @@ var videoCategories = []source.Category{
 	{ID: "7", Name: "Мультипликация"}, {ID: "10", Name: "Аниме"}, {ID: "15", Name: "Юмор"},
 }
 
+// Адресов Rutor в программе нет: адрес сайта или зеркала вводит пользователь, адрес .torrent —
+// по правилу из него (спека этапа 11a, раздел 6). Без адреса источник выключен.
 type Options struct {
 	Proxy        *netx.Proxy   // прокси для трекеров из настроек; nil — напрямую
-	Mirrors      []string      // пусто — DefaultMirrors
-	DownloadBase string        // пусто — DefaultDownloadBase
+	Mirrors      []string      // адреса сайта; пусто — адрес не введён, источник выключен
+	DownloadBase string        // адрес .torrent; пусто — по правилу из первого адреса сайта
 	Rate         rate.Limit    // 0 — 1 запрос/с (тесты ускоряют)
 	Timeout      time.Duration // 0 — 90 с
 	Log          *slog.Logger  // nil — без журнала
@@ -55,37 +51,74 @@ type Options struct {
 
 type Rutor struct {
 	c        *netx.Client
-	download string
 	searches chan struct{} // не больше трёх запросов поиска одновременно на весь Rutor (спека, раздел 7)
+
+	mu       sync.Mutex
+	download string // адрес .torrent без «/» на конце; меняет SetAddresses
 }
 
 var _ source.Source = (*Rutor)(nil)
 
 func New(o Options) (*Rutor, error) {
-	// Копия: список по умолчанию — общий, его правка не должна менять работающий источник.
-	if len(o.Mirrors) == 0 {
-		o.Mirrors = DefaultMirrors
-	}
-	o.Mirrors = slices.Clone(o.Mirrors)
-	if o.DownloadBase == "" {
-		o.DownloadBase = DefaultDownloadBase
-	}
 	if o.Log == nil {
 		o.Log = slog.New(slog.DiscardHandler)
 	}
-	dl, err := url.Parse(o.DownloadBase)
-	if err != nil || dl.Host == "" {
-		return nil, fmt.Errorf("Rutor: адрес .torrent %q — не адрес сайта", o.DownloadBase)
-	}
 	c, err := netx.NewClient(netx.Options{
-		Name: title, Mirrors: o.Mirrors, ExtraHosts: []string{dl.Host},
-		Proxy: o.Proxy, UserAgent: userAgent, Classify: classify, ChallengeIsMirrorDown: true,
+		Name: title, Proxy: o.Proxy, UserAgent: userAgent, Classify: classify, ChallengeIsMirrorDown: true,
 		Rate: o.Rate, Timeout: o.Timeout, Log: o.Log,
 	})
 	if err != nil {
 		return nil, err
 	}
-	return &Rutor{c: c, download: strings.TrimRight(o.DownloadBase, "/"), searches: make(chan struct{}, 3)}, nil
+	r := &Rutor{c: c, searches: make(chan struct{}, 3)}
+	if err := r.setAddresses(o.Mirrors, o.DownloadBase); err != nil {
+		return nil, err
+	}
+	return r, nil
+}
+
+// SetAddresses — адрес сайта (или зеркала) и адрес .torrent из настроек; download "" — по
+// правилу из адреса сайта, site "" — источник выключен. Действует со следующего запроса.
+func (r *Rutor) SetAddresses(site, download string) error {
+	var mirrors []string
+	if site != "" {
+		mirrors = []string{site}
+	}
+	return r.setAddresses(mirrors, download)
+}
+
+func (r *Rutor) setAddresses(mirrors []string, download string) error {
+	mirrors = slices.Clone(mirrors)
+	if len(mirrors) == 0 {
+		download = ""
+	} else if download == "" {
+		download = source.RutorDownload(strings.TrimRight(mirrors[0], "/"))
+	}
+	var extra []string
+	if download != "" {
+		dl, err := url.Parse(download)
+		if err != nil || dl.Host == "" {
+			return fmt.Errorf("Rutor: адрес .torrent %q — не адрес сайта", download)
+		}
+		extra = []string{dl.Host}
+	}
+	if err := r.c.SetMirrors(mirrors, extra...); err != nil {
+		return err
+	}
+	r.mu.Lock()
+	r.download = strings.TrimRight(download, "/")
+	r.mu.Unlock()
+	return nil
+}
+
+// Configured — адрес Rutor введён.
+func (r *Rutor) Configured() bool { return r.c.Configured() }
+
+// Check — «Проверить» в мастере начальных настроек: список раздела открывается и похож на Rutor.
+// Ошибки — как у запросов: ErrNotConfigured, netx.ErrProxyDown, netx.ErrNotTracker, netx.ErrTrackerDown.
+func (r *Rutor) Check(ctx context.Context) error {
+	_, err := r.page(ctx, "/browse/0/1/0/2")
+	return err
 }
 
 func (r *Rutor) Name() string { return Name }
@@ -93,8 +126,14 @@ func (r *Rutor) Name() string { return Name }
 // Mirror — зеркало, ответившее последним (каталог запомнит его между запусками — этап 5).
 func (r *Rutor) Mirror() string { return r.c.Mirror() }
 
-// TopicURL — страница раздачи на текущем зеркале (ссылка «На трекере» в пульте).
-func (r *Rutor) TopicURL(id string) string { return r.c.Mirror() + "/torrent/" + id }
+// TopicURL — страница раздачи на текущем зеркале (ссылка «На трекере» в пульте); "" — адрес не введён.
+func (r *Rutor) TopicURL(id string) string {
+	m := r.c.Mirror()
+	if m == "" {
+		return ""
+	}
+	return m + "/torrent/" + id
+}
 
 // Categories — видеоразделы Rutor; список постоянный, на трекер за ним не ходим.
 func (r *Rutor) Categories(context.Context) ([]source.Category, error) {
@@ -129,6 +168,9 @@ func (r *Rutor) Top(ctx context.Context, categoryID string, limit int) ([]source
 // ограничителя «1 в секунду» (спека, раздел 7). Часть категорий не ответила или вышло время —
 // возвращаем найденное вместе с *source.PartialError; не ответила ни одна — только ошибку.
 func (r *Rutor) Search(ctx context.Context, query string) ([]source.Release, error) {
+	if !r.Configured() {
+		return nil, fmt.Errorf("%s: %w", title, source.ErrNotConfigured)
+	}
 	q := searchQuery(query)
 	if q == "" {
 		return nil, errors.New("Rutor: пустой поисковый запрос")
@@ -247,7 +289,11 @@ func (r *Rutor) Torrent(ctx context.Context, topicID string) ([]byte, error) {
 	return p.Body, nil
 }
 
-func (r *Rutor) torrentURL(id string) string { return r.download + "/download/" + id }
+func (r *Rutor) torrentURL(id string) string {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.download + "/download/" + id
+}
 
 // page — страница с кодом 200; другие коды — ошибка без смены зеркала (5xx и 451 зеркало
 // уже сменили в netx).

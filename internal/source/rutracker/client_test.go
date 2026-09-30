@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"kinodom/internal/netx"
+	"kinodom/internal/source"
 	"kinodom/internal/source/rutracker/rutrackertest"
 )
 
@@ -239,5 +240,86 @@ func TestPassSwitchesUserAgent(t *testing.T) {
 	}
 	if got := s.LastUserAgent(); got != "Edg/200" {
 		t.Fatalf("форум получил UA %q, нужно Edg/200", got)
+	}
+}
+
+// Адрес Rutracker не введён (этап 11a): источник есть, но выключен — ни одного запроса ни к
+// форуму, ни к API; вход не считается неудачным (иначе в «Состоянии» висела бы вторая проблема).
+func TestNotConfigured(t *testing.T) {
+	p := &fakePasser{}
+	r, err := New(Options{Rate: 1000, Login: "user", Password: "pass", Passer: p})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if r.Configured() || r.Mirror() != "" || r.TopicURL("1") != "" {
+		t.Fatalf("настроен %v, зеркало %q, ссылка %q", r.Configured(), r.Mirror(), r.TopicURL("1"))
+	}
+	_, errTop := r.Top(ctx, "2076", 10)
+	_, errCats := r.Categories(ctx)
+	_, errSearch := r.Search(ctx, "космос")
+	_, errDetails := r.Details(ctx, "6914565")
+	_, errRecent := r.Recent(ctx, "313")
+	errLogin := r.Login(ctx)
+	for name, err := range map[string]error{"Top": errTop, "Categories": errCats, "Search": errSearch,
+		"Details": errDetails, "Recent": errRecent, "Login": errLogin} {
+		if !errors.Is(err, source.ErrNotConfigured) {
+			t.Errorf("%s: %v", name, err)
+		}
+	}
+	if st := r.LoginState().State; st == LoginFailing || st == LoginBlocked {
+		t.Fatalf("состояние входа без адреса: %s", st)
+	}
+	if p.calls.Load() != 0 {
+		t.Fatal("без адреса запускался Edge")
+	}
+}
+
+// Адрес ввели в пульте — форум, API и лента работают без перезапуска; служебные адреса — явные
+// или по правилу (у адреса-IP — сам сайт).
+func TestSetAddresses(t *testing.T) {
+	s := rutrackertest.NewServer(t)
+	s.Login, s.Password = "user", "pass"
+	r, err := New(Options{Rate: 1000, Login: "user", Password: "pass", Passer: &fakePasser{}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := r.SetAddresses(s.Forum.URL, s.API.URL, s.Feed.URL); err != nil {
+		t.Fatal(err)
+	}
+	if !r.Configured() || r.Mirror() != s.Forum.URL {
+		t.Fatalf("зеркало %q", r.Mirror())
+	}
+	if _, err := r.Top(ctx, "2076", 10); err != nil {
+		t.Fatalf("топ: %v", err)
+	}
+	if _, err := r.Recent(ctx, "313"); err != nil {
+		t.Fatalf("лента: %v", err)
+	}
+	if _, err := r.Details(ctx, "6914565"); err != nil {
+		t.Fatalf("раздача: %v", err)
+	}
+	if err := r.SetAddresses(s.Forum.URL, "", ""); err != nil {
+		t.Fatal(err)
+	}
+	if got := r.feed(); got != s.Forum.URL {
+		t.Fatalf("лента по правилу для IP: %s", got)
+	}
+	if err := r.SetAddresses("", "", ""); err != nil || r.Configured() {
+		t.Fatalf("сброс: %v, настроен %v", err, r.Configured())
+	}
+	if _, err := r.Top(ctx, "2076", 10); !errors.Is(err, source.ErrNotConfigured) {
+		t.Fatalf("после сброса: %v", err)
+	}
+}
+
+// «Проверить» в мастере (этап 11a): главная форума открывается — трекер отвечает.
+func TestCheck(t *testing.T) {
+	s := rutrackertest.NewServer(t)
+	if err := newRutracker(t, s, nil).Check(ctx); err != nil {
+		t.Fatal(err)
+	}
+	r, _ := New(Options{Rate: 1000})
+	if err := r.Check(ctx); !errors.Is(err, source.ErrNotConfigured) {
+		t.Fatalf("без адреса: %v", err)
 	}
 }

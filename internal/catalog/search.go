@@ -3,6 +3,8 @@ package catalog
 import (
 	"context"
 	"errors"
+	"maps"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -80,7 +82,9 @@ func (c *Catalog) startSearch(query string, poll bool) (*searchRun, string, erro
 	if !ok {
 		run = &searchRun{started: now, status: map[string]string{}}
 		for name := range c.sources {
-			run.status[name] = SearchRunning
+			if c.configured(name) { // без адреса трекер выключен: в поиске его нет
+				run.status[name] = SearchRunning
+			}
 		}
 		c.searches[key] = run
 		parent := c.runCtx
@@ -98,7 +102,11 @@ func (c *Catalog) startSearch(query string, poll bool) (*searchRun, string, erro
 func (c *Catalog) runSearch(ctx context.Context, cancel context.CancelFunc, run *searchRun, q string) {
 	defer cancel()
 	var wg sync.WaitGroup
-	for name, src := range c.sources {
+	run.mu.Lock()
+	names := slices.Collect(maps.Keys(run.status))
+	run.mu.Unlock()
+	for _, name := range names {
+		src := c.sources[name]
 		wg.Go(func() {
 			rs, err := src.Search(ctx, q)
 			var partial *source.PartialError

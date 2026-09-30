@@ -13,13 +13,14 @@ import (
 // required — файлы пульта, без которых он не работает (спека этапа 7, раздел 6.1).
 var required = []string{
 	"index.html", "style.css", "app.js", "api.js", "ui.js", "icons.js", "nav.js",
+	"favicon.ico", "icon-192.png", "logo-icon.png", "logo-text.png",
 	"fonts/golos-text-cyrillic.woff2", "fonts/golos-text-latin.woff2",
 	"fonts/unbounded-cyrillic.woff2", "fonts/unbounded-latin.woff2",
 	"fonts/OFL-golos-text.txt", "fonts/OFL-unbounded.txt",
 	"views/catalog.js", "views/release.js", "views/search.js", "views/downloads.js",
 	"views/settings-layout.js", "views/settings-status.js", "views/settings-params.js", "views/settings-sections.js",
 	"views/channels.js", "views/channel.js", "views/channel-settings.js", "views/tvkit.js", "views/settings-iptv.js", "views/settings-unrecognized.js",
-	"views/history.js", "views/library.js", "views/library-card.js", "views/settings-library.js",
+	"views/history.js", "views/library.js", "views/library-card.js", "views/settings-library.js", "views/folders.js", "views/setup.js",
 }
 
 // scripts — все модули пульта.
@@ -508,6 +509,107 @@ const checks = [
   [libraryPlayerLink(res, true, 'Mozilla/5.0 (Windows NT 10.0)'), res.m3uUrl],
   [libraryPlayerLink(res, true, android).startsWith('intent://192.168.0.2:8090/m3u/library/7.m3u8?start=600#Intent;scheme=http;type=audio/x-mpegurl;package=org.videolan.vlc;'), true],
   [libraryPlayerLink(res, false, android).startsWith('intent://192.168.0.2:8090/media/7/film.mkv#Intent;scheme=http;type=video/*;package=org.videolan.vlc;l.position=600000;'), true],
+];
+for (const [got, want] of checks) {
+  if (got !== want) {
+    console.error(JSON.stringify(got), '≠', JSON.stringify(want));
+    process.exitCode = 1;
+  }
+}
+`
+	cmd := exec.Command(node, "--input-type=module", "--no-warnings", "-e", script)
+	cmd.Dir = "static"
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Errorf("%v\n%s", err, out)
+	}
+}
+
+// Обзор папок и «Разрешить доступ» (спека этапа 11a, разделы 4.7 и 7): части пути для «Вверх» и
+// строки пути; кнопка доступа — только на ПК с Kinodom, с телефона — строка (Review Focus 5).
+func TestPultFolders(t *testing.T) {
+	node := lookNode(t)
+	script := `
+import { crumbs, grantView } from './views/folders.js';
+const c = (p) => crumbs(p).map((x) => x.name + '=' + x.path).join(' | ');
+const noAccess = { path: 'D:\\Share\\Мои фильмы', problem: 'no_access' };
+const checks = [
+  [c('D:\\Share\\Movies'), 'D:=D:\\ | Share=D:\\Share | Movies=D:\\Share\\Movies'],
+  [c('C:\\'), 'C:=C:\\'],
+  [c('e:\\A\\'), 'E:=E:\\ | A=E:\\A'],
+  [c(''), ''],
+  [JSON.stringify(grantView({ local: true }, noAccess, 8090)), JSON.stringify({ link: 'kinodom://grant?path=D%3A%5CShare%5C%D0%9C%D0%BE%D0%B8+%D1%84%D0%B8%D0%BB%D1%8C%D0%BC%D1%8B&port=8090' })],
+  [JSON.stringify(grantView({ local: false }, noAccess, 8090)), JSON.stringify({ hint: 'Откройте пульт на ПК с Kinodom, чтобы разрешить доступ' })],
+  [grantView({ local: true }, { path: 'D:\\A', problem: '' }, 8090), null],
+  [grantView({ local: true }, { path: 'D:\\A', problem: 'not_found' }, 8090), null],
+];
+for (const [got, want] of checks) {
+  if (got !== want) {
+    console.error(JSON.stringify(got), '≠', JSON.stringify(want));
+    process.exitCode = 1;
+  }
+}
+`
+	cmd := exec.Command(node, "--input-type=module", "--no-warnings", "-e", script)
+	cmd.Dir = "static"
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Errorf("%v\n%s", err, out)
+	}
+}
+
+// Мастер начальных настроек (спека этапа 11a, раздел 7): пять шагов; открывается сам только из
+// домашней сети, пока не пройден, и только вместо каталога — ссылка на раздачу ведёт на раздачу;
+// у шага Кинопоиска — инструкция из трёх пунктов со ссылкой на сайт ключей.
+func TestPultSetup(t *testing.T) {
+	node := lookNode(t)
+	script := `
+import { STEPS, nextStep, prevStep, shouldOpenSetup, kpInstruction } from './views/setup.js';
+const home = { canEdit: true, setupDone: false };
+const checks = [
+  [STEPS.map((s) => s.id).join(','), 'trackers,kinopoisk,channels,library,done'],
+  [nextStep(0), 1], [nextStep(STEPS.length - 1), STEPS.length - 1], [prevStep(0), 0], [prevStep(3), 2],
+  [shouldOpenSetup(home, ''), true],
+  [shouldOpenSetup(home, '#/'), true],
+  [shouldOpenSetup(home, '#/catalog/rutor'), true],
+  [shouldOpenSetup(home, '#/release/12'), false],
+  [shouldOpenSetup(home, '#/settings/params'), false],
+  [shouldOpenSetup({ canEdit: false, setupDone: false }, ''), false],
+  [shouldOpenSetup({ canEdit: true, setupDone: true }, ''), false],
+  [shouldOpenSetup(null, ''), false],
+  [kpInstruction.items.length, 3],
+  [kpInstruction.link.startsWith('https://'), true],
+];
+for (const [got, want] of checks) {
+  if (got !== want) {
+    console.error(JSON.stringify(got), '≠', JSON.stringify(want));
+    process.exitCode = 1;
+  }
+}
+`
+	cmd := exec.Command(node, "--input-type=module", "--no-warnings", "-e", script)
+	cmd.Dir = "static"
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Errorf("%v\n%s", err, out)
+	}
+}
+
+// «Разрешить доступ» сообщает экрану о нажатии: мастер снова опрашивает медиатеку, иначе после окна
+// Windows «Да/Нет» папка так и показывалась бы «нет доступа» (второе ревью, мелочь 1).
+func TestPultGrantControlNotifies(t *testing.T) {
+	node := lookNode(t)
+	script := `
+const mk = (tag) => ({ tag, attrs: {}, listeners: {}, children: [], style: {},
+  setAttribute(k, v) { this.attrs[k] = v; }, addEventListener(k, f) { this.listeners[k] = f; }, append(...k) { this.children.push(...k); } });
+globalThis.document = { createElement: mk, createElementNS: (ns, tag) => mk(tag) };
+globalThis.Node = class {};
+const { grantControl } = await import('./views/folders.js');
+let pressed = 0;
+const link = grantControl({ local: true }, { path: 'D:\\A', problem: 'no_access' }, 'grant-1', () => pressed++);
+link.listeners.click();
+const hint = grantControl({ local: false }, { path: 'D:\\A', problem: 'no_access' }, 'grant-1', () => pressed++);
+const checks = [
+  [link.attrs.href.startsWith('kinodom://grant?'), true],
+  [pressed, 1],
+  [hint.listeners.click, undefined],
 ];
 for (const [got, want] of checks) {
   if (got !== want) {

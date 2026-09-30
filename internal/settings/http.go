@@ -14,6 +14,8 @@ import (
 // View — настройки для пульта. Секретов в ответе нет: только признак «задан».
 type View struct {
 	Rutracker RutrackerView `json:"rutracker"`
+	Rutor     RutorView     `json:"rutor"`
+	Setup     SetupView     `json:"setup"`
 	Proxy     ProxyView     `json:"proxy"`
 	Kinopoisk KinopoiskView `json:"kinopoisk"`
 	Storage   StorageView   `json:"storage"`
@@ -25,6 +27,18 @@ type View struct {
 type RutrackerView struct {
 	Login       string `json:"login"`
 	PasswordSet bool   `json:"passwordSet"`
+	Address     string `json:"address"`     // "" — Rutracker выключен
+	APIAddress  string `json:"apiAddress"`  // "" — по правилу из адреса сайта
+	FeedAddress string `json:"feedAddress"` // "" — по правилу из адреса сайта
+}
+
+type RutorView struct {
+	Address         string `json:"address"`         // "" — Rutor выключен
+	DownloadAddress string `json:"downloadAddress"` // "" — по правилу из адреса сайта
+}
+
+type SetupView struct {
+	Done bool `json:"done"` // мастер начальных настроек пройден
 }
 
 type ProxyView struct {
@@ -65,7 +79,10 @@ type IPTVView struct {
 func (v Values) View() View {
 	p := splitProxy(v.Proxy)
 	return View{
-		Rutracker: RutrackerView{Login: v.RutrackerLogin, PasswordSet: v.RutrackerPassword != ""},
+		Rutracker: RutrackerView{Login: v.RutrackerLogin, PasswordSet: v.RutrackerPassword != "",
+			Address: v.RutrackerAddress, APIAddress: v.RutrackerAPI, FeedAddress: v.RutrackerFeed},
+		Rutor:     RutorView{Address: v.RutorAddress, DownloadAddress: v.RutorDownload},
+		Setup:     SetupView{Done: v.SetupDone},
 		Proxy:     ProxyView{Type: p.Type, Address: p.Address, Login: p.Login, PasswordSet: p.password != ""},
 		Kinopoisk: KinopoiskView{KeySet: v.KinopoiskKey != ""},
 		Storage:   StorageView{DownloadsDir: v.DownloadsDir, KeepDays: v.KeepDays, KeepBehind: v.KeepBehind, MinFreeGB: v.MinFreeGB, UploadLimitMBps: v.UploadMBps},
@@ -79,6 +96,8 @@ func (v Values) View() View {
 // Patch — изменения из пульта: только присланные поля. Секрет: поля нет — не меняется, "" — стереть.
 type Patch struct {
 	Rutracker *RutrackerPatch `json:"rutracker"`
+	Rutor     *RutorPatch     `json:"rutor"`
+	Setup     *SetupPatch     `json:"setup"`
 	Proxy     *ProxyPatch     `json:"proxy"`
 	Kinopoisk *KinopoiskPatch `json:"kinopoisk"`
 	Storage   *StoragePatch   `json:"storage"`
@@ -88,8 +107,20 @@ type Patch struct {
 }
 
 type RutrackerPatch struct {
-	Login    *string `json:"login"`
-	Password *string `json:"password"`
+	Login       *string `json:"login"`
+	Password    *string `json:"password"`
+	Address     *string `json:"address"`
+	APIAddress  *string `json:"apiAddress"`
+	FeedAddress *string `json:"feedAddress"`
+}
+
+type RutorPatch struct {
+	Address         *string `json:"address"`
+	DownloadAddress *string `json:"downloadAddress"`
+}
+
+type SetupPatch struct {
+	Done *bool `json:"done"`
 }
 
 type ProxyPatch struct {

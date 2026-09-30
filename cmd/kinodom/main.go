@@ -21,6 +21,13 @@ type command struct {
 func commands() []command {
 	return []command{
 		{"run", "запустить сервер в консоли (для разработки)", cmdRun},
+		{"service", "сервер как служба Windows (запускает диспетчер служб)", cmdService},
+		{"install", "установить или починить службу на этом ПК (от администратора): kinodom install --downloads D:\\Kinodom", cmdInstall},
+		{"uninstall", "удалить службу (от администратора); --purge — ещё настройки и скачанное", cmdUninstall},
+		{"stop", "остановить службу перед заменой файлов (перезапуск при сбое вернёт install)", cmdStop},
+		{"check", "проверить установку: служба, пульт, брандмауэр, ссылки kinodom://", cmdCheck},
+		{"grant", "права службы на папку (от администратора): kinodom grant [--write] ПАПКА", cmdGrant},
+		{"tray", "значок в трее: открыть пульт, выход с остановкой сервера (kinodomw tray [--open])", cmdTray},
 		{"play", "открыть раздачу на запущенном сервере и получить ссылку для VLC", cmdPlay},
 		{"source", "проверить источник раздач вживую: kinodom source rutor top 12", cmdSource},
 		{"meta", "проверить метаданные вживую: kinodom meta kp film 301", cmdMeta},

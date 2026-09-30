@@ -37,6 +37,16 @@ func Open(ctx context.Context, path string) (*DB, error) {
 	return openWith(ctx, path, ms)
 }
 
+// OpenAsIs открывает существующую базу без миграций: схему переводит только служба. Им пользуется
+// установка — при обновлении она лишь читает и пишет настройки (этап 11a): если обновление
+// откатится, прежняя программа найдёт базу своей версии.
+func OpenAsIs(ctx context.Context, path string) (*DB, error) {
+	if _, err := os.Stat(path); err != nil {
+		return nil, err
+	}
+	return openWith(ctx, path, nil)
+}
+
 func openWith(ctx context.Context, path string, ms []migration) (*DB, error) {
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return nil, err
@@ -53,6 +63,9 @@ func openWith(ctx context.Context, path string, ms []migration) (*DB, error) {
 	}
 	r.SetMaxOpenConns(4)
 	db := &DB{W: w, R: r, Path: path}
+	if ms == nil {
+		return db, nil
+	}
 	if err := db.migrate(ctx, ms); err != nil {
 		db.Close()
 		return nil, err

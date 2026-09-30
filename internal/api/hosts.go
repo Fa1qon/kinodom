@@ -5,56 +5,32 @@ import (
 	"net/http"
 	"os"
 	"strings"
-	"sync"
-	"time"
 
 	"kinodom/internal/httpx"
 )
 
-// hostList — какие имена в заголовке Host допустимы: localhost, адреса интерфейсов ПК
-// и его имя. Чужое имя в Host — признак DNS rebinding (страница в браузере
-// притворяется нашим сервером), такие запросы отклоняются.
+// hostList — какие имена в заголовке Host допустимы: localhost, имя ПК и адреса его интерфейсов.
+// Чужое имя в Host — признак DNS rebinding (страница в браузере притворяется нашим сервером), такие
+// запросы отклоняются. Адреса ПК — из httpx: там же их знает FromThisPC, и смена адреса видна обоим.
 type hostList struct {
-	mu          sync.Mutex
-	allowed     map[string]bool
-	refreshedAt time.Time
+	names map[string]bool
 }
 
 func newHostList() *hostList {
-	h := &hostList{}
-	h.refreshLocked()
-	return h
-}
-
-func (h *hostList) refreshLocked() {
 	m := map[string]bool{"localhost": true, "127.0.0.1": true, "::1": true}
 	if name, err := os.Hostname(); err == nil {
 		m[strings.ToLower(name)] = true
 	}
-	if addrs, err := net.InterfaceAddrs(); err == nil {
-		for _, a := range addrs {
-			if ipn, ok := a.(*net.IPNet); ok {
-				m[ipn.IP.String()] = true
-			}
-		}
-	}
-	h.allowed = m
-	h.refreshedAt = time.Now()
+	return &hostList{names: m}
 }
 
 func (h *hostList) allows(hostport string) bool {
 	host := normalizeHost(hostport)
-	h.mu.Lock()
-	defer h.mu.Unlock()
-	if h.allowed[host] {
+	if h.names[host] {
 		return true
 	}
-	// Адрес мог появиться недавно (сменился IP) — перечитаем, но не чаще раза в 10 с.
-	if time.Since(h.refreshedAt) > 10*time.Second {
-		h.refreshLocked()
-		return h.allowed[host]
-	}
-	return false
+	ip := net.ParseIP(host)
+	return ip != nil && (ip.IsLoopback() || httpx.IsOwnIP(ip))
 }
 
 // normalizeHost: "[::1]:8090" → "::1", "LocalHost:8090" → "localhost".

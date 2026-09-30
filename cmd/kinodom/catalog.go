@@ -42,12 +42,12 @@ func cmdCatalog(args []string, stdout, stderr io.Writer) int {
 	category := fs.String("category", "", "только этот раздел")
 	proxy := fs.String("proxy", "", "прокси для трекеров")
 	var t app.Trackers
-	rutorURL := fs.String("rutor", "", "зеркало Rutor вместо встроенных")
-	rtURL := fs.String("rutracker", "", "зеркало Rutracker вместо встроенных")
-	fs.StringVar(&t.RutorDownload, "rutor-download", "", "адрес .torrent Rutor вместо встроенного")
-	fs.StringVar(&t.RutrackerAPI, "rutracker-api", "", "API Rutracker вместо встроенного")
+	rutorURL := fs.String("rutor", "", "адрес Rutor вместо настройки rutor.address")
+	rtURL := fs.String("rutracker", "", "адрес Rutracker вместо настройки rutracker.address")
+	fs.StringVar(&t.RutorDownload, "rutor-download", "", "адрес .torrent Rutor; пусто — по правилу из адреса сайта")
+	fs.StringVar(&t.RutrackerAPI, "rutracker-api", "", "API Rutracker; пусто — по правилу из адреса сайта")
 	kinopoisk := fs.String("kinopoisk", "", "API и рейтинги Кинопоиска вместо настоящих")
-	fs.StringVar(&t.RutrackerFeed, "rutracker-feed", "", "лента Rutracker вместо встроенной")
+	fs.StringVar(&t.RutrackerFeed, "rutracker-feed", "", "лента Rutracker; пусто — по правилу из адреса сайта")
 	fs.BoolVar(&t.NoEdge, "no-edge", false, "без Edge: пропуск Cloudflare не добывать")
 	if err := fs.Parse(args[1:]); err != nil {
 		return 2

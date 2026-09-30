@@ -41,6 +41,9 @@ var (
 	ErrChallenge     = errors.New("трекер требует пройти проверку Cloudflare")
 	ErrLoginRequired = errors.New("трекер требует войти")
 	ErrRemoved       = errors.New("раздача удалена с трекера")
+	ErrNotConfigured = errors.New("не указан адрес трекера")
+	// ErrNotTracker — на всех зеркалах вместо трекера чужой сайт или заглушка; вместе с ErrTrackerDown.
+	ErrNotTracker = errors.New("по адресу не сайт трекера")
 )
 
 // Page — ответ трекера целиком.
@@ -53,7 +56,7 @@ type Page struct {
 
 type Options struct {
 	Name       string       // «Rutor» — для текстов ошибок и журнала
-	Mirrors    []string     // базовые адреса зеркал по порядку предпочтения: "https://rutor.info"
+	Mirrors    []string     // базовые адреса зеркал по порядку предпочтения ("https://сайт"); пусто — адрес не введён
 	ExtraHosts []string     // другие свои хосты (d.rutor.info): редирект туда — не «чужой сайт»
 	Proxy      *Proxy       // прокси из настроек; nil — напрямую
 	UserAgent  string       // пусто — User-Agent Go по умолчанию
@@ -69,31 +72,28 @@ type Options struct {
 }
 
 // Client — HTTP-клиент одного трекера: перебор зеркал, классификация ответов, повтор,
-// ограничение частоты. Безопасен для одновременного использования.
+// ограничение частоты. Безопасен для одновременного использования. Без зеркал (адрес трекера
+// не введён) никуда не ходит и отвечает ErrNotConfigured.
 type Client struct {
 	o    Options
 	http *http.Client
 	lim  *rate.Limiter
-	own  map[string]bool // свои хосты в нижнем регистре: зеркала и ExtraHosts
 
 	mu      sync.Mutex
-	current int    // номер зеркала, ответившего последним
-	ua      string // User-Agent запросов; меняет SetUserAgent
+	mirrors []string        // адреса без «/» на конце; меняет SetMirrors
+	own     map[string]bool // свои хосты в нижнем регистре: зеркала и дополнительные хосты
+	current int             // номер зеркала, ответившего последним
+	ua      string          // User-Agent запросов; меняет SetUserAgent
 }
 
 // maxBody — предел ответа: страницы трекеров — сотни КБ, .torrent — единицы МБ.
 const maxBody = 32 << 20
 
 func NewClient(o Options) (*Client, error) {
-	if len(o.Mirrors) == 0 {
-		return nil, fmt.Errorf("netx: у трекера %q нет зеркал", o.Name)
+	mirrors, own, err := addresses(o.Mirrors, o.ExtraHosts)
+	if err != nil {
+		return nil, err
 	}
-	// Своя копия без «/» на конце: адрес зеркала склеивается с путём и служит ключом cookie.
-	mirrors := make([]string, len(o.Mirrors))
-	for i, m := range o.Mirrors {
-		mirrors[i] = strings.TrimRight(m, "/")
-	}
-	o.Mirrors = mirrors
 	if o.Rate == 0 {
 		o.Rate = 1
 	}
@@ -108,25 +108,58 @@ func NewClient(o Options) (*Client, error) {
 	if lim == nil {
 		lim = rate.NewLimiter(o.Rate, 1)
 	}
-	c := &Client{o: o, http: &http.Client{Transport: tr, Jar: o.Jar}, lim: lim, own: map[string]bool{}, ua: o.UserAgent}
-	for _, m := range o.Mirrors {
-		u, err := url.Parse(m)
-		if err != nil || u.Host == "" {
-			return nil, fmt.Errorf("netx: зеркало %q — не адрес сайта (нужно https://…)", m)
-		}
-		c.own[strings.ToLower(u.Host)] = true
-	}
-	for _, h := range o.ExtraHosts {
-		c.own[strings.ToLower(h)] = true
-	}
+	c := &Client{o: o, http: &http.Client{Transport: tr, Jar: o.Jar}, lim: lim, mirrors: mirrors, own: own, ua: o.UserAgent}
 	return c, nil
 }
 
-// Mirror — зеркало, которое ответило последним: с него начнётся следующий запрос.
+// addresses — своя копия зеркал без «/» на конце (адрес зеркала склеивается с путём и служит
+// ключом cookie) и набор своих хостов.
+func addresses(mirrors, extraHosts []string) ([]string, map[string]bool, error) {
+	out := make([]string, len(mirrors))
+	own := map[string]bool{}
+	for i, m := range mirrors {
+		out[i] = strings.TrimRight(m, "/")
+		u, err := url.Parse(out[i])
+		if err != nil || u.Host == "" || (u.Scheme != "http" && u.Scheme != "https") {
+			return nil, nil, fmt.Errorf("netx: зеркало %q — не адрес сайта (нужно https://…)", m)
+		}
+		own[strings.ToLower(u.Host)] = true
+	}
+	for _, h := range extraHosts {
+		own[strings.ToLower(h)] = true
+	}
+	return out, own, nil
+}
+
+// SetMirrors меняет адреса на ходу (адрес трекера поменяли в настройках): следующий запрос идёт
+// на новые зеркала, свои хосты — новые зеркала и extraHosts. Пусто — трекер выключен. Неверный
+// адрес — ошибка, прежние адреса остаются.
+func (c *Client) SetMirrors(mirrors []string, extraHosts ...string) error {
+	ms, own, err := addresses(mirrors, extraHosts)
+	if err != nil {
+		return err
+	}
+	c.mu.Lock()
+	c.mirrors, c.own, c.current = ms, own, 0
+	c.mu.Unlock()
+	return nil
+}
+
+// Configured — адрес трекера введён.
+func (c *Client) Configured() bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return len(c.mirrors) > 0
+}
+
+// Mirror — зеркало, которое ответило последним: с него начнётся следующий запрос. "" — адрес не введён.
 func (c *Client) Mirror() string {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	return c.o.Mirrors[c.current]
+	if len(c.mirrors) == 0 {
+		return ""
+	}
+	return c.mirrors[c.current]
 }
 
 // GetOption — необязательный параметр Get.
@@ -151,10 +184,12 @@ func (c *Client) Post(ctx context.Context, path, form string, opts ...GetOption)
 // Rutor (спека, разделы 5 и 7): там одновременно идут не больше трёх запросов.
 func WithoutLimit() GetOption { return func(g *getOpts) { g.noLimit = true } }
 
-// target — куда слать запрос; mirror = -1 для полного адреса (без перебора зеркал).
+// target — куда слать запрос; mirror = -1 для полного адреса (без перебора зеркал), base — адрес
+// зеркала: пока шёл запрос, адреса могли поменять (SetMirrors).
 type target struct {
 	url    string
 	mirror int
+	base   string
 }
 
 // Get запрашивает path на рабочем зеркале, при «зеркало недоступно» — на следующих.
@@ -167,7 +202,11 @@ func (c *Client) Get(ctx context.Context, path string, opts ...GetOption) (*Page
 		o(&g)
 	}
 	var down []string // почему не ответило каждое зеркало — для текста ошибки
+	foreign := true   // все зеркала — чужие сайты (а не молчат)
 	targets := c.targets(path)
+	if targets == nil {
+		return nil, fmt.Errorf("%s: %w", c.o.Name, ErrNotConfigured)
+	}
 	if g.method == http.MethodPost {
 		targets = targets[:1] // форму — только на текущее зеркало: вход на другом — уже другая попытка
 	}
@@ -177,6 +216,7 @@ func (c *Client) Get(ctx context.Context, path string, opts ...GetOption) (*Page
 		var de *downError
 		if errors.As(err, &de) {
 			down = append(down, host+" — "+de.reason)
+			foreign = false
 			args := []any{"mirror", host, "reason", de.reason}
 			if de.raw != nil {
 				args = append(args, "err", de.raw)
@@ -190,13 +230,16 @@ func (c *Client) Get(ctx context.Context, path string, opts ...GetOption) (*Page
 		v, reason := c.judge(p, g)
 		if v == MirrorDown {
 			down = append(down, host+" — "+reason)
+			foreign = foreign && strings.Contains(reason, "чуж")
 			c.o.Log.Warn(c.o.Name+": зеркало не отвечает", "mirror", host, "reason", reason)
 			continue
 		}
 		// Зеркало живо, даже если ответило «удалена» или «нужен вход», — с него и продолжаем.
 		if t.mirror >= 0 {
 			c.mu.Lock()
-			c.current = t.mirror
+			if t.mirror < len(c.mirrors) && c.mirrors[t.mirror] == t.base {
+				c.current = t.mirror
+			}
 			c.mu.Unlock()
 		}
 		switch v {
@@ -209,28 +252,38 @@ func (c *Client) Get(ctx context.Context, path string, opts ...GetOption) (*Page
 		}
 		return p, nil
 	}
-	return nil, &trackerDownError{name: c.o.Name, reasons: down}
+	return nil, &trackerDownError{name: c.o.Name, reasons: down, foreign: foreign && len(down) > 0}
 }
 
+// targets — адреса попыток по порядку; nil — адрес трекера не введён.
 func (c *Client) targets(path string) []target {
-	if strings.HasPrefix(path, "http://") || strings.HasPrefix(path, "https://") {
-		return []target{{path, -1}}
-	}
 	c.mu.Lock()
-	start := c.current
-	c.mu.Unlock()
-	n := len(c.o.Mirrors)
+	defer c.mu.Unlock()
+	n := len(c.mirrors)
+	if n == 0 {
+		return nil
+	}
+	if strings.HasPrefix(path, "http://") || strings.HasPrefix(path, "https://") {
+		return []target{{path, -1, ""}}
+	}
 	out := make([]target, 0, n)
 	for i := range n {
-		m := (start + i) % n
-		out = append(out, target{c.o.Mirrors[m] + path, m})
+		m := (c.current + i) % n
+		out = append(out, target{c.mirrors[m] + path, m, c.mirrors[m]})
 	}
 	return out
 }
 
+// isOwn — хост свой: зеркало или дополнительный хост трекера.
+func (c *Client) isOwn(host string) bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.own[strings.ToLower(host)]
+}
+
 // judge — сначала общие признаки из спеки, затем признаки трекера.
 func (c *Client) judge(p *Page, g getOpts) (Verdict, string) {
-	if !c.own[strings.ToLower(p.URL.Host)] {
+	if !c.isOwn(p.URL.Host) {
 		return MirrorDown, "перенаправляет на чужой сайт " + p.URL.Host
 	}
 	// Проверка Cloudflare приходит с кодом 403 или 503 — её смотрим раньше, чем 5xx.
@@ -370,13 +423,16 @@ func (e *downError) Error() string { return e.reason }
 type trackerDownError struct {
 	name    string
 	reasons []string
+	foreign bool // все зеркала — чужие сайты: ErrNotTracker
 }
 
 func (e *trackerDownError) Error() string {
 	return fmt.Sprintf("%s недоступен (%s)", e.name, strings.Join(e.reasons, "; "))
 }
 
-func (e *trackerDownError) Is(target error) bool { return target == ErrTrackerDown }
+func (e *trackerDownError) Is(target error) bool {
+	return target == ErrTrackerDown || (e.foreign && target == ErrNotTracker)
+}
 
 // netReason — причина сетевой ошибки коротко и по-русски: текст уходит в «Проблемы».
 // Сырой текст Go («read tcp …: wsarecv: …») остаётся только в журнале.
@@ -415,6 +471,13 @@ func seconds(d time.Duration) string { return fmt.Sprintf("%g с", d.Seconds()) 
 
 // SetUserAgent меняет User-Agent следующих запросов: пропуск Cloudflare привязан к UA браузера,
 // а Edge мог обновиться, пока служба работает (ревью этапа 4).
+// UserAgent — User-Agent запросов сейчас.
+func (c *Client) UserAgent() string {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.ua
+}
+
 func (c *Client) SetUserAgent(ua string) {
 	c.mu.Lock()
 	c.ua = ua

@@ -1,6 +1,6 @@
 // Каталог трекера: вкладки Rutracker и Rutor, раздел, сетка постеров по раздающим, страницы
 // (спека этапа 7, разделы 5.4 и 6.3).
-import { h, icon, ago, size, rating, store, plural, keepFocus } from '../ui.js';
+import { h, icon, ago, size, rating, store, plural, keepFocus, offWarn } from '../ui.js';
 import { get } from '../api.js';
 
 export const TRACKERS = [['rutracker', 'Rutracker'], ['rutor', 'Rutor']];
@@ -28,7 +28,8 @@ export function render(root, r, ctx) {
         title, bad ? icon('warning', 18, 'Есть проблемы') : null);
     })));
     const t = trackers[tracker];
-    warn.replaceChildren(t && t.state !== 'ok' && t.text ? h('div', { class: 'warn' }, icon('warning'), t.text) : '');
+    keepFocus(warn, () => warn.replaceChildren(t && t.state === 'off' ? offWarn(t.text)
+      : t && t.state !== 'ok' && t.text ? h('div', { class: 'warn' }, icon('warning'), t.text) : ''));
   };
   ctx.listeners.add(onStatus);
   onStatus(ctx.status);
@@ -45,8 +46,10 @@ export function render(root, r, ctx) {
     }, s.name)));
     bar.querySelector('.on')?.scrollIntoView({ block: 'nearest', inline: 'nearest' });
     if (list.section) store.set('catalog', `#/catalog/${tracker}/${encodeURIComponent(list.section)}`);
+    const off = ctx.status && ctx.status.trackers && ctx.status.trackers[tracker] && ctx.status.trackers[tracker].state === 'off';
     if (sections.length === 0) {
-      grid.replaceChildren(h('p', { class: 'muted' }, 'Каталог ещё пуст — идёт первое обновление'));
+      // Трекер без адреса (этап 11a) не обновляется — об этом строка «Укажите адрес» выше.
+      grid.replaceChildren(off ? '' : h('p', { class: 'muted' }, 'Каталог ещё пуст — идёт первое обновление'));
     } else if (list.entries.length === 0) {
       grid.replaceChildren(h('p', { class: 'muted' }, 'Здесь пусто'));
     } else {

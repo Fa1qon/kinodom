@@ -109,7 +109,10 @@ func (r *Rutracker) noteLoginState() {
 
 // dropSessions удаляет cookie сессии на всех зеркалах: и привязанную к хосту, и к домену.
 func (r *Rutracker) dropSessions() {
-	for _, m := range r.mirrors {
+	r.addrMu.Lock()
+	mirrors := r.mirrors
+	r.addrMu.Unlock()
+	for _, m := range mirrors {
 		u, err := url.Parse(m + "/forum/")
 		if err != nil {
 			continue
@@ -168,7 +171,16 @@ func (r *Rutracker) ensureLogin(ctx context.Context, stale string) error {
 
 // doLogin — сам вход; вызывается под loginMu.
 func (r *Rutracker) doLogin(ctx context.Context) error {
+	if err := r.notConfigured(); err != nil {
+		return err // адреса нет — это не неудача входа: ни паузы, ни проблемы
+	}
 	defer r.noteLoginState() // после снятия r.mu: отложен раньше блокировки ниже
+	loggedIn := false
+	defer func() { // тоже после снятия r.mu
+		if loggedIn {
+			r.saveSession(ctx)
+		}
+	}()
 	r.mu.Lock()
 	login, password, block, gen := r.login, r.password, r.loginBlock, r.credGen
 	r.mu.Unlock()
@@ -192,6 +204,7 @@ func (r *Rutracker) doLogin(ctx context.Context) error {
 	switch {
 	case err == nil:
 		r.loginRetryAt, r.loginRetryErr = time.Time{}, nil
+		loggedIn = true
 	case errors.Is(err, ErrWrongPassword) || errors.As(err, &ce):
 		if r.credGen == gen { // пароль не меняли, пока шёл вход
 			r.loginBlock = err
@@ -258,6 +271,9 @@ func (r *Rutracker) Search(ctx context.Context, query string) ([]source.Release,
 	if q == "" {
 		return nil, errors.New("Rutracker: пустой поисковый запрос")
 	}
+	if err := r.notConfigured(); err != nil {
+		return nil, err
+	}
 	if !r.hasCredentials() {
 		return nil, ErrNoCredentials
 	}
@@ -290,6 +306,9 @@ func (r *Rutracker) Search(ctx context.Context, query string) ([]source.Release,
 func (r *Rutracker) Details(ctx context.Context, topicID string) (source.Details, error) {
 	if !isNumber(topicID) {
 		return source.Details{}, fmt.Errorf("Rutracker: номер раздачи %q — не число", topicID)
+	}
+	if err := r.notConfigured(); err != nil {
+		return source.Details{}, err
 	}
 	if r.mayAutoLogin() && !r.loggedIn() {
 		r.noteLogin(r.autoLogin(ctx, ""))
