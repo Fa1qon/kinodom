@@ -1,6 +1,8 @@
 ; Установщик Kinodom (спека этапа 11a, раздел 5). Собирает build.ps1 -Installer:
 ; ISCC /DAppVersion=… /DNumVersion=… installer\kinodom.iss → dist\Kinodom-<версия>-setup.exe.
-; Установщик только копирует файлы и вызывает команды kinodom.exe: stop, install, uninstall.
+; Установщик только копирует файлы и вызывает команды kinodom.exe: stop, install --check (до
+; копирования), install (после), uninstall. Исключение в AfterInstall Inno не откатывает установку —
+; поэтому отказ до копирования — в PrepareToInstall, после — честная страница «Не установлен» и удаление.
 
 #ifndef AppVersion
   #define AppVersion "0.0.0-dev"
@@ -45,7 +47,7 @@ Name: "desktopicon"; Description: "Ярлык на рабочем столе"; F
 
 [Files]
 Source: "..\bin\kinodom.exe"; DestDir: "{app}"; Flags: ignoreversion
-Source: "..\bin\kinodomw.exe"; DestDir: "{app}"; Flags: ignoreversion; AfterInstall: RunKinodomInstall
+Source: "..\bin\kinodomw.exe"; DestDir: "{app}"; Flags: ignoreversion
 
 [INI]
 ; Ярлыки — ссылки на пульт в браузере.
@@ -57,7 +59,7 @@ Type: files; Name: "{autoprograms}\Kinodom.url"
 Type: files; Name: "{autodesktop}\Kinodom.url"
 
 [Run]
-Filename: "http://localhost:{code:APIPort}"; Description: "Открыть Kinodom"; Flags: postinstall shellexec nowait skipifsilent
+Filename: "http://localhost:{code:APIPort}"; Description: "Открыть Kinodom"; Flags: postinstall shellexec nowait skipifsilent; Check: InstallSucceeded
 
 [Code]
 const
@@ -71,7 +73,14 @@ var
   DownloadsPage: TInputDirWizardPage;
   WasInstalled: Boolean;
   StoppedByUs: Boolean; { PrepareToInstall остановил службу }
+  CopyStarted: Boolean; { файлы начали копироваться: папка программы известна, есть что убирать }
   InstallOK: Boolean;   { kinodom.exe install прошёл }
+  FailText: String;     { почему не установлен — для страницы «Готово» }
+
+function InstallSucceeded: Boolean;
+begin
+  Result := InstallOK;
+end;
 
 { Kinodom уже стоит (ключ удаления — с фигурными скобками, как AppId) или остались его настройки
   (удаление без данных): папку загрузок не спрашиваем, выбор человека не трогаем. }
@@ -153,22 +162,6 @@ begin
   Result := WasInstalled and (PageID = DownloadsPage.ID);
 end;
 
-{ Обновление поверх: служба останавливается до замены файлов. Не остановилась — установка не
-  начинается, старая версия цела. }
-function PrepareToInstall(var NeedsRestart: Boolean): String;
-var
-  Exe: String;
-  Code: Integer;
-begin
-  Result := '';
-  Exe := ExpandConstant('{app}\kinodom.exe');
-  if FileExists(Exe) then
-    if Exec(Exe, 'stop', '', SW_HIDE, ewWaitUntilTerminated, Code) and (Code = 0) then
-      StoppedByUs := True
-    else
-      Result := 'Служба Kinodom не остановилась. Закройте просмотр на телевизорах и телефонах и запустите установку ещё раз.';
-end;
-
 { Путь в кавычках для командной строки: «\» перед закрывающей кавычкой её бы экранировал. }
 function QuotedPath(P: String): String;
 begin
@@ -177,41 +170,104 @@ begin
   Result := '"' + P + '"';
 end;
 
-{ Системная часть — kinodom.exe install. Отказ — его текст в окне, установка откатывается. }
-procedure RunKinodomInstall;
+{ Текст отказа команды kinodom.exe из файла --result (UTF-8). }
+function ResultText(F: String; Code: Integer): String;
 var
-  Params, ResultFile, Msg: String;
   Lines: TArrayOfString;
-  Code, I: Integer;
+  I: Integer;
 begin
-  ResultFile := ExpandConstant('{tmp}\install-result.txt');
-  Params := 'install --result ' + QuotedPath(ResultFile);
-  if not WasInstalled then
-    Params := Params + ' --downloads-default ' + QuotedPath(DownloadsPage.Values[0]);
-  WizardForm.StatusLabel.Caption := 'Настраиваю службу Kinodom…';
-  if Exec(ExpandConstant('{app}\kinodom.exe'), Params, '', SW_HIDE, ewWaitUntilTerminated, Code) and (Code = 0) then
-  begin
-    InstallOK := True;
-    Exit;
-  end;
-  Msg := '';
-  if LoadStringsFromFile(ResultFile, Lines) then
+  Result := '';
+  if LoadStringsFromFile(F, Lines) then
     for I := 0 to GetArrayLength(Lines) - 1 do
-      Msg := Msg + Lines[I] + #13#10;
-  if Msg = '' then
-    Msg := SysErrorMessage(Code);
-  RaiseException('Kinodom не установлен: ' + Msg);
+      Result := Result + Lines[I] + #13#10;
+  if Result = '' then
+    Result := 'kinodom.exe завершился с кодом ' + IntToStr(Code);
 end;
 
-{ Службу остановили, а установка не дошла до конца (отказ, отмена, откат): kinodom.exe install
-  той версии, что на месте, чинит установку — возвращает перезапуск при сбое и запускает службу.
-  Первая неудачная установка убирает службу сама (kinodom install). }
+{ Параметры kinodom.exe install: папка загрузок — только при первой установке и только «по умолчанию»
+  (сохранённый выбор человека не перезаписывается). }
+function InstallParams(ResultFile: String): String;
+begin
+  Result := '--result ' + QuotedPath(ResultFile);
+  if not WasInstalled then
+    Result := Result + ' --downloads-default ' + QuotedPath(DownloadsPage.Values[0]);
+end;
+
+{ До копирования файлов: обновление — служба останавливается (не остановилась — старая версия цела);
+  затем kinodom.exe из установщика проверяет, пройдёт ли установка (права, папка загрузок, порт). Отказ —
+  текст на этой странице, ничего не скопировано. }
+function PrepareToInstall(var NeedsRestart: Boolean): String;
+var
+  Exe, ResultFile: String;
+  Code: Integer;
+begin
+  Result := '';
+  Exe := ExpandConstant('{app}\kinodom.exe');
+  if FileExists(Exe) then
+  begin
+    if Exec(Exe, 'stop', '', SW_HIDE, ewWaitUntilTerminated, Code) and (Code = 0) then
+      StoppedByUs := True
+    else
+    begin
+      Result := 'Служба Kinodom не остановилась. Закройте просмотр на телевизорах и телефонах и запустите установку ещё раз.';
+      Exit;
+    end;
+  end;
+  ExtractTemporaryFile('kinodom.exe');
+  ResultFile := ExpandConstant('{tmp}\check-result.txt');
+  if not Exec(ExpandConstant('{tmp}\kinodom.exe'), 'install --check ' + InstallParams(ResultFile), '', SW_HIDE,
+     ewWaitUntilTerminated, Code) or (Code <> 0) then
+    Result := 'Kinodom не установлен: ' + ResultText(ResultFile, Code);
+end;
+
+{ После копирования — системная часть: kinodom.exe install. Отказ — окно с его текстом и страница
+  «Готово» с ним же; убрать или починить — в DeinitializeSetup. }
+procedure CurStepChanged(CurStep: TSetupStep);
+var
+  ResultFile: String;
+  Code: Integer;
+begin
+  if CurStep = ssInstall then
+    CopyStarted := True;
+  if CurStep = ssPostInstall then
+  begin
+    ResultFile := ExpandConstant('{tmp}\install-result.txt');
+    WizardForm.StatusLabel.Caption := 'Настраиваю службу Kinodom…';
+    if Exec(ExpandConstant('{app}\kinodom.exe'), 'install ' + InstallParams(ResultFile), '', SW_HIDE,
+       ewWaitUntilTerminated, Code) and (Code = 0) then
+      InstallOK := True
+    else
+    begin
+      FailText := ResultText(ResultFile, Code);
+      if not WizardSilent then
+        MsgBox('Kinodom не установлен:' + #13#10 + FailText, mbError, MB_OK);
+    end;
+  end;
+end;
+
+procedure CurPageChanged(CurPageID: Integer);
+begin
+  if (CurPageID = wpFinished) and CopyStarted and not InstallOK then
+  begin
+    WizardForm.FinishedHeadingLabel.Caption := 'Kinodom не установлен';
+    WizardForm.FinishedLabel.Caption := FailText;
+  end;
+end;
+
+{ Установка не дошла до конца. Первая — удаляет себя целиком (служба, правила и ссылка уже убраны
+  kinodom install). Обновление или отказ после остановки службы — kinodom.exe install той версии, что
+  на месте, чинит установку: возвращает перезапуск при сбое и запускает службу. }
 procedure DeinitializeSetup;
 var
   Code: Integer;
 begin
-  if StoppedByUs and not InstallOK and FileExists(ExpandConstant('{app}\kinodom.exe')) then
-    Exec(ExpandConstant('{app}\kinodom.exe'), 'install', '', SW_HIDE, ewWaitUntilTerminated, Code);
+  if InstallOK then
+    Exit;
+  if StoppedByUs and FileExists(ExpandConstant('{app}\kinodom.exe')) then
+    Exec(ExpandConstant('{app}\kinodom.exe'), 'install', '', SW_HIDE, ewWaitUntilTerminated, Code)
+  else if CopyStarted and not WasInstalled and FileExists(ExpandConstant('{app}\unins000.exe')) then
+    Exec(ExpandConstant('{app}\unins000.exe'), '/VERYSILENT /SUPPRESSMSGBOXES /NORESTART', '', SW_HIDE,
+      ewWaitUntilTerminated, Code);
 end;
 
 { Удаление: вопрос о данных, затем kinodom.exe uninstall — до удаления файлов. Отказ (служба не
@@ -219,8 +275,7 @@ end;
 function InitializeUninstall: Boolean;
 var
   Params, ResultFile, Msg: String;
-  Lines: TArrayOfString;
-  Code, I: Integer;
+  Code: Integer;
 begin
   Result := True;
   Params := 'uninstall';
@@ -232,12 +287,7 @@ begin
   if Exec(ExpandConstant('{app}\kinodom.exe'), Params + ' --result ' + QuotedPath(ResultFile), '', SW_HIDE,
      ewWaitUntilTerminated, Code) and (Code = 0) then
     Exit;
-  Msg := '';
-  if LoadStringsFromFile(ResultFile, Lines) then
-    for I := 0 to GetArrayLength(Lines) - 1 do
-      Msg := Msg + Lines[I] + #13#10;
-  if Msg = '' then
-    Msg := SysErrorMessage(Code);
+  Msg := ResultText(ResultFile, Code);
   if not UninstallSilent then
     MsgBox('Kinodom не удалён: ' + Msg, mbError, MB_OK);
   Result := False;

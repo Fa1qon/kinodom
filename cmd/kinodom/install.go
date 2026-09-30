@@ -35,11 +35,31 @@ func cmdInstall(args []string, stdout, stderr io.Writer) int {
 	downloadsDefault := fs.String("downloads-default", "", "папка загрузок, только если её ещё нет в настройках (установщик)")
 	noStart := fs.Bool("no-start", false, "не запускать службу")
 	result := fs.String("result", "", "файл для текста отказа (UTF-8; его читает установщик)")
+	check := fs.Bool("check", false, "только проверить, пройдёт ли установка (до копирования файлов)")
 	if err := fs.Parse(args); err != nil || fs.NArg() > 0 {
-		fmt.Fprintln(stderr, "использование: kinodom install [--downloads ПАПКА | --downloads-default ПАПКА] [--no-start] [--result ФАЙЛ]")
+		fmt.Fprintln(stderr, "использование: kinodom install [--check] [--downloads ПАПКА | --downloads-default ПАПКА] [--no-start] [--result ФАЙЛ]")
 		return 2
 	}
+	if *check {
+		return finish(stderr, *result, installCheck(*downloads, *downloadsDefault))
+	}
 	return finish(stderr, *result, install(*downloads, *downloadsDefault, *noStart, stdout))
+}
+
+// installCheck — установщик до копирования файлов: права, папка загрузок, порт. kinodom.json не
+// создаётся: проверка не должна ничего оставлять.
+func installCheck(downloads, downloadsDefault string) error {
+	paths := config.NewPaths(config.DefaultHome())
+	boot := config.DefaultBootstrap()
+	if _, err := os.Stat(paths.Bootstrap); err == nil {
+		b, err := config.LoadBootstrap(paths.Bootstrap)
+		if err != nil {
+			return err
+		}
+		boot = b
+	}
+	return setup.Check(context.Background(), newSystem(), setup.InstallOptions{Downloads: downloads, DownloadsDefault: downloadsDefault,
+		Home: paths.Home, APIPort: boot.APIPort, TorrentPort: boot.TorrentPort})
 }
 
 // finish — код выхода системной команды; отказ — ещё и текстом в файл result (UTF-8): его читает
