@@ -43,7 +43,7 @@ func TestCheckDownloadsDir(t *testing.T) {
 	if err := dirError(`D:\K`, fmt.Errorf("open: %w", fs.ErrPermission)); !strings.Contains(err.Error(), "нет права записи") {
 		t.Errorf("нет прав: %v", err)
 	}
-	if isNetworkPath(`C:\Kinodom`) || isNetworkPath(`\?\C:\Kinodom`) {
+	if IsNetworkPath(`C:\Kinodom`) || IsNetworkPath(`\?\C:\Kinodom`) {
 		t.Error("локальный диск принят за сетевой")
 	}
 }
