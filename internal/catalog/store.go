@@ -284,11 +284,45 @@ func (s catalogStore) release(ctx context.Context, id int64) (r row, description
 }
 
 // missingPosters — раздачи без картинки со страницей раздачи: в каталоге или тронутые после since.
-func (s catalogStore) missingPosters(ctx context.Context, since time.Time) ([]row, error) {
+// missingPosters — раздачи со страницей, но без картинки (в каталоге или тронутые с since) и адреса
+// постеров их страниц ("" — на странице постера нет).
+func (s catalogStore) missingPosters(ctx context.Context, since time.Time) ([]row, []string, error) {
 	rows, err := s.db.R.QueryContext(ctx,
-		`SELECT `+rowColumns+` FROM releases r
+		`SELECT `+rowColumns+`, r.poster_url FROM releases r
 		 WHERE r.image_key = '' AND r.details_at > 0 AND r.removed = 0
 		   AND (r.updated_at >= ? OR r.id IN (SELECT release_id FROM catalog_entries))`, ms(since))
+	if err != nil {
+		return nil, nil, err
+	}
+	defer rows.Close()
+	var out []row
+	var urls []string
+	for rows.Next() {
+		var u string
+		r, err := scanRow(rows, &u)
+		if err != nil {
+			return nil, nil, err
+		}
+		out = append(out, r)
+		urls = append(urls, u)
+	}
+	return out, urls, rows.Err()
+}
+
+// missingTorrents — раздачи трекеров trackers (у которых есть .torrent) со страницей, но без .torrent.
+func (s catalogStore) missingTorrents(ctx context.Context, trackers []string, since time.Time) ([]row, error) {
+	if len(trackers) == 0 {
+		return nil, nil
+	}
+	args := []any{ms(since)}
+	for _, t := range trackers {
+		args = append(args, t)
+	}
+	rows, err := s.db.R.QueryContext(ctx,
+		`SELECT `+rowColumns+` FROM releases r
+		 WHERE (r.torrent IS NULL OR length(r.torrent) = 0) AND r.details_at > 0 AND r.removed = 0
+		   AND (r.updated_at >= ? OR r.id IN (SELECT release_id FROM catalog_entries))
+		   AND r.tracker IN (?`+strings.Repeat(",?", len(trackers)-1)+`)`, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -302,6 +336,16 @@ func (s catalogStore) missingPosters(ctx context.Context, since time.Time) ([]ro
 		out = append(out, r)
 	}
 	return out, rows.Err()
+}
+
+// clearImageKeys снимает картинки keys с раздач (заглушки хостингов).
+func (s catalogStore) clearImageKeys(ctx context.Context, keys []string) error {
+	args := make([]any, len(keys))
+	for i, k := range keys {
+		args[i] = k
+	}
+	_, err := s.db.W.ExecContext(ctx, `UPDATE releases SET image_key = '' WHERE image_key IN (?`+strings.Repeat(",?", len(keys)-1)+`)`, args...)
+	return err
 }
 
 func (s catalogStore) saveImageKey(ctx context.Context, id int64, key string) error {

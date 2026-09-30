@@ -142,26 +142,10 @@ func (scm) Start(name string) error {
 }
 
 // Halt — «Выход» в трее: остановить и дождаться, с правами пользователя. Перезапуск при сбое не
-// сработает: служба при остановке выходит с кодом 0.
+// сработает: служба при остановке выходит с кодом 0. Служба ещё запускается — ждём (хвост Х39).
 func (scm) Halt(name string, wait time.Duration) error {
 	return openService(name, windows.SERVICE_STOP|windows.SERVICE_QUERY_STATUS, func(s *mgr.Service) error {
-		if _, err := s.Control(svc.Stop); err != nil && !errors.Is(err, windows.ERROR_SERVICE_NOT_ACTIVE) {
-			return err
-		}
-		deadline := time.Now().Add(wait)
-		for {
-			st, err := s.Query()
-			if err != nil {
-				return err
-			}
-			if st.State == svc.Stopped {
-				return nil
-			}
-			if time.Now().After(deadline) {
-				return fmt.Errorf("не остановилась за %d с", int(wait.Seconds()))
-			}
-			time.Sleep(300 * time.Millisecond)
-		}
+		return haltService(s, wait, 300*time.Millisecond)
 	})
 }
 
@@ -187,10 +171,15 @@ func (scm) Stop(name string, wait time.Duration) error {
 	return withService(name, func(s *mgr.Service) error { return stopService(s, wait, 300*time.Millisecond) })
 }
 
-// serviceControl — что нужно остановке от службы (mgr.Service; в тестах — подделка).
-type serviceControl interface {
+// haltControl — что нужно остановке от службы (mgr.Service; в тестах — подделка).
+type haltControl interface {
 	Query() (svc.Status, error)
 	Control(svc.Cmd) (svc.Status, error)
+}
+
+// serviceControl — остановке перед заменой файлов нужно ещё снять перезапуск при сбое.
+type serviceControl interface {
+	haltControl
 	ResetRecoveryActions() error
 }
 
@@ -201,6 +190,11 @@ func stopService(s serviceControl, wait, step time.Duration) error {
 	if err := s.ResetRecoveryActions(); err != nil {
 		return fmt.Errorf("перезапуск при сбое не снялся: %w", err)
 	}
+	return haltService(s, wait, step)
+}
+
+// haltService — остановить и дождаться: пока служба запускается, «остановить» она не принимает — ждём.
+func haltService(s haltControl, wait, step time.Duration) error {
 	deadline := time.Now().Add(wait)
 	for {
 		st, err := s.Query()

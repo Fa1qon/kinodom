@@ -2,6 +2,8 @@ package meta
 
 import (
 	"bytes"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"image"
 	"image/png"
@@ -229,6 +231,146 @@ func TestNoImageAddressIsRemembered(t *testing.T) {
 	}
 	if hits.Load() != 1 {
 		t.Fatalf("заглушка скачана %d раз", hits.Load())
+	}
+}
+
+// Заглушка хостинга (хвост Х6): одна и та же картинка с трёх разных адресов — это «Thumbnail
+// Temporarily Unavailable» хостинга, а не постер: третий адрес — ErrNoImage, уже скачанные с тем же
+// содержимым удаляются и отдаются каталогу (Stubbed), чтобы он снял их с раздач; настоящий постер
+// принимается. Признанная заглушка помнится после перезапуска.
+func TestStubImageDetected(t *testing.T) {
+	stub := pngBytes(t)
+	real := append(pngBytes(t), 0) // другое содержимое
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/real.png" {
+			w.Write(real)
+			return
+		}
+		w.Write(stub)
+	}))
+	t.Cleanup(srv.Close)
+	dir := t.TempDir()
+	im, err := NewImages(ImagesOptions{Dir: dir, Rate: 1000, AllowPrivate: true, StubSources: PosterStubSources})
+	if err != nil {
+		t.Fatal(err)
+	}
+	a, errA := im.Fetch(ctx, srv.URL+"/a.png", Direct)
+	b, errB := im.Fetch(ctx, srv.URL+"/b.png", Direct)
+	if errA != nil || errB != nil {
+		t.Fatalf("первые два адреса: %v %v", errA, errB)
+	}
+	if _, err := im.Fetch(ctx, srv.URL+"/c.png", Direct); !errors.Is(err, ErrNoImage) {
+		t.Fatalf("третий адрес с той же картинкой: %v", err)
+	}
+	if got := im.Stubbed(); !slices.Contains(got, a) || !slices.Contains(got, b) {
+		t.Fatalf("снятые ключи: %v, нужны %s %s", got, a, b)
+	}
+	if im.find(a) != "" || im.find(b) != "" {
+		t.Fatal("файлы заглушки остались в кэше")
+	}
+	if _, err := im.Fetch(ctx, srv.URL+"/a.png", Direct); !errors.Is(err, ErrNoImage) {
+		t.Fatalf("адрес заглушки снова: %v", err)
+	}
+	if _, err := im.Fetch(ctx, srv.URL+"/real.png", Direct); err != nil {
+		t.Fatalf("настоящий постер: %v", err)
+	}
+	again, err := NewImages(ImagesOptions{Dir: dir, Rate: 1000, AllowPrivate: true, StubSources: PosterStubSources})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := again.Fetch(ctx, srv.URL+"/d.png", Direct); !errors.Is(err, ErrNoImage) {
+		t.Fatalf("после перезапуска заглушка забыта: %v", err)
+	}
+}
+
+// Заглушку признали, пока другой адрес с тем же содержимым ещё записывал файл: отданный ключ должен
+// попасть в Stubbed (каталог снимет его с раздачи) или не отдаваться вовсе — иначе раздача остаётся с
+// заглушкой навсегда (гонка, найдена нестабильным TestStubPosterReplacedByKinopoisk, 11b-А).
+func TestStubRecognizedDuringConcurrentFetch(t *testing.T) {
+	stub := pngBytes(t)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { w.Write(stub) }))
+	t.Cleanup(srv.Close)
+	for round := range 60 {
+		im, err := NewImages(ImagesOptions{Dir: t.TempDir(), Rate: 1000, AllowPrivate: true, StubSources: PosterStubSources})
+		if err != nil {
+			t.Fatal(err)
+		}
+		var wg sync.WaitGroup
+		var mu sync.Mutex
+		var got []string
+		start := make(chan struct{})
+		for _, p := range []string{"/a.png", "/b.png", "/c.png"} {
+			wg.Go(func() {
+				<-start
+				if k, err := im.Fetch(ctx, srv.URL+p, Direct); err == nil {
+					mu.Lock()
+					got = append(got, k)
+					mu.Unlock()
+				}
+			})
+		}
+		close(start)
+		wg.Wait()
+		dropped := im.Stubbed()
+		for _, k := range got {
+			if !slices.Contains(dropped, k) {
+				t.Fatalf("круг %d: ключ %s заглушки отдан, но не снят (снятые %v)", round, k, dropped)
+			}
+		}
+	}
+}
+
+// Логотипы каналов: часовые версии канала и зеркала ведут на один файл с разных адресов — это не
+// заглушка хостинга. Без StubSources заглушки не распознаются и прежний stubs.txt не читается
+// (ревью 11b-А: иначе логотип федерального канала пропадал навсегда).
+func TestStubDetectionOffByDefault(t *testing.T) {
+	logo := pngBytes(t)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { w.Write(logo) }))
+	t.Cleanup(srv.Close)
+	dir := t.TempDir()
+	sum := sha256.Sum256(logo)
+	if err := os.WriteFile(filepath.Join(dir, stubsFile), []byte(hex.EncodeToString(sum[:])+"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	im, err := NewImages(ImagesOptions{Dir: dir, Rate: 1000, AllowPrivate: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, p := range []string{"/perviy.png", "/perviy-plus2.png", "/perviy-plus4.png", "/perviy-plus6.png"} {
+		if _, err := im.Fetch(ctx, srv.URL+p, Direct); err != nil {
+			t.Fatalf("логотип %s: %v", p, err)
+		}
+	}
+	if got := im.Stubbed(); len(got) != 0 {
+		t.Fatalf("сняты как заглушки: %v", got)
+	}
+}
+
+// Неудача сети или ответ не 200 (хвост Х29): с FailFor адрес не запрашивается снова столько времени —
+// логотип, которого нет, не качается на каждой перерисовке списка каналов; потом — снова.
+func TestFailedFetchRemembered(t *testing.T) {
+	var hits atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		hits.Add(1)
+		w.WriteHeader(http.StatusInternalServerError)
+	}))
+	t.Cleanup(srv.Close)
+	im, err := NewImages(ImagesOptions{Dir: t.TempDir(), Rate: 1000, AllowPrivate: true, FailFor: 200 * time.Millisecond})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for range 3 {
+		if _, err := im.Fetch(ctx, srv.URL+"/logo.png", Direct); err == nil {
+			t.Fatal("ответ 500 — не ошибка")
+		}
+	}
+	if hits.Load() != 1 {
+		t.Fatalf("неудачный адрес запрошен %d раз за FailFor", hits.Load())
+	}
+	time.Sleep(250 * time.Millisecond)
+	im.Fetch(ctx, srv.URL+"/logo.png", Direct)
+	if hits.Load() != 2 {
+		t.Fatalf("после FailFor адрес не запрошен снова: %d", hits.Load())
 	}
 }
 

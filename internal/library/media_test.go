@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -15,6 +16,7 @@ import (
 	"testing"
 	"time"
 
+	"kinodom/internal/player"
 	"kinodom/internal/power"
 	"kinodom/internal/watch"
 )
@@ -135,11 +137,11 @@ func TestMediaKeepsAwake(t *testing.T) {
 func quick(t *testing.T) {
 	t.Helper()
 	was := [3]time.Duration{watch.Every, watch.Min, watch.Gap}
-	wasLead, wasJump, wasExtra := watch.Lead, watch.JumpRead, mediaExtraLead
-	watch.Every, watch.Min, watch.Gap, watch.Lead, watch.JumpRead, mediaExtraLead = 0, 0, 0, 0, 1, 0
+	wasLead, wasJump, wasExtra := watch.Lead, watch.JumpRead, watch.DiskExtraLead
+	watch.Every, watch.Min, watch.Gap, watch.Lead, watch.JumpRead, watch.DiskExtraLead = 0, 0, 0, 0, 1, 0
 	t.Cleanup(func() {
 		watch.Every, watch.Min, watch.Gap = was[0], was[1], was[2]
-		watch.Lead, watch.JumpRead, mediaExtraLead = wasLead, wasJump, wasExtra
+		watch.Lead, watch.JumpRead, watch.DiskExtraLead = wasLead, wasJump, wasExtra
 	})
 }
 
@@ -246,6 +248,21 @@ func TestM3USeries(t *testing.T) {
 	}
 }
 
+// Курс без номеров серий (хвост Х16): .m3u8 урока идёт дальше через главы (папки) по порядку курса, а не
+// обрывается на последнем уроке главы.
+func TestM3UCourseAcrossChapters(t *testing.T) {
+	e := newEnv(t)
+	e.folder(t, catSeries, "Study", "Go/1. О курсе/a.mp4", "Go/1. О курсе/b.mp4", "Go/2. Память/c.mp4")
+	e.scan(t)
+	var b int64
+	e.d.R.QueryRow(`SELECT id FROM lib_files WHERE path LIKE '%b.mp4'`).Scan(&b)
+	w := get(t, mediaMux(e.l), "/m3u/library/"+strconv.FormatInt(b, 10)+".m3u8", fromPhone)
+	body := w.Body.String()
+	if w.Code != 200 || strings.Count(body, "http://") != 2 || !strings.Contains(body, "c.mp4") {
+		t.Errorf(".m3u8 курса:\n%s", body)
+	}
+}
+
 // «Смотреть»: место из истории устройства; «С начала» — с нуля; kinodom:// — только на этом ПК, на
 // .m3u8 (серии подряд), место — в .m3u8, а не в ссылке (иначе VLC начал бы с него каждую серию).
 func TestPlay(t *testing.T) {
@@ -271,6 +288,15 @@ func TestPlay(t *testing.T) {
 		!strings.Contains(*p.LaunchURL, "m3u%2Flibrary") || strings.Contains(*p.LaunchURL, "&start=") || p.Title == "" {
 		t.Errorf("с места на ПК: %+v %v", p, *p.LaunchURL)
 	}
+	// Ссылка, которую отдал сервер, должна открываться своим же kinodom open (замечание № 8 этапа 11b):
+	// место — в адресе .m3u8 внутри ссылки.
+	if inner, err := url.Parse(launchInner(*p.LaunchURL)); err != nil {
+		t.Errorf("ссылка: %v", err)
+	} else if port, _ := strconv.Atoi(inner.Port()); true {
+		if u, _, err := player.ParseLaunch(*p.LaunchURL, port); err != nil || !strings.HasSuffix(u, ".m3u8?start=690") {
+			t.Errorf("kinodom open не принял ссылку «Продолжить»: %q, %v", u, err)
+		}
+	}
 	if p := play(fromPC, "?fromStart=1"); p.StartSec != 0 || strings.Contains(p.M3UURL, "start") {
 		t.Errorf("с начала: %+v", p)
 	}
@@ -283,11 +309,20 @@ func TestPlay(t *testing.T) {
 	_ = io.EOF
 }
 
+// launchInner — адрес потока из ссылки kinodom://.
+func launchInner(link string) string {
+	u, err := url.Parse(link)
+	if err != nil {
+		return ""
+	}
+	return u.Query().Get("url")
+}
+
 // Файл с локального диска VLC читает впереди на весь буфер (вживую 2026-09-30: записано 86 с при
 // картинке на ~40-й) — у /media поправка больше, чем у раздач.
 func TestMediaLead(t *testing.T) {
 	quick(t)
-	mediaExtraLead = 100
+	watch.DiskExtraLead = 100
 	e, file, unit, _ := withFile(t, "film.mkv", make([]byte, 10000))
 	get(t, mediaMux(e.l), mediaURL(file, "film.mkv"), fromPhone, "Range", "bytes=0-4099")
 	e.clk.add(time.Minute)
@@ -296,7 +331,7 @@ func TestMediaLead(t *testing.T) {
 	if len(fs) != 1 || fs[0].Fraction != 0.4 {
 		t.Errorf("место с поправкой: %+v", fs)
 	}
-	mediaExtraLead = 1 << 20 // больше 2 % файла — поправка 2 %
+	watch.DiskExtraLead = 1 << 20 // больше 2 % файла — поправка 2 %
 	get(t, mediaMux(e.l), mediaURL(file, "film.mkv"), "192.168.0.51:5000", "Range", "bytes=0-4199")
 	e.clk.add(time.Minute)
 	e.l.tracker.Tick(e.clk.now())

@@ -3,6 +3,7 @@ package iptv
 import (
 	"context"
 	"fmt"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -11,6 +12,7 @@ import (
 
 	"kinodom/internal/iptv/m3u"
 	"kinodom/internal/iptv/probe"
+	"kinodom/internal/store"
 )
 
 // countingChecker — проверка, которая считает, сколько идёт одновременно; panicOn — упасть на ссылке.
@@ -41,7 +43,7 @@ func (c *countingChecker) Light(_ context.Context, t probe.Target) probe.Result 
 func (c *countingChecker) Full(_ context.Context, t probe.Target) probe.Result  { return c.run(t) }
 
 // moduleWithStreams — модуль без Run: n живых источников в базе и в пуле.
-func moduleWithStreams(t *testing.T, n int, ch *countingChecker) (*Module, []int64) {
+func moduleWithStreams(t *testing.T, n int, ch Checker) (*Module, []int64) {
 	t.Helper()
 	d := openDB(t)
 	pl := &Playlist{Name: "a", AddedAt: time.Now()}
@@ -85,6 +87,86 @@ func TestFullLimitIsShared(t *testing.T) {
 	}
 	if ch.calls.Load() != 90 {
 		t.Errorf("проверок %d, нужно 90", ch.calls.Load())
+	}
+}
+
+// blackChecker — проверка, у которой молчат источники, выбранные black.
+type blackChecker struct{ black func(url string) bool }
+
+func (c *blackChecker) res(t probe.Target) probe.Result {
+	if c.black(t.URL) {
+		return probe.Result{Grade: probe.GradeBlack, Error: "нет соединения"}
+	}
+	return probe.Result{Grade: probe.GradeGreen, Ratio: 2}
+}
+func (c *blackChecker) Light(_ context.Context, t probe.Target) probe.Result { return c.res(t) }
+func (c *blackChecker) Full(_ context.Context, t probe.Target) probe.Result  { return c.res(t) }
+
+// Моргнул интернет (хвост Х28): проход, где молчат почти все (≥ 90 % из 20+), — сбой сети, а не каналов:
+// источники остаются живыми, в «Состоянии» — проблема iptv.network; нормальный проход её снимает, а
+// обычные ⚫ (меньше 90 %) применяются как раньше.
+func TestNetworkBlipKeepsChannels(t *testing.T) {
+	ctx := context.Background()
+	ch := &blackChecker{black: func(string) bool { return false }}
+	m, ids := moduleWithStreams(t, 25, ch)
+	m.online = func(context.Context) bool { return false } // контрольный адрес тоже не отвечает
+	m.runLight(ctx, ids)                                   // все живы
+	ch.black = func(url string) bool { return !strings.HasSuffix(url, "/0.m3u8") }
+	m.runLight(ctx, ids) // моргнул интернет
+	states := func() (alive, silent int) {
+		for _, s := range m.pool.streams {
+			switch s.State {
+			case StateAlive:
+				alive++
+			case StateSilent:
+				silent++
+			}
+		}
+		return
+	}
+	problem := func() bool {
+		ps, err := m.d.Problems(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return slices.ContainsFunc(ps, func(p store.Problem) bool { return p.ID == problemNetwork })
+	}
+	if a, s := states(); a != 25 || s != 0 || !problem() {
+		t.Fatalf("сбой сети: живых %d, молчат %d, проблема %v", a, s, problem())
+	}
+	ch.black = func(url string) bool { return strings.HasSuffix(url, "/1.m3u8") || strings.HasSuffix(url, "/2.m3u8") }
+	m.runLight(ctx, ids)
+	if a, s := states(); a != 23 || s != 2 || problem() {
+		t.Fatalf("нормальный проход: живых %d, молчат %d, проблема %v", a, s, problem())
+	}
+}
+
+// Почти все молчат, а контрольный адрес (база iptv-org, телепрограмма) отвечает — это умер провайдер
+// большого плейлиста, а не наша сеть: результаты применяются, проблемы «пропадал интернет» нет (ревью
+// 11b-А: иначе мёртвые источники оставались «работает» навсегда).
+func TestDeadProviderIsNotNetworkBlip(t *testing.T) {
+	ctx := context.Background()
+	ch := &blackChecker{black: func(string) bool { return false }}
+	m, ids := moduleWithStreams(t, 25, ch)
+	m.online = func(context.Context) bool { return true }
+	m.runLight(ctx, ids)
+	ch.black = func(url string) bool { return !strings.HasSuffix(url, "/0.m3u8") }
+	m.runLight(ctx, ids)
+	alive, silent := 0, 0
+	for _, s := range m.pool.streams {
+		switch s.State {
+		case StateAlive:
+			alive++
+		case StateSilent:
+			silent++
+		}
+	}
+	ps, err := m.d.Problems(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if alive != 1 || silent != 24 || slices.ContainsFunc(ps, func(p store.Problem) bool { return p.ID == problemNetwork }) {
+		t.Fatalf("умер провайдер: живых %d, молчат %d, проблемы %+v", alive, silent, ps)
 	}
 }
 

@@ -23,11 +23,13 @@ type ScannedFile struct {
 	Episode int
 }
 
-// ScannedUnit — единица из папки категории: Key — полный путь папки или файла.
+// ScannedUnit — единица из папки категории: Key — полный путь папки или файла. Copying — файлы,
+// пропущенные как «ещё копируются»: их строки и номера сохраняются до следующего обхода (хвост Х14).
 type ScannedUnit struct {
-	Key   string
-	Name  string // имя папки или файла
-	Files []ScannedFile
+	Copying []string
+	Key     string
+	Name    string // имя папки или файла
+	Files   []ScannedFile
 }
 
 // Пропуски обхода (спека, раздел 5.2).
@@ -43,54 +45,72 @@ func Scan(root string, layout Layout, skip func(path string) bool, now time.Time
 	if err := readable(root); err != nil {
 		return nil, err
 	}
-	w := walker{skip: skip, now: now}
+	w := walker{skip: skip, now: now, fresh: map[string]bool{}}
 	entries, err := os.ReadDir(root)
 	if err != nil {
 		return nil, err
 	}
 	var direct []ScannedFile
-	var dirs []string
+	var dirs, freshDirect []string
 	for _, e := range entries {
 		p := filepath.Join(root, e.Name())
 		if w.ignored(e, p) {
 			continue
 		}
 		if e.IsDir() {
-			if w.hasVideo(p) {
+			if w.hasVideo(p) || len(w.freshIn(p)) > 0 {
 				dirs = append(dirs, p)
 			}
 			continue
 		}
 		if f, ok := w.file(e, p); ok {
 			direct = append(direct, f)
+		} else if w.fresh[p] {
+			freshDirect = append(freshDirect, p)
 		}
 	}
 	if layout == LayoutSeries && selfSeries(direct, dirs) {
-		return []ScannedUnit{{Key: root, Name: filepath.Base(root), Files: w.collect(root)}}, nil
+		files := w.collect(root)
+		return []ScannedUnit{{Key: root, Name: filepath.Base(root), Files: files, Copying: w.freshIn(root)}}, nil
 	}
 	var out []ScannedUnit
 	for _, f := range direct {
 		f.Season, f.Episode = Episode(filepath.Base(f.Path))
 		out = append(out, ScannedUnit{Key: f.Path, Name: filepath.Base(f.Path), Files: []ScannedFile{f}})
 	}
+	for _, p := range freshDirect {
+		out = append(out, ScannedUnit{Key: p, Name: filepath.Base(p), Copying: []string{p}})
+	}
 	for _, d := range dirs {
-		if files := w.collect(d); len(files) > 0 {
-			out = append(out, ScannedUnit{Key: d, Name: filepath.Base(d), Files: files})
+		files := w.collect(d)
+		if cp := w.freshIn(d); len(files) > 0 || len(cp) > 0 {
+			out = append(out, ScannedUnit{Key: d, Name: filepath.Base(d), Files: files, Copying: cp})
 		}
 	}
 	slices.SortFunc(out, func(a, b ScannedUnit) int { return natCompare(a.Name, b.Name) })
 	return out, nil
 }
 
-// selfSeries — добавленная папка сама сериал: все её подпапки с видео — сезоны («S01», «Сезон 1»), и
-// есть хотя бы один сезон или серии одного сериала с SxxEyy прямо в ней.
+// specialsDirs — подпапки спецвыпусков в папке-сериале: не сезон, но и не повод разваливать сериал на
+// единицы-сезоны (хвост Х13). Их файлы — внутри сериала (сезон по имени файла, S00Exx — нулевой).
+var specialsDirs = map[string]bool{"specials": true, "special": true, "bonus": true, "bonuses": true,
+	"дополнительно": true, "бонусы": true, "бонус": true, "спецвыпуски": true, "спецвыпуск": true}
+
+// selfSeries — добавленная папка сама сериал: все её подпапки с видео — сезоны («S01», «Сезон 1») или
+// спецвыпуски, и есть хотя бы один сезон или серии одного сериала с SxxEyy прямо в ней.
 func selfSeries(direct []ScannedFile, dirs []string) bool {
+	seasons := 0
 	for _, d := range dirs {
-		if _, ok := SeasonOnly(filepath.Base(d)); !ok {
+		base := filepath.Base(d)
+		if specialsDirs[strings.ToLower(strings.TrimSpace(base))] {
+			continue
+		}
+		if _, ok := SeasonOnly(base); !ok {
 			return false
 		}
+		seasons++
 	}
-	if len(dirs) > 0 {
+	if seasons > 0 {
 		return true
 	}
 	title := ""
@@ -109,8 +129,22 @@ func selfSeries(direct []ScannedFile, dirs []string) bool {
 }
 
 type walker struct {
-	skip func(string) bool
-	now  time.Time
+	skip  func(string) bool
+	now   time.Time
+	fresh map[string]bool // видеофайлы моложе copyingFor — ещё копируются (хвост Х14)
+}
+
+// freshIn — копирующиеся файлы внутри папки dir.
+func (w walker) freshIn(dir string) []string {
+	var out []string
+	prefix := dir + string(filepath.Separator)
+	for p := range w.fresh {
+		if strings.HasPrefix(p, prefix) {
+			out = append(out, p)
+		}
+	}
+	slices.Sort(out)
+	return out
 }
 
 // ignored — не смотреть: с точки, скрытые и системные, папки Sample/Extras, чужие добавленные папки.
@@ -143,6 +177,9 @@ func (w walker) file(e fs.DirEntry, path string) (ScannedFile, bool) {
 		return ScannedFile{}, false
 	}
 	if w.now.Sub(info.ModTime()) < copyingFor {
+		if w.fresh != nil {
+			w.fresh[path] = true
+		}
 		return ScannedFile{}, false
 	}
 	return ScannedFile{Path: path, Size: info.Size(), ModTime: info.ModTime()}, true

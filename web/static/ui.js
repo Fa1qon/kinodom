@@ -207,6 +207,8 @@ export function poll(fn, ms) {
     busy = true;
     try {
       await fn();
+    } catch (e) {
+      console.error('опрос:', e); // исключение не останавливает опрос навсегда (хвост Х19)
     } finally {
       busy = false;
     }
@@ -231,10 +233,19 @@ export function poll(fn, ms) {
   };
 }
 
-// openPlayer — «Смотреть» на этом ПК: ссылка kinodom:// открывает плеер. Если обработчик ссылки не
-// установлен (kinodom protocol install / инсталлятор), браузер молча ничего не делает — тогда через
-// 1,5 с, если плеер не забрал фокус, открывается запасной адрес (.m3u8). env — для тестов.
-export function openPlayer(launchUrl, fallbackUrl, env = { win: window, loc: location, doc: document, wait: (f) => setTimeout(f, 1500) }) {
+// openPlayer — «Смотреть» на этом ПК: ссылка kinodom:// открывает плеер. registered — сервер знает,
+// зарегистрирован ли обработчик (хвост Х33): да — только kinodom://; нет — сразу запасной адрес (.m3u8).
+// Не знает (старый сервер) — как раньше: если за 1,5 с плеер не забрал фокус, запасной адрес. env — для
+// тестов.
+export function openPlayer(launchUrl, fallbackUrl, registered, env = { win: window, loc: location, doc: document, wait: (f) => setTimeout(f, 1500) }) {
+  if (registered === true) {
+    env.loc.href = launchUrl;
+    return;
+  }
+  if (registered === false) {
+    env.loc.href = fallbackUrl;
+    return;
+  }
   let left = false;
   const onBlur = () => {
     left = true;
@@ -254,12 +265,61 @@ export async function copyText(text) {
     await navigator.clipboard.writeText(text);
     return;
   }
+  const active = document.activeElement;
   const ta = h('textarea', { style: { position: 'fixed', top: '-100px', opacity: '0' }, readonly: true }, text);
   document.body.append(ta);
   ta.select();
   const ok = document.execCommand('copy');
   ta.remove();
+  // Фокус — обратно на кнопку: иначе на пульте ТВ следующая стрелка начинает с первого элемента (Х25).
+  if (active && active.focus) active.focus({ preventScroll: true });
   if (!ok) throw new Error('не удалось скопировать');
+}
+
+// openModal — окно поверх экрана: остальное недоступно (inert — стрелки пульта не уходят за окно),
+// «Назад» пульта и Escape вызывают onCancel, а не уходят с экрана. close() убирает окно и возвращает
+// фокус туда, где он был.
+export function openModal(box, onCancel) {
+  const before = document.activeElement;
+  const others = [...document.body.children];
+  for (const el of others) el.inert = true;
+  const back = h('div', { class: 'dlg-back', onkeydown: (e) => {
+    const typing = e.target.tagName === 'INPUT';
+    if (e.key === 'Escape' || e.key === 'GoBack' || e.key === 'BrowserBack' || (e.key === 'Backspace' && !typing)) {
+      e.preventDefault();
+      e.stopPropagation();
+      onCancel();
+    }
+  } }, box);
+  document.body.append(back);
+  const key = before && before.dataset ? before.dataset.key || '' : '';
+  return {
+    close() {
+      back.remove();
+      for (const el of others) el.inert = false;
+      // Экран мог перерисоваться, пока окно было открыто (опрос раздачи): тогда — на элемент с тем же
+      // ключом (найдено вживую, 11b-А).
+      const target = before && before.isConnected ? before : key ? document.querySelector(`[data-key="${CSS.escape(key)}"]`) : null;
+      if (target && target.focus) target.focus({ preventScroll: true });
+    },
+  };
+}
+
+// confirmDialog — «Да» / «Нет» (спека 11b, 4.1): Promise<boolean>; фокус сразу на «Да».
+export function confirmDialog({ title, yes = 'Да', no = 'Нет' }) {
+  return new Promise((resolve) => {
+    let modal = null;
+    const done = (v) => {
+      modal.close();
+      resolve(v);
+    };
+    const yesBtn = h('button', { class: 'btn inv', type: 'button', 'data-key': 'dlg-yes', onclick: () => done(true) }, yes);
+    const noBtn = h('button', { class: 'btn', type: 'button', 'data-key': 'dlg-no', onclick: () => done(false) }, no);
+    const box = h('div', { class: 'dlg card', role: 'dialog', 'aria-modal': 'true', 'aria-label': title },
+      h('div', { class: 'h' }, title), h('div', { class: 'row gap10' }, yesBtn, noBtn));
+    modal = openModal(box, () => done(false));
+    yesBtn.focus({ preventScroll: true });
+  });
 }
 
 // store — запомнить мелочь в браузере (последняя вкладка, раздел); без localStorage — не помнить.

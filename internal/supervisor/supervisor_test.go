@@ -180,7 +180,9 @@ func TestPanicInChildGoroutineRestartsOnlyThatModule(t *testing.T) {
 func TestChildErrorIsModuleFailure(t *testing.T) {
 	s := New(quiet(), WithBackoff(time.Hour))
 	s.Add(fakeModule{"m", func(ctx context.Context) error {
-		Go(ctx, func(ctx context.Context) error { return errors.New("проверка каналов сломалась") })
+		Go(ctx, func(ctx context.Context) error {
+			return errors.New("проверка каналов сломалась")
+		})
 		<-ctx.Done()
 		return nil
 	}}, true)

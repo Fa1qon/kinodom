@@ -37,6 +37,9 @@ func units(t *testing.T, root string, us []ScannedUnit) []string {
 	t.Helper()
 	var out []string
 	for _, u := range us {
+		if len(u.Files) == 0 {
+			continue // одни копирующиеся файлы: единица — только чтобы не потерять номера (Х14)
+		}
 		rel, _ := filepath.Rel(root, u.Key)
 		var fs []string
 		for _, f := range u.Files {
@@ -111,6 +114,22 @@ func TestScanSelfSeries(t *testing.T) {
 	trudno := tree(t, "Trudno.byt.bogom.S01.E02.mkv", "Trudno.byt.bogom.S01.E01.mkv")
 	same(t, "Трудно быть богом", scanOK(t, trudno, LayoutSeries, nil),
 		".: Trudno.byt.bogom.S01.E01.mkv[1//1], Trudno.byt.bogom.S01.E02.mkv[1//2]")
+}
+
+// Подпапка Specials / Bonus / «Спецвыпуски» в папке-сериале (хвост Х13) не разваливает сериал на
+// единицы-сезоны: папка — одна единица, её файлы — внутри неё.
+func TestScanSelfSeriesWithSpecials(t *testing.T) {
+	for _, extra := range []string{"Specials", "Bonus", "Спецвыпуски"} {
+		silo := tree(t, "S01/Silo.S01E01.mkv", "S02/Silo.S02E01.mkv", extra+"/Silo.S00E01.mkv")
+		us := scanOK(t, silo, LayoutSeries, nil)
+		if len(us) != 1 || !strings.HasPrefix(us[0], ".: ") || !strings.Contains(us[0], "Silo.S00E01.mkv") {
+			t.Errorf("%s: %v — сериал развалился", extra, us)
+		}
+	}
+	notSeries := tree(t, "S01/Silo.S01E01.mkv", "Фильмы/film.mkv")
+	if us := scanOK(t, notSeries, LayoutSeries, nil); len(us) != 2 {
+		t.Errorf("папка «Фильмы» — не спецвыпуски: %v", us)
+	}
 }
 
 // Главы курса — разделы с именем папки; «2» раньше «10».

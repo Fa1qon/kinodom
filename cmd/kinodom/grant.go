@@ -48,6 +48,9 @@ func openGrant(link string, apiPort int, stdout, stderr io.Writer) int {
 	case errors.Is(err, winsvc.ErrCancelled):
 		fmt.Fprintln(stderr, "Доступ не выдан: в окне Windows нажали «Нет»")
 		return 1
+	case errors.Is(err, winsvc.ErrElevatedFailed):
+		fmt.Fprintln(stderr, "Доступ к папке не выдан:", err) // окно уже показал повышенный grant
+		return 1
 	case err != nil:
 		return report(stderr, "Доступ к папке не выдан.", err)
 	}

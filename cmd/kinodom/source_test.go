@@ -94,7 +94,14 @@ func runt2(t *testing.T, s *t2test.Server, args ...string) (int, string, string)
 	return code, out.String(), errb.String()
 }
 
+// not2Env — пара t2 разработчика из окружения не должна попадать в тесты.
+func not2Env(t *testing.T) {
+	t.Setenv("KINODOM_t2_LOGIN", "")
+	t.Setenv("KINODOM_t2_PASSWORD", "")
+}
+
 func TestSourcet2API(t *testing.T) {
+	not2Env(t)
 	s := t2test.NewServer(t)
 	code, out, errOut := runt2(t, s, "categories")
 	if code != 0 || !strings.Contains(out, "[Док] Космос") {
@@ -111,11 +118,15 @@ func TestSourcet2API(t *testing.T) {
 }
 
 func TestSourcet2DetailsAndSearch(t *testing.T) {
+	not2Env(t)
 	s := t2test.NewServer(t)
 	s.Login, s.Password = "user", "pass"
 	code, out, errOut := runt2(t, s, "details", "6914565")
 	if code != 0 || !strings.Contains(out, "Экстрасенсы") {
 		t.Fatalf("details: код %d\n%s\n%s", code, out, errOut)
+	}
+	if n := s.Logins(); n != 0 {
+		t.Fatalf("details без пары в окружении теста вошёл %d раз — пара взята из окружения разработчика", n)
 	}
 	t.Setenv("KINODOM_t2_LOGIN", "user")
 	t.Setenv("KINODOM_t2_PASSWORD", "pass")

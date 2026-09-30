@@ -152,6 +152,21 @@ func (m *Module) SetNameRule(ctx context.Context, name, channel string, hidden b
 	return nil
 }
 
+// HiddenNames — скрытые из «Не распознано» названия (нормализованные, как в списке), по алфавиту: их
+// можно вернуть (хвост Х30).
+func (m *Module) HiddenNames() []string {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	var out []string
+	for name, r := range m.pool.nameRules {
+		if r.Hidden {
+			out = append(out, name)
+		}
+	}
+	slices.Sort(out)
+	return out
+}
+
 // SetStreamRule — «это другой канал» для одного источника (по ссылке).
 func (m *Module) SetStreamRule(ctx context.Context, id int64, channel string, hidden bool) error {
 	m.plMu.Lock()

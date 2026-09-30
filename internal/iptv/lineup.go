@@ -576,7 +576,7 @@ func hiddenBy(c *Channel, o Override, in buildInput) string {
 		return HiddenCategory
 	case slices.Contains(in.hidden.Countries, c.Labels.Country):
 		return HiddenCountry
-	case allHidden(c.Labels.Languages, in.hidden.Languages):
+	case anyHidden(c.Labels.Languages, in.hidden.Languages):
 		return HiddenLanguage
 	case in.hidden.OtherZones && c.Zone != 0 && c.Zone != in.localShift:
 		return HiddenZone
@@ -584,16 +584,13 @@ func hiddenBy(c *Channel, o Override, in buildInput) string {
 	return ""
 }
 
-func allHidden(langs, hidden []string) bool {
+// anyHidden — скрыт хотя бы один язык канала; без языков — скрыт «Язык не указан» (""). Решение
+// заказчика этапа 11b (замечание № 6): «скрыл все языки, кроме русского» — двуязычные каналы тоже прячутся.
+func anyHidden(langs, hidden []string) bool {
 	if len(langs) == 0 {
 		return slices.Contains(hidden, "")
 	}
-	for _, l := range langs {
-		if !slices.Contains(hidden, l) {
-			return false
-		}
-	}
-	return true
+	return slices.ContainsFunc(langs, func(l string) bool { return slices.Contains(hidden, l) })
 }
 
 // compareChannels — порядок остальных каналов: категория, страна (сначала Россия), название; версия

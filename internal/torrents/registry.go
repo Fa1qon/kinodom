@@ -67,33 +67,6 @@ func (r *Registry) MarkStored(ctx context.Context, ih metainfo.Hash, index int, 
 	return err
 }
 
-// ReleaseOpened — последнее открытие каждой раздачи с хранимыми файлами: позднейшее из её файлов;
-// нулевое время — ни один файл ни разу не открывали (срок хранения по раздаче, спека этапа 9, 5.8).
-func (r *Registry) ReleaseOpened(ctx context.Context) (map[metainfo.Hash]time.Time, error) {
-	rows, err := r.db.R.QueryContext(ctx, `SELECT infohash, MAX(last_opened_at) FROM stored_files GROUP BY infohash`)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	out := map[metainfo.Hash]time.Time{}
-	for rows.Next() {
-		var h string
-		var at int64
-		if err := rows.Scan(&h, &at); err != nil {
-			return nil, err
-		}
-		var ih metainfo.Hash
-		if err := ih.FromHexString(h); err != nil {
-			return nil, err
-		}
-		out[ih] = time.Time{}
-		if at > 0 {
-			out[ih] = time.UnixMilli(at)
-		}
-	}
-	return out, rows.Err()
-}
-
 // TouchStream — к файлу подключился плеер: «сейчас смотрят». Заодно это открытие файла (срок
 // хранения считается от него) — не чаще раза в минуту (спека, раздел 9).
 func (r *Registry) TouchStream(ctx context.Context, ih metainfo.Hash, index int, now time.Time) error {

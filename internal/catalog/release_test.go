@@ -90,6 +90,7 @@ func TestReleaseReadyBeforeItsPoster(t *testing.T) {
 	if err := <-done; err != nil {
 		t.Fatal(err)
 	}
+	c.posterWG.Wait()
 	if r, _ = c.Release(ctx, ids[0]); r.ImageKey == "" {
 		t.Fatal("постер не записался после догрузки")
 	}

@@ -111,6 +111,40 @@ func TestParseLaunchRejectsForeignLinks(t *testing.T) {
 	}
 }
 
+// Место в плейлисте медиатеки (замечание № 8 этапа 11b): у адреса /m3u/… разрешён ровно один
+// параметр start с целым 0…604800 — иначе «Продолжить» на ПК не открывался; всё прочее — отказ.
+func TestParseLaunchStart(t *testing.T) {
+	wrap := func(inner string) string { return LaunchURL(inner, "Серия") }
+	for _, inner := range []string{
+		"http://127.0.0.1:8090/m3u/library/42.m3u8?start=120",
+		"http://127.0.0.1:8090/m3u/library/42.m3u8?start=0",
+		"http://127.0.0.1:8090/m3u/library/42.m3u8?start=604800",
+	} {
+		u, _, err := ParseLaunch(wrap(inner), 8090)
+		if err != nil || u != inner {
+			t.Errorf("%s: %q, %v", inner, u, err)
+		}
+	}
+	for name, inner := range map[string]string{
+		"больше недели":      "http://127.0.0.1:8090/m3u/library/42.m3u8?start=604801",
+		"огромное":           "http://127.0.0.1:8090/m3u/library/42.m3u8?start=1000000000",
+		"отрицательное":      "http://127.0.0.1:8090/m3u/library/42.m3u8?start=-1",
+		"не целое":           "http://127.0.0.1:8090/m3u/library/42.m3u8?start=1e9",
+		"пустое":             "http://127.0.0.1:8090/m3u/library/42.m3u8?start=",
+		"второй параметр":    "http://127.0.0.1:8090/m3u/library/42.m3u8?start=1&x=2",
+		"start дважды":       "http://127.0.0.1:8090/m3u/library/42.m3u8?start=1&start=2",
+		"другой параметр":    "http://127.0.0.1:8090/m3u/library/42.m3u8?x=1",
+		"start у потока":     "http://127.0.0.1:8090/stream/a/0/f.mkv?start=10",
+		"start у медиа":      "http://127.0.0.1:8090/media/12?start=10",
+		"start у мультикаст": "http://127.0.0.1:8090/mcast/239.0.0.1:1234?start=10",
+		"амперсанд внутри":   "http://127.0.0.1:8090/m3u/library/42.m3u8?start=1%26x=2",
+	} {
+		if _, _, err := ParseLaunch(wrap(inner), 8090); !errors.Is(err, ErrBadLink) {
+			t.Errorf("%s: принята (%v)", name, err)
+		}
+	}
+}
+
 // Плеер по настройке: авто — VLC, без VLC — MPC-HC; путь из реестра, которого нет на диске, не
 // годится — тогда стандартные папки программ.
 func TestFindPlayers(t *testing.T) {
