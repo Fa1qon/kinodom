@@ -261,7 +261,7 @@ func (a *App) initTorrents(ctx context.Context, o Options, v settings.Values) {
 // без ключа (rating.kinopoisk.ru), поиск ждёт ключа.
 func (a *App) initMeta(ctx context.Context, o Options, v settings.Values) error {
 	images, err := meta.NewImages(meta.ImagesOptions{Dir: a.Paths.Images, Proxy: a.proxy, Log: a.Log.With("module", "images"),
-		AllowPrivate: o.LocalImages})
+		AllowPrivate: o.LocalImages, StubSources: meta.PosterStubSources})
 	if err != nil {
 		return err
 	}

@@ -237,7 +237,7 @@ func TestStubPosterReplacedByKinopoisk(t *testing.T) {
 		w.Write(stub)
 	}))
 	t.Cleanup(host.Close)
-	im, err := meta.NewImages(meta.ImagesOptions{Dir: t.TempDir(), Rate: 1000, AllowPrivate: true})
+	im, err := meta.NewImages(meta.ImagesOptions{Dir: t.TempDir(), Rate: 1000, AllowPrivate: true, StubSources: meta.PosterStubSources})
 	if err != nil {
 		t.Fatal(err)
 	}
