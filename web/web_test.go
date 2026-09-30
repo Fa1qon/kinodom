@@ -721,6 +721,38 @@ for (const [name, got, want] of checks) {
 	}
 }
 
+// Подгрузка каталога (найдено вживую, 11b-А): вторая просьба, пока порция грузится, ждёт её, а не
+// возвращается сразу — иначе экран считал список пустым и не восстанавливал место после «Назад».
+func TestPultOneAtATime(t *testing.T) {
+	node := lookNode(t)
+	script := `
+import { oneAtATime } from './views/catalog.js';
+let calls = 0;
+let release;
+const f = oneAtATime(() => { calls++; return new Promise((r) => { release = r; }); });
+const a = f();
+const b = f();
+const checks = [['один вызов, пока идёт', calls === 1], ['тот же промис', a === b]];
+release();
+await a;
+const c = f();
+release();
+await c;
+checks.push(['после окончания — снова вызов', calls === 2]);
+for (const [name, ok] of checks) {
+  if (!ok) {
+    console.error('не выполнено:', name);
+    process.exitCode = 1;
+  }
+}
+`
+	cmd := exec.Command(node, "--input-type=module", "--no-warnings", "-e", script)
+	cmd.Dir = "static"
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Errorf("%v\n%s", err, out)
+	}
+}
+
 // Разделы каталога деревом: строка настройки читается и пишется без потерь; категория целиком —
 // «cN+», раздел со всеми подразделами — «раздел+», только собственные раздачи раздела — «раздел».
 func TestPultSectionsEncoding(t *testing.T) {

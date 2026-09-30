@@ -23,6 +23,16 @@ export function portions(state, action) {
   }
 }
 
+// oneAtATime — пока вызов fn идёт, повторный возвращает тот же промис: вторая просьба порции ждёт идущую
+// загрузку, а не возвращается сразу (иначе экран считал список пустым — найдено вживую, 11b-А).
+export function oneAtATime(fn) {
+  let running = null;
+  return () => {
+    if (!running) running = Promise.resolve(fn()).finally(() => { running = null; });
+    return running;
+  };
+}
+
 export function render(root, r, ctx) {
   const tracker = TRACKERS.some(([id]) => id === r.parts[1]) ? r.parts[1] : 'rutor';
   const section = r.parts[2] || '';
@@ -70,7 +80,8 @@ export function render(root, r, ctx) {
   }
 
   // more — следующая порция, если её можно просить.
-  async function more() {
+  const more = oneAtATime(loadMore);
+  async function loadMore() {
     const next = portions(state, { type: 'more' });
     if (next === state) return;
     state = next;
@@ -108,7 +119,6 @@ export function render(root, r, ctx) {
       if (es.some((e) => e.isIntersecting)) more();
     }, { rootMargin: '600px 0px' })
     : null;
-  if (watcher) watcher.observe(tail);
   grid.addEventListener('focusin', (e) => {
     const last = grid.lastElementChild;
     if (last && e.target.closest && e.target.closest('.entry') && e.target.getBoundingClientRect().top >= last.getBoundingClientRect().top - 1) more();
@@ -125,6 +135,7 @@ export function render(root, r, ctx) {
     if (!alive) return;
     await more(); // первая порция: в ней — раздел по умолчанию и время обновления
     if (!alive) return;
+    if (watcher) watcher.observe(tail); // только теперь: пустая сетка не должна просить порцию сама
     const off = ctx.status && ctx.status.trackers && ctx.status.trackers[tracker] && ctx.status.trackers[tracker].state === 'off';
     bar.replaceChildren(...sections.map((s) => h('a', {
       class: s.id === shownSection ? 'fil on' : 'fil',
