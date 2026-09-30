@@ -55,13 +55,42 @@ func (r *Registry) SaveMetainfo(ctx context.Context, ih metainfo.Hash, name stri
 	return err
 }
 
-// MarkStored — файл выбран для просмотра: он хранится и докачивается целиком.
-func (r *Registry) MarkStored(ctx context.Context, ih metainfo.Hash, index int, path string, size int64, now time.Time) error {
+// MarkStored — файл выбран («Смотреть» или «Скачать»): он хранится и докачивается целиком. Выбор —
+// не открытие (спека этапа 9, раздел 5.8): у нового файла время открытия — «никогда», открытием
+// считается поток (TouchStream).
+func (r *Registry) MarkStored(ctx context.Context, ih metainfo.Hash, index int, path string, size int64) error {
 	_, err := r.db.W.ExecContext(ctx,
-		`INSERT INTO stored_files(infohash, file_index, path, size, last_opened_at) VALUES(?, ?, ?, ?, ?)
-		 ON CONFLICT(infohash, file_index) DO UPDATE SET path = excluded.path, last_opened_at = excluded.last_opened_at`,
-		ih.HexString(), index, path, size, now.UnixMilli())
+		`INSERT INTO stored_files(infohash, file_index, path, size, last_opened_at) VALUES(?, ?, ?, ?, 0)
+		 ON CONFLICT(infohash, file_index) DO UPDATE SET path = excluded.path`,
+		ih.HexString(), index, path, size)
 	return err
+}
+
+// ReleaseOpened — последнее открытие каждой раздачи с хранимыми файлами: позднейшее из её файлов;
+// нулевое время — ни один файл ни разу не открывали (срок хранения по раздаче, спека этапа 9, 5.8).
+func (r *Registry) ReleaseOpened(ctx context.Context) (map[metainfo.Hash]time.Time, error) {
+	rows, err := r.db.R.QueryContext(ctx, `SELECT infohash, MAX(last_opened_at) FROM stored_files GROUP BY infohash`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := map[metainfo.Hash]time.Time{}
+	for rows.Next() {
+		var h string
+		var at int64
+		if err := rows.Scan(&h, &at); err != nil {
+			return nil, err
+		}
+		var ih metainfo.Hash
+		if err := ih.FromHexString(h); err != nil {
+			return nil, err
+		}
+		out[ih] = time.Time{}
+		if at > 0 {
+			out[ih] = time.UnixMilli(at)
+		}
+	}
+	return out, rows.Err()
 }
 
 // TouchStream — к файлу подключился плеер: «сейчас смотрят». Заодно это открытие файла (срок
@@ -199,7 +228,9 @@ func scanStoredFile(sc interface{ Scan(...any) error }) (StoredFile, error) {
 	if err := f.InfoHash.FromHexString(hexHash); err != nil {
 		return f, err
 	}
-	f.LastOpened = time.UnixMilli(opened)
+	if opened > 0 {
+		f.LastOpened = time.UnixMilli(opened)
+	}
 	if stream > 0 {
 		f.LastStream = time.UnixMilli(stream)
 	}
@@ -273,10 +304,13 @@ func (r *Registry) Unstored(ctx context.Context, before time.Time) ([]Record, er
 	return out, rows.Err()
 }
 
-// TorrentsByOpened — раздачи с хранимыми файлами, самые недавно открытые — первыми (раздача).
+// TorrentsByOpened — раздачи с хранимыми файлами, самые недавно открытые — первыми (раздача). Ни разу
+// не открытая (скачанная заранее, спека этапа 9, раздел 5.8) — по времени добавления: только что
+// скачанная раздаётся, давно лежащая — нет.
 func (r *Registry) TorrentsByOpened(ctx context.Context) ([]metainfo.Hash, error) {
 	rows, err := r.db.R.QueryContext(ctx,
-		`SELECT infohash FROM stored_files GROUP BY infohash ORDER BY MAX(last_opened_at) DESC, infohash`)
+		`SELECT s.infohash FROM stored_files s LEFT JOIN torrents t ON t.infohash = s.infohash GROUP BY s.infohash
+		 ORDER BY CASE WHEN MAX(s.last_opened_at) > 0 THEN MAX(s.last_opened_at) ELSE COALESCE(MAX(t.added_at), 0) END DESC, s.infohash`)
 	if err != nil {
 		return nil, err
 	}
