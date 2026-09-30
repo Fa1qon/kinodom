@@ -57,14 +57,15 @@ type Options struct {
 }
 
 type Rutracker struct {
-	forum   *netx.Client // сайт: зеркала, cookie, признаки ответа форума
-	api     *netx.Client // API и лента
-	jar     http.CookieJar
-	onLogin func(LoginInfo)
-	passer  Passer
-	passes  singleflight.Group
-	log     *slog.Logger
-	now     func() time.Time // часы (тесты подменяют)
+	forum    *netx.Client // сайт: зеркала, cookie, признаки ответа форума
+	api      *netx.Client // API и лента
+	jar      http.CookieJar
+	onLogin  func(LoginInfo)
+	passer   Passer
+	passes   singleflight.Group
+	sessions SessionStore // nil — сессия не сохраняется (под mu)
+	log      *slog.Logger
+	now      func() time.Time // часы (тесты подменяют)
 
 	loginMu sync.Mutex // один вход за раз: одновременные запросы ждут его, а не входят сами
 
@@ -277,6 +278,7 @@ func (r *Rutracker) renewPass(ctx context.Context, path string) error {
 		}
 		u, _ := url.Parse(mirror + "/")
 		r.jar.SetCookies(u, cookies)
+		r.saveSession(passCtx)
 		return nil, nil
 	})
 	select {

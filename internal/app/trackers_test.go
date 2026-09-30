@@ -8,6 +8,7 @@ import (
 
 	"kinodom/internal/config"
 	"kinodom/internal/source/rutor/rutortest"
+	"kinodom/internal/source/rutracker/rutrackertest"
 	"kinodom/internal/store"
 )
 
@@ -82,5 +83,38 @@ func TestStatusHasVersion(t *testing.T) {
 	getJSON(t, "http://"+a.API.Addr()+"/api/v1/status", &st)
 	if st.Version != "0.11.0-test" {
 		t.Fatalf("версия %q", st.Version)
+	}
+}
+
+// Вход Rutracker переживает перезапуск приложения (хвост 5c): сессия — в базе (tracker_state).
+func TestRutrackerSessionSurvivesRestart(t *testing.T) {
+	rt := rutrackertest.NewServer(t)
+	rt.Login, rt.Password, rt.TopicNeedsLogin = "user", "pass", true
+	kp := httptest.NewServer(http.NotFoundHandler())
+	t.Cleanup(kp.Close)
+	home := t.TempDir()
+	o := Options{Home: home, ListenAddr: "127.0.0.1:0", Offline: true, DownloadsDir: t.TempDir(), KinopoiskAPI: kp.URL,
+		Settings: map[string]string{"rutracker.login": "user", "rutracker.password": "pass"},
+		Trackers: Trackers{RutrackerMirrors: []string{rt.Forum.URL}, RutrackerAPI: rt.API.URL, RutrackerFeed: rt.Feed.URL,
+			RutorMirrors: []string{"http://" + closedAddr(t)}, NoEdge: true, Rate: 1000}}
+	ctx, cancel := context.WithCancel(context.Background())
+	a, err := New(ctx, o)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := a.rutracker.Details(ctx, "6914565"); err != nil {
+		t.Fatal(err)
+	}
+	cancel()
+	a.Close()
+	if rt.Logins() != 1 {
+		t.Fatalf("входов %d", rt.Logins())
+	}
+	a2 := startAppRaw(t, o)
+	if _, err := a2.rutracker.Details(context.Background(), "6914565"); err != nil {
+		t.Fatal(err)
+	}
+	if rt.Logins() != 1 {
+		t.Fatalf("после перезапуска входов %d — сессия не сохранилась", rt.Logins())
 	}
 }

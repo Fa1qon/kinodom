@@ -175,6 +175,12 @@ func (r *Rutracker) doLogin(ctx context.Context) error {
 		return err // адреса нет — это не неудача входа: ни паузы, ни проблемы
 	}
 	defer r.noteLoginState() // после снятия r.mu: отложен раньше блокировки ниже
+	loggedIn := false
+	defer func() { // тоже после снятия r.mu
+		if loggedIn {
+			r.saveSession(ctx)
+		}
+	}()
 	r.mu.Lock()
 	login, password, block, gen := r.login, r.password, r.loginBlock, r.credGen
 	r.mu.Unlock()
@@ -198,6 +204,7 @@ func (r *Rutracker) doLogin(ctx context.Context) error {
 	switch {
 	case err == nil:
 		r.loginRetryAt, r.loginRetryErr = time.Time{}, nil
+		loggedIn = true
 	case errors.Is(err, ErrWrongPassword) || errors.As(err, &ce):
 		if r.credGen == gen { // пароль не меняли, пока шёл вход
 			r.loginBlock = err

@@ -316,6 +316,7 @@ func (a *App) initCatalog(ctx context.Context, o Options, v settings.Values) err
 		return err
 	}
 	a.rutracker = rtSrc
+	rtSrc.SetSessionStore(trackerSessions{a.DB}) // вход и пропуск прошлого запуска (этап 11a)
 	// Проблема входа прошлого запуска в базе: запрет входа живёт в памяти, после перезапуска его нет.
 	a.rutrackerLogin(rtSrc.LoginState())
 	// Кнопка «Войти» в настройках (спека этапа 7, раздел 5.3): из домашней сети.
