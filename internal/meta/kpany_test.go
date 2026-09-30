@@ -19,6 +19,14 @@ func newKPAny(t *testing.T, w *fakeKPWeb, f *fakeKP, key string, types func(int)
 	return a
 }
 
+// Правка единицы из пульта ждёт человек — срочная очередь, а не после каталога (11b-Б, вживую).
+func TestKPAnyUrgentClass(t *testing.T) {
+	a := &KPAny{}
+	if a.class(ctx) != KPBackground || a.class(Urgent(ctx)) != KPNormal {
+		t.Fatalf("классы: обычный %v, срочный %v", a.class(ctx), a.class(Urgent(ctx)))
+	}
+}
+
 // Медиатека ищет без ключа — поиском сайта, в очереди после каталога (спека 11b, 5.6).
 func TestKPAnyKeylessFirst(t *testing.T) {
 	w, f := newFakeKPWeb(t), newFakeKP(t)

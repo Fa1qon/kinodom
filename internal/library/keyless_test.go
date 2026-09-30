@@ -38,6 +38,35 @@ func TestLibraryKeylessWaitsOnPause(t *testing.T) {
 	}
 }
 
+// Обход не ждёт Кинопоиск (найдено вживую, 11b-Б): без токена запросы идут раз в 3 с и после каталога —
+// обход, распознававший единицы внутри себя, висел десятки минут, и новые папки не появлялись.
+// Распознавание — отдельным циклом.
+func TestScanDoesNotWaitForKinopoisk(t *testing.T) {
+	e := newEnv(t)
+	crimeKP(e)
+	e.kp.block = make(chan struct{})
+	e.folder(t, catFilms, "Movies", "Crime.101.2026.WEBRip.mkv")
+	done := make(chan error, 1)
+	go func() { done <- e.l.scanNow(ctx) }()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(2 * time.Second):
+		close(e.kp.block)
+		t.Fatal("обход ждёт Кинопоиск")
+	}
+	if st := unitState(t, e, "Crime.101.2026.WEBRip.mkv"); st != StateNew {
+		t.Fatalf("единица после обхода: %s", st)
+	}
+	close(e.kp.block)
+	e.l.recognizeOnce(ctx)
+	if st := unitState(t, e, "Crime.101.2026.WEBRip.mkv"); st != StateFound {
+		t.Fatalf("после цикла распознавания: %s", st)
+	}
+}
+
 // Х9: постер Кинопоиска карточки не скачался — повтор с паузой (без нового запроса описания).
 func TestKPPosterRetried(t *testing.T) {
 	e := newEnv(t)

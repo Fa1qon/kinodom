@@ -18,13 +18,26 @@ type KPAny struct {
 	seen map[int]string // номер → вид из последних поисков
 }
 
+type urgentKey struct{}
+
+// Urgent — запросы этого ctx ждёт человек (правка единицы в пульте): очередь каталога, а не медиатеки.
+func Urgent(ctx context.Context) context.Context { return context.WithValue(ctx, urgentKey{}, true) }
+
+// class — очередь запроса: срочный ctx — KPNormal, иначе KPBackground (медиатека после каталога).
+func (a *KPAny) class(ctx context.Context) KPClass {
+	if u, _ := ctx.Value(urgentKey{}).(bool); u {
+		return KPNormal
+	}
+	return KPBackground
+}
+
 // webDown — сайт сейчас не ответит: отказ или суточный предел.
 func webDown(err error) bool { return errors.Is(err, ErrKPBlocked) || errors.Is(err, ErrKPDailyLimit) }
 
 // Search — фильмы по названию; год в запрос сайта не входит (его сверяет медиатека).
 func (a *KPAny) Search(ctx context.Context, keyword string, year int) ([]Film, error) {
 	if a.Web != nil {
-		fs, err := a.Web.Suggest(ctx, KPBackground, keyword)
+		fs, err := a.Web.Suggest(ctx, a.class(ctx), keyword)
 		if err == nil {
 			a.mu.Lock()
 			if a.seen == nil {
@@ -50,9 +63,9 @@ func (a *KPAny) Search(ctx context.Context, keyword string, year int) ([]Film, e
 func (a *KPAny) Details(ctx context.Context, id int) (FilmDetails, error) {
 	if a.Web != nil {
 		typ := a.typeOf(ctx, id)
-		d, err := a.Web.Details(ctx, KPBackground, id, seriesTypes[typ])
+		d, err := a.Web.Details(ctx, a.class(ctx), id, seriesTypes[typ])
 		if errors.Is(err, ErrNotFound) && typ == "" {
-			d, err = a.Web.Details(ctx, KPBackground, id, true)
+			d, err = a.Web.Details(ctx, a.class(ctx), id, true)
 		}
 		if err == nil || !webDown(err) || a.Key == nil || !a.Key.HasKey() {
 			return d, err

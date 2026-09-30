@@ -15,9 +15,16 @@ type fakeKP struct {
 	errs    map[string]error
 	details map[int]meta.FilmDetails
 	calls   []string
+	block   chan struct{} // не nil — поиск ждёт, пока канал не закроют (Кинопоиск без токена занят каталогом)
 }
 
 func (f *fakeKP) Search(_ context.Context, keyword string, year int) ([]meta.Film, error) {
+	f.mu.Lock()
+	b := f.block
+	f.mu.Unlock()
+	if b != nil {
+		<-b
+	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.calls = append(f.calls, keyword)
