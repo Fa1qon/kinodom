@@ -207,6 +207,8 @@ export function poll(fn, ms) {
     busy = true;
     try {
       await fn();
+    } catch (e) {
+      console.error('опрос:', e); // исключение не останавливает опрос навсегда (хвост Х19)
     } finally {
       busy = false;
     }

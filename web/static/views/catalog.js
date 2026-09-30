@@ -5,19 +5,42 @@ import { get } from '../api.js';
 
 export const TRACKERS = [['rutracker', 'Rutracker'], ['rutor', 'Rutor']];
 
+// portions — подгрузка каталога порциями (замечание № 9 этапа 11b): {loaded, page, pages, loading, error}.
+// 'more' — просить следующую (не во время загрузки и не после конца списка), 'loaded' — пришла,
+// 'failed' — не пришла (можно попросить снова).
+export function portions(state, action) {
+  const s = state || { loaded: [], page: 0, pages: 1, loading: false, error: '' };
+  switch (action.type) {
+    case 'more':
+      if (s.loading || s.page >= s.pages) return s;
+      return { ...s, loading: true, error: '' };
+    case 'loaded':
+      return { loaded: [...s.loaded, ...action.list.entries], page: action.list.page, pages: action.list.pages, loading: false, error: '' };
+    case 'failed':
+      return { ...s, loading: false, error: action.error };
+    default:
+      return s;
+  }
+}
+
 export function render(root, r, ctx) {
   const tracker = TRACKERS.some(([id]) => id === r.parts[1]) ? r.parts[1] : 'rutor';
   const section = r.parts[2] || '';
-  const page = Math.max(1, parseInt(r.query.get('page') || '1', 10) || 1);
   let alive = true;
+  let state = portions(undefined, { type: 'init' });
+  let shownSection = section;
+  // Где были (замечание № 14): сколько порций, прокрутка и карточка в фокусе — в history.state этой
+  // записи; пишется постоянно, пока каталог открыт (к моменту перехода на раздачу запись уже чужая).
+  const here = location.hash.split('?')[0];
+  const saved = history.state && history.state.catalog && history.state.catalog.at === here ? history.state.catalog : null;
 
   const tabs = h('nav', { class: 'tabs', 'aria-label': 'Трекер' });
   const updated = h('div', { class: 'muted small' });
   const warn = h('div');
   const bar = h('nav', { class: 'filters', 'aria-label': 'Разделы' });
   const grid = h('div', { class: 'grid' });
-  const pages = h('nav', { class: 'pages', 'aria-label': 'Страницы' });
-  root.append(h('div', { class: 'screen' }, h('div', { class: 'row' }, tabs, h('div', { class: 'grow' }), updated), warn, bar, grid, pages));
+  const tail = h('div', { class: 'grid-tail' });
+  root.append(h('div', { class: 'screen' }, h('div', { class: 'row' }, tabs, h('div', { class: 'grow' }), updated), warn, bar, grid, tail));
 
   // Вкладки и предупреждение трекера — из «Состояния»: у вкладки со значком есть проблемы.
   const onStatus = (status) => {
@@ -34,28 +57,100 @@ export function render(root, r, ctx) {
   ctx.listeners.add(onStatus);
   onStatus(ctx.status);
 
-  const q = new URLSearchParams({ tracker, page: String(page) });
-  if (section) q.set('section', section);
-  Promise.all([get(`/catalog/sections?tracker=${tracker}`), get(`/catalog?${q}`)]).then(([sections, list]) => {
+  function remember() {
     if (!alive) return;
-    updated.textContent = list.updatedAt ? `обновлён ${ago(list.updatedAt)}` : 'ещё не обновлялся';
+    const a = document.activeElement;
+    const focusKey = a && grid.contains(a) && a.dataset ? a.dataset.key || '' : '';
+    const st = { ...(history.state || {}), catalog: { at: here, pages: state.page, scrollY: window.scrollY, focusKey } };
+    try {
+      history.replaceState(st, '');
+    } catch {
+      // браузер не дал записать — место просто не запомнится
+    }
+  }
+
+  // more — следующая порция, если её можно просить.
+  async function more() {
+    const next = portions(state, { type: 'more' });
+    if (next === state) return;
+    state = next;
+    drawTail();
+    const q = new URLSearchParams({ tracker, page: String(state.page + 1) });
+    if (shownSection) q.set('section', shownSection);
+    let list;
+    try {
+      list = await get(`/catalog?${q}`);
+    } catch (e) {
+      if (!alive) return;
+      state = portions(state, { type: 'failed', error: e.message });
+      drawTail();
+      return;
+    }
+    if (!alive) return;
+    shownSection = list.section;
+    if (state.page === 0) updated.textContent = list.updatedAt ? `обновлён ${ago(list.updatedAt)}` : 'ещё не обновлялся';
+    const was = state.loaded.length;
+    state = portions(state, { type: 'loaded', list });
+    grid.append(...state.loaded.slice(was).map(entry));
+    drawTail();
+    remember();
+  }
+
+  function drawTail() {
+    tail.replaceChildren(
+      state.error ? h('p', { class: 'error' }, state.error) : '',
+      state.loading ? h('div', { class: 'muted', 'aria-label': 'Загружается' }, '…') : '');
+  }
+
+  // Следующая порция — когда низ сетки виден (мышь, касание) или фокус пульта пришёл в последний ряд.
+  const watcher = typeof IntersectionObserver === 'function'
+    ? new IntersectionObserver((es) => {
+      if (es.some((e) => e.isIntersecting)) more();
+    }, { rootMargin: '600px 0px' })
+    : null;
+  if (watcher) watcher.observe(tail);
+  grid.addEventListener('focusin', (e) => {
+    const last = grid.lastElementChild;
+    if (last && e.target.closest && e.target.closest('.entry') && e.target.getBoundingClientRect().top >= last.getBoundingClientRect().top - 1) more();
+    remember();
+  });
+  let scrollTimer = 0;
+  const onScroll = () => {
+    clearTimeout(scrollTimer);
+    scrollTimer = setTimeout(remember, 200);
+  };
+  window.addEventListener('scroll', onScroll, { passive: true });
+
+  get(`/catalog/sections?tracker=${tracker}`).then(async (sections) => {
+    if (!alive) return;
+    await more(); // первая порция: в ней — раздел по умолчанию и время обновления
+    if (!alive) return;
+    const off = ctx.status && ctx.status.trackers && ctx.status.trackers[tracker] && ctx.status.trackers[tracker].state === 'off';
     bar.replaceChildren(...sections.map((s) => h('a', {
-      class: s.id === list.section ? 'fil on' : 'fil',
+      class: s.id === shownSection ? 'fil on' : 'fil',
       href: `#/catalog/${tracker}/${encodeURIComponent(s.id)}`,
-      'aria-current': s.id === list.section ? 'page' : null,
+      'aria-current': s.id === shownSection ? 'page' : null,
+      'data-key': `sec-${s.id}`,
     }, s.name)));
     bar.querySelector('.on')?.scrollIntoView({ block: 'nearest', inline: 'nearest' });
-    if (list.section) store.set('catalog', `#/catalog/${tracker}/${encodeURIComponent(list.section)}`);
-    const off = ctx.status && ctx.status.trackers && ctx.status.trackers[tracker] && ctx.status.trackers[tracker].state === 'off';
+    if (shownSection) store.set('catalog', `#/catalog/${tracker}/${encodeURIComponent(shownSection)}`);
     if (sections.length === 0) {
       // Трекер без адреса (этап 11a) не обновляется — об этом строка «Укажите адрес» выше.
       grid.replaceChildren(off ? '' : h('p', { class: 'muted' }, 'Каталог ещё пуст — идёт первое обновление'));
-    } else if (list.entries.length === 0) {
-      grid.replaceChildren(h('p', { class: 'muted' }, 'Здесь пусто'));
-    } else {
-      grid.replaceChildren(...list.entries.map(entry));
+      return;
     }
-    pages.replaceChildren(...pager(list.page, list.pages, (n) => `#/catalog/${tracker}/${encodeURIComponent(list.section)}?page=${n}`));
+    if (state.loaded.length === 0 && !state.error) {
+      grid.replaceChildren(h('p', { class: 'muted' }, 'Здесь пусто'));
+      return;
+    }
+    // Возврат со страницы раздачи — столько же порций, то же место и та же карточка.
+    if (saved) {
+      while (alive && state.page < saved.pages && !state.error) await more();
+      if (!alive) return;
+      window.scrollTo(0, saved.scrollY || 0);
+      const el = saved.focusKey ? grid.querySelector(`[data-key="${CSS.escape(saved.focusKey)}"]`) : null;
+      if (el) el.focus({ preventScroll: true });
+    }
   }).catch((e) => {
     if (alive) grid.replaceChildren(h('p', { class: 'error' }, e.message));
   });
@@ -63,6 +158,9 @@ export function render(root, r, ctx) {
   return () => {
     alive = false;
     ctx.listeners.delete(onStatus);
+    if (watcher) watcher.disconnect();
+    window.removeEventListener('scroll', onScroll);
+    clearTimeout(scrollTimer);
   };
 }
 
@@ -70,7 +168,7 @@ export function render(root, r, ctx) {
 // которой ещё нет названия (не догружена), — заглушкой.
 export function entry(e) {
   const title = e.name || e.title;
-  return h('a', { class: 'entry', href: `#/release/${e.id}` },
+  return h('a', { class: 'entry', href: `#/release/${e.id}`, 'data-key': `e-${e.id}` },
     poster(e, title),
     e.title
       ? [h('div', { class: 'etitle' }, title), h('div', { class: 'muted small' }, [e.year || null, e.quality || null, e.format || null].filter(Boolean).join(' · '))]
@@ -94,18 +192,4 @@ export function poster(e, title, cls = 'poster') {
     box.prepend(img);
   }
   return box;
-}
-
-// pager — пять номеров вокруг текущей страницы и стрелки.
-export function pager(current, total, href) {
-  if (total <= 1) return [];
-  const from = Math.max(1, Math.min(current - 2, total - 4));
-  const to = Math.min(total, from + 4);
-  const out = [];
-  if (current > 1) out.push(h('a', { class: 'page', href: href(current - 1), 'aria-label': 'Предыдущая страница' }, icon('chevron_left')));
-  for (let n = from; n <= to; n++) {
-    out.push(h('a', { class: n === current ? 'page on' : 'page', href: href(n), 'aria-current': n === current ? 'page' : null }, String(n)));
-  }
-  if (current < total) out.push(h('a', { class: 'page', href: href(current + 1), 'aria-label': 'Следующая страница' }, icon('chevron_right')));
-  return out;
 }
