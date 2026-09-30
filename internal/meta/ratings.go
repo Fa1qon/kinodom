@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"log/slog"
+	"slices"
 	"sync"
 	"time"
 
@@ -22,11 +23,17 @@ const (
 	idlePoll          = 30 * time.Second    // очередь пуста или всё отложено — заглядывать снова
 )
 
-// errNeedKey — задаче нужен поиск, а искать сейчас нечем (нет ключа или квоты).
+// errNeedKey — задаче нужен поиск, а искать сейчас нечем (нет ключа или квоты, без токена недоступно).
 var errNeedKey = errors.New("Кинопоиск: для поиска нужен ключ и квота")
+
+// errWebPaused — поиск без токена на паузе (отказ сайта, суточный предел), а ключа нет: задача ждёт.
+var errWebPaused = errors.New("Кинопоиск без токена на паузе")
 
 // ProblemKinopoiskKey — проблема «ключ не подходит» в «Состоянии».
 const ProblemKinopoiskKey = "kinopoisk.key"
+
+// ProblemKinopoiskBlocked — Кинопоиск без токена отказал: пауза (спека 11b, 5.2).
+const ProblemKinopoiskBlocked = "kinopoisk.blocked"
 
 // Item — раздача для очереди рейтингов. Ключ раздачи задаёт каталог: «rutor:1077013».
 type Item struct {
@@ -53,10 +60,12 @@ type RatingsStatus struct {
 	Quota       Quota     // последние известные лимиты ключа
 	PausedUntil time.Time // квота кончилась — до этого времени только рейтинги по номеру без ключа
 	Queue       int
+	Keyless     KPWebStatus // Кинопоиск без токена: пауза и запросов за сутки
 }
 
 type RatingsOptions struct {
 	KP  *Kinopoisk
+	Web *KPWeb // Кинопоиск без токена (спека 11b, раздел 5); nil — только ключ и номера из описаний
 	DB  *store.DB
 	Log *slog.Logger // nil — без журнала
 }
@@ -65,6 +74,7 @@ type RatingsOptions struct {
 // в порядке основного каталога (Enqueue) и берёт готовые рейтинги (For).
 type Ratings struct {
 	kp      *Kinopoisk
+	web     *KPWeb
 	st      ratingStore
 	db      *store.DB
 	log     *slog.Logger
@@ -76,15 +86,18 @@ type Ratings struct {
 	quota       Quota
 	pausedUntil time.Time
 	badKey      bool
-	fails       int // ответов 5xx подряд (каждый платный)
+	fails       int            // ответов 5xx подряд (каждый платный)
+	webUntil    time.Time      // суточный предел без токена — до полуночи
+	blocked     bool           // проблема kinopoisk.blocked записана
+	kwFrom      map[string]int // раздача → с какого ключевого слова продолжить поиск по ключу (после 402/429)
 }
 
 func NewRatings(o RatingsOptions) *Ratings {
 	if o.Log == nil {
 		o.Log = slog.New(slog.DiscardHandler)
 	}
-	return &Ratings{kp: o.KP, st: ratingStore{o.DB}, db: o.DB, log: o.Log, now: time.Now, wake: make(chan struct{}, 1),
-		recheck: make(chan struct{}, 1)}
+	return &Ratings{kp: o.KP, web: o.Web, st: ratingStore{o.DB}, db: o.DB, log: o.Log, now: time.Now, wake: make(chan struct{}, 1),
+		recheck: make(chan struct{}, 1), kwFrom: map[string]int{}}
 }
 
 func (r *Ratings) Name() string { return "ratings" }
@@ -94,6 +107,11 @@ func (r *Ratings) Name() string { return "ratings" }
 // каждом обновлении, а квота не должна тратиться повторно.
 func (r *Ratings) Enqueue(ctx context.Context, prio int, it Item) error {
 	now := r.now()
+	if it.KinopoiskID != 0 {
+		if err := r.seedTitle(ctx, it); err != nil {
+			return err
+		}
+	}
 	id, retryAt, found, err := r.st.releaseLink(ctx, it.Release)
 	if err != nil {
 		return err
@@ -124,6 +142,22 @@ func (r *Ratings) Enqueue(ctx context.Context, prio int, it Item) error {
 	default:
 	}
 	return nil
+}
+
+// seedTitle — соседняя раздача (спека 11b, 5.1, шаг 2): номер из описания раздачи сразу даёт номер
+// её произведению в кэше названий — раздачи того же произведения без номера получат его без запросов.
+// Найденный номер не перезаписывается; «не найдено» — перезаписывается.
+func (r *Ratings) seedTitle(ctx context.Context, it Item) error {
+	t := ParseTitle(it.Title)
+	wk := WorkKey(t)
+	if wk == "" {
+		return nil
+	}
+	id, _, found, err := r.st.titleLink(ctx, wk, t.Year)
+	if err != nil || (found && id != 0) {
+		return err
+	}
+	return r.st.setTitle(ctx, wk, t.Year, it.KinopoiskID, time.Time{})
 }
 
 // EnqueueCatalog ставит раздачи основного каталога в его порядке: место в списке — приоритет.
@@ -162,9 +196,13 @@ func (r *Ratings) AddFilm(ctx context.Context, f Film) error { return r.st.addFi
 
 func (r *Ratings) Status(ctx context.Context) (RatingsStatus, error) {
 	n, err := r.st.queueLen(ctx)
+	var kw KPWebStatus
+	if r.web != nil {
+		kw = r.web.Status()
+	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	return RatingsStatus{HasKey: r.kp.HasKey(), BadKey: r.badKey, Quota: r.quota, PausedUntil: r.pausedUntil, Queue: n}, err
+	return RatingsStatus{HasKey: r.kp.HasKey(), BadKey: r.badKey, Quota: r.quota, PausedUntil: r.pausedUntil, Queue: n, Keyless: kw}, err
 }
 
 // Run — первый запрос с ключом — лимиты (спека, раздел 8), затем очередь по одной задаче.
@@ -201,26 +239,29 @@ func (r *Ratings) Run(ctx context.Context) error {
 // задачу откладывают, а не роняют модуль; ошибка — только у базы.
 func (r *Ratings) Step(ctx context.Context) (did bool, err error) {
 	now := r.now()
-	keyless := r.keyless(now)
-	it, ok, err := r.st.next(ctx, now, keyless)
+	web, key := r.ways(now)
+	it, ok, err := r.st.next(ctx, now, !web && !key)
 	if err != nil || !ok {
 		return false, err
 	}
-	err = r.resolve(ctx, it, keyless)
+	err = r.resolve(ctx, it, web, key)
+	keyless := !key
 	switch {
 	case err == nil:
 		return true, r.st.done(ctx, it)
 	case ctx.Err() != nil:
 		return false, nil
 	case errors.Is(err, ErrQuota):
-		r.log.Info("Кинопоиск: суточная квота исчерпана — до восстановления только рейтинги по номеру без ключа")
+		r.log.Info("Кинопоиск: суточная квота ключа исчерпана — до восстановления без ключа")
 		r.mu.Lock()
 		r.pausedUntil = now.Add(quotaRecheck)
 		r.mu.Unlock()
-		return true, nil
+		return true, r.waitKey(ctx, it, web, now)
 	case errors.Is(err, ErrBadKey):
 		r.setBadKey(ctx)
-		return true, nil
+		return true, r.waitKey(ctx, it, web, now)
+	case errors.Is(err, errWebPaused):
+		return true, r.st.postpone(ctx, it.Release, r.webResume(now))
 	case errors.Is(err, errNeedKey):
 		return true, r.st.postpone(ctx, it.Release, now.Add(quotaRecheck))
 	case errors.Is(err, ErrRateLimited):
@@ -274,17 +315,88 @@ func (r *Ratings) serviceOK() {
 	r.mu.Unlock()
 }
 
-// keyless — сейчас только пути без ключа: ключа нет, он не подходит или кончилась квота.
-func (r *Ratings) keyless(now time.Time) bool {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	return !r.kp.HasKey() || r.badKey || now.Before(r.pausedUntil)
+// waitKey — ключ отказал (квота, не подходит): задача, которой без ключа дальше некуда (номера нет, без
+// токена недоступно), ждёт проверки квоты, а не берётся снова (Х1); с номером или без токена — идёт сразу.
+func (r *Ratings) waitKey(ctx context.Context, it queued, web bool, now time.Time) error {
+	if web || it.KinopoiskID != 0 {
+		return nil
+	}
+	id, _, _, err := r.st.releaseLink(ctx, it.Release)
+	if err != nil || id != 0 {
+		return err
+	}
+	return r.st.postpone(ctx, it.Release, now.Add(quotaRecheck))
 }
 
-// resolve — фильм раздачи и его рейтинг. Номер из описания — без поиска; иначе IMDb, иначе
-// поиск по названию (спека, раздел 8; хвост этапа 3 — связка через IMDb).
-func (r *Ratings) resolve(ctx context.Context, it queued, keyless bool) error {
+// ways — чем сейчас можно искать номер: без токена (сайт не на паузе) и ключом (задан, подходит, есть квота).
+func (r *Ratings) ways(now time.Time) (web, key bool) {
+	r.mu.Lock()
+	key = r.kp.HasKey() && !r.badKey && !now.Before(r.pausedUntil)
+	webUntil := r.webUntil
+	r.mu.Unlock()
+	if r.web != nil && !now.Before(webUntil) {
+		web = !now.Before(r.web.Status().PausedUntil)
+	}
+	return web, key
+}
+
+// webResume — когда без токена можно снова: конец паузы сайта или суточного предела.
+func (r *Ratings) webResume(now time.Time) time.Time {
+	r.mu.Lock()
+	until := r.webUntil
+	r.mu.Unlock()
+	if r.web != nil {
+		if p := r.web.Status().PausedUntil; p.After(until) {
+			until = p
+		}
+	}
+	if !until.After(now) {
+		until = now.Add(quotaRecheck)
+	}
+	return until
+}
+
+// webPaused — без токена отказ или предел: проблема в «Состоянии» (отказ) или пауза до полуночи (предел).
+func (r *Ratings) webPaused(ctx context.Context, err error) {
+	if errors.Is(err, ErrKPDailyLimit) {
+		now := r.now()
+		y, m, d := now.Date()
+		r.mu.Lock()
+		r.webUntil = time.Date(y, m, d+1, 0, 0, 0, 0, now.Location())
+		r.mu.Unlock()
+		return
+	}
+	st := r.web.Status()
+	text := "Кинопоиск не отвечает — " + st.Reason
+	if !st.PausedUntil.IsZero() {
+		text += ", пауза до " + st.PausedUntil.Format("15:04")
+	}
+	r.mu.Lock()
+	r.blocked = true
+	r.mu.Unlock()
+	if err := r.db.SetProblem(ctx, ProblemKinopoiskBlocked, text); err != nil {
+		r.log.Error("не удалось записать проблему", "id", ProblemKinopoiskBlocked, "err", err)
+	}
+}
+
+// webOK — запрос без токена прошёл: проблема отказа снимается.
+func (r *Ratings) webOK(ctx context.Context) {
+	r.mu.Lock()
+	was := r.blocked
+	r.blocked = false
+	r.mu.Unlock()
+	if was {
+		if err := r.db.ClearProblem(ctx, ProblemKinopoiskBlocked); err != nil {
+			r.log.Error("не удалось снять проблему", "id", ProblemKinopoiskBlocked, "err", err)
+		}
+	}
+}
+
+// resolve — фильм раздачи и его рейтинг. Номер из описания — без поиска; иначе соседняя раздача,
+// поиск без токена, ключ (спека 11b, раздел 5.1).
+func (r *Ratings) resolve(ctx context.Context, it queued, web, key bool) error {
 	now := r.now()
+	keyless := !key
 	kpID := it.KinopoiskID
 	if kpID == 0 {
 		id, _, _, err := r.st.releaseLink(ctx, it.Release)
@@ -294,10 +406,7 @@ func (r *Ratings) resolve(ctx context.Context, it queued, keyless bool) error {
 		kpID = id
 	}
 	if kpID == 0 {
-		if keyless {
-			return errNeedKey // next без ключа отдаёт только задачи с номером; на всякий случай — отложить, не терять
-		}
-		id, retryAt, err := r.findFilm(ctx, it)
+		id, retryAt, err := r.findFilm(ctx, it, web, key)
 		if err != nil {
 			return err
 		}
@@ -348,10 +457,84 @@ func titleKey(t Title) string {
 	return NormTitle(t.Ru)
 }
 
-// findFilm ищет фильм раздачи без номера Кинопоиска: по IMDb (точно, один запрос), иначе по
-// названию и году — сначала оригинальное (латиница), потом русское. Возвращает номер (0 — не
-// найдено) и когда искать снова. Найденные фильмы сохраняются вместе с рейтингом из ответа.
-func (r *Ratings) findFilm(ctx context.Context, it queued) (int, time.Time, error) {
+// findFilm ищет фильм раздачи без номера Кинопоиска (спека 11b, 5.1): кэш названий (там и соседние
+// раздачи), поиск сайта без токена, а когда сайт на паузе или не нашёл — ключ. Возвращает номер
+// (0 — не найдено) и когда искать снова.
+func (r *Ratings) findFilm(ctx context.Context, it queued, web, key bool) (int, time.Time, error) {
+	now := r.now()
+	t := ParseTitle(it.Title)
+	wk := WorkKey(t)
+	miss := time.Time{} // сайт не нашёл: искать снова не раньше
+	if wk != "" {
+		id, retryAt, found, err := r.st.titleLink(ctx, wk, t.Year)
+		if err != nil {
+			return 0, time.Time{}, err
+		}
+		if found && id != 0 {
+			return id, time.Time{}, nil
+		}
+		if found && now.Before(retryAt) {
+			miss = retryAt
+		}
+	}
+	if web && wk != "" && miss.IsZero() {
+		id, err := r.searchWeb(ctx, t, wk)
+		switch {
+		case err == nil && id != 0:
+			return id, time.Time{}, nil
+		case err == nil:
+			miss = now.Add(notFoundRetry)
+		case errors.Is(err, ErrKPBlocked) || errors.Is(err, ErrKPDailyLimit):
+			r.webPaused(ctx, err)
+			if !key {
+				return 0, time.Time{}, errWebPaused
+			}
+		default:
+			return 0, time.Time{}, err
+		}
+	}
+	if key {
+		return r.findByKey(ctx, it, t)
+	}
+	if !miss.IsZero() {
+		return 0, miss, nil
+	}
+	if r.web != nil {
+		return 0, time.Time{}, errWebPaused
+	}
+	return 0, time.Time{}, errNeedKey
+}
+
+// searchWeb — поиск сайта без токена: русское название, потом оригинальное; год не в запросе, сверка —
+// MatchKP. Найденный фильм — в базу с рейтингом из ответа (без второго запроса), итог — в кэш названий.
+func (r *Ratings) searchWeb(ctx context.Context, t Title, wk string) (int, error) {
+	now := r.now()
+	var keywords []string
+	for _, n := range []string{t.Ru, t.Orig} {
+		if n != "" && !slices.ContainsFunc(keywords, func(k string) bool { return NormTitle(k) == NormTitle(n) }) {
+			keywords = append(keywords, n)
+		}
+	}
+	for _, kw := range keywords {
+		hits, err := r.web.Suggest(ctx, KPNormal, kw)
+		if err != nil {
+			return 0, err
+		}
+		r.webOK(ctx)
+		if f, ok := MatchKP(hits, t); ok {
+			if err := r.st.addFilm(ctx, f, now); err != nil {
+				return 0, err
+			}
+			return f.ID, r.st.setTitle(ctx, wk, t.Year, f.ID, time.Time{})
+		}
+	}
+	return 0, r.st.setTitle(ctx, wk, t.Year, 0, now.Add(notFoundRetry))
+}
+
+// findByKey — поиск ключом (kinopoiskapiunofficial.tech): по IMDb (точно, один запрос), иначе по
+// названию и году — сначала оригинальное (латиница), потом русское. Повтор после 402/429 продолжает с
+// того ключевого слова, на котором остановился (Х1).
+func (r *Ratings) findByKey(ctx context.Context, it queued, t Title) (int, time.Time, error) {
 	now := r.now()
 	if it.IMDbID != "" {
 		// Рипы одного фильма со ссылкой на IMDb — один запрос: сначала то, что уже известно.
@@ -383,7 +566,6 @@ func (r *Ratings) findFilm(ctx context.Context, it queued) (int, time.Time, erro
 			}
 		}
 	}
-	t := ParseTitle(it.Title)
 	keywords := []string{}
 	if t.Orig != "" {
 		keywords = append(keywords, t.Orig)
@@ -399,8 +581,11 @@ func (r *Ratings) findFilm(ctx context.Context, it queued) (int, time.Time, erro
 		return id, retryAt, err
 	}
 	broken := false
-	for _, kw := range keywords {
-		fs, err := r.kp.Search(ctx, kw, t.Year)
+	r.mu.Lock()
+	from := r.kwFrom[it.Release]
+	r.mu.Unlock()
+	for i := from; i < len(keywords); i++ {
+		fs, err := r.kp.Search(ctx, keywords[i], t.Year)
 		var se *ServiceError
 		if errors.As(err, &se) {
 			broken = true // бывает на кириллице (исследование, разделы 12–13)
@@ -408,21 +593,32 @@ func (r *Ratings) findFilm(ctx context.Context, it queued) (int, time.Time, erro
 			continue
 		}
 		if err != nil {
+			r.mu.Lock()
+			r.kwFrom[it.Release] = i
+			r.mu.Unlock()
 			return 0, time.Time{}, err
 		}
 		r.serviceOK()
 		if f, ok := match(fs, t); ok {
+			r.forgetKeyword(it.Release)
 			if err := r.keepFilm(ctx, f, now); err != nil {
 				return 0, time.Time{}, err
 			}
 			return f.ID, time.Time{}, r.st.setTitle(ctx, key, t.Year, f.ID, time.Time{})
 		}
 	}
+	r.forgetKeyword(it.Release)
 	retry := now.Add(notFoundRetry)
 	if broken {
 		retry = now.Add(brokenSearchRetry)
 	}
 	return 0, retry, r.st.setTitle(ctx, key, t.Year, 0, retry)
+}
+
+func (r *Ratings) forgetKeyword(release string) {
+	r.mu.Lock()
+	delete(r.kwFrom, release)
+	r.mu.Unlock()
 }
 
 // keepFilm сохраняет фильм из выдачи поиска, только если в ней есть год и рейтинг. Выдача отстаёт

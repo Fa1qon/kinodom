@@ -547,3 +547,200 @@ func TestReleasesOfFilm(t *testing.T) {
 		t.Fatalf("раздачи фильма: %v", got)
 	}
 }
+
+// newRatingsWeb — очередь рейтингов с Кинопоиском без токена (сайт — фейк w) и ключом key ("" — без ключа).
+func newRatingsWeb(t *testing.T, f *fakeKP, w *fakeKPWeb, key string) (*Ratings, *clock, *store.DB) {
+	t.Helper()
+	db, err := store.Open(ctx, filepath.Join(t.TempDir(), "kinodom.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { db.Close() })
+	c := &clock{t: time.Date(2026, 9, 28, 12, 0, 0, 0, time.Local)}
+	web := NewKPWeb(KPWebOptions{GraphQL: w.URL + "/graphql/", Site: w.URL, Every: time.Millisecond, Now: c.now})
+	r := NewRatings(RatingsOptions{KP: newKP(f, key), Web: web, DB: db})
+	r.now = c.now
+	return r, c, db
+}
+
+func hasProblem(t *testing.T, db *store.DB, id string) bool {
+	t.Helper()
+	ps, err := db.Problems(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return slices.ContainsFunc(ps, func(p store.Problem) bool { return p.ID == id })
+}
+
+func webCalls(w *fakeKPWeb, op string) int {
+	n := 0
+	for _, c := range w.Calls() {
+		if c.op == op {
+			n++
+		}
+	}
+	return n
+}
+
+// Без ключа раздача без номера получает номер, рейтинг и названия поиском сайта — одним запросом
+// (спека 11b, 5.1, № 1).
+func TestRatingsKeylessFindsBySuggest(t *testing.T) {
+	f, w := newFakeKP(t), newFakeKPWeb(t)
+	w.suggest["Законник"] = "kpweb-suggest-zakonnik.json"
+	r, _, _ := newRatingsWeb(t, f, w, "")
+	enqueue(t, r, 1, Item{Release: "rutor:1", Title: "Законник [S01] (2023) WEB-DL 1080p от New-Team"})
+	drain(t, r)
+	got, ok := ratingOf(t, r, "rutor:1")
+	if !ok || got.KinopoiskID != 5325705 || got.Kinopoisk != 7.969 || got.NameRu != "Законник" || got.Year != 2023 {
+		t.Fatalf("рейтинг %+v, %v", got, ok)
+	}
+	if webCalls(w, "SuggestSearch") != 1 || f.Hits("xml")+f.Hits("search")+f.Hits("film") != 0 {
+		t.Fatalf("запросы: поиск сайта %d, рейтинг %d, ключ %d/%d", webCalls(w, "SuggestSearch"), f.Hits("xml"), f.Hits("search"), f.Hits("film"))
+	}
+}
+
+// Соседняя раздача: номер из описания одной раздачи даёт номер другим раздачам того же произведения —
+// без единого запроса поиска (спека 11b, 5.1, шаг 2).
+func TestRatingsNeighborNoRequests(t *testing.T) {
+	f, w := newFakeKP(t), newFakeKPWeb(t)
+	f.xml[5325705] = `<?xml version="1.0" encoding="WINDOWS-1251"?><rating><kp_rating num_vote="1">7.969</kp_rating><imdb_rating num_vote="1">0</imdb_rating></rating>`
+	r, _, _ := newRatingsWeb(t, f, w, "")
+	enqueue(t, r, 5, Item{Release: "rutor:2", Title: "Законник [01-10 из 10] (2023) WEB-DL 2160p"})
+	enqueue(t, r, 6, Item{Release: "rutracker:3", Title: "Законник [S01] (2023) WEB-DLRip"})
+	enqueue(t, r, 9, Item{Release: "rutor:1", KinopoiskID: 5325705, Title: "Законник [S01] (2023) WEB-DL 1080p"})
+	drain(t, r)
+	for _, rel := range []string{"rutor:1", "rutor:2", "rutracker:3"} {
+		if got, ok := ratingOf(t, r, rel); !ok || got.KinopoiskID != 5325705 {
+			t.Fatalf("%s: %+v, %v", rel, got, ok)
+		}
+	}
+	if n := webCalls(w, "SuggestSearch"); n != 0 {
+		t.Fatalf("поиск сайта %d раз — соседняя раздача без запросов", n)
+	}
+}
+
+// Сайт отказал (Review Focus 1): с ключом номер находит ключ; проблема kinopoisk.blocked в «Состоянии»;
+// без ключа задача ждёт конца паузы, не теряется, а после паузы номер находит сайт, проблема снимается.
+func TestRatingsKeylessBlockedFallsBackToKey(t *testing.T) {
+	t.Run("с ключом", func(t *testing.T) {
+		f, w := newFakeKP(t), newFakeKPWeb(t)
+		w.status = http.StatusForbidden
+		r, _, db := newRatingsWeb(t, f, w, testKey)
+		enqueue(t, r, 1, Item{Release: "rutor:1", Title: "Матрица / The Matrix (1999) BDRip"})
+		drain(t, r)
+		if got, ok := ratingOf(t, r, "rutor:1"); !ok || got.KinopoiskID != 301 {
+			t.Fatalf("рейтинг по ключу: %+v, %v", got, ok)
+		}
+		if !hasProblem(t, db, ProblemKinopoiskBlocked) {
+			t.Fatal("нет проблемы kinopoisk.blocked")
+		}
+		if st, _ := r.Status(ctx); st.Keyless.PausedUntil.IsZero() {
+			t.Fatalf("статус без паузы: %+v", st)
+		}
+	})
+	t.Run("без ключа", func(t *testing.T) {
+		f, w := newFakeKP(t), newFakeKPWeb(t)
+		w.suggest["Матрица"] = "kpweb-suggest-matrix.json"
+		w.status = http.StatusForbidden
+		r, clk, db := newRatingsWeb(t, f, w, "")
+		enqueue(t, r, 1, Item{Release: "rutor:1", Title: "Матрица / The Matrix (1999) BDRip"})
+		drain(t, r)
+		if _, ok := ratingOf(t, r, "rutor:1"); ok || queueLen(t, r) != 1 || !hasProblem(t, db, ProblemKinopoiskBlocked) {
+			t.Fatalf("пауза без ключа: в очереди %d, проблема %v", queueLen(t, r), hasProblem(t, db, ProblemKinopoiskBlocked))
+		}
+		n := len(w.Calls())
+		drain(t, r)
+		if len(w.Calls()) != n {
+			t.Fatal("во время паузы — без запросов")
+		}
+		w.set(func() { w.status = 0 })
+		clk.add(6*time.Hour + time.Second)
+		drain(t, r)
+		if got, ok := ratingOf(t, r, "rutor:1"); !ok || got.KinopoiskID != 301 {
+			t.Fatalf("после паузы: %+v, %v", got, ok)
+		}
+		if hasProblem(t, db, ProblemKinopoiskBlocked) {
+			t.Fatal("проблема не снялась")
+		}
+	})
+}
+
+// Не нашлось без токена — помнится месяц: повторная постановка каталогом не ищет снова.
+func TestRatingsKeylessNotFoundRemembered(t *testing.T) {
+	w := newFakeKPWeb(t)
+	r, clk, _ := newRatingsWeb(t, newFakeKP(t), w, "")
+	it := Item{Release: "rutor:7", Title: "Никому не известное кино (2026) WEB-DL"}
+	enqueue(t, r, 1, it)
+	drain(t, r)
+	enqueue(t, r, 1, it)
+	drain(t, r)
+	if n := webCalls(w, "SuggestSearch"); n != 1 {
+		t.Fatalf("поиск сайта %d раз, нужно 1", n)
+	}
+	clk.add(31 * 24 * time.Hour)
+	enqueue(t, r, 1, it)
+	drain(t, r)
+	if n := webCalls(w, "SuggestSearch"); n != 2 {
+		t.Fatalf("через месяц — снова: %d", n)
+	}
+}
+
+// Х4: у раздачи с годом номер без сверки года не ставится — «Трудно быть богом (2020)» не получает
+// ни сериал 2026, ни фильм 2013.
+func TestRatingsKeylessRejectsWrongYear(t *testing.T) {
+	w := newFakeKPWeb(t)
+	w.suggest["Трудно быть богом"] = "kpweb-suggest-trudno.json"
+	r, _, _ := newRatingsWeb(t, newFakeKP(t), w, "")
+	enqueue(t, r, 1, Item{Release: "rutor:8", Title: "Трудно быть богом (2020) WEB-DL"})
+	drain(t, r)
+	if got, ok := ratingOf(t, r, "rutor:8"); ok {
+		t.Fatalf("чужой фильм: %+v", got)
+	}
+}
+
+// Х1: кончилась квота ключа — задача откладывается (до проверки квоты), а не берётся снова сразу.
+func TestRatingsQuotaPostponesTask(t *testing.T) {
+	f := newFakeKP(t)
+	f.SetStatus(http.StatusPaymentRequired)
+	r, clk, _ := newRatings(t, f, testKey)
+	enqueue(t, r, 1, Item{Release: "rutor:1", Title: "Матрица / The Matrix (1999) BDRip"})
+	if did, err := r.Step(ctx); !did || err != nil {
+		t.Fatal(did, err)
+	}
+	f.SetStatus(0)
+	r.KeyChanged(ctx) // пауза квоты снята — а задача всё равно ждёт своего часа
+	if did, _ := r.Step(ctx); did {
+		t.Fatal("задача после 402 не отложена")
+	}
+	clk.add(quotaRecheck + time.Second)
+	drain(t, r)
+	if got, ok := ratingOf(t, r, "rutor:1"); !ok || got.KinopoiskID != 301 {
+		t.Fatalf("после паузы: %+v, %v", got, ok)
+	}
+}
+
+// Х1: повтор после 429 продолжает с того ключевого слова, на котором остановился, — первое не ищется снова.
+func TestRatingsRetryResumesKeyword(t *testing.T) {
+	f := newFakeKP(t)
+	limited := true
+	f.onSearch = func(kw string) int {
+		if kw == "Бегущая" && limited {
+			return http.StatusTooManyRequests
+		}
+		return 0
+	}
+	r, clk, _ := newRatings(t, f, testKey)
+	enqueue(t, r, 1, Item{Release: "rutor:9", Title: "Бегущая / The Runner (2026) WEB-DL"})
+	r.Step(ctx) // «The Runner» — пусто, «Бегущая» — 429
+	f.mu.Lock()
+	limited = false
+	f.mu.Unlock()
+	clk.add(time.Minute)
+	drain(t, r)
+	if n := f.Hits("search:The Runner"); n != 1 {
+		t.Fatalf("«The Runner» искали %d раз — повтор должен продолжить со «Бегущая»", n)
+	}
+	if n := f.Hits("search:Бегущая"); n != 2 {
+		t.Fatalf("«Бегущая» искали %d раз", n)
+	}
+}
