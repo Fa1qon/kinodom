@@ -9,8 +9,8 @@ import (
 	"golang.org/x/sys/windows"
 )
 
-// isNetworkPath — путь на сетевом диске: \сервер\папка или подключённый сетевой диск (Z:).
-func isNetworkPath(dir string) bool {
+// IsNetworkPath — путь на сетевом диске (папка загрузок, папки медиатеки): \сервер\папка или подключённый сетевой диск (Z:).
+func IsNetworkPath(dir string) bool {
 	switch {
 	case strings.HasPrefix(dir, `\?\UNC\`):
 		return true
