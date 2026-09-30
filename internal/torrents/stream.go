@@ -10,6 +10,7 @@ import (
 	"github.com/anacrolix/torrent/metainfo"
 
 	"kinodom/internal/httpx"
+	"kinodom/internal/watch"
 )
 
 // StreamHandler отдаёт файл раздачи с поддержкой Range: GET /stream/{hash}/{index}/{name}.
@@ -62,9 +63,9 @@ func (s *Service) StreamHandler() http.Handler {
 		w.Header().Set("Content-Type", ct) // иначе ServeContent стал бы угадывать тип по байтам
 		var body io.ReadSeeker = rd
 		if s.watch != nil { // место по чтению — в историю устройства (спека этапа 8, раздел 7.2)
-			tr := &trackedReader{rs: rd}
-			body = tr
-			defer s.watchBegin(watchKey{httpx.Device(r), ih, index}, f.Length(), tr)()
+			var done func()
+			body, done = s.tracker.Wrap(watch.Key{Device: httpx.Device(r), Hash: ih.HexString(), Index: index}, f.Length(), rd)
+			defer done()
 			s.learnDuration(ih, index, f)
 		}
 		http.ServeContent(w, r, "", time.Time{}, body)

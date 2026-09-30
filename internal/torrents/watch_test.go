@@ -19,6 +19,7 @@ import (
 	"github.com/anacrolix/torrent/metainfo"
 
 	"kinodom/internal/torrents/torrenttest"
+	"kinodom/internal/watch"
 )
 
 // fakeWatch — история просмотров для тестов.
@@ -60,25 +61,11 @@ func (f *fakeWatch) snapshot() []string {
 // quickWatch — отчёты без ожидания 10 с (тесты); сеанс кончается через 300 мс без запросов.
 func quickWatch(t *testing.T, min time.Duration) {
 	t.Helper()
-	was, wasMin, wasGap, wasLead, wasJump := watchEvery, watchMin, watchGap, streamLead, jumpRead
-	watchEvery, watchMin, watchGap, streamLead, jumpRead = 20*time.Millisecond, min, 300*time.Millisecond, 0, 64<<10
-	t.Cleanup(func() { watchEvery, watchMin, watchGap, streamLead, jumpRead = was, wasMin, wasGap, wasLead, wasJump })
-}
-
-// Место — с поправкой на то, что плеер читает впереди картинки (streamLead); не меньше нуля.
-func TestWatchLead(t *testing.T) {
-	fw := &fakeWatch{dur: map[string]float64{}}
-	s := &Service{watch: fw}
-	now := time.Now()
-	for i, pos := range []int64{10 << 20, 1 << 20} {
-		tr := &trackedReader{}
-		tr.pos.Store(pos)
-		s.watchSessions = map[watchKey]*watchSession{{device: "pc", index: i}: {size: 100 << 20, started: now.Add(-time.Hour), latest: tr, latestAt: now.Add(-time.Hour)}}
-		s.watchTick(now)
-	}
-	if r := fw.snapshot(); len(r) != 2 || r[0] != fmt.Sprintf("pc 0 %d/%d", 6<<20, 100<<20) || r[1] != fmt.Sprintf("pc 1 0/%d", 100<<20) {
-		t.Errorf("с поправкой: %v", r)
-	}
+	was, wasMin, wasGap, wasLead, wasJump := watch.Every, watch.Min, watch.Gap, watch.Lead, watch.JumpRead
+	watch.Every, watch.Min, watch.Gap, watch.Lead, watch.JumpRead = 20*time.Millisecond, min, 300*time.Millisecond, 0, 64<<10
+	t.Cleanup(func() {
+		watch.Every, watch.Min, watch.Gap, watch.Lead, watch.JumpRead = was, wasMin, wasGap, wasLead, wasJump
+	})
 }
 
 // get — запрос потока с Range; тело читается целиком.
@@ -101,7 +88,7 @@ func getRange(t *testing.T, url, rng string) {
 // держится меньше watchMin, — не место, даже если отчёт пришёлся на него.
 func TestShortRequestsLikeVLC(t *testing.T) {
 	quickWatch(t, 1500*time.Millisecond)
-	watchGap = 5 * time.Second // паузы между запросами короче конца сеанса, как у VLC (2 с против 30)
+	watch.Gap = 5 * time.Second // паузы между запросами короче конца сеанса, как у VLC (2 с против 30)
 	fw := &fakeWatch{dur: map[string]float64{}}
 	_, srv, ih, _ := streamFixtureWith(t, "film.avi", 300_000, func(s *Service) { s.SetWatchTracker(fw) })
 	url := srv.URL + "/stream/" + ih.HexString() + "/0/film.avi"
