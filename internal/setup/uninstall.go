@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
 
 	"kinodom/internal/app"
 	"kinodom/internal/config"
@@ -14,12 +15,23 @@ import (
 	"kinodom/internal/winsvc"
 )
 
-// Uninstall убирает службу, правила брандмауэра и ссылку kinodom:// (спека этапа 11a, раздел 4.3).
-// purge — ещё данные (home) и скачанное: папки раздач из реестра, затем папка загрузок, если она
-// пуста. Чужие файлы в папке загрузок не удаляются.
-func Uninstall(ctx context.Context, sys winsvc.System, purge bool, home string, log func(string)) error {
+// UninstallOptions — что удалять.
+type UninstallOptions struct {
+	Purge      bool   // ещё данные и скачанное
+	Home       string // %ProgramData%\Kinodom
+	ProgramDir string // папка kinodomw.exe: значки в трее закрываются
+}
+
+// Uninstall убирает значки в трее, службу, правила брандмауэра, ссылку kinodom:// и автозапуск (спека
+// этапа 11a, разделы 4.3 и 5.2). Purge — ещё данные (Home) и скачанное: папки раздач из реестра, затем
+// папка загрузок, если она пуста. Чужие файлы в папке загрузок не удаляются.
+func Uninstall(ctx context.Context, sys winsvc.System, o UninstallOptions, log func(string)) error {
 	if !sys.IsAdmin() {
 		return ErrNotAdmin
+	}
+	purge, home := o.Purge, o.Home
+	if err := sys.Procs.Close(filepath.Join(o.ProgramDir, "kinodomw.exe")); err != nil {
+		log("Значок в трее не закрылся: " + err.Error())
 	}
 	log("Останавливаю службу Kinodom")
 	switch err := sys.SCM.Stop(ServiceName, StopWait); {
@@ -38,6 +50,9 @@ func Uninstall(ctx context.Context, sys winsvc.System, purge bool, home string, 
 	}
 	if err := sys.Registry.DeleteProtocol(Scheme); err != nil {
 		return fmt.Errorf("ссылки kinodom://: %w", err)
+	}
+	if err := sys.Registry.DeleteAutorun(AutorunName); err != nil {
+		return fmt.Errorf("значок в трее: %w", err)
 	}
 	if !purge {
 		return nil

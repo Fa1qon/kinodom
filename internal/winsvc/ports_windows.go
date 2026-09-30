@@ -100,5 +100,5 @@ func isAdmin() bool {
 // Real — система этого ПК.
 func Real() System {
 	return System{SCM: scm{}, ACL: acl{}, Firewall: firewall{}, Registry: classes{root: registry.LOCAL_MACHINE, base: `Software\Classes`},
-		Ports: ports{}, IsAdmin: isAdmin}
+		Ports: ports{}, Procs: procs{}, IsAdmin: isAdmin}
 }

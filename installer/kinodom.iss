@@ -33,7 +33,8 @@ OutputBaseFilename=Kinodom-{#AppVersion}-setup
 Compression=lzma2/max
 SolidCompression=yes
 WizardStyle=modern
-UninstallDisplayIcon={app}\kinodom.exe
+SetupIconFile=kinodom.ico
+UninstallDisplayIcon={app}\kinodom.ico
 UninstallDisplayName=Kinodom
 ; Службу останавливает kinodom.exe stop (PrepareToInstall), а не «Перезапуск приложений» Windows.
 CloseApplications=no
@@ -48,18 +49,22 @@ Name: "desktopicon"; Description: "Ярлык на рабочем столе"; F
 [Files]
 Source: "..\bin\kinodom.exe"; DestDir: "{app}"; Flags: ignoreversion
 Source: "..\bin\kinodomw.exe"; DestDir: "{app}"; Flags: ignoreversion
+Source: "kinodom.ico"; DestDir: "{app}"; Flags: ignoreversion
 
-[INI]
-; Ярлыки — ссылки на пульт в браузере.
-Filename: "{autoprograms}\Kinodom.url"; Section: "InternetShortcut"; Key: "URL"; String: "http://localhost:{code:APIPort}"
-Filename: "{autodesktop}\Kinodom.url"; Section: "InternetShortcut"; Key: "URL"; String: "http://localhost:{code:APIPort}"; Tasks: desktopicon
+[Icons]
+; Ярлык «Kinodom» — как у UMS: запускает сервер (если его остановили «Выходом»), значок в трее и пульт.
+Name: "{autoprograms}\Kinodom"; Filename: "{app}\kinodomw.exe"; Parameters: "tray --open"; WorkingDir: "{app}"; IconFilename: "{app}\kinodom.ico"
+Name: "{autodesktop}\Kinodom"; Filename: "{app}\kinodomw.exe"; Parameters: "tray --open"; WorkingDir: "{app}"; IconFilename: "{app}\kinodom.ico"; Tasks: desktopicon
 
 [UninstallDelete]
+; Ярлыки-ссылки первых сборок этапа 11a.
 Type: files; Name: "{autoprograms}\Kinodom.url"
 Type: files; Name: "{autodesktop}\Kinodom.url"
 
 [Run]
-Filename: "http://localhost:{code:APIPort}"; Description: "Открыть Kinodom"; Flags: postinstall shellexec nowait skipifsilent; Check: InstallSucceeded
+; Значок в трее — сразу, от имени пользователя (установщик работает от администратора); пульт — флажком.
+Filename: "{app}\kinodomw.exe"; Parameters: "tray"; Flags: runasoriginaluser nowait; Check: InstallSucceeded
+Filename: "{app}\kinodomw.exe"; Parameters: "tray --open"; Description: "Открыть Kinodom"; Flags: postinstall nowait skipifsilent; Check: InstallSucceeded
 
 [Code]
 const
@@ -88,28 +93,6 @@ function IsInstalled: Boolean;
 begin
   Result := RegKeyExists(HKLM, 'Software\Microsoft\Windows\CurrentVersion\Uninstall\{' + '{#AppGuid}' + '}_is1')
     or FileExists(ExpandConstant('{commonappdata}\Kinodom\data\kinodom.db'));
-end;
-
-{ Порт пульта — из kinodom.json, иначе 8090. }
-function APIPort(Param: String): String;
-var
-  S: AnsiString;
-  I, J: Integer;
-begin
-  Result := '8090';
-  if not LoadStringFromFile(ExpandConstant('{commonappdata}\Kinodom\kinodom.json'), S) then
-    Exit;
-  I := Pos('"apiPort"', S);
-  if I = 0 then
-    Exit;
-  I := I + Length('"apiPort"');
-  while (I <= Length(S)) and ((S[I] = ':') or (S[I] = ' ')) do
-    I := I + 1;
-  J := I;
-  while (J <= Length(S)) and (S[J] >= '0') and (S[J] <= '9') do
-    J := J + 1;
-  if J > I then
-    Result := Copy(S, I, J - I);
 end;
 
 { Диск ПК с наибольшим свободным местом. }

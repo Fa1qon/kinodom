@@ -302,3 +302,16 @@ func TestInstallCheckFlag(t *testing.T) {
 		t.Fatalf("файл результата %q", b)
 	}
 }
+
+// stop перед заменой файлов закрывает и значки в трее: они держат kinodomw.exe (спека этапа 11a,
+// раздел 5.2).
+func TestStopClosesTrays(t *testing.T) {
+	f, _ := withFake(t)
+	if code, _, errOut := runCmd(cmdStop); code != 0 {
+		t.Fatalf("код %d: %s", code, errOut)
+	}
+	dir, _ := programDir()
+	if acts := f.Actions(); len(acts) == 0 || acts[0] != "procs.close "+filepath.Join(dir, "kinodomw.exe") {
+		t.Fatalf("действия %v", acts)
+	}
+}

@@ -95,6 +95,11 @@ func withService(name string, fn func(*mgr.Service) error) error {
 // queryService открывает службу только для чтения состояния: так kinodom check работает и без
 // прав администратора (mgr.Connect просит полный доступ к диспетчеру служб).
 func queryService(name string, fn func(*mgr.Service) error) error {
+	return openService(name, windows.SERVICE_QUERY_STATUS, fn)
+}
+
+// openService открывает службу с правами access — не больше, чем нужно действию.
+func openService(name string, access uint32, fn func(*mgr.Service) error) error {
 	h, err := windows.OpenSCManager(nil, nil, windows.SC_MANAGER_CONNECT)
 	if err != nil {
 		return err
@@ -104,7 +109,7 @@ func queryService(name string, fn func(*mgr.Service) error) error {
 	if err != nil {
 		return err
 	}
-	sh, err := windows.OpenService(h, n, windows.SERVICE_QUERY_STATUS)
+	sh, err := windows.OpenService(h, n, access)
 	if errors.Is(err, windows.ERROR_SERVICE_DOES_NOT_EXIST) {
 		return ErrNotInstalled
 	}
@@ -124,13 +129,57 @@ func (scm) Exists(name string) (bool, error) {
 	return err == nil, err
 }
 
+// Start открывает службу только с правом запуска: так запускает и значок в трее от имени
+// пользователя (AllowUserControl).
 func (scm) Start(name string) error {
-	return withService(name, func(s *mgr.Service) error {
+	return openService(name, windows.SERVICE_START|windows.SERVICE_QUERY_STATUS, func(s *mgr.Service) error {
 		err := s.Start()
 		if errors.Is(err, windows.ERROR_SERVICE_ALREADY_RUNNING) {
 			return nil
 		}
 		return err
+	})
+}
+
+// Halt — «Выход» в трее: остановить и дождаться, с правами пользователя. Перезапуск при сбое не
+// сработает: служба при остановке выходит с кодом 0.
+func (scm) Halt(name string, wait time.Duration) error {
+	return openService(name, windows.SERVICE_STOP|windows.SERVICE_QUERY_STATUS, func(s *mgr.Service) error {
+		if _, err := s.Control(svc.Stop); err != nil && !errors.Is(err, windows.ERROR_SERVICE_NOT_ACTIVE) {
+			return err
+		}
+		deadline := time.Now().Add(wait)
+		for {
+			st, err := s.Query()
+			if err != nil {
+				return err
+			}
+			if st.State == svc.Stopped {
+				return nil
+			}
+			if time.Now().After(deadline) {
+				return fmt.Errorf("не остановилась за %d с", int(wait.Seconds()))
+			}
+			time.Sleep(300 * time.Millisecond)
+		}
+	})
+}
+
+// userControlSDDL — права на службу: как у Windows по умолчанию, плюс запуск (RP) и остановка (WP)
+// интерактивным пользователям (IU) — для значка в трее без окна прав.
+const userControlSDDL = "D:(A;;CCLCSWRPWPDTLOCRRC;;;SY)(A;;CCDCLCSWRPWPDTLOCRSDRCWDWO;;;BA)(A;;CCLCSWRPWPLOCRRC;;;IU)(A;;CCLCSWLOCRRC;;;SU)"
+
+func (scm) AllowUserControl(name string) error {
+	sd, err := windows.SecurityDescriptorFromString(userControlSDDL)
+	if err != nil {
+		return err
+	}
+	dacl, _, err := sd.DACL()
+	if err != nil {
+		return err
+	}
+	return withService(name, func(s *mgr.Service) error {
+		return windows.SetSecurityInfo(s.Handle, windows.SE_SERVICE, windows.DACL_SECURITY_INFORMATION, nil, nil, dacl, nil)
 	})
 }
 

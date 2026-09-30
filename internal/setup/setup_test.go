@@ -99,12 +99,14 @@ func TestInstallFirstTime(t *testing.T) {
 	exe := filepath.Join(prog, "kinodom.exe")
 	want := []string{
 		"scm.install Kinodom",
+		"scm.allow Kinodom", // значок в трее запускает и останавливает службу без окна прав
 		"acl.restrict " + o.Home + " full=S-1-5-18,S-1-5-32-544 read=S-1-5-32-545,NT SERVICE\\Kinodom",
 		"acl.restrict " + data + " full=S-1-5-18,S-1-5-32-544,NT SERVICE\\Kinodom read=",
 		"acl.grant " + dl + " NT SERVICE\\Kinodom write",
 		fmt.Sprintf("fw.set Kinodom — пульт TCP %d LocalSubnet %s", o.APIPort, exe),
 		"fw.set Kinodom — раздачи TCP,UDP 42000 Any " + exe,
 		`reg.set kinodom "` + filepath.Join(prog, "kinodomw.exe") + `" open "%1"`,
+		`reg.autorun Kinodom "` + filepath.Join(prog, "kinodomw.exe") + `" tray`,
 		"scm.start Kinodom",
 	}
 	if !slices.Equal(acts, want) {
@@ -155,7 +157,7 @@ func TestInstallNeedsAdmin(t *testing.T) {
 	if !errors.Is(err, ErrNotAdmin) || len(f.Actions()) != 0 {
 		t.Fatalf("err %v, действия %v", err, f.Actions())
 	}
-	if err := Uninstall(ctx, f.System(), false, t.TempDir(), nolog); !errors.Is(err, ErrNotAdmin) {
+	if err := Uninstall(ctx, f.System(), UninstallOptions{Home: t.TempDir(), ProgramDir: prog}, nolog); !errors.Is(err, ErrNotAdmin) {
 		t.Fatalf("удаление: %v", err)
 	}
 }
@@ -213,10 +215,11 @@ func TestUninstallKeepsData(t *testing.T) {
 		t.Fatal(err)
 	}
 	f.Reset()
-	if err := Uninstall(ctx, f.System(), false, o.Home, nolog); err != nil {
+	if err := Uninstall(ctx, f.System(), UninstallOptions{Home: o.Home, ProgramDir: prog}, nolog); err != nil {
 		t.Fatal(err)
 	}
-	want := []string{"scm.stop Kinodom", "scm.delete Kinodom", "fw.delete Kinodom — пульт", "fw.delete Kinodom — раздачи", "reg.delete kinodom"}
+	want := []string{"procs.close " + filepath.Join(prog, "kinodomw.exe"), "scm.stop Kinodom", "scm.delete Kinodom",
+		"fw.delete Kinodom — пульт", "fw.delete Kinodom — раздачи", "reg.delete kinodom", "reg.noautorun Kinodom"}
 	if acts := f.Actions(); !slices.Equal(acts, want) {
 		t.Fatalf("действия %v", acts)
 	}
@@ -227,7 +230,7 @@ func TestUninstallKeepsData(t *testing.T) {
 		t.Fatalf("папка загрузок удалена: %v", err)
 	}
 	// Второй раз — службы уже нет: не ошибка.
-	if err := Uninstall(ctx, f.System(), false, o.Home, nolog); err != nil {
+	if err := Uninstall(ctx, f.System(), UninstallOptions{Home: o.Home, ProgramDir: prog}, nolog); err != nil {
 		t.Fatalf("повторное удаление: %v", err)
 	}
 }
@@ -247,7 +250,7 @@ func TestUninstallPurgeKeepsForeign(t *testing.T) {
 		if foreign {
 			os.WriteFile(mine, []byte("x"), 0o644)
 		}
-		if err := Uninstall(ctx, f.System(), true, o.Home, nolog); err != nil {
+		if err := Uninstall(ctx, f.System(), UninstallOptions{Purge: true, Home: o.Home, ProgramDir: prog}, nolog); err != nil {
 			t.Fatal(err)
 		}
 		if _, err := os.Stat(folder); !os.IsNotExist(err) {
@@ -329,8 +332,8 @@ func TestInstallFirstFailureRollsBack(t *testing.T) {
 	if err := Install(ctx, f.System(), o, nolog); err == nil {
 		t.Fatal("установка без ответа службы прошла")
 	}
-	if len(f.Services) != 0 || len(f.Rules) != 0 || len(f.Protocols) != 0 {
-		t.Fatalf("осталось: службы %v, правила %v, ссылки %v", f.Services, f.Rules, f.Protocols)
+	if len(f.Services) != 0 || len(f.Rules) != 0 || len(f.Protocols) != 0 || len(f.Autoruns) != 0 {
+		t.Fatalf("осталось: службы %v, правила %v, ссылки %v, автозапуск %v", f.Services, f.Rules, f.Protocols, f.Autoruns)
 	}
 	// Починка существующей установки при отказе ничего не удаляет.
 	f.Services[ServiceName] = winsvc.ServiceConfig{Name: ServiceName}

@@ -116,7 +116,12 @@ func cmdUninstall(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintln(stderr, "использование: kinodom uninstall [--purge] [--result ФАЙЛ]")
 		return 2
 	}
-	err := setup.Uninstall(context.Background(), newSystem(), *purge, config.DefaultHome(), func(s string) { fmt.Fprintln(stdout, s) })
+	dir, err := programDir()
+	if err != nil {
+		return fail(stderr, err)
+	}
+	err = setup.Uninstall(context.Background(), newSystem(), setup.UninstallOptions{Purge: *purge, Home: config.DefaultHome(), ProgramDir: dir},
+		func(s string) { fmt.Fprintln(stdout, s) })
 	if err == nil {
 		fmt.Fprintln(stdout, "Kinodom удалён")
 	}
@@ -131,7 +136,15 @@ func cmdStop(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintln(stderr, "использование: kinodom stop")
 		return 2
 	}
-	err := newSystem().SCM.Stop(setup.ServiceName, setup.StopWait)
+	sys := newSystem()
+	if dir, err := programDir(); err == nil {
+		// Значки в трее держат kinodomw.exe — установщик его заменяет. После установки значок
+		// запускается снова.
+		if err := sys.Procs.Close(filepath.Join(dir, "kinodomw.exe")); err != nil {
+			fmt.Fprintln(stderr, "Значок в трее не закрылся:", err)
+		}
+	}
+	err := sys.SCM.Stop(setup.ServiceName, setup.StopWait)
 	switch {
 	case errors.Is(err, winsvc.ErrNotInstalled):
 		return 0

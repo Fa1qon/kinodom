@@ -48,8 +48,10 @@ type SCM interface {
 	Install(ServiceConfig) error
 	Update(ServiceConfig) error // путь, учётная запись, запуск, восстановление
 	Exists(name string) (bool, error)
-	Start(name string) error
-	Stop(name string, wait time.Duration) error // уже остановлена — nil; нет службы — ErrNotInstalled
+	Start(name string) error                    // хватает прав пользователя, если разрешено AllowUserControl
+	Stop(name string, wait time.Duration) error // перед заменой файлов: снимает перезапуск при сбое; уже остановлена — nil; нет службы — ErrNotInstalled
+	Halt(name string, wait time.Duration) error // «Выход» в трее: только остановить, прав пользователя хватает
+	AllowUserControl(name string) error         // интерактивные пользователи могут запускать и останавливать службу
 	Delete(name string) error
 	State(name string) (string, error) // нет службы — StateNotFound без ошибки
 }
@@ -85,6 +87,14 @@ type Registry interface {
 	SetProtocol(scheme, command string) error
 	DeleteProtocol(scheme string) error     // нет — nil
 	Protocol(scheme string) (string, error) // команда; нет — ""
+	// Автозапуск при входе любого пользователя (HKLM\Software\Microsoft\Windows\CurrentVersion\Run).
+	SetAutorun(name, command string) error
+	DeleteAutorun(name string) error // нет — nil
+}
+
+// Procs — процессы программы.
+type Procs interface {
+	Close(exe string) error // завершить все процессы этого exe (полный путь), кроме своего
 }
 
 // Ports — кто слушает порт.
@@ -99,5 +109,6 @@ type System struct {
 	Firewall Firewall
 	Registry Registry
 	Ports    Ports
+	Procs    Procs
 	IsAdmin  func() bool
 }

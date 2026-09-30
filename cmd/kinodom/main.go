@@ -27,6 +27,7 @@ func commands() []command {
 		{"stop", "остановить службу перед заменой файлов (перезапуск при сбое вернёт install)", cmdStop},
 		{"check", "проверить установку: служба, пульт, брандмауэр, ссылки kinodom://", cmdCheck},
 		{"grant", "права службы на папку (от администратора): kinodom grant [--write] ПАПКА", cmdGrant},
+		{"tray", "значок в трее: открыть пульт, выход с остановкой сервера (kinodomw tray [--open])", cmdTray},
 		{"play", "открыть раздачу на запущенном сервере и получить ссылку для VLC", cmdPlay},
 		{"source", "проверить источник раздач вживую: kinodom source rutor top 12", cmdSource},
 		{"meta", "проверить метаданные вживую: kinodom meta kp film 301", cmdMeta},
