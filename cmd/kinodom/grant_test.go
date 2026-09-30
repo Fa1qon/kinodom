@@ -124,6 +124,18 @@ func TestOpenGrant(t *testing.T) {
 	if code, _, _ := runCmd(cmdOpen, player.GrantURL(movies, port)); code != 1 || len(*shown) != 1 {
 		t.Fatalf("отказ в окне прав: код %d, окна %q", code, *shown)
 	}
+	// Повышенный grant отказал и сам показал окно (хвост Х41) — второго окна нет, только журнал.
+	elevate = func(string, []string) error { return fmt.Errorf("grant: %w", winsvc.ErrElevatedFailed) }
+	if code, _, _ := runCmd(cmdOpen, player.GrantURL(movies, port)); code != 1 || len(*shown) != 1 {
+		t.Fatalf("отказ повышенного grant: код %d, окна %q", code, *shown)
+	}
+	// Повышение не запустилось вовсе — окно одно, от этого процесса.
+	elevate = func(string, []string) error {
+		return errors.New("запуск от администратора: нет процесса")
+	}
+	if code, _, _ := runCmd(cmdOpen, player.GrantURL(movies, port)); code != 1 || len(*shown) != 2 {
+		t.Fatalf("повышение не запустилось: код %d, окна %q", code, *shown)
+	}
 }
 
 // kinodom grant — только от администратора, только папка на диске этого ПК; права — учётной

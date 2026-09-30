@@ -372,7 +372,9 @@ func (s *Service) sessionFor(t *torrent.Torrent) *session {
 // придётся ждать от пиров. Зовётся из цикла Run (хвост этапа 2: раньше — горутина на каждое
 // открытие, висевшая, пока сеть не готова).
 func (s *Service) saveMetainfo(ss *session) {
+	s.mu.Lock() // raw пишет Open под s.mu — читать под ним же (гонка данных, хвост Х36)
 	raw := ss.raw
+	s.mu.Unlock()
 	if raw == nil {
 		b, err := bencode.Marshal(ss.t.Metainfo())
 		if err != nil {

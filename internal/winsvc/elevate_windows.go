@@ -75,7 +75,7 @@ func Elevate(exe string, args []string) error {
 		return err
 	}
 	if code != 0 {
-		return fmt.Errorf("команда от администратора завершилась с кодом %d", code)
+		return fmt.Errorf("%w: код %d", ErrElevatedFailed, code)
 	}
 	return nil
 }
