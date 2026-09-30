@@ -3,6 +3,7 @@ package catalog
 import (
 	"context"
 	"net/http"
+	"slices"
 	"strconv"
 	"time"
 
@@ -99,15 +100,37 @@ func (c *Catalog) handleList(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	if out.Section != "" {
+		// Порция глубже загруженного — у трекера, на страницу вперёд (спека 11b, 7.2).
+		cat := CategoryRef{name, out.Section}
+		more, perr := false, error(nil)
+		if slices.Contains(c.enabled(), cat) {
+			more, perr = c.ensure(r.Context(), cat, (page+1)*PageSize)
+		}
+		if isDBError(perr) {
+			httpx.WriteError(w, http.StatusInternalServerError, "каталог не читается: "+perr.Error())
+			return
+		}
 		es, total, err := c.List(r.Context(), ListOptions{Tracker: name, Category: out.Section, Offset: (page - 1) * PageSize, Limit: PageSize})
 		if err != nil {
 			httpx.WriteError(w, http.StatusInternalServerError, "каталог не читается: "+err.Error())
 			return
 		}
+		if perr != nil && len(es) < PageSize {
+			// Порция не пришла: ошибка — пульт повторит при следующем подходе к низу (11b-А).
+			c.log.Info("каталог: порция раздела не пришла", "tracker", name, "section", out.Section, "err", perr)
+			httpx.WriteError(w, http.StatusBadGateway, "Порция каталога не пришла: "+perr.Error())
+			return
+		}
 		out.Pages = max(1, (total+PageSize-1)/PageSize)
+		if (more || perr != nil) && out.Pages <= page {
+			out.Pages = page + 1
+		}
+		ids := make([]int64, 0, len(es))
 		for _, e := range es {
 			out.Entries = append(out.Entries, e.View())
+			ids = append(ids, e.ID)
 		}
+		c.enqueueFound(r.Context(), name, ids) // без страницы раздачи — в догрузку вне очереди по порядку показа
 	}
 	at, err := c.UpdatedAt(r.Context(), name)
 	if err != nil {
