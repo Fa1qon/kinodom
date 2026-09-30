@@ -153,7 +153,9 @@ func (r *Ratings) Releases(ctx context.Context, kpIDs []int) (map[int][]string, 
 }
 
 // Films — рейтинги фильмов по номерам (медиатека); кого нет в базе — нет и в ответе.
-func (r *Ratings) Films(ctx context.Context, ids []int) (map[int]Rating, error) { return r.st.films(ctx, ids) }
+func (r *Ratings) Films(ctx context.Context, ids []int) (map[int]Rating, error) {
+	return r.st.films(ctx, ids)
+}
 
 // AddFilm — фильм, найденный медиатекой, в базу рейтингов; нулевой рейтинг не затирает известный.
 func (r *Ratings) AddFilm(ctx context.Context, f Film) error { return r.st.addFilm(ctx, f, r.now()) }
