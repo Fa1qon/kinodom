@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -15,6 +16,7 @@ import (
 	"testing"
 	"time"
 
+	"kinodom/internal/player"
 	"kinodom/internal/power"
 	"kinodom/internal/watch"
 )
@@ -271,6 +273,15 @@ func TestPlay(t *testing.T) {
 		!strings.Contains(*p.LaunchURL, "m3u%2Flibrary") || strings.Contains(*p.LaunchURL, "&start=") || p.Title == "" {
 		t.Errorf("с места на ПК: %+v %v", p, *p.LaunchURL)
 	}
+	// Ссылка, которую отдал сервер, должна открываться своим же kinodom open (замечание № 8 этапа 11b):
+	// место — в адресе .m3u8 внутри ссылки.
+	if inner, err := url.Parse(launchInner(*p.LaunchURL)); err != nil {
+		t.Errorf("ссылка: %v", err)
+	} else if port, _ := strconv.Atoi(inner.Port()); true {
+		if u, _, err := player.ParseLaunch(*p.LaunchURL, port); err != nil || !strings.HasSuffix(u, ".m3u8?start=690") {
+			t.Errorf("kinodom open не принял ссылку «Продолжить»: %q, %v", u, err)
+		}
+	}
 	if p := play(fromPC, "?fromStart=1"); p.StartSec != 0 || strings.Contains(p.M3UURL, "start") {
 		t.Errorf("с начала: %+v", p)
 	}
@@ -281,6 +292,15 @@ func TestPlay(t *testing.T) {
 		t.Errorf("нет файла: %d", w.Code)
 	}
 	_ = io.EOF
+}
+
+// launchInner — адрес потока из ссылки kinodom://.
+func launchInner(link string) string {
+	u, err := url.Parse(link)
+	if err != nil {
+		return ""
+	}
+	return u.Query().Get("url")
 }
 
 // Файл с локального диска VLC читает впереди на весь буфер (вживую 2026-09-30: записано 86 с при

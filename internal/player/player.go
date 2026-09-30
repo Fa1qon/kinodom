@@ -9,6 +9,7 @@ import (
 	"mime"
 	"net/url"
 	"path"
+	"regexp"
 	"strconv"
 	"strings"
 )
@@ -93,7 +94,8 @@ var ErrBadLink = errors.New("ссылка kinodom:// не от Kinodom — пл�
 // ParseLaunch разбирает ссылку kinodom://play?url=…&title=… строго по основной спеке (раздел 14):
 // поток — только http на 127.0.0.1 или localhost, порт API, путь после path.Clean — /stream/,
 // /media/, /mcast/ или /m3u/ (плейлист канала IPTV — этап 8). Иначе любая страница в браузере
-// могла бы запустить плеер с чем угодно.
+// могла бы запустить плеер с чем угодно. Параметры у адреса запрещены, кроме одного: место в
+// плейлисте /m3u/… — ровно start=<целое 0…604800> (медиатека кладёт место в .m3u8, этап 11b).
 func ParseLaunch(link string, apiPort int) (streamURL, title string, err error) {
 	u, err := url.Parse(link)
 	if err != nil || u.Scheme != "kinodom" || u.Host != "play" || (u.Path != "" && u.Path != "/") {
@@ -102,7 +104,7 @@ func ParseLaunch(link string, apiPort int) (streamURL, title string, err error) 
 	q := u.Query()
 	s, err := url.Parse(q.Get("url"))
 	switch {
-	case err != nil, s.Scheme != "http", s.User != nil, s.RawQuery != "", s.Fragment != "",
+	case err != nil, s.Scheme != "http", s.User != nil, s.Fragment != "",
 		s.Hostname() != "127.0.0.1" && s.Hostname() != "localhost", s.Port() != strconv.Itoa(apiPort):
 		return "", "", ErrBadLink
 	}
@@ -111,6 +113,21 @@ func ParseLaunch(link string, apiPort int) (streamURL, title string, err error) 
 		!strings.HasPrefix(clean, "/m3u/") {
 		return "", "", fmt.Errorf("%w (путь %s)", ErrBadLink, clean)
 	}
+	if s.RawQuery != "" && (!strings.HasPrefix(clean, "/m3u/") || !startOnly(s.RawQuery)) {
+		return "", "", ErrBadLink
+	}
 	s.Path, s.RawPath = clean, ""
 	return s.String(), q.Get("title"), nil
+}
+
+// reStartOnly — сырая строка параметров «start=<цифры>» и ничего больше.
+var reStartOnly = regexp.MustCompile(`^start=[0-9]{1,6}$`)
+
+// startOnly — параметры адреса — только место в плейлисте 0…604800 с (неделя, как LaunchStart).
+func startOnly(rawQuery string) bool {
+	if !reStartOnly.MatchString(rawQuery) {
+		return false
+	}
+	n, err := strconv.Atoi(strings.TrimPrefix(rawQuery, "start="))
+	return err == nil && n <= 7*24*3600
 }
