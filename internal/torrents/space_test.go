@@ -36,7 +36,13 @@ func fakeDisk(s *Service, capacity int64) {
 // и числятся недокачанными.
 func archive(t *testing.T, s *Service) (metainfo.Hash, []int) {
 	t.Helper()
-	mi, _ := torrenttest.MakeTorrent(t, t.TempDir(), "Архив", 64<<10,
+	return archiveNamed(t, s, "Архив")
+}
+
+// archiveNamed — то же с другим названием: другая раздача (другой infohash).
+func archiveNamed(t *testing.T, s *Service, name string) (metainfo.Hash, []int) {
+	t.Helper()
+	mi, _ := torrenttest.MakeTorrent(t, t.TempDir(), name, 64<<10,
 		torrenttest.File{Path: "Серия 1.mkv", Size: mib}, torrenttest.File{Path: "Серия 2.mkv", Size: mib},
 		torrenttest.File{Path: "Серия 3.mkv", Size: mib}, torrenttest.File{Path: "Серия 4.mkv", Size: mib})
 	ih, err := s.Open(context.Background(), Source{Torrent: torrentBytes(t, mi)})
@@ -189,21 +195,71 @@ func TestCleanupSkipsWatchedFile(t *testing.T) {
 	}
 }
 
-// Раз в сутки удаляется то, что не открывали дольше срока хранения, кроме того, что смотрят.
-func TestExpireDeletesFilesPastKeepFor(t *testing.T) {
+// Срок хранения — по раздаче целиком, от последнего открытия любого её файла (спека этапа 9,
+// раздел 5.8): брошенная раздача удаляется вся, включая не открытые серии; сериал, который смотрят
+// по серии в день, не теряет первые серии; ни разу не открытая раздача не удаляется; раздача, одну
+// серию которой смотрят сейчас, ждёт.
+func TestExpireByRelease(t *testing.T) {
 	ctx := context.Background()
 	s := newTestService(t)
-	ih, ep := archive(t, s)
-	for _, i := range ep[:3] {
-		must(t, s.Prepare(ctx, ih, i))
+	gone, a := archiveNamed(t, s, "Брошенный")
+	daily, b := archiveNamed(t, s, "По серии в день")
+	later, c := archiveNamed(t, s, "На потом")
+	busy, d := archiveNamed(t, s, "Смотрят")
+	type rel struct {
+		ih  metainfo.Hash
+		eps []int
 	}
-	openedAgo(t, s, ih, ep[0], 15*24*time.Hour)
-	openedAgo(t, s, ih, ep[1], 13*24*time.Hour)
-	must(t, s.reg.TouchStream(ctx, ih, ep[2], s.now().Add(-time.Hour)))
-	openedAgo(t, s, ih, ep[2], 20*24*time.Hour) // открывали давно, но смотрят сейчас
+	for _, x := range []rel{{gone, a}, {daily, b}, {later, c}, {busy, d}} {
+		for _, i := range x.eps[:2] {
+			must(t, s.Prepare(ctx, x.ih, i))
+		}
+	}
+	openedAgo(t, s, gone, a[0], 15*24*time.Hour) // a[1] не открывали
+	openedAgo(t, s, daily, b[0], 20*24*time.Hour)
+	openedAgo(t, s, daily, b[1], 24*time.Hour) // вчера — вся раздача живёт
+	must(t, s.reg.TouchStream(ctx, busy, d[1], s.now().Add(-time.Hour)))
+	openedAgo(t, s, busy, d[0], 20*24*time.Hour)
+	openedAgo(t, s, busy, d[1], 20*24*time.Hour)
 	must(t, s.expire(ctx))
-	if got := stored(t, s, ih); !slices.Equal(got, sorted(ep[1], ep[2])) {
-		t.Fatalf("хранятся %v", got)
+	if got := stored(t, s, gone); len(got) != 0 {
+		t.Errorf("брошенная раздача: хранятся %v", got)
+	}
+	for name, x := range map[string]rel{"по серии в день": {daily, b}, "на потом": {later, c}, "смотрят": {busy, d}} {
+		if got := stored(t, s, x.ih); !slices.Equal(got, sorted(x.eps[0], x.eps[1])) {
+			t.Errorf("%s: хранятся %v", name, got)
+		}
+	}
+}
+
+// Нехватка места не трогает ни разу не открытое (скачанное заранее): удаляется открытая давно
+// раздача; не помогает — отказ, ничего не удалено.
+func TestLowSpaceSparesNeverOpened(t *testing.T) {
+	ctx := context.Background()
+	s := newTestService(t)
+	early, e := archiveNamed(t, s, "Скачано заранее")
+	seen, f := archiveNamed(t, s, "Смотрели")
+	must(t, s.Prepare(ctx, early, e[0]))
+	must(t, s.Prepare(ctx, early, e[1]))
+	must(t, s.Prepare(ctx, seen, f[0]))
+	openedAgo(t, s, seen, f[0], 5*24*time.Hour)
+	// Диск 10 МиБ, занято 3, докачиваются 2 (по файлу в фокусе каждой раздачи), новая серия — 1:
+	// свободно останется 4 при запасе 5 — удалить нужно 1 МиБ.
+	fakeDisk(s, 10*mib)
+	s.SetPolicy(Policy{MinFree: 5 * mib})
+	must(t, s.Prepare(ctx, seen, f[1]))
+	if got := stored(t, s, early); !slices.Equal(got, sorted(e[0], e[1])) {
+		t.Errorf("скачанное заранее тронуто: %v", got)
+	}
+	if got := stored(t, s, seen); !slices.Equal(got, []int{f[1]}) {
+		t.Errorf("открытая давно: хранятся %v", got)
+	}
+	s.SetPolicy(Policy{MinFree: 8 * mib})
+	if err := s.Prepare(ctx, seen, f[2]); !errors.Is(err, ErrLowSpace) {
+		t.Errorf("удалять нечего — нужен отказ: %v", err)
+	}
+	if got := stored(t, s, early); !slices.Equal(got, sorted(e[0], e[1])) {
+		t.Errorf("после отказа скачанное заранее тронуто: %v", got)
 	}
 }
 
@@ -329,14 +385,19 @@ func TestConcurrentPrepareKeepsBoth(t *testing.T) {
 	}
 }
 
-// Поток — это и открытие файла: срок хранения считается от него, но не чаще раза в минуту.
+// Открытие — только поток (спека этапа 9, раздел 5.8): «Скачать» и выбор файла открытием не считаются;
+// срок хранения считается от потока, но не чаще раза в минуту.
 func TestStreamCountsAsOpening(t *testing.T) {
 	ctx := context.Background()
 	reg := NewRegistry(newTestDB(t))
 	ih := hashOf(t, "f")
 	remember(t, reg, ih, "x")
 	t0 := time.Now().Add(-24 * time.Hour)
-	must(t, reg.MarkStored(ctx, ih, 0, `D:\K\f.mkv`, 1, t0))
+	must(t, reg.MarkStored(ctx, ih, 0, `D:\K\f.mkv`, 1))
+	if f, _, _ := reg.StoredFile(ctx, ih, 0); !f.LastOpened.IsZero() {
+		t.Fatalf("выбор файла посчитан открытием: %v", f.LastOpened)
+	}
+	must(t, reg.TouchStream(ctx, ih, 0, t0))
 	must(t, reg.TouchStream(ctx, ih, 0, t0.Add(30*time.Second)))
 	f, _, _ := reg.StoredFile(ctx, ih, 0)
 	if !f.LastOpened.Equal(time.UnixMilli(t0.UnixMilli())) {
@@ -432,7 +493,10 @@ func TestExpireForgetsRecordsOnMissingDisk(t *testing.T) {
 		t.Fatal(err)
 	}
 	must(t, reg.SaveMetainfo(ctx, ih, "film.mkv", torrentBytes(t, mi)))
-	must(t, reg.MarkStored(ctx, ih, 0, filepath.Join(usb, "film.mkv"), 300_000, time.Now().Add(-15*24*time.Hour)))
+	must(t, reg.MarkStored(ctx, ih, 0, filepath.Join(usb, "film.mkv"), 300_000))
+	if _, err := db.W.Exec("UPDATE stored_files SET last_opened_at = ?", time.Now().Add(-15*24*time.Hour).UnixMilli()); err != nil {
+		t.Fatal(err)
+	}
 	s := serviceFor(newOfflineEngine(t), reg)
 	must(t, s.restore(ctx))
 	if err := s.DeleteFile(ctx, ih, 0); err == nil || !strings.Contains(err.Error(), "подключите диск") {

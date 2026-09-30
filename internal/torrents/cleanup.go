@@ -43,17 +43,41 @@ func (s *Service) maintain(ctx context.Context) error {
 	return nil
 }
 
-// expire удаляет файлы, которые не открывали дольше срока хранения (по умолчанию 14 дней), кроме
-// тех, что смотрят (спека, раздел 9).
+// releaseOpened — последнее открытие раздачи по её хранимым файлам; нулевое — ни разу.
+func releaseOpened(files []StoredFile) map[metainfo.Hash]time.Time {
+	out := map[metainfo.Hash]time.Time{}
+	for _, f := range files {
+		if f.LastOpened.After(out[f.InfoHash]) {
+			out[f.InfoHash] = f.LastOpened
+		} else if _, ok := out[f.InfoHash]; !ok {
+			out[f.InfoHash] = time.Time{}
+		}
+	}
+	return out
+}
+
+// expire удаляет раздачи целиком, которые не открывали дольше срока хранения (по умолчанию 14 дней;
+// спека этапа 9, раздел 5.8): срок — от последнего открытия любого файла раздачи; ни разу не
+// открытую раздачу не трогает; раздача, файл которой смотрят, ждёт следующей проверки.
 func (s *Service) expire(ctx context.Context) error {
 	files, err := s.reg.StoredByAge(ctx)
 	if err != nil {
 		return err
 	}
+	opened := releaseOpened(files)
 	cut := s.now().Add(-s.pol().KeepFor)
+	busy := map[metainfo.Hash]bool{}
+	s.mu.Lock()
 	for _, f := range files {
-		if !f.LastOpened.Before(cut) {
-			break
+		if s.watching(s.sessions[f.InfoHash], f.Index, f.LastStream) {
+			busy[f.InfoHash] = true
+		}
+	}
+	s.mu.Unlock()
+	for _, f := range files {
+		o := opened[f.InfoHash]
+		if o.IsZero() || !o.Before(cut) || busy[f.InfoHash] {
+			continue
 		}
 		switch err := s.DeleteFile(ctx, f.InfoHash, f.Index); {
 		case err == nil:

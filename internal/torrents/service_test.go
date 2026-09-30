@@ -129,7 +129,7 @@ func TestRestoreOpensStoredTorrentWithoutPeers(t *testing.T) {
 	mi, _ := torrenttest.MakeTorrent(t, t.TempDir(), "film.mkv", 64<<10, torrenttest.File{Path: "film.mkv", Size: 300_000})
 	ih := mi.HashInfoBytes()
 	must(t, reg.SaveMetainfo(ctx, ih, "film.mkv", torrentBytes(t, mi)))
-	must(t, reg.MarkStored(ctx, ih, 0, `D:\K\film.mkv`, 300_000, time.Now()))
+	must(t, reg.MarkStored(ctx, ih, 0, `D:\K\film.mkv`, 300_000))
 
 	s := serviceFor(newOfflineEngine(t), reg)
 	runService(t, s)

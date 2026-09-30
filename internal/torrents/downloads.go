@@ -33,10 +33,10 @@ type DownloadItem struct {
 	Percent      int           `json:"percent"`
 	State        DownloadState `json:"state"`
 	Readiness    Readiness     `json:"readiness"`
-	Speed        int64         `json:"speed,omitempty"` // байт/с; только у файла в фокусе
-	LastOpenedAt time.Time     `json:"lastOpenedAt"`
-	DeleteInDays *int          `json:"deleteInDays"` // null — до удаления по сроку больше трёх дней
-	CanDelete    bool          `json:"canDelete"`    // файл, который смотрят, удалить нельзя
+	Speed        int64         `json:"speed,omitempty"`       // байт/с; только у файла в фокусе
+	LastOpenedAt time.Time     `json:"lastOpenedAt,omitzero"` // нет — ни разу не открывали
+	DeleteInDays *int          `json:"deleteInDays"`          // null — до удаления по сроку больше трёх дней
+	CanDelete    bool          `json:"canDelete"`             // файл, который смотрят, удалить нельзя
 }
 
 // DownloadsView — экран «Загрузки».
@@ -92,6 +92,7 @@ func (s *Service) Downloads(ctx context.Context) (DownloadsView, error) {
 		return DownloadsView{}, err
 	}
 	now, pol := s.now(), s.pol()
+	opened := releaseOpened(files)
 	out := DownloadsView{Items: []DownloadItem{}}
 	s.mu.Lock()
 	for _, f := range files {
@@ -118,7 +119,9 @@ func (s *Service) Downloads(ctx context.Context) (DownloadsView, error) {
 		}
 		it.Percent = bufferPercent(it.Done, it.Size)
 		it.CanDelete = !watching
-		if left := pol.KeepFor - now.Sub(f.LastOpened); !watching && left <= deleteWarnDays*24*time.Hour {
+		// Срок — по раздаче целиком; ни разу не открытая не удаляется (спека этапа 9, раздел 5.8).
+		if o := opened[f.InfoHash]; !o.IsZero() && !watching && pol.KeepFor-now.Sub(o) <= deleteWarnDays*24*time.Hour {
+			left := pol.KeepFor - now.Sub(o)
 			days := max(0, int(math.Ceil(left.Hours()/24)))
 			it.DeleteInDays = &days
 		}

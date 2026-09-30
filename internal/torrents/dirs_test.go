@@ -9,7 +9,6 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
-	"time"
 
 	"kinodom/internal/torrents/torrenttest"
 )
@@ -106,7 +105,7 @@ func TestUnavailableDirKeepsRecords(t *testing.T) {
 		t.Fatal(err)
 	}
 	must(t, reg.SaveMetainfo(ctx, ih, "film.mkv", torrentBytes(t, mi)))
-	must(t, reg.MarkStored(ctx, ih, 0, filepath.Join(usb, "film.mkv"), 300_000, time.Now()))
+	must(t, reg.MarkStored(ctx, ih, 0, filepath.Join(usb, "film.mkv"), 300_000))
 
 	s := serviceFor(newOfflineEngine(t), reg)
 	must(t, s.restore(ctx))
@@ -142,7 +141,7 @@ func TestOldTorrentWithoutDirStaysAfterDirChange(t *testing.T) {
 		t.Fatal(err)
 	}
 	must(t, reg.SaveMetainfo(ctx, ih, "film.mkv", torrentBytes(t, mi)))
-	must(t, reg.MarkStored(ctx, ih, 0, filepath.Join(oldDir, "film.mkv"), 300_000, time.Now()))
+	must(t, reg.MarkStored(ctx, ih, 0, filepath.Join(oldDir, "film.mkv"), 300_000))
 	e, err := NewEngine(Config{DownloadsDir: oldDir, StateDir: t.TempDir(), Offline: true, Log: quiet()})
 	must(t, err)
 	t.Cleanup(func() { e.Close() })
