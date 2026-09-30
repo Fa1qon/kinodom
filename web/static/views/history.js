@@ -78,9 +78,11 @@ export function render(root, r, ctx) {
 
   function row(it) {
     const rel = it.release;
-    const title = rel ? rel.title : it.hash.slice(0, 8);
+    const lib = it.library; // карточка медиатеки (спека этапа 9, раздел 5.7)
+    const title = lib ? lib.title : rel ? rel.title : it.hash.slice(0, 8);
     const thumb = h('div', { class: 'thumb' });
-    if (rel && rel.imageKey) thumb.append(h('img', { src: `/img/${rel.imageKey}`, alt: '', loading: 'lazy' }));
+    const img = lib ? lib.poster : rel && rel.imageKey ? `/img/${rel.imageKey}` : '';
+    if (img) thumb.append(h('img', { src: img, alt: '', loading: 'lazy' }));
     const file = it.file ? baseName(it.file) : `файл ${it.last.index + 1}`;
     const lines = [
       [it.count > 1 ? file : null, whereStopped(it.last)].filter(Boolean).join(' · '),
@@ -90,7 +92,8 @@ export function render(root, r, ctx) {
       h('span', { class: 'muted small ellipsis' }, lines[0]), h('span', { class: 'muted small' }, lines[1]));
     const conf = confirm === it.hash;
     return h('div', { class: 'dl' },
-      rel ? h('a', { class: 'hist-link', href: `#/release/${rel.id}`, 'data-key': `open-${it.hash}` }, thumb, main) : h('div', { class: 'hist-link' }, thumb, main),
+      lib || rel ? h('a', { class: 'hist-link', href: lib ? `#/library/${encodeURIComponent(lib.key)}` : `#/release/${rel.id}`, 'data-key': `open-${it.hash}` }, thumb, main)
+        : h('div', { class: 'hist-link' }, thumb, main),
       ctx.canEdit ? h('button', { class: conf ? 'btn danger' : 'sq', type: 'button', 'data-key': `forget-${it.hash}`,
         'aria-label': conf ? 'Убрать?' : 'Убрать из истории', onclick: () => {
           if (!conf) {
