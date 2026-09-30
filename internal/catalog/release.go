@@ -348,11 +348,24 @@ func (c *Catalog) posterLater(ctx context.Context, id int64, url string, kp int,
 			return
 		}
 		c.succeeded("poster", id)
+		c.noteKPPoster(id, kp, key)
 		if err := c.st.saveImageKey(context.WithoutCancel(ctx), id, key); err != nil {
 			c.log.Warn("каталог: постер не записался", "err", err)
 		}
 	}()
 }
+
+// noteKPPoster — номер известен, а картинка не Кинопоиска (он не отдал постер): повтор постера
+// Кинопоиска — по паузе (Х9), ключ повтора «kpposter».
+func (c *Catalog) noteKPPoster(id int64, kp int, key string) {
+	if kp > 0 && c.kpPoster != nil && key != meta.ImageKey(c.kpPoster(kp)) {
+		c.failed("kpposter", id, c.now())
+	}
+}
+
+// kpSwitchPerPass — сколько постеров страниц за проход меняется на постер Кинопоиска: он прямой и
+// быстрый, а у каталога, где номера нашлись позже, таких сотни.
+const kpSwitchPerPass = 60
 
 func (c *Catalog) wakePosters() {
 	select {
@@ -377,8 +390,49 @@ func (c *Catalog) postersLoop(ctx context.Context) error {
 	}
 }
 
-// fixPosters — повтор постеров и .torrent Rutor (хвост Х7): постер страницы, а если его нет или
-// хостинг мёртв — постер Кинопоиска по номеру (из описания или найденному очередью рейтингов);
+// switchToKPPosters — раздачам с картинкой, у которых номер Кинопоиска известен, а картинка не его, —
+// постер Кинопоиска (не больше kpSwitchPerPass за проход).
+func (c *Catalog) switchToKPPosters(ctx context.Context, now time.Time) error {
+	if c.kpPoster == nil {
+		return nil
+	}
+	rs, err := c.st.postersWithImage(ctx, now.Add(-imagesKeepFor))
+	if err != nil || len(rs) == 0 {
+		return err
+	}
+	kps, err := c.kinopoiskIDs(ctx, rs)
+	if err != nil {
+		return err
+	}
+	n := 0
+	for _, r := range rs {
+		kp := kps[r.ID]
+		if kp == 0 || n == kpSwitchPerPass {
+			continue
+		}
+		u := c.kpPoster(kp)
+		if r.ImageKey == meta.ImageKey(u) || !c.due("kpposter", r.ID, now) {
+			continue
+		}
+		n++
+		key, err := c.images.Fetch(ctx, u, meta.Direct)
+		if ctx.Err() != nil {
+			return nil
+		}
+		if err != nil {
+			c.failed("kpposter", r.ID, now)
+			continue
+		}
+		c.succeeded("kpposter", r.ID)
+		if err := c.st.saveImageKey(ctx, r.ID, key); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// fixPosters — повтор постеров и .torrent Rutor (хвост Х7): постер Кинопоиска по номеру (из описания или
+// найденному очередью рейтингов), а если номера нет или Кинопоиск не отдал — постер страницы;
 // .torrent — у источников, которые его отдают. Сначала открытые в пульте, за проход — не больше
 // assetsPerPass. Ошибка — только у базы.
 func (c *Catalog) fixPosters(ctx context.Context) error {
@@ -441,9 +495,15 @@ func (c *Catalog) fixPosters(ctx context.Context) error {
 				continue
 			}
 			c.succeeded("poster", r.ID)
+			c.noteKPPoster(r.ID, kps[i], key)
 			if err := c.st.saveImageKey(ctx, r.ID, key); err != nil {
 				return err
 			}
+		}
+		// Номер нашёлся позже (или Кинопоиск не отдал постер раньше): постер страницы — один раз на
+		// постер Кинопоиска (спека 11b, 5.4); не скачался — остаётся постер страницы, повтор по паузе.
+		if err := c.switchToKPPosters(ctx, now); err != nil || ctx.Err() != nil {
+			return err
 		}
 	}
 	var trackers []string

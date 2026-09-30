@@ -7,12 +7,14 @@ import (
 	"net/http/httptest"
 	"slices"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
 
 	"kinodom/internal/meta"
 	"kinodom/internal/source"
+	"kinodom/internal/store"
 )
 
 // Найденное поиском сразу встаёт в срочную догрузку (замечание № 10 этапа 11b): первые 20 на трекер,
@@ -369,5 +371,157 @@ func TestPosterAndTorrentRetried(t *testing.T) {
 	es = list(t, c, ListOptions{})
 	if es[0].ImageKey != meta.ImageKey(host.URL+"/p.png") || torrentOf(es[0].ID) == nil {
 		t.Fatalf("после паузы: картинка %q, .torrent %d байт", es[0].ImageKey, len(torrentOf(es[0].ID)))
+	}
+}
+
+// posterHost — хостинг картинок: /page.jpg — постер страницы, /kp/<номер>.jpg — постер Кинопоиска (или 404,
+// если kpDown); считает запросы по путям.
+type posterHost struct {
+	*httptest.Server
+	mu     sync.Mutex
+	hits   map[string]int
+	kpDown bool
+}
+
+func newPosterHost(t *testing.T) *posterHost {
+	pic := pngBytes(t)
+	kpPic := append(pngBytes(t), 7)
+	h := &posterHost{hits: map[string]int{}}
+	h.Server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		h.mu.Lock()
+		h.hits[r.URL.Path]++
+		down := h.kpDown
+		h.mu.Unlock()
+		if strings.HasPrefix(r.URL.Path, "/kp/") {
+			if down {
+				http.NotFound(w, r)
+				return
+			}
+			w.Write(kpPic)
+			return
+		}
+		w.Write(pic)
+	}))
+	t.Cleanup(h.Close)
+	return h
+}
+
+func (h *posterHost) Hits(path string) int { h.mu.Lock(); defer h.mu.Unlock(); return h.hits[path] }
+
+func posterCatalog(t *testing.T, h *posterHost, rutor *fakeSource) (*Catalog, *clock, *store.DB) {
+	t.Helper()
+	im, err := meta.NewImages(meta.ImagesOptions{Dir: t.TempDir(), Rate: 1000, AllowPrivate: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	db := openDB(t)
+	c, clk := newCatalog(t, db, func(o *Options) {
+		o.Images = im
+		o.KinopoiskPoster = func(id int) string { return fmt.Sprintf("%s/kp/%d.jpg", h.URL, id) }
+	}, rutor)
+	return c, clk, db
+}
+
+func imageOf(t *testing.T, c *Catalog, id int64) string {
+	t.Helper()
+	r, err := c.Release(ctx, id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return r.ImageKey
+}
+
+// Номер известен — постер Кинопоиска, а не страницы раздачи (спека 11b, 5.4; № 1).
+func TestPosterPrefersKinopoisk(t *testing.T) {
+	h := newPosterHost(t)
+	rutor := newFake("rutor")
+	rutor.top["12"] = []source.Release{rel("rutor", "1", "Матрица (1999) BDRip", 9, 1, "a")}
+	rutor.details["1"] = source.Details{Release: source.Release{Title: "Матрица (1999) BDRip"}, PosterURL: h.URL + "/page.jpg", KinopoiskID: "301"}
+	c, _, db := posterCatalog(t, h, rutor)
+	refresh(t, c, true)
+	enrichAll(t, c, "rutor")
+	if got := imageOf(t, c, releaseID(t, db, "rutor", "1")); got != meta.ImageKey(h.URL+"/kp/301.jpg") || h.Hits("/page.jpg") != 0 {
+		t.Fatalf("картинка %q, запросов постера страницы %d", got, h.Hits("/page.jpg"))
+	}
+}
+
+// Номер нашёлся позже — карточка один раз меняет постер страницы на постер Кинопоиска (спека 11b, 5.4).
+func TestPosterSwitchesOnceWhenNumberFound(t *testing.T) {
+	h := newPosterHost(t)
+	rutor := newFake("rutor")
+	rutor.top["12"] = []source.Release{rel("rutor", "1", "Матрица (1999) BDRip", 9, 1, "a")}
+	rutor.details["1"] = source.Details{Release: source.Release{Title: "Матрица (1999) BDRip"}, PosterURL: h.URL + "/page.jpg"}
+	c, _, db := posterCatalog(t, h, rutor)
+	refresh(t, c, true)
+	enrichAll(t, c, "rutor")
+	id := releaseID(t, db, "rutor", "1")
+	if got := imageOf(t, c, id); got != meta.ImageKey(h.URL+"/page.jpg") {
+		t.Fatalf("без номера — постер страницы: %q", got)
+	}
+	if _, err := db.W.ExecContext(ctx, `UPDATE releases SET kinopoisk_id = 301 WHERE id = ?`, id); err != nil {
+		t.Fatal(err)
+	}
+	if err := c.fixPosters(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if got := imageOf(t, c, id); got != meta.ImageKey(h.URL+"/kp/301.jpg") {
+		t.Fatalf("номер нашёлся — постер Кинопоиска: %q", got)
+	}
+	n := h.Hits("/kp/301.jpg")
+	if err := c.fixPosters(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if h.Hits("/kp/301.jpg") != n {
+		t.Fatal("постер меняется один раз")
+	}
+}
+
+// Постер Кинопоиска не скачался — остаётся постер страницы, повтор — по паузе (Х9).
+func TestKinopoiskPosterFailureKeepsPage(t *testing.T) {
+	h := newPosterHost(t)
+	h.kpDown = true
+	rutor := newFake("rutor")
+	rutor.top["12"] = []source.Release{rel("rutor", "1", "Матрица (1999) BDRip", 9, 1, "a")}
+	rutor.details["1"] = source.Details{Release: source.Release{Title: "Матрица (1999) BDRip"}, PosterURL: h.URL + "/page.jpg", KinopoiskID: "301"}
+	c, clk, db := posterCatalog(t, h, rutor)
+	refresh(t, c, true)
+	enrichAll(t, c, "rutor")
+	id := releaseID(t, db, "rutor", "1")
+	if got := imageOf(t, c, id); got != meta.ImageKey(h.URL+"/page.jpg") {
+		t.Fatalf("Кинопоиск не отдал — постер страницы: %q", got)
+	}
+	n := h.Hits("/kp/301.jpg")
+	c.fixPosters(ctx)
+	if h.Hits("/kp/301.jpg") != n {
+		t.Fatal("повтор раньше паузы")
+	}
+	h.mu.Lock()
+	h.kpDown = false
+	h.mu.Unlock()
+	clk.add(assetRetry[0] + time.Second)
+	c.fixPosters(ctx)
+	if got := imageOf(t, c, id); got != meta.ImageKey(h.URL+"/kp/301.jpg") {
+		t.Fatalf("после паузы — постер Кинопоиска: %q", got)
+	}
+}
+
+// Постер по номеру и без страницы раздачи: найденное поиском получает постер Кинопоиска, как только
+// номер известен (спека 11b, 7.2 — быстрый постер без страницы).
+func TestPosterByNumberWithoutPage(t *testing.T) {
+	h := newPosterHost(t)
+	rutor := newFake("rutor")
+	c, _, db := posterCatalog(t, h, rutor)
+	ids, err := c.st.saveFound(ctx, []source.Release{rel("rutor", "5", "Матрица (1999) BDRip", 9, 1, "e")}, c.now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.W.ExecContext(ctx, `UPDATE releases SET kinopoisk_id = 301 WHERE id = ?`, ids[0]); err != nil {
+		t.Fatal(err)
+	}
+	if err := c.fixPosters(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if r, _ := c.st.rowsByID(ctx, ids); r[ids[0]].ImageKey != meta.ImageKey(h.URL+"/kp/301.jpg") {
+		t.Fatalf("без страницы: %q", r[ids[0]].ImageKey)
 	}
 }
