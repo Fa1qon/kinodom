@@ -63,3 +63,20 @@ func TestStopService(t *testing.T) {
 		t.Fatal("зависшая служба «остановилась»")
 	}
 }
+
+// «Выход» в трее сразу после запуска сервера (хвост Х39): служба ещё «запускается» и «остановить» не
+// принимает — Halt ждёт и останавливает, а не отказывает окном «не остановился»; перезапуск при сбое не
+// трогает (у пользователя трея нет права менять настройки службы).
+func TestHaltWaitsStartPending(t *testing.T) {
+	f := &fakeControl{states: []svc.State{svc.StartPending, svc.StartPending, svc.Running, svc.StopPending, svc.Stopped}}
+	if err := haltService(f, time.Second, time.Millisecond); err != nil {
+		t.Fatal(err)
+	}
+	if f.controls != 1 || f.reset {
+		t.Fatalf("действия %v", f.log)
+	}
+	f = &fakeControl{states: []svc.State{svc.Running, svc.Running, svc.Stopped}, refuse: 1}
+	if err := haltService(f, time.Second, time.Millisecond); err != nil || f.controls != 2 {
+		t.Fatalf("не приняла «остановить» сразу: %v, действия %v", err, f.log)
+	}
+}
