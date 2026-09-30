@@ -15,13 +15,22 @@ export const CATEGORIES = [
 const STATE = { new: 'ещё не проверен', alive: 'работает', silent: 'не отвечает', dead: 'не отвечает давно' };
 
 // labelPatch — правка меток из черновика: только поля, которые отличаются от меток канала (остальные
-// метки не замораживаются правкой).
+// метки не замораживаются правкой). Языки — списком (хвост Х31): порядок не важен, пустой — «Язык не
+// указан».
 export function labelPatch(c, d) {
   const p = {};
   if (d.category !== c.category) p.category = d.category;
   if (d.country !== c.country) p.country = d.country;
-  if (d.lang !== (c.languages[0] || '')) p.languages = d.lang ? [d.lang] : [];
+  const sorted = (a) => [...a].sort().join(',');
+  if (sorted(d.langs) !== sorted(c.languages)) p.languages = [...d.langs];
   return p;
+}
+
+// sourceGrade — квадрат оценки источника: предлагаемый — его оценка; скрытый вручную и не
+// предлагаемый — «скрыт» (он может работать — ⚫ «не отвечает» путал, Х32); остальные — ⚫.
+export function sourceGrade(s) {
+  if (s.offered) return s.grade || 'unrated';
+  return s.hidden ? 'hidden' : 'black';
 }
 
 // sourceMarks — пометки источника i: «основной» — его плеер получит первым (выбран вручную или
@@ -57,7 +66,7 @@ export function render(root, r, ctx) {
   let card = null;
   let error = '';
   let facets = null; // страны и языки для правки меток — из /channels?all=1
-  let draft = null; // черновик меток: {category, country, lang}; null — как у канала
+  let draft = null; // черновик меток: {category, country, langs}; null — как у канала
   let reassign = 0; // источник, для которого открыт поиск «Это другой канал»
   let found = [];
   let probing = 0; // время нажатия «Проверить»
@@ -165,7 +174,7 @@ export function render(root, r, ctx) {
       const marks = sourceMarks(s, n).map((m) => h('span', { class: m === 'без звука' ? 'tag warn-tag' : 'tag' },
         icon(m === 'без звука' ? 'warning' : m.startsWith('скрыт') ? 'visibility_off' : 'push_pin', 16), m));
       const row = h('div', { class: s.offered ? 'src' : 'src off' },
-        h('div', { class: 'row' }, h('span', { class: 'num' }, String(n + 1)), gradeMark(s.offered ? (s.grade || 'unrated') : 'black'),
+        h('div', { class: 'row' }, h('span', { class: 'num' }, String(n + 1)), gradeMark(sourceGrade(s)),
           h('span', { class: 'grow strong ellipsis', title: s.name }, s.name || s.playlists.join(', '))),
         marks.length ? h('div', { class: 'tags' }, marks) : null,
         h('div', { class: 'muted small' }, [s.playlists.join(', '), info, STATE[s.state] + (s.checkedAt ? `, проверен ${ago(s.checkedAt)}` : '')].filter(Boolean).join(' · ')),
@@ -217,7 +226,7 @@ export function render(root, r, ctx) {
     }
     const c = card;
     // Черновик переживает опрос раз в 5 с: выбор в списке не сбрасывается, пока не сохранили.
-    if (!draft) draft = { category: c.category, country: c.country, lang: c.languages[0] || '' };
+    if (!draft) draft = { category: c.category, country: c.country, langs: [...c.languages] };
     const d = draft;
     const opt = (v, t, cur) => h('option', { value: v, selected: v === cur }, t);
     const pick = (field) => (e) => {
@@ -231,11 +240,15 @@ export function render(root, r, ctx) {
       opt('', 'Страна не указана', d.country), countries.map((x) => opt(x.id, x.name, d.country)));
     const langs = facets.languages.filter((x) => x.id);
     for (const [i, l] of c.languages.entries()) if (!langs.some((x) => x.id === l)) langs.push({ id: l, name: c.languageNames[i] });
-    const lang = h('select', { class: 'input', name: 'language', 'data-key': 'lang', 'aria-label': 'Язык', onchange: pick('lang') },
-      opt('', 'Язык не указан', d.lang), langs.map((x) => opt(x.id, x.name, d.lang)));
+    // Языки — флажками (хвост Х31): у канала их бывает несколько; ни одного — «Язык не указан».
+    const lang = h('div', { class: 'checks', role: 'group', 'aria-label': 'Языки' }, langs.map((x) =>
+      h('label', { class: 'check' }, h('input', { type: 'checkbox', name: 'language', value: x.id, 'data-key': `lang-${x.id}`, checked: d.langs.includes(x.id),
+        onchange: (e) => {
+          d.langs = e.target.checked ? [...d.langs, x.id] : d.langs.filter((l) => l !== x.id);
+        } }), x.name)));
     const overridden = c.override.category !== null || c.override.country !== null || c.override.languages !== null;
     fill(edit, h('div', { class: 'h' }, 'Метки'),
-      h('label', { class: 'fld' }, 'Категория', cat), h('label', { class: 'fld' }, 'Страна', country), h('label', { class: 'fld' }, 'Язык', lang),
+      h('label', { class: 'fld' }, 'Категория', cat), h('label', { class: 'fld' }, 'Страна', country), h('div', { class: 'fld' }, 'Языки', lang),
       h('div', { class: 'row gap10' },
         h('button', { class: 'btn inv', type: 'button', 'data-key': 'save-labels', onclick: () => act(async () => {
           const p = labelPatch(card, draft);
