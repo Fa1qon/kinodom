@@ -53,13 +53,14 @@ type Options struct {
 	// Settings — поверх настроек из базы и не сохраняются: тесты и kinodom catalog (логин, пароль
 	// Rutracker и ключ Кинопоиска — из переменных окружения, не в базу).
 	Settings map[string]string
-	Trackers Trackers // адреса трекеров вместо настоящих (тесты, kinodom catalog)
+	Trackers Trackers // адреса трекеров вместо настроек (тесты, kinodom catalog)
 	// LocalImages — тесты: картинки с адресов этого ПК (фейковые хостинги). В работе адреса этого ПК
 	// и домашней сети в картинках не скачиваются.
 	LocalImages bool
 }
 
-// Trackers — адреса трекеров вместо встроенных. Пусто — встроенные.
+// Trackers — адреса трекеров вместо настроек при старте. Пусто — из настроек (rutor.address,
+// rutracker.address и служебные); в программе адресов трекеров нет (этап 11a).
 type Trackers struct {
 	RutorMirrors     []string
 	RutorDownload    string
@@ -88,6 +89,7 @@ type App struct {
 	Library  *library.Library  // медиатека: скачанное и папки заказчика (модуль library, этап 9)
 
 	kp        *meta.Kinopoisk
+	rutor     *rutor.Rutor
 	rutracker *rutracker.Rutracker
 	proxy     *netx.Proxy // прокси для трекеров: один на всех, меняется в пульте на ходу
 	closers   []io.Closer // закрываются в обратном порядке
@@ -278,14 +280,23 @@ func (a *App) initCatalog(ctx context.Context, o Options, v settings.Values) err
 	} else {
 		a.clearProblem(ctx, "catalog.categories")
 	}
-	rutorSrc, err := rutor.New(rutor.Options{Proxy: a.proxy, Mirrors: o.Trackers.RutorMirrors,
-		DownloadBase: o.Trackers.RutorDownload, Rate: o.Trackers.Rate, Log: log})
+	// Адреса — из настроек; без адреса источник выключен (этап 11a). Trackers — тесты и kinodom catalog.
+	ro := rutor.Options{Proxy: a.proxy, Mirrors: oneAddress(v.RutorAddress), DownloadBase: v.RutorDownload,
+		Rate: o.Trackers.Rate, Log: log}
+	if len(o.Trackers.RutorMirrors) > 0 {
+		ro.Mirrors, ro.DownloadBase = o.Trackers.RutorMirrors, o.Trackers.RutorDownload
+	}
+	rutorSrc, err := rutor.New(ro)
 	if err != nil {
 		return err
 	}
-	rto := rutracker.Options{Proxy: a.proxy, Mirrors: o.Trackers.RutrackerMirrors, APIBase: o.Trackers.RutrackerAPI,
-		FeedBase: o.Trackers.RutrackerFeed, Rate: o.Trackers.Rate, Log: log,
+	a.rutor = rutorSrc
+	rto := rutracker.Options{Proxy: a.proxy, Mirrors: oneAddress(v.RutrackerAddress), APIBase: v.RutrackerAPI,
+		FeedBase: v.RutrackerFeed, Rate: o.Trackers.Rate, Log: log,
 		Login: v.RutrackerLogin, Password: v.RutrackerPassword, OnLogin: a.rutrackerLogin}
+	if len(o.Trackers.RutrackerMirrors) > 0 {
+		rto.Mirrors, rto.APIBase, rto.FeedBase = o.Trackers.RutrackerMirrors, o.Trackers.RutrackerAPI, o.Trackers.RutrackerFeed
+	}
 	edgeOn := !o.Trackers.NoEdge && a.ModuleEnabled(ctx, "edge")
 	if edgeOn {
 		// UA — только начальный: Edge пересчитывает его на каждый проход, и источник переключается
@@ -323,6 +334,14 @@ func (a *App) initCatalog(ctx context.Context, o Options, v settings.Values) err
 	a.API.Handle("POST /api/v1/releases/{id}/download", a.Torrents.Name(), http.HandlerFunc(a.handleDownload))
 	a.Sup.Add(a.Catalog, a.ModuleEnabled(ctx, a.Catalog.Name()))
 	return nil
+}
+
+// oneAddress — адрес сайта из настроек списком зеркал; "" — пустой список (трекер выключен).
+func oneAddress(site string) []string {
+	if site == "" {
+		return nil
+	}
+	return []string{site}
 }
 
 // initIPTV — модуль iptv (спека этапа 8): плейлисты, каналы, проверки. Логотипы каналов — в своём кэше
@@ -635,6 +654,23 @@ func (a *App) Apply(ctx context.Context, old, n settings.Values) {
 	}
 	if n.RutrackerLogin != old.RutrackerLogin || n.RutrackerPassword != old.RutrackerPassword {
 		a.rutracker.SetCredentials(n.RutrackerLogin, n.RutrackerPassword)
+	}
+	// Адреса трекеров — без перезапуска: источник переключается, каталог обновляется сразу.
+	trackersChanged := false
+	if n.RutorAddress != old.RutorAddress || n.RutorDownload != old.RutorDownload {
+		if err := a.rutor.SetAddresses(n.RutorAddress, n.RutorDownload); err != nil {
+			a.Log.Error("адрес Rutor не применился", "err", err)
+		}
+		trackersChanged = true
+	}
+	if n.RutrackerAddress != old.RutrackerAddress || n.RutrackerAPI != old.RutrackerAPI || n.RutrackerFeed != old.RutrackerFeed {
+		if err := a.rutracker.SetAddresses(n.RutrackerAddress, n.RutrackerAPI, n.RutrackerFeed); err != nil {
+			a.Log.Error("адрес Rutracker не применился", "err", err)
+		}
+		trackersChanged = true
+	}
+	if trackersChanged {
+		a.Catalog.Refresh()
 	}
 	a.Log.Info("настройки изменены в пульте") // без значений: среди них пароли и ключ
 }

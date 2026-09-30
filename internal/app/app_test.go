@@ -41,8 +41,9 @@ import (
 // startAppRaw поднимает сервер и ждёт только HTTP; модули могут ещё стартовать.
 func startAppRaw(t *testing.T, o Options) *App {
 	t.Helper()
-	if o.Trackers.RutorMirrors == nil && o.Trackers.RutrackerMirrors == nil {
-		o.Trackers = offlineTrackers(t)
+	if o.Trackers.RutorMirrors == nil && o.Trackers.RutrackerMirrors == nil && !o.Trackers.NoEdge {
+		// Адресов трекеров нет — трекеры выключены и в сеть не ходят (этап 11a); Edge не нужен.
+		o.Trackers = Trackers{NoEdge: true, Rate: 1000}
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	a, err := New(ctx, o)
@@ -964,6 +965,11 @@ func TestTrackerStateFromProblems(t *testing.T) {
 	}
 	if st := trackerOf(ps[3:], "rutor"); st.State != "ok" {
 		t.Fatalf("без проблем трекера: %+v", st)
+	}
+	// Адрес не введён — «выключен», это важнее любых прежних проблем трекера (этап 11a).
+	off := append(ps, store.Problem{ID: "catalog.rutor.address", Text: "Укажите адрес Rutor в настройках"})
+	if st := trackerOf(off, "rutor"); st.State != "off" || st.Text != "Укажите адрес Rutor в настройках" {
+		t.Fatalf("без адреса: %+v", st)
 	}
 }
 

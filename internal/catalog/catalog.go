@@ -177,6 +177,9 @@ func (c *Catalog) refreshPass(ctx context.Context, force bool) (time.Duration, e
 	trackerErr := map[string]error{}
 	touched, failed := false, false
 	for name, src := range c.sources {
+		if !c.configured(name) {
+			continue
+		}
 		if err := c.refreshTree(ctx, name, src); err != nil && ctx.Err() == nil {
 			c.log.Warn("каталог: разделы трекера не обновились", "tracker", name, "err", err)
 		}
@@ -188,7 +191,7 @@ func (c *Catalog) refreshPass(ctx context.Context, force bool) (time.Duration, e
 	cats := c.enabled()
 	for _, cat := range cats {
 		src, ok := c.sources[cat.Tracker]
-		if !ok {
+		if !ok || !c.configured(cat.Tracker) {
 			continue
 		}
 		if trackerDown(trackerErr[cat.Tracker]) {
@@ -216,6 +219,13 @@ func (c *Catalog) refreshPass(ctx context.Context, force bool) (time.Duration, e
 		}
 	}
 	for name := range c.sources {
+		if !c.configured(name) {
+			// Адрес не введён (этап 11a): трекер выключен — это не сбой, «не отвечает» снимается.
+			c.setProblem(ctx, "catalog."+name+".address", "Укажите адрес "+title(name)+" в настройках")
+			c.clearProblem(ctx, "catalog."+name)
+			continue
+		}
+		c.clearProblem(ctx, "catalog."+name+".address")
 		if err := trackerErr[name]; err != nil {
 			c.setProblem(ctx, "catalog."+name, err.Error())
 		} else if touched {
@@ -311,7 +321,7 @@ func (c *Catalog) checkStale(ctx context.Context, cats []CategoryRef, now time.T
 	var oldest time.Time
 	var reason error
 	for _, cat := range cats {
-		if _, ok := c.sources[cat.Tracker]; !ok {
+		if _, ok := c.sources[cat.Tracker]; !ok || !c.configured(cat.Tracker) {
 			continue
 		}
 		_, at, err := c.st.state(ctx, cat)
@@ -355,6 +365,15 @@ func (c *Catalog) enqueueRatings(ctx context.Context) error {
 
 func ratingItem(r row) meta.Item {
 	return meta.Item{Release: r.Tracker + ":" + r.TopicID, KinopoiskID: r.KinopoiskID, IMDbID: r.IMDbID, Title: r.Title}
+}
+
+// configurable — источник, у которого может не быть адреса (rutor, rutracker — этап 11a).
+type configurable interface{ Configured() bool }
+
+// configured — адрес трекера введён; источник без такого признака — всегда.
+func (c *Catalog) configured(name string) bool {
+	s, ok := c.sources[name].(configurable)
+	return !ok || s.Configured()
 }
 
 func title(tracker string) string {

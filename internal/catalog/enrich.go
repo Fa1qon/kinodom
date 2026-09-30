@@ -56,7 +56,7 @@ func (c *Catalog) enrichLoop(ctx context.Context, tracker string) error {
 // сейчас нечего. Ошибки трекера раздачу откладывают; ошибка — только у базы.
 func (c *Catalog) enrichStep(ctx context.Context, tracker string) (bool, error) {
 	now := c.now()
-	if c.forumPausedUntil(tracker).After(now) {
+	if !c.configured(tracker) || c.forumPausedUntil(tracker).After(now) {
 		return false, nil
 	}
 	// Сначала раздачи, открытые в пульте: их страницу ждёт человек (хвост 5c).

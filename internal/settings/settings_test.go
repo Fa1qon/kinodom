@@ -315,3 +315,70 @@ func TestIPTVFields(t *testing.T) {
 		t.Errorf("испорченная строка в базе: %v", v.HiddenCategories)
 	}
 }
+
+// Адреса трекеров вводит человек (этап 11a): сохраняются приведёнными к «схема://хост», пустая
+// строка — трекер выключен, мусор — ошибка с названием поля.
+func TestTrackerAddressFields(t *testing.T) {
+	db := openDB(t)
+	v := load(t, db, nil)
+	if vw := v.View(); vw.Rutracker.Address != "" || vw.Rutor.Address != "" || vw.Rutor.DownloadAddress != "" || vw.Setup.Done {
+		t.Fatalf("по умолчанию: %+v", vw)
+	}
+	n, err := v.With(patch(t, `{"rutracker":{"address":" www.Rutracker.org/forum/ ","apiAddress":"","feedAddress":"feed.example.cc"},
+		"rutor":{"address":"rutor.is","downloadAddress":"http://d.rutor.is/"}}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n.RutrackerAddress != "https://rutracker.org" || n.RutrackerAPI != "" || n.RutrackerFeed != "https://feed.example.cc" ||
+		n.RutorAddress != "https://rutor.is" || n.RutorDownload != "http://d.rutor.is" {
+		t.Fatalf("после правки: %+v", n)
+	}
+	if err := save(ctx, db, v, n); err != nil {
+		t.Fatal(err)
+	}
+	got := load(t, db, nil).View()
+	if got.Rutracker.Address != "https://rutracker.org" || got.Rutracker.FeedAddress != "https://feed.example.cc" ||
+		got.Rutor.Address != "https://rutor.is" || got.Rutor.DownloadAddress != "http://d.rutor.is" {
+		t.Fatalf("после записи: %+v %+v", got.Rutracker, got.Rutor)
+	}
+	off, err := n.With(patch(t, `{"rutor":{"address":""}}`))
+	if err != nil || off.RutorAddress != "" {
+		t.Fatalf("стереть адрес: %+v, %v", off.RutorAddress, err)
+	}
+	cases := map[string]string{
+		`{"rutor":{"address":"абв"}}`:             "Адрес Rutor",
+		`{"rutracker":{"address":"ftp://x.org"}}`: "Адрес Rutracker",
+		`{"rutracker":{"apiAddress":"мусор"}}`:    "Адрес API Rutracker",
+		`{"rutracker":{"feedAddress":"http://"}}`: "Адрес ленты Rutracker",
+		`{"rutor":{"downloadAddress":"a b.c"}}`:   "Адрес .torrent Rutor",
+	}
+	for js, want := range cases {
+		m, err := n.With(patch(t, js))
+		var fe *FieldError
+		if !errors.As(err, &fe) || !strings.Contains(err.Error(), want) {
+			t.Errorf("%s: ошибка %v, ждали «%s»", js, err, want)
+		}
+		if !reflect.DeepEqual(m, n) {
+			t.Errorf("%s: значения изменились при ошибке", js)
+		}
+	}
+}
+
+// Мастер начальных настроек пройден — setup.done (по умолчанию нет).
+func TestSetupDone(t *testing.T) {
+	db := openDB(t)
+	v := load(t, db, nil)
+	if v.SetupDone || v.View().Setup.Done {
+		t.Fatal("мастер пройден в пустой базе")
+	}
+	n, err := v.With(patch(t, `{"setup":{"done":true}}`))
+	if err != nil || !n.SetupDone {
+		t.Fatalf("%+v, %v", n.SetupDone, err)
+	}
+	if err := save(ctx, db, v, n); err != nil {
+		t.Fatal(err)
+	}
+	if !load(t, db, nil).View().Setup.Done {
+		t.Fatal("после записи мастер не пройден")
+	}
+}

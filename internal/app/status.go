@@ -12,7 +12,7 @@ import (
 
 // trackerStatus — трекер на экране «Состояние» и во вкладке каталога.
 type trackerStatus struct {
-	State     string               `json:"state"` // ok, warn, down
+	State     string               `json:"state"` // ok, warn, down, off (адрес не введён)
 	Text      string               `json:"text,omitempty"`
 	UpdatedAt *time.Time           `json:"updatedAt"` // последнее удачное обновление разделов; null — не было
 	Login     *rutracker.LoginInfo `json:"login,omitempty"`
@@ -38,6 +38,11 @@ type streamsStatus struct {
 // разбор, вход Rutracker).
 func trackerOf(ps []store.Problem, tracker string) trackerStatus {
 	st := trackerStatus{State: "ok"}
+	for _, p := range ps {
+		if p.ID == "catalog."+tracker+".address" { // адрес не введён — трекер выключен (этап 11a)
+			return trackerStatus{State: "off", Text: p.Text}
+		}
+	}
 	for _, p := range ps {
 		switch {
 		case p.ID == "catalog."+tracker:

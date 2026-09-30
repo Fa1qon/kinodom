@@ -246,7 +246,8 @@ func TestPassSwitchesUserAgent(t *testing.T) {
 // Адрес Rutracker не введён (этап 11a): источник есть, но выключен — ни одного запроса ни к
 // форуму, ни к API; вход не считается неудачным (иначе в «Состоянии» висела бы вторая проблема).
 func TestNotConfigured(t *testing.T) {
-	r, err := New(Options{Rate: 1000, Login: "user", Password: "pass", Passer: &fakePasser{}})
+	p := &fakePasser{}
+	r, err := New(Options{Rate: 1000, Login: "user", Password: "pass", Passer: p})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -267,6 +268,9 @@ func TestNotConfigured(t *testing.T) {
 	}
 	if st := r.LoginState().State; st == LoginFailing || st == LoginBlocked {
 		t.Fatalf("состояние входа без адреса: %s", st)
+	}
+	if p.calls.Load() != 0 {
+		t.Fatal("без адреса запускался Edge")
 	}
 }
 
