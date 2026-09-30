@@ -51,6 +51,20 @@ export function retryDue(state, tailTop, viewportH) {
   return !!state.error && !state.loading && state.page < state.pages && tailTop < viewportH + 600;
 }
 
+// groupBar — ряды над сеткой (спека 11b, 7.1): у Rutracker — группы («Кино · Сериалы · Документалистика»,
+// только где что-то выбрано; выбранная — по разделу, ссылка — на первый её подраздел) и подразделы
+// выбранной группы; раздел без группы — в ряду всегда. У Rutor групп нет — один ряд, как раньше.
+export function groupBar(sections, current) {
+  const groups = [];
+  for (const s of sections) {
+    if (s.group && !groups.some((g) => g.id === s.group)) groups.push({ id: s.group, name: s.groupName, first: s.id, on: false });
+  }
+  const cur = sections.find((s) => s.id === current);
+  const on = cur && cur.group ? cur.group : groups.length > 0 && !(cur && !cur.group) ? groups[0].id : '';
+  for (const g of groups) g.on = g.id === on;
+  return { groups, sections: sections.filter((s) => !s.group || s.group === on) };
+}
+
 export function render(root, r, ctx) {
   const tracker = TRACKERS.some(([id]) => id === r.parts[1]) ? r.parts[1] : 'rutor';
   const section = r.parts[2] || '';
@@ -163,7 +177,17 @@ export function render(root, r, ctx) {
     if (!alive) return;
     if (watcher) watcher.observe(tail); // только теперь: пустая сетка не должна просить порцию сама
     const off = ctx.status && ctx.status.trackers && ctx.status.trackers[tracker] && ctx.status.trackers[tracker].state === 'off';
-    bar.replaceChildren(...sections.map((s) => h('a', {
+    const gb = groupBar(sections, shownSection);
+    if (gb.groups.length > 0) {
+      const groups = h('nav', { class: 'filters', 'aria-label': 'Группы' }, ...gb.groups.map((g) => h('a', {
+        class: g.on ? 'fil on' : 'fil',
+        href: `#/catalog/${tracker}/${encodeURIComponent(g.first)}`,
+        'aria-current': g.on ? 'true' : null,
+        'data-key': `grp-${g.id}`,
+      }, g.name)));
+      bar.before(groups);
+    }
+    bar.replaceChildren(...gb.sections.map((s) => h('a', {
       class: s.id === shownSection ? 'fil on' : 'fil',
       href: `#/catalog/${tracker}/${encodeURIComponent(s.id)}`,
       'aria-current': s.id === shownSection ? 'page' : null,

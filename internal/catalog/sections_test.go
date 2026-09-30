@@ -202,10 +202,36 @@ func TestTreeAndSectionsRoutes(t *testing.T) {
 	}
 	var secs []SectionInfo
 	if code := getJSON(t, mux, "/api/v1/catalog/sections?tracker=rutracker", &secs); code != 200 || len(secs) != 1 ||
-		secs[0] != (SectionInfo{ID: "46", Name: "Документальные фильмы и телепередачи", Count: 2}) {
+		secs[0] != (SectionInfo{ID: "46", Name: "Документальные фильмы и телепередачи", Count: 2, Group: "c20", GroupName: "Документалистика"}) {
 		t.Fatalf("разделы вкладки: %d %+v", code, secs)
 	}
 	if code := getJSON(t, mux, "/api/v1/sources/kinozal/categories", nil); code != http.StatusNotFound {
 		t.Fatalf("незнакомый трекер: %d", code)
+	}
+}
+
+// Разделы вкладки Rutracker — в порядке групп «Кино · Сериалы · Документалистика» и дерева, с группой
+// (спека 11b, 7.1).
+func TestSectionsRouteGroups(t *testing.T) {
+	rt := newFake("rutracker")
+	rt.tree = groupsTree()
+	for i, f := range []string{"252", "81", "56"} { // разные раздачи: одинаковый infohash схлопнулся бы в один раздел
+		rt.top[f] = []source.Release{rel("rutracker", f, "Фильм "+f+" (2020) WEB-DL", 10+i, 1<<30, "h"+f)}
+	}
+	c, _ := newCatalog(t, openDB(t), func(o *Options) {
+		o.Sections = []Section{{"rutracker", "46", true}, {"rutracker", "9", true}, {"rutracker", "7", true}}
+	}, rt)
+	refresh(t, c, false)
+	refresh(t, c, true)
+	mux := http.NewServeMux()
+	c.Register(muxRouter{mux})
+	var secs []SectionInfo
+	getJSON(t, mux, "/api/v1/catalog/sections?tracker=rutracker", &secs)
+	var got []string
+	for _, s := range secs {
+		got = append(got, s.ID+":"+s.Group+":"+s.GroupName)
+	}
+	if strings.Join(got, " ") != "7:c2:Кино 9:c18:Сериалы 46:c20:Документалистика" {
+		t.Fatalf("разделы: %v", got)
 	}
 }

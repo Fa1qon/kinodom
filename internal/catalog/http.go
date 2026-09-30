@@ -152,9 +152,11 @@ type TreeNode struct {
 
 // SectionInfo — раздел во вкладке трекера: в каталоге есть его раздачи.
 type SectionInfo struct {
-	ID    string `json:"id"`
-	Name  string `json:"name"`
-	Count int    `json:"count"`
+	ID        string `json:"id"`
+	Name      string `json:"name"`
+	Count     int    `json:"count"`
+	Group     string `json:"group"`     // группа Rutracker (c2, c18, c20); у Rutor и вне групп — ""
+	GroupName string `json:"groupName"` // «Кино», «Сериалы», «Документалистика»
 }
 
 // tracker — трекер из запроса; неизвестный — 404 и false.
@@ -196,7 +198,8 @@ func (c *Catalog) handleSections(w http.ResponseWriter, r *http.Request) {
 	httpx.WriteJSON(w, http.StatusOK, out)
 }
 
-// trackerSections — разделы трекера, в которых есть раздачи, в порядке настройки и дерева.
+// trackerSections — разделы трекера, в которых есть раздачи, в порядке настройки и дерева. У Rutracker —
+// с группой, в порядке групп и дерева (спека 11b, 7.1); раздел вне групп — в конце, без группы.
 func (c *Catalog) trackerSections(ctx context.Context, tracker string) ([]SectionInfo, error) {
 	cats, err := c.Categories(ctx)
 	if err != nil {
@@ -208,5 +211,38 @@ func (c *Catalog) trackerSections(ctx context.Context, tracker string) ([]Sectio
 			out = append(out, SectionInfo{ID: cat.ID, Name: cat.Name, Count: cat.Count})
 		}
 	}
+	if tracker != "rutracker" {
+		return out, nil
+	}
+	tree, err := c.st.tree(ctx, tracker)
+	if err != nil {
+		return nil, err
+	}
+	rank := map[string]int{}
+	group := map[string]Group{}
+	fl := firstLevel(tree)
+	for _, g := range RutrackerGroups {
+		for _, s := range fl[g.ID] {
+			rank[s.ID] = len(rank)
+			group[s.ID] = g
+		}
+	}
+	for i := range out {
+		g := group[out[i].ID]
+		out[i].Group, out[i].GroupName = g.ID, g.Name
+	}
+	slices.SortStableFunc(out, func(a, b SectionInfo) int {
+		ra, oka := rank[a.ID]
+		rb, okb := rank[b.ID]
+		switch {
+		case oka && okb:
+			return ra - rb
+		case oka:
+			return -1
+		case okb:
+			return 1
+		}
+		return 0
+	})
 	return out, nil
 }
