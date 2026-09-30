@@ -48,7 +48,8 @@ export function render(root, r, ctx) {
   let alive = true;
   let data = null;
   let unrec = null;
-  let error = '';
+  let error = ''; // список не загрузился
+  let failed = ''; // последнее действие не удалось — видно до следующего действия
   let timer = 0;
   const forms = new Map(); // поля «Не распознано» по единице: создаются один раз, опрос их не сбрасывает
 
@@ -84,7 +85,7 @@ export function render(root, r, ctx) {
     keepFocus(root, () => {
       fill(head, h('h1', { class: 'grow' }, 'Медиатека'),
         data.scan.running ? h('span', { class: 'muted small' }, 'Обновляется…') : null,
-        error ? h('span', { class: 'error' }, error) : null);
+        error || failed ? h('span', { class: 'error' }, failed || error) : null);
       fill(tabs, ...libraryTabs(data).map((t) => h('a', { class: t.id === tab ? 'fil on' : 'fil', href: t.id === 'all' ? '#/library' : `#/library?cat=${t.id}`,
         'aria-current': t.id === tab ? 'page' : null, 'data-key': `tab-${t.id}` }, t.name, h('span', { class: 'muted small' }, ' ' + t.count))));
       fill(cont, ...(tab === 'all' && data.continue.length ? [h('h2', null, 'Продолжить просмотр'),
@@ -116,7 +117,7 @@ export function render(root, r, ctx) {
         try {
           await card.playFile(c.file, ctx, false, c.episode > 0);
         } catch (e) {
-          error = e.message;
+          failed = e.message;
           draw();
         }
       } },
@@ -139,9 +140,9 @@ export function render(root, r, ctx) {
   async function act(fn) {
     try {
       await fn();
-      error = '';
+      failed = '';
     } catch (e) {
-      error = e.message;
+      failed = e.message;
     }
     clearTimeout(timer);
     load();

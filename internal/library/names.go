@@ -45,8 +45,11 @@ func ParseName(name string) Parsed {
 	}
 	s := strings.NewReplacer(".", " ", "_", " ").Replace(name)
 	cut := len(s)
-	if loc := reCut.FindStringIndex(s); loc != nil {
-		cut = loc[0]
+	for _, loc := range reCut.FindAllStringIndex(s, -1) {
+		if loc[0] > 0 { // скобка в самом начале — часть названия («[Студия] Курс»), а не хвост раздачи
+			cut = loc[0]
+			break
+		}
 	}
 	if ys := reYear.FindAllStringSubmatchIndex(s, -1); ys != nil {
 		y := ys[len(ys)-1]
@@ -63,8 +66,9 @@ func ParseName(name string) Parsed {
 	return p
 }
 
+// clean — пробелы и хвостовые разделители; открывающая скобка в начале — часть названия.
 func clean(s string) string {
-	return strings.Trim(reSpaces.ReplaceAllString(s, " "), " -–—([,")
+	return strings.TrimLeft(strings.TrimRight(reSpaces.ReplaceAllString(s, " "), " -–—([,"), " -–—,")
 }
 
 var (

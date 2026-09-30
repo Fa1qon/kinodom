@@ -135,11 +135,11 @@ func TestMediaKeepsAwake(t *testing.T) {
 func quick(t *testing.T) {
 	t.Helper()
 	was := [3]time.Duration{watch.Every, watch.Min, watch.Gap}
-	wasLead, wasJump := watch.Lead, watch.JumpRead
-	watch.Every, watch.Min, watch.Gap, watch.Lead, watch.JumpRead = 0, 0, 0, 0, 1
+	wasLead, wasJump, wasExtra := watch.Lead, watch.JumpRead, mediaExtraLead
+	watch.Every, watch.Min, watch.Gap, watch.Lead, watch.JumpRead, mediaExtraLead = 0, 0, 0, 0, 1, 0
 	t.Cleanup(func() {
 		watch.Every, watch.Min, watch.Gap = was[0], was[1], was[2]
-		watch.Lead, watch.JumpRead = wasLead, wasJump
+		watch.Lead, watch.JumpRead, mediaExtraLead = wasLead, wasJump, wasExtra
 	})
 }
 
@@ -281,4 +281,19 @@ func TestPlay(t *testing.T) {
 		t.Errorf("нет файла: %d", w.Code)
 	}
 	_ = io.EOF
+}
+
+// Файл с локального диска VLC читает впереди на весь буфер (вживую 2026-09-30: записано 86 с при
+// картинке на ~40-й) — у /media поправка больше, чем у раздач.
+func TestMediaLead(t *testing.T) {
+	quick(t)
+	mediaExtraLead = 100
+	e, file, unit, _ := withFile(t, "film.mkv", make([]byte, 1000))
+	get(t, mediaMux(e.l), mediaURL(file, "film.mkv"), fromPhone, "Range", "bytes=0-499")
+	e.clk.add(time.Minute)
+	e.l.tracker.Tick(e.clk.now())
+	fs, _ := e.hist.Files(ctx, "192.168.0.50", "lib-"+strconv.FormatInt(unit, 10))
+	if len(fs) != 1 || fs[0].Fraction != 0.4 {
+		t.Errorf("место с поправкой: %+v", fs)
+	}
 }
