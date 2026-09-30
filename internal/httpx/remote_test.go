@@ -84,3 +84,19 @@ func TestDevice(t *testing.T) {
 		}
 	}
 }
+
+// Адреса ПК для телефонов и ТВ (экран «Готово» мастера, этап 11a): только частные IPv4, сначала
+// 192.168.*, без loopback, локальных для сегмента и внешних.
+func TestHomeAddresses(t *testing.T) {
+	setOwn(t, "127.0.0.1/8", "10.8.0.2/24", "192.168.1.5/24", "169.254.3.4/16", "fe80::1/64", "8.8.4.4/32", "172.20.0.9/16")
+	got := HomeAddresses()
+	want := []string{"192.168.1.5", "10.8.0.2", "172.20.0.9"}
+	if len(got) != len(want) {
+		t.Fatalf("адреса %v", got)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("адреса %v, ждали %v", got, want)
+		}
+	}
+}

@@ -437,3 +437,24 @@ func TestTitleWithSpacesIsRutor(t *testing.T) {
 		t.Fatalf("вывод %d", v)
 	}
 }
+
+// «Проверить» в мастере (этап 11a): список раздела открывается — трекер отвечает; вместо трекера
+// чужой сайт — ErrNotTracker; адреса нет — ErrNotConfigured.
+func TestCheck(t *testing.T) {
+	s := rutortest.NewServer(t)
+	if err := newRutor(t, s).Check(ctx); err != nil {
+		t.Fatal(err)
+	}
+	shop := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/html; charset=UTF-8")
+		io.WriteString(w, "<html><title>Магазин</title></html>")
+	}))
+	t.Cleanup(shop.Close)
+	if err := newRutor(t, s, shop.URL).Check(ctx); !errors.Is(err, netx.ErrNotTracker) {
+		t.Fatalf("чужой сайт: %v", err)
+	}
+	r, _ := New(Options{Rate: 1000})
+	if err := r.Check(ctx); !errors.Is(err, source.ErrNotConfigured) {
+		t.Fatalf("без адреса: %v", err)
+	}
+}

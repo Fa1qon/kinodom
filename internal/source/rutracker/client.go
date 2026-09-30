@@ -173,6 +173,16 @@ func (r *Rutracker) setAddresses(mirrors []string, api, feed string) error {
 // Configured — адрес Rutracker введён.
 func (r *Rutracker) Configured() bool { return r.forum.Configured() }
 
+// Check — «Проверить» в мастере начальных настроек: главная форума открывается (с пропуском
+// Cloudflare, если он нужен) и похожа на Rutracker. Вход проверяет Relogin.
+func (r *Rutracker) Check(ctx context.Context) error {
+	if err := r.notConfigured(); err != nil {
+		return err
+	}
+	_, err := r.forumPage(ctx, "/forum/index.php", "")
+	return err
+}
+
 // notConfigured — ошибка «адрес не введён» с именем трекера; nil — адрес есть.
 func (r *Rutracker) notConfigured() error {
 	if r.Configured() {

@@ -3,6 +3,7 @@ package httpx
 import (
 	"net"
 	"net/http"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -97,4 +98,38 @@ func Device(r *http.Request) string {
 		return DevicePC
 	}
 	return ip.String()
+}
+
+// HomeAddresses — адреса этого ПК в домашней сети для телефонов и ТВ: частные IPv4, сначала
+// 192.168.* (обычная домашняя сеть), затем 10.* и 172.16–31.*.
+func HomeAddresses() []string {
+	as, err := interfaceAddrs()
+	if err != nil {
+		return nil
+	}
+	rank := func(ip net.IP) int {
+		switch ip[0] {
+		case 192:
+			return 0
+		case 10:
+			return 1
+		}
+		return 2
+	}
+	var ips []net.IP
+	for _, a := range as {
+		n, ok := a.(*net.IPNet)
+		if !ok {
+			continue
+		}
+		if ip := n.IP.To4(); ip != nil && ip.IsPrivate() {
+			ips = append(ips, ip)
+		}
+	}
+	slices.SortStableFunc(ips, func(a, b net.IP) int { return rank(a) - rank(b) })
+	out := make([]string, len(ips))
+	for i, ip := range ips {
+		out[i] = ip.String()
+	}
+	return out
 }

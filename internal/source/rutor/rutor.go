@@ -114,6 +114,13 @@ func (r *Rutor) setAddresses(mirrors []string, download string) error {
 // Configured — адрес Rutor введён.
 func (r *Rutor) Configured() bool { return r.c.Configured() }
 
+// Check — «Проверить» в мастере начальных настроек: список раздела открывается и похож на Rutor.
+// Ошибки — как у запросов: ErrNotConfigured, netx.ErrProxyDown, netx.ErrNotTracker, netx.ErrTrackerDown.
+func (r *Rutor) Check(ctx context.Context) error {
+	_, err := r.page(ctx, "/browse/0/1/0/2")
+	return err
+}
+
 func (r *Rutor) Name() string { return Name }
 
 // Mirror — зеркало, ответившее последним (каталог запомнит его между запусками — этап 5).

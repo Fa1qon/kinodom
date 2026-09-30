@@ -311,3 +311,15 @@ func TestSetAddresses(t *testing.T) {
 		t.Fatalf("после сброса: %v", err)
 	}
 }
+
+// «Проверить» в мастере (этап 11a): главная форума открывается — трекер отвечает.
+func TestCheck(t *testing.T) {
+	s := rutrackertest.NewServer(t)
+	if err := newRutracker(t, s, nil).Check(ctx); err != nil {
+		t.Fatal(err)
+	}
+	r, _ := New(Options{Rate: 1000})
+	if err := r.Check(ctx); !errors.Is(err, source.ErrNotConfigured) {
+		t.Fatalf("без адреса: %v", err)
+	}
+}

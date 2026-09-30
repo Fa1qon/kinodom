@@ -671,3 +671,22 @@ func TestSetUserAgent(t *testing.T) {
 		}
 	}
 }
+
+// Вместо трекера — чужой сайт на всех зеркалах: ошибка «не похоже на трекер» (мастер начальных
+// настроек, этап 11a) — отдельно от «не отвечает»; для остального кода это по-прежнему «недоступен».
+func TestNotTrackerError(t *testing.T) {
+	foreign := newSite(t, page(`<html><title>Магазин</title>скидки</html>`))
+	_, err := newTestClient(t, foreign.URL).Get(context.Background(), "/")
+	if !errors.Is(err, ErrNotTracker) || !errors.Is(err, ErrTrackerDown) {
+		t.Fatalf("чужой сайт: %v", err)
+	}
+	broken := newSite(t, status(http.StatusServiceUnavailable))
+	_, err = newTestClient(t, broken.URL).Get(context.Background(), "/")
+	if errors.Is(err, ErrNotTracker) || !errors.Is(err, ErrTrackerDown) {
+		t.Fatalf("503: %v", err)
+	}
+	_, err = newTestClient(t, foreign.URL, broken.URL).Get(context.Background(), "/")
+	if errors.Is(err, ErrNotTracker) {
+		t.Fatalf("одно зеркало чужое, другое не отвечает: %v", err)
+	}
+}

@@ -89,8 +89,9 @@ func (a *App) statusFields(ctx context.Context) (map[string]any, error) {
 	}
 	down, up := a.Torrents.Speeds()
 	return map[string]any{
-		"version":  a.version,
-		"trackers": trackers,
+		"version":   a.version,
+		"setupDone": a.Settings.Current().SetupDone, // пульт открывает мастер начальных настроек
+		"trackers":  trackers,
 		"kinopoisk": kinopoiskStatus{KeySet: rs.HasKey, BadKey: rs.BadKey, DailyUsed: rs.Quota.DailyUsed,
 			DailyLimit: rs.Quota.DailyLimit, TotalLimit: rs.Quota.TotalLimit},
 		"disk":    disk,
