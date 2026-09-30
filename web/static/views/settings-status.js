@@ -71,7 +71,10 @@ export function render(root, r, ctx) {
     if (!t) return row('var(--faint)', name, 'нет данных', 'var(--muted)');
     const ok = t.state === 'ok';
     const lines = [ok ? `Работает · каталог обновлён ${ago(t.updatedAt)}` : t.text || 'не отвечает'];
-    if (t.login) lines.push(t.login.text || LOGIN[t.login.state] || t.login.state);
+    if (t.login) {
+      const extra = loginExtra(ok ? '' : t.text, t.login.text || LOGIN[t.login.state] || t.login.state);
+      if (extra) lines.push(extra);
+    }
     return row(ok ? 'var(--green)' : 'var(--yellow)', name, lines.join(' · '), ok ? 'var(--muted)' : 'var(--yellow)');
   }
 
@@ -105,4 +108,11 @@ function row(mark, name, text, color) {
     h('span', { class: 'mark', style: { background: mark } }),
     h('span', { class: 'mod-name', style: { color: mark === 'var(--faint)' ? 'var(--faint)' : null } }, name),
     h('span', { class: 'grow', style: { color } }, text));
+}
+
+// loginExtra — строка входа Rutracker, если она не повторяет строку трекера (хвост Х23: «Rutracker:
+// неверный логин или пароль · Неверный логин или пароль»).
+export function loginExtra(trackerText, loginText) {
+  const norm = (x) => (x || '').toLowerCase().replace(/^rutracker:\s*/, '').trim();
+  return loginText && norm(trackerText) !== norm(loginText) ? loginText : '';
 }

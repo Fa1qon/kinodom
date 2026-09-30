@@ -74,6 +74,13 @@ func (c classes) DeleteAutorun(name string) error {
 	return nil
 }
 
+// KinodomProtocol — обработчик kinodom:// для всех пользователей (HKLM\Software\Classes, его ставит
+// установщик): служба видит только его — HKCU у неё свой (хвост Х33).
+func KinodomProtocol() bool {
+	cmd, err := classes{root: registry.LOCAL_MACHINE, base: `Software\Classes`}.Protocol("kinodom")
+	return err == nil && cmd != ""
+}
+
 func (c classes) Protocol(scheme string) (string, error) {
 	k, err := registry.OpenKey(c.root, c.key(scheme, "shell", "open", "command"), registry.QUERY_VALUE)
 	if errors.Is(err, registry.ErrNotExist) {

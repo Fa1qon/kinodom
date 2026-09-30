@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"strconv"
+	"sync/atomic"
 	"time"
 
 	"kinodom/internal/meta"
@@ -15,6 +16,7 @@ const (
 	detailsRetry = 30 * time.Minute // страница раздачи не загрузилась — повтор
 	forumPause   = 10 * time.Minute // форум закрыт проверкой Cloudflare — не ходить (источник помнит неудачу столько же)
 	enrichIdle   = time.Minute      // догружать нечего — заглядывать снова
+	torrentWait  = 20 * time.Second // .torrent Rutor ждём в шаге не дольше: зависший — повтор в фоне (Х8)
 )
 
 // torrentFetcher — источник отдаёт .torrent (Rutor): каталог качает его заранее, чтобы список
@@ -59,8 +61,8 @@ func (c *Catalog) enrichStep(ctx context.Context, tracker string) (bool, error) 
 	if !c.configured(tracker) || c.forumPausedUntil(tracker).After(now) {
 		return false, nil
 	}
-	// Сначала раздачи, открытые в пульте: их страницу ждёт человек (хвост 5c).
-	r, urgent, err := c.nextUrgent(ctx, tracker)
+	// Сначала раздачи, открытые в пульте: их страницу ждёт человек (хвост 5c); потом найденные поиском.
+	r, opened, urgent, err := c.nextUrgent(ctx, tracker)
 	if err != nil {
 		return false, err
 	}
@@ -105,26 +107,37 @@ func (c *Catalog) enrichStep(ctx context.Context, tracker string) (bool, error) 
 	kpID, _ := strconv.Atoi(d.KinopoiskID)
 	// .torrent — до отметки «страница загружена»: экран раздачи перестаёт ждать догрузку и сразу
 	// показывает серии Rutor. Постер — после: медленный хостинг не держит экран раздачи
-	// (финальное ревью 7a).
+	// (финальное ревью 7a). Найденному поиском .torrent — когда откроют (Release): он идёт через тот
+	// же ограничитель «запрос в секунду» и вдвое замедлял бы постеры поиска (11b-А, вживую).
 	var torrent []byte
-	if tf, ok := src.(torrentFetcher); ok {
-		if b, err := tf.Torrent(ctx, r.TopicID); err == nil {
+	if tf, ok := src.(torrentFetcher); ok && (!urgent || opened) {
+		tctx, cancel := context.WithTimeout(ctx, torrentWait)
+		var interrupted atomic.Bool
+		if !urgent {
+			c.yieldTo(tracker, func() { interrupted.Store(true); cancel() })
+		}
+		b, err := tf.Torrent(tctx, r.TopicID)
+		if !urgent {
+			c.yieldTo(tracker, nil)
+		}
+		cancel()
+		switch {
+		case err == nil:
 			if err := c.st.saveTorrent(ctx, r.ID, b); err != nil {
 				return false, err
 			}
 			torrent = b
-		} else if ctx.Err() == nil {
-			c.log.Warn("каталог: .torrent не скачался — раздача откроется по magnet", "tracker", tracker, "topic", r.TopicID, "err", err)
+		case interrupted.Load():
+			// Не сбой: повтор в фоне или сразу при открытии раздачи.
+		case ctx.Err() == nil:
+			c.log.Warn("каталог: .torrent не скачался — раздача откроется по magnet, повтор позже", "tracker", tracker, "topic", r.TopicID, "err", err)
+			c.failed("torrent", r.ID, now)
 		}
 	}
 	if err := c.st.saveDetails(ctx, r.ID, d, kpID, "", c.formatOf(d.Description, torrent), now); err != nil {
 		return false, err
 	}
-	if key := c.fetchPoster(ctx, d.PosterURL, kpID); key != "" {
-		if err := c.st.saveImageKey(ctx, r.ID, key); err != nil {
-			return false, err
-		}
-	}
+	c.posterLater(ctx, r.ID, d.PosterURL, kpID, urgent)
 	if c.ratings != nil {
 		r.Title, r.KinopoiskID, r.IMDbID = firstNonEmpty(d.Title, r.Title), kpID, d.IMDbID
 		pos := 0 // открытую раздачу — в рейтинги первой

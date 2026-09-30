@@ -24,6 +24,7 @@ type storedCookie struct {
 type storedSession struct {
 	Mirror    string         `json:"mirror"`
 	UserAgent string         `json:"userAgent"`
+	Login     string         `json:"login"`
 	Cookies   []storedCookie `json:"cookies"`
 }
 
@@ -41,15 +42,20 @@ func (s trackerSessions) Load(ctx context.Context, tracker string) (rutracker.Se
 	if err := json.Unmarshal([]byte(raw), &v); err != nil {
 		return rutracker.Session{}, false, nil // испорчена — как не было: прежний путь (Edge и вход)
 	}
-	out := rutracker.Session{Mirror: v.Mirror, UserAgent: v.UserAgent, SavedAt: time.UnixMilli(at)}
+	out := rutracker.Session{Mirror: v.Mirror, UserAgent: v.UserAgent, Login: v.Login, SavedAt: time.UnixMilli(at)}
 	for _, c := range v.Cookies {
 		out.Cookies = append(out.Cookies, &http.Cookie{Name: c.Name, Value: c.Value})
 	}
 	return out, true, nil
 }
 
+func (s trackerSessions) Delete(ctx context.Context, tracker string) error {
+	_, err := s.db.W.ExecContext(ctx, `DELETE FROM tracker_state WHERE tracker = ?`, tracker)
+	return err
+}
+
 func (s trackerSessions) Save(ctx context.Context, tracker string, sess rutracker.Session) error {
-	v := storedSession{Mirror: sess.Mirror, UserAgent: sess.UserAgent}
+	v := storedSession{Mirror: sess.Mirror, UserAgent: sess.UserAgent, Login: sess.Login}
 	for _, c := range sess.Cookies {
 		v.Cookies = append(v.Cookies, storedCookie{Name: c.Name, Value: c.Value})
 	}

@@ -42,6 +42,7 @@ func (r *Rutracker) SetCredentials(login, password string) {
 	r.mu.Unlock()
 	if userChanged {
 		r.dropSessions()
+		r.forgetSession()
 	}
 	r.noteLoginState()
 }

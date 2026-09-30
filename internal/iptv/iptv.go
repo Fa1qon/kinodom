@@ -100,6 +100,7 @@ type Module struct {
 	now    func() time.Time // без пояса; местное время — m.local()
 	client *http.Client
 	prober Checker
+	online func(context.Context) bool // контрольный адрес отвечает (сбой сети или умер провайдер)
 
 	// Пределы одновременных проверок — на весь модуль: плановый проход и кнопки «Проверить» делят их
 	// (спека этапа 8, раздел 5.8, критерий 7).
@@ -165,6 +166,7 @@ func New(o Options) *Module {
 	if m.prober == nil {
 		m.prober = &probe.Prober{Client: m.client}
 	}
+	m.online = m.reachable
 	m.lineup = &Lineup{ByKey: map[string]*Channel{}, StreamChannel: map[int64]string{}}
 	return m
 }
@@ -288,6 +290,13 @@ func (m *Module) Guide() *xmltv.Guide {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	return m.guide
+}
+
+// hiddenNow — настройки скрытия сейчас.
+func (m *Module) hiddenNow() Hidden {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.hidden
 }
 
 // SetHidden — настройки скрытия поменяли в пульте.

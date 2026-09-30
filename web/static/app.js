@@ -17,6 +17,7 @@ import * as channel from './views/channel.js';
 import * as settingsIPTV from './views/settings-iptv.js';
 import * as settingsUnrecognized from './views/settings-unrecognized.js';
 import * as setup from './views/setup.js';
+import { settingsRoute } from './views/settings-layout.js';
 
 // views — экраны по первой части адреса; у «Настроек» — по второй.
 const views = { catalog, release, search, downloads, channels, channel, history, library, setup };
@@ -124,8 +125,17 @@ function render() {
     location.replace(defaultRoute());
     return;
   }
-  const [first, second] = r.parts;
-  const view = first === 'settings' ? settingsViews[second || 'status'] : views[first];
+  const [first] = r.parts;
+  let view = views[first];
+  if (first === 'settings') {
+    const sr = settingsRoute(r.parts.slice(1));
+    if (sr.redirect) {
+      const q = r.query.toString();
+      location.replace(sr.redirect + (q ? '?' + q : ''));
+      return;
+    }
+    view = settingsViews[sr.view];
+  }
   updateHeader(r);
   searchInput.value = first === 'search' ? r.query.get('q') || '' : '';
   if (cleanup) cleanup();

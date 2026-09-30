@@ -32,6 +32,8 @@ var (
 	procSetForegroundWindow    = user32.NewProc("SetForegroundWindow")
 	procGetCursorPos           = user32.NewProc("GetCursorPos")
 	procGetSystemMetrics       = user32.NewProc("GetSystemMetrics")
+	procSetDpiAwarenessContext = user32.NewProc("SetProcessDpiAwarenessContext")
+	procSetProcessDPIAware     = user32.NewProc("SetProcessDPIAware")
 	procCreateIconFromResource = user32.NewProc("CreateIconFromResourceEx")
 	procDestroyIcon            = user32.NewProc("DestroyIcon")
 	procShellNotifyIcon        = shell32.NewProc("Shell_NotifyIconW")
@@ -121,10 +123,28 @@ type Options struct {
 
 var window atomic.Uintptr // окно значка: Quit посылает ему WM_CLOSE
 
+// dpiAwarenessPerMonitorV2 — DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2, (HANDLE)-4.
+const dpiAwarenessPerMonitorV2 = ^uintptr(3)
+
+// dpiAware — процесс сам учитывает масштаб экрана: иначе Windows отдаёт размер значка 16 px и растягивает
+// его — значок размыт при 125–150 % (хвост Х38). До создания окон; Windows 10 1703+, раньше —
+// SetProcessDPIAware.
+func dpiAware() {
+	if procSetDpiAwarenessContext.Find() == nil {
+		if r, _, _ := procSetDpiAwarenessContext.Call(dpiAwarenessPerMonitorV2); r != 0 {
+			return
+		}
+	}
+	if procSetProcessDPIAware.Find() == nil {
+		procSetProcessDPIAware.Call()
+	}
+}
+
 // Run показывает значок и крутит цикл сообщений до Quit. Окно невидимое: только для сообщений значка.
 func Run(o Options) error {
 	runtime.LockOSThread() // окно и цикл сообщений — в одном системном потоке
 	defer runtime.UnlockOSThread()
+	dpiAware()
 	var inst windows.Handle
 	if err := windows.GetModuleHandleEx(0, nil, &inst); err != nil {
 		return err

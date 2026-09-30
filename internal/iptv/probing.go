@@ -2,6 +2,7 @@ package iptv
 
 import (
 	"context"
+	"net/http"
 	"slices"
 	"sync"
 	"time"
@@ -167,19 +168,102 @@ func (m *Module) run(ctx context.Context, ids []int64, level string, parallel in
 	}
 	*pr = Progress{Running: true, Total: len(ids), Finished: pr.Finished}
 	m.mu.Unlock()
-	m.check(ctx, ids, level, parallel, func() {
+	hold := &blackHold{}
+	m.checkHeld(ctx, ids, level, parallel, func() {
 		m.mu.Lock()
 		pr.Done++
 		m.mu.Unlock()
-	})
+	}, hold)
+	m.settle(ctx, level, hold)
 	m.mu.Lock()
 	pr.Running, pr.Finished = false, m.now()
 	m.mu.Unlock()
 	m.changed()
 }
 
-// check — проверить источники не больше parallel одновременно.
+// problemNetwork — проход, в котором молчали почти все источники (хвост Х28).
+const problemNetwork = "iptv.network"
+
+// blackHold — ⚫ прохода, отложенные до его конца: если молчат почти все, это сбой сети у нас, а не у
+// каналов, и применять их нельзя — иначе все каналы пропали бы до следующего полного прохода (до 3 ч).
+type blackHold struct {
+	mu    sync.Mutex
+	total int
+	black []heldResult
+}
+
+type heldResult struct {
+	id int64
+	r  probe.Result
+}
+
+// hold — учесть результат; true — это ⚫, он отложен.
+func (h *blackHold) hold(id int64, r probe.Result) bool {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.total++
+	if r.Grade != probe.GradeBlack {
+		return false
+	}
+	h.black = append(h.black, heldResult{id, r})
+	return true
+}
+
+// blip — сбой сети: проверено не меньше 20, из них ⚫ — 90 % и больше.
+func (h *blackHold) blip() bool {
+	return h.total >= 20 && len(h.black)*10 >= h.total*9
+}
+
+// settle — конец прохода: сбой сети — ⚫ отбрасываются и проблема в «Состоянии»; иначе ⚫ применяются, а
+// проблема снимается. Почти все молчат, а контрольный адрес отвечает — умер провайдер большого
+// плейлиста, а не наша сеть: ⚫ применяются (ревью 11b-А).
+func (m *Module) settle(ctx context.Context, level string, h *blackHold) {
+	if ctx.Err() != nil || h.total == 0 {
+		return
+	}
+	if h.blip() && !m.online(ctx) {
+		m.log.Warn("iptv: почти все источники не ответили — похоже, пропадал интернет; результаты прохода не применены",
+			"level", level, "checked", h.total, "black", len(h.black))
+		if err := m.d.SetProblem(ctx, problemNetwork, "Каналы: почти все источники не ответили — похоже, пропадал интернет"); err != nil {
+			m.log.Warn("iptv: проблема не записалась", "err", err)
+		}
+		return
+	}
+	if err := m.d.ClearProblem(ctx, problemNetwork); err != nil {
+		m.log.Warn("iptv: проблема не снялась", "err", err)
+	}
+	for _, b := range h.black {
+		m.record(ctx, b.id, level, b.r)
+	}
+}
+
+// reachable — контрольный адрес отвечает (любым HTTP-ответом): база iptv-org или телепрограмма.
+func (m *Module) reachable(ctx context.Context) bool {
+	m.mu.Lock()
+	epg := m.epgURL
+	m.mu.Unlock()
+	for _, u := range []string{m.o.OrgBase, epg} {
+		cctx, cancel := context.WithTimeout(ctx, 15*time.Second)
+		req, err := http.NewRequestWithContext(cctx, http.MethodHead, u, nil)
+		if err == nil {
+			if resp, err := m.client.Do(req); err == nil {
+				resp.Body.Close()
+				cancel()
+				return true
+			}
+		}
+		cancel()
+	}
+	return false
+}
+
+// check — проверить источники не больше parallel одновременно; результаты применяются сразу.
 func (m *Module) check(ctx context.Context, ids []int64, level string, parallel int, done func()) {
+	m.checkHeld(ctx, ids, level, parallel, done, nil)
+}
+
+// checkHeld — то же; hold != nil — ⚫ откладываются до конца прохода (settle).
+func (m *Module) checkHeld(ctx context.Context, ids []int64, level string, parallel int, done func(), hold *blackHold) {
 	sem := make(chan struct{}, parallel)
 	var wg sync.WaitGroup
 	for _, id := range ids {
@@ -193,7 +277,7 @@ func (m *Module) check(ctx context.Context, ids []int64, level string, parallel 
 		go func() {
 			defer wg.Done()
 			defer func() { <-sem }()
-			m.checkOne(ctx, id, level)
+			m.checkOne(ctx, id, level, hold)
 			if done != nil {
 				done()
 			}
@@ -204,7 +288,7 @@ func (m *Module) check(ctx context.Context, ids []int64, level string, parallel 
 
 // checkOne — проверка одного источника и запись результата. Не больше lightParallel / fullParallel
 // одновременно на весь модуль; паника проверки — в журнал, а не падение процесса.
-func (m *Module) checkOne(ctx context.Context, id int64, level string) {
+func (m *Module) checkOne(ctx context.Context, id int64, level string, hold *blackHold) {
 	sem := m.lightSem
 	if level == "full" {
 		sem = m.fullSem
@@ -240,14 +324,19 @@ func (m *Module) checkOne(ctx context.Context, id int64, level string) {
 	} else {
 		r = m.prober.Light(ctx, t)
 	}
-	if ctx.Err() != nil {
+	if ctx.Err() != nil || (hold != nil && hold.hold(id, r)) {
 		return
 	}
+	m.record(ctx, id, level, r)
+}
+
+// record — результат проверки источника: в память и в базу.
+func (m *Module) record(ctx context.Context, id int64, level string, r probe.Result) {
 	m.plMu.RLock() // пул не перечитывается, пока результат пишется в память и в базу
 	defer m.plMu.RUnlock()
 	now := m.now()
 	m.mu.Lock()
-	s = m.pool.streams[id]
+	s := m.pool.streams[id]
 	if s == nil { // источник удалили, пока шла проверка
 		m.mu.Unlock()
 		return

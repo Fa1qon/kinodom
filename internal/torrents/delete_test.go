@@ -222,7 +222,7 @@ func TestDeleteReleaseRoute(t *testing.T) {
 	one, two := fileIndex(t, tt, "Серия 1.mkv"), fileIndex(t, tt, "Серия 2.mkv")
 	url := srv.URL + "/api/v1/downloads/" + ih.HexString()
 	var e struct{ Error string }
-	if code := call(t, "DELETE", url, nil, &e); code != http.StatusNotFound || e.Error != ErrNotStored.Error() {
+	if code := call(t, "DELETE", url, nil, &e); code != http.StatusNotFound || e.Error != ErrNothingStored.Error() || !errors.Is(ErrNothingStored, ErrNotStored) {
 		t.Fatalf("ничего не скачано: %d %q", code, e.Error)
 	}
 	must(t, s.Prepare(ctx, ih, one))

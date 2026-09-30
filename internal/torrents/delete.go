@@ -16,6 +16,9 @@ var (
 	ErrWatching = errors.New("Сейчас смотрят на другом телевизоре")
 	// ErrNotStored — файл не скачан: его не выбирали для просмотра или уже удалили.
 	ErrNotStored = errors.New("этот файл не скачан")
+	// ErrNothingStored — у раздачи нет скачанных файлов (корзина раздачи, хвост Х27); errors.Is с
+	// ErrNotStored — как раньше.
+	ErrNothingStored error = nothingStored{}
 	// errDirMissing — раздачи нет в движке: её папка загрузок недоступна (диск не подключён).
 	errDirMissing = errors.New("папка загрузок раздачи недоступна — подключите диск и удалите снова")
 )
@@ -33,8 +36,15 @@ func (s *Service) DeleteFile(ctx context.Context, ih metainfo.Hash, index int) e
 	return s.deleteLocked(ctx, ih, index, true)
 }
 
+type nothingStored struct{}
+
+func (nothingStored) Error() string {
+	return "у этой раздачи нет скачанных файлов"
+}
+func (nothingStored) Is(target error) bool { return target == ErrNotStored }
+
 // DeleteRelease — корзина раздачи в «Загрузках»: удаляются все хранимые файлы раздачи, файл, который
-// сейчас смотрят, пропускается (спека этапа 7, раздел 10.6). Ничего не хранится — ErrNotStored.
+// сейчас смотрят, пропускается (спека этапа 7, раздел 10.6). Ничего не хранится — ErrNothingStored.
 func (s *Service) DeleteRelease(ctx context.Context, ih metainfo.Hash) (deleted, skipped int, err error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -43,7 +53,7 @@ func (s *Service) DeleteRelease(ctx context.Context, ih metainfo.Hash) (deleted,
 		return 0, 0, err
 	}
 	if len(files) == 0 {
-		return 0, 0, ErrNotStored
+		return 0, 0, ErrNothingStored
 	}
 	for _, i := range files {
 		switch err := s.deleteLocked(ctx, ih, i, true); {

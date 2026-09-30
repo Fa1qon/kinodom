@@ -68,6 +68,15 @@ func (m *Module) Register(r Router, logo func(w http.ResponseWriter, r *http.Req
 	r.Handle("POST /api/v1/iptv/playlists/{id}/refresh", n, http.HandlerFunc(m.handleRefresh))
 	r.Handle("GET /api/v1/iptv/unrecognized", n, http.HandlerFunc(m.handleUnrecognized))
 	r.HandleHome("PUT /api/v1/iptv/names", n, http.HandlerFunc(m.handleNameRule))
+	r.Handle("GET /api/v1/iptv/names", n, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		items := []map[string]string{}
+		if r.URL.Query().Get("hidden") == "1" {
+			for _, name := range m.HiddenNames() {
+				items = append(items, map[string]string{"name": name})
+			}
+		}
+		httpx.WriteJSON(w, http.StatusOK, map[string]any{"items": items})
+	}))
 	r.HandleHome("PUT /api/v1/iptv/streams/{id}", n, http.HandlerFunc(m.handleStreamRule))
 	r.Handle("GET /api/v1/iptv/epg-channels", n, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		httpx.WriteJSON(w, http.StatusOK, map[string]any{"items": m.SearchEPG(r.URL.Query().Get("q"), 20)})
@@ -178,6 +187,17 @@ func (m *Module) handleChannels(w http.ResponseWriter, r *http.Request) {
 	for _, id := range labels.CategoryOrder {
 		if n := cats[id]; n > 0 {
 			out.Categories = append(out.Categories, Facet{id, labels.CategoryName(id), n})
+		}
+	}
+	if !all {
+		// Скрытое в настройках в фильтрах не показывается, даже если канал с ним виден (избранное,
+		// федеральный блок) — замечание № 6 этапа 11b. ?all=1 — экран скрытия: там нужно всё.
+		h := m.hiddenNow()
+		for _, id := range h.Countries {
+			delete(countries, id)
+		}
+		for _, id := range h.Languages {
+			delete(langs, id)
 		}
 	}
 	out.Countries = facets(countries, labels.CountryName)

@@ -204,7 +204,7 @@ func TestPultChannelsFilter(t *testing.T) {
 import { filterChannels, sections, UNKNOWN, filtersFrom } from './views/channels.js';
 import { progressOf, hhmm } from './views/tvkit.js';
 import { dateStr } from './views/channel.js';
-import { labelPatch, sourceMarks, sourceButtons } from './views/channel-settings.js';
+import { labelPatch, sourceMarks, sourceButtons, sourceGrade } from './views/channel-settings.js';
 const c = (key, block, category, categoryName, country, languages) => ({ key, block, category, categoryName, country, languages });
 const all = [
   c('bbc', 'favorite', 'news', 'Новости', 'GB', ['eng']),
@@ -257,11 +257,18 @@ const checks = [
   [sourceButtons({ offered: true }, 0, [{ offered: true }, { offered: false }]).join(), 'keep,hide-last,other'],
   [sourceButtons({ offered: false }, 1, [{ offered: true }, { offered: false }]).join(), 'hide,other'],
   [sourceButtons({ offered: false, hidden: true }, 1, [{ offered: true }, { offered: false, hidden: true }]).join(), 'show'],
-  // Правка меток — только изменённые поля (финальное ревью этапа 8).
-  [JSON.stringify(labelPatch({ category: 'news', country: 'RU', languages: ['rus'] }, { category: 'news', country: 'RU', lang: 'rus' })), '{}'],
-  [JSON.stringify(labelPatch({ category: 'news', country: 'RU', languages: ['rus'] }, { category: '', country: 'RU', lang: 'rus' })), '{"category":""}'],
-  [JSON.stringify(labelPatch({ category: 'news', country: 'RU', languages: [] }, { category: 'news', country: 'UA', lang: 'ukr' })), '{"country":"UA","languages":["ukr"]}'],
-  [JSON.stringify(labelPatch({ category: 'news', country: 'RU', languages: ['rus', 'eng'] }, { category: 'news', country: 'RU', lang: '' })), '{"languages":[]}'],
+  // Правка меток — только изменённые поля (финальное ревью этапа 8); языки — списком (хвост Х31).
+  [JSON.stringify(labelPatch({ category: 'news', country: 'RU', languages: ['rus'] }, { category: 'news', country: 'RU', langs: ['rus'] })), '{}'],
+  [JSON.stringify(labelPatch({ category: 'news', country: 'RU', languages: ['rus'] }, { category: '', country: 'RU', langs: ['rus'] })), '{"category":""}'],
+  [JSON.stringify(labelPatch({ category: 'news', country: 'RU', languages: [] }, { category: 'news', country: 'UA', langs: ['ukr'] })), '{"country":"UA","languages":["ukr"]}'],
+  [JSON.stringify(labelPatch({ category: 'news', country: 'RU', languages: ['rus', 'eng'] }, { category: 'news', country: 'RU', langs: [] })), '{"languages":[]}'],
+  [JSON.stringify(labelPatch({ category: 'news', country: 'RU', languages: ['rus', 'eng'] }, { category: 'news', country: 'RU', langs: ['eng', 'rus'] })), '{}'],
+  [JSON.stringify(labelPatch({ category: 'news', country: 'RU', languages: ['rus'] }, { category: 'news', country: 'RU', langs: ['rus', 'eng'] })), '{"languages":["rus","eng"]}'],
+  // Скрытый вручную источник, который плееру не предлагается, — «скрыт», а не ⚫ «не отвечает» (Х32).
+  [sourceGrade({ offered: false, hidden: true, state: 'alive' }), 'hidden'],
+  [sourceGrade({ offered: false, state: 'silent' }), 'black'],
+  [sourceGrade({ offered: true, grade: 'green' }), 'green'],
+  [sourceGrade({ offered: true, hidden: true, grade: 'yellow' }), 'yellow'],
 ];
 for (const [got, want] of checks) {
   if (got !== want) {
@@ -326,15 +333,23 @@ const env = () => {
   return e;
 };
 const a = env();
-openPlayer('kinodom://play?x', '/m3u/a.m3u8', a);
+openPlayer('kinodom://play?x', '/m3u/a.m3u8', undefined, a);
 a.timers.forEach((f) => f());
 const b = env();
-openPlayer('kinodom://play?x', '/m3u/a.m3u8', b);
+openPlayer('kinodom://play?x', '/m3u/a.m3u8', undefined, b);
 b.listeners.blur();
 b.timers.forEach((f) => f());
+// Сервер знает, зарегистрирован ли обработчик (хвост Х33): есть — только kinodom://, без таймера;
+// нет — сразу .m3u8.
+const c = env();
+openPlayer('kinodom://play?x', '/m3u/a.m3u8', true, c);
+const d = env();
+openPlayer('kinodom://play?x', '/m3u/a.m3u8', false, d);
 const checks = [
   [a.loc.href, '/m3u/a.m3u8'], // плеер не открылся — скачать .m3u8
   [b.loc.href, 'kinodom://play?x'], // плеер забрал фокус — ничего больше
+  [c.loc.href + ' ' + c.timers.length, 'kinodom://play?x 0'],
+  [d.loc.href + ' ' + d.timers.length, '/m3u/a.m3u8 0'],
 ];
 for (const [got, want] of checks) {
   if (got !== want) {
@@ -381,6 +396,362 @@ const checks = [
 for (const [got, want] of checks) {
   if (got !== want) {
     console.error('получили', got, 'ждали', want);
+    process.exitCode = 1;
+  }
+}
+`
+	cmd := exec.Command(node, "--input-type=module", "--no-warnings", "-e", script)
+	cmd.Dir = "static"
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Errorf("%v\n%s", err, out)
+	}
+}
+
+// Колонки экрана (спека 11b, 4.1): стрелка вправо из строки основной колонки, когда в своём ряду справа
+// ничего нет, — в соседнюю колонку (боковую панель раздачи) на её главную кнопку; влево из панели —
+// обратно на строку, с которой пришли; колонка без элементов пропускается; на узком экране (панель под
+// основной колонкой) прыжка вбок нет.
+func TestPultColumnJump(t *testing.T) {
+	node := lookNode(t)
+	script := `
+import { nextColumn, enterColumn } from './nav.js';
+const r = (left, top, w, hh) => ({ left, top, right: left + w, bottom: top + hh });
+const cover = r(0, 100, 280, 400), main = r(300, 100, 900, 1200), panel = r(1220, 100, 360, 200);
+const checks = [
+  ['из основной вправо — панель', nextColumn(main, [cover, panel], 'right'), 1],
+  ['из панели влево — основная', nextColumn(panel, [cover, main], 'left'), 1],
+  ['из основной влево — постер', nextColumn(main, [cover, panel], 'left'), 0],
+  ['из панели вправо — ничего', nextColumn(panel, [cover, main], 'right'), -1],
+  ['узкий экран: панель под основной — вбок ничего', nextColumn(r(0, 100, 390, 800), [r(0, 950, 390, 200)], 'right'), -1],
+  ['вход: запомненный важнее главного', enterColumn([r(0, 0, 10, 10), r(0, 50, 10, 10)], r(0, 55, 5, 5), 0, 1), 1],
+  ['вход: главный, если не помним', enterColumn([r(0, 0, 10, 10), r(0, 50, 10, 10)], r(0, 55, 5, 5), 0, -1), 0],
+  ['вход: ближайший по высоте', enterColumn([r(0, 0, 10, 10), r(0, 50, 10, 10)], r(0, 52, 5, 5), -1, -1), 1],
+  ['вход в пустую колонку', enterColumn([], r(0, 0, 5, 5), -1, -1), -1],
+];
+for (const [name, got, want] of checks) {
+  if (got !== want) {
+    console.error(name, ': получили', got, 'ждали', want);
+    process.exitCode = 1;
+  }
+}
+`
+	cmd := exec.Command(node, "--input-type=module", "--no-warnings", "-e", script)
+	cmd.Dir = "static"
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Errorf("%v\n%s", err, out)
+	}
+}
+
+// Escape в поле ввода (хвост Х25): фокус остаётся на поле, а следующая стрелка влево или вправо уводит
+// с поля, а не двигает курсор; без Escape — курсор двигается, пока не упрётся в край.
+func TestPultNavEscapeKeepsField(t *testing.T) {
+	node := lookNode(t)
+	script := `
+import { arrowMoves } from './nav.js';
+const field = { tagName: 'INPUT', type: 'text', value: 'абв', selectionStart: 1, selectionEnd: 1 };
+const btn = { tagName: 'BUTTON' };
+const checks = [
+  ['кнопка — стрелка двигает фокус', arrowMoves('right', btn, null), true],
+  ['поле, курсор в середине — стрелка двигает курсор', arrowMoves('right', field, null), false],
+  ['поле после Escape — стрелка уходит с поля', arrowMoves('right', field, field), true],
+  ['поле, вниз — всегда уходит', arrowMoves('down', field, null), true],
+  ['поле, курсор в конце — вправо уходит', arrowMoves('right', { ...field, selectionStart: 3, selectionEnd: 3 }, null), true],
+];
+for (const [name, got, want] of checks) {
+  if (got !== want) {
+    console.error(name, ': получили', got, 'ждали', want);
+    process.exitCode = 1;
+  }
+}
+`
+	cmd := exec.Command(node, "--input-type=module", "--no-warnings", "-e", script)
+	cmd.Dir = "static"
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Errorf("%v\n%s", err, out)
+	}
+}
+
+// Окно подтверждения (спека 11b, 4.1): «Да» — true, Escape — false; пока окно открыто, остальное
+// недоступно (inert), фокус — на «Да»; после — фокус там, где был, inert снят.
+func TestPultDialog(t *testing.T) {
+	node := lookNode(t)
+	script := `
+class El {
+  constructor(tag) { this.tagName = tag.toUpperCase(); this.children = []; this.attrs = {}; this.listeners = {}; this.style = {}; this.dataset = {}; this.parent = null; this.inert = false; }
+  append(...kids) { for (const k of kids) { const c = typeof k === 'string' ? Object.assign(new El('#text'), { text: k }) : k; c.parent = this; this.children.push(c); } }
+  remove() { if (this.parent) this.parent.children = this.parent.children.filter((c) => c !== this); this.parent = null; }
+  setAttribute(k, v) { this.attrs[k] = v; if (k.startsWith('data-')) this.dataset[k.slice(5).replace(/-(.)/g, (_, c) => c.toUpperCase())] = v; }
+  getAttribute(k) { return this.attrs[k] ?? null; }
+  addEventListener(type, fn) { (this.listeners[type] ||= []).push(fn); }
+  focus() { if (this.isConnected) document.activeElement = this; }
+  get isConnected() { let n = this; while (n.parent) n = n.parent; return n === document.body; }
+  find(key) { if (this.dataset.key === key) return this; for (const c of this.children) { const f = c.find && c.find(key); if (f) return f; } return null; }
+  fire(type, ev = {}) { const e = { key: ev.key, target: this, preventDefault() {}, stopPropagation() { this.stopped = true; } }; for (let n = this; n && !e.stopped; n = n.parent) for (const fn of n.listeners[type] || []) fn(e); }
+}
+globalThis.Node = El;
+const body = new El('body');
+globalThis.document = { body, activeElement: body, createElement: (t) => new El(t), createElementNS: (_, t) => new El(t),
+  querySelector: (sel) => { const m = /^\[data-key="(.*)"\]$/.exec(sel); return m ? body.find(m[1]) : null; } };
+globalThis.CSS = { escape: (s) => s };
+const view = new El('main'); body.append(view);
+const before = new El('button'); before.setAttribute('data-key', 'pick-0'); view.append(before); before.focus();
+const { confirmDialog } = await import('./ui.js');
+const checks = [];
+let p = confirmDialog({ title: 'Скачать «Фонари» — 19,4 ГБ?' });
+checks.push(['пока окно открыто, экран недоступен', view.inert === true]);
+const yes = body.find('dlg-yes');
+checks.push(['фокус на «Да»', document.activeElement === yes]);
+yes.fire('click');
+checks.push(['«Да» — true', (await p) === true]);
+checks.push(['окно убрано', body.children.length === 1 && view.inert === false]);
+checks.push(['фокус вернулся', document.activeElement === before]);
+p = confirmDialog({ title: 'Скачать?' });
+body.find('dlg-no').fire('keydown', { key: 'Escape' });
+checks.push(['Escape — false', (await p) === false]);
+checks.push(['после Escape экран доступен', view.inert === false && document.activeElement === before]);
+// Экран перерисовался, пока окно было открыто (опрос раздачи): фокус — на новый элемент с тем же ключом.
+p = confirmDialog({ title: 'Скачать?' });
+before.remove();
+const redrawn = new El('button'); redrawn.setAttribute('data-key', 'pick-0'); view.append(redrawn);
+body.find('dlg-no').fire('click');
+await p;
+checks.push(['после перерисовки фокус — на тот же ключ', document.activeElement === redrawn]);
+for (const [name, ok] of checks) {
+  if (!ok) {
+    console.error('не выполнено:', name);
+    process.exitCode = 1;
+  }
+}
+`
+	cmd := exec.Command(node, "--input-type=module", "--no-warnings", "-e", script)
+	cmd.Dir = "static"
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Errorf("%v\n%s", err, out)
+	}
+}
+
+// Серия нескачанного сериала (замечание № 3 этапа 11b): OK на строке — окно «Скачать?»; после «Скачать»
+// строка выбирает файл панели; пока идёт действие — ничего.
+func TestPultReleaseEpisodeConfirm(t *testing.T) {
+	node := lookNode(t)
+	script := `
+import { episodeAction } from './views/release.js';
+const checks = [
+  ['до «Скачать» — окно', episodeAction(false, false), 'confirm'],
+  ['после «Скачать» — выбрать файл панели', episodeAction(true, false), 'pick'],
+  ['идёт действие — ничего', episodeAction(false, true), 'none'],
+];
+for (const [name, got, want] of checks) {
+  if (got !== want) {
+    console.error(name, ': получили', got, 'ждали', want);
+    process.exitCode = 1;
+  }
+}
+`
+	cmd := exec.Command(node, "--input-type=module", "--no-warnings", "-e", script)
+	cmd.Dir = "static"
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Errorf("%v\n%s", err, out)
+	}
+}
+
+// Адреса настроек (замечание № 5 этапа 11b): «Не распознано» — вкладка «Каналов»; старый адрес
+// переадресуется, пустой — «Состояние».
+func TestPultSettingsRoutes(t *testing.T) {
+	node := lookNode(t)
+	script := `
+import { settingsRoute } from './views/settings-layout.js';
+const s = (parts) => JSON.stringify(settingsRoute(parts));
+const checks = [
+  [s([]), '{"view":"status"}'],
+  [s(['iptv']), '{"view":"iptv"}'],
+  [s(['iptv', 'unrecognized']), '{"view":"unrecognized"}'],
+  [s(['unrecognized']), '{"redirect":"#/settings/iptv/unrecognized"}'],
+  [s(['library']), '{"view":"library"}'],
+];
+for (const [got, want] of checks) {
+  if (got !== want) {
+    console.error(got, '≠', want);
+    process.exitCode = 1;
+  }
+}
+`
+	cmd := exec.Command(node, "--input-type=module", "--no-warnings", "-e", script)
+	cmd.Dir = "static"
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Errorf("%v\n%s", err, out)
+	}
+}
+
+// Каталог подгружается при прокрутке (замечание № 9 этапа 11b): следующая порция — одна за раз; конец
+// списка — больше не просим; ошибка порции — можно попросить снова.
+func TestPultCatalogPortions(t *testing.T) {
+	node := lookNode(t)
+	script := `
+import { portions } from './views/catalog.js';
+const e = (id) => ({ id });
+let s = portions(undefined, { type: 'init' });
+const checks = [];
+s = portions(s, { type: 'more' });
+checks.push(['первая порция просится', s.loading === true && s.page === 0]);
+checks.push(['вторая просьба во время загрузки — без изменений', portions(s, { type: 'more' }) === s]);
+s = portions(s, { type: 'loaded', list: { entries: [e(1), e(2)], page: 1, pages: 2 } });
+checks.push(['порция 1', s.loaded.length === 2 && !s.loading && s.page === 1]);
+s = portions(s, { type: 'more' });
+s = portions(s, { type: 'failed', error: 'нет сети' });
+checks.push(['ошибка — не загружается, текст есть', !s.loading && s.error === 'нет сети' && s.loaded.length === 2]);
+s = portions(s, { type: 'more' });
+checks.push(['после ошибки можно снова', s.loading === true && s.error === '']);
+s = portions(s, { type: 'loaded', list: { entries: [e(3)], page: 2, pages: 2 } });
+checks.push(['порция 2', s.loaded.map((x) => x.id).join() === '1,2,3' && s.page === 2]);
+checks.push(['конец списка — больше не просим', portions(s, { type: 'more' }) === s]);
+for (const [name, ok] of checks) {
+  if (!ok) {
+    console.error('не выполнено:', name);
+    process.exitCode = 1;
+  }
+}
+`
+	cmd := exec.Command(node, "--input-type=module", "--no-warnings", "-e", script)
+	cmd.Dir = "static"
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Errorf("%v\n%s", err, out)
+	}
+}
+
+// Исключение внутри опроса пульта (хвост Х19) — в консоль, опрос идёт дальше.
+func TestPultPollSurvivesError(t *testing.T) {
+	node := lookNode(t)
+	script := `
+globalThis.document = { hidden: false, addEventListener() {}, removeEventListener() {} };
+console.error = () => {};
+const { poll } = await import('./ui.js');
+let calls = 0;
+const p = poll(async () => {
+  calls++;
+  if (calls === 1) throw new Error('сервер ответил не то');
+}, 10);
+await new Promise((r) => setTimeout(r, 80));
+p.stop();
+if (calls < 3) {
+  process.stderr.write('опрос остановился после исключения: вызовов ' + calls + '\n');
+  process.exitCode = 1;
+}
+`
+	cmd := exec.Command(node, "--input-type=module", "--no-warnings", "-e", script)
+	cmd.Dir = "static"
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Errorf("%v\n%s", err, out)
+	}
+}
+
+// Поиск (замечание № 10 этапа 11b): опрос идёт, пока трекеры ищут (до 30 с), и дальше — пока у найденного
+// догружаются страницы с постерами, но не дольше 2 минут от начала.
+func TestPultSearchPolling(t *testing.T) {
+	node := lookNode(t)
+	script := `
+import { keepPolling } from './views/search.js';
+const pending = { complete: true, results: [{ detailsPending: true }, { detailsPending: false }] };
+const done = { complete: true, results: [{ detailsPending: false }] };
+const checks = [
+  ['ищут — опрос идёт', keepPolling({ complete: false, results: [] }, 0, 10000), true],
+  ['ищут дольше 30 с — хватит', keepPolling({ complete: false, results: [] }, 0, 31000), false],
+  ['нашли, постеры догружаются — опрос идёт', keepPolling(pending, 0, 60000), true],
+  ['догружаются дольше 2 минут — хватит', keepPolling(pending, 0, 121000), false],
+  ['всё догружено — хватит', keepPolling(done, 0, 5000), false],
+];
+for (const [name, got, want] of checks) {
+  if (got !== want) {
+    console.error(name, ': получили', got, 'ждали', want);
+    process.exitCode = 1;
+  }
+}
+`
+	cmd := exec.Command(node, "--input-type=module", "--no-warnings", "-e", script)
+	cmd.Dir = "static"
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Errorf("%v\n%s", err, out)
+	}
+}
+
+// «Загрузки» (хвост Х27): надпись «Сейчас смотрят — …» после удаления раздачи исчезает через 10 с;
+// ошибка действия — остаётся до следующего действия. «Состояние» (хвост Х23): текст входа Rutracker, который
+// повторяет строку трекера, второй раз не показывается.
+func TestPultDownloadNoteAndLoginText(t *testing.T) {
+	node := lookNode(t)
+	script := `
+import { noteText } from './views/downloads.js';
+import { loginExtra } from './views/settings-status.js';
+const checks = [
+  ['надпись свежая', noteText({ text: 'Сейчас смотрят — 1 серия осталась', until: 10000 }, 5000), 'Сейчас смотрят — 1 серия осталась'],
+  ['надпись через 10 с', noteText({ text: 'Сейчас смотрят — 1 серия осталась', until: 10000 }, 10001), ''],
+  ['ошибка без срока', noteText({ text: 'этот файл не скачан', until: 0 }, 99999), 'этот файл не скачан'],
+  ['нет записи', noteText(undefined, 1), ''],
+  ['вход повторяет строку трекера', loginExtra('Rutracker: неверный логин или пароль', 'Неверный логин или пароль'), ''],
+  ['вход — новое', loginExtra('Rutracker: не отвечает', 'Неверный логин или пароль'), 'Неверный логин или пароль'],
+  ['строки трекера нет', loginExtra('', 'Вход выполнен'), 'Вход выполнен'],
+];
+for (const [name, got, want] of checks) {
+  if (got !== want) {
+    console.error(name, ': получили', JSON.stringify(got), 'ждали', JSON.stringify(want));
+    process.exitCode = 1;
+  }
+}
+`
+	cmd := exec.Command(node, "--input-type=module", "--no-warnings", "-e", script)
+	cmd.Dir = "static"
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Errorf("%v\n%s", err, out)
+	}
+}
+
+// «Настройки → Медиатека» после «Разрешить доступ» (хвост Х41): категории перечитываются, пока у какой-то
+// папки нет доступа.
+func TestPultLibraryGrantWatch(t *testing.T) {
+	node := lookNode(t)
+	script := `
+import { stillDenied } from './views/settings-library.js';
+const cats = (problem) => [{ folders: [{ problem: '' }] }, { folders: [{ problem }] }];
+const checks = [
+  ['есть папка без доступа', stillDenied(cats('no_access')), true],
+  ['доступ выдан', stillDenied(cats('')), false],
+  ['нет категорий', stillDenied(null), false],
+];
+for (const [name, got, want] of checks) {
+  if (got !== want) {
+    console.error(name, ': получили', got, 'ждали', want);
+    process.exitCode = 1;
+  }
+}
+`
+	cmd := exec.Command(node, "--input-type=module", "--no-warnings", "-e", script)
+	cmd.Dir = "static"
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Errorf("%v\n%s", err, out)
+	}
+}
+
+// Подгрузка каталога (найдено вживую, 11b-А): вторая просьба, пока порция грузится, ждёт её, а не
+// возвращается сразу — иначе экран считал список пустым и не восстанавливал место после «Назад».
+func TestPultOneAtATime(t *testing.T) {
+	node := lookNode(t)
+	script := `
+import { oneAtATime } from './views/catalog.js';
+let calls = 0;
+let release;
+const f = oneAtATime(() => { calls++; return new Promise((r) => { release = r; }); });
+const a = f();
+const b = f();
+const checks = [['один вызов, пока идёт', calls === 1], ['тот же промис', a === b]];
+release();
+await a;
+const c = f();
+release();
+await c;
+checks.push(['после окончания — снова вызов', calls === 2]);
+for (const [name, ok] of checks) {
+  if (!ok) {
+    console.error('не выполнено:', name);
     process.exitCode = 1;
   }
 }
@@ -614,6 +985,159 @@ const checks = [
 for (const [got, want] of checks) {
   if (got !== want) {
     console.error(JSON.stringify(got), '≠', JSON.stringify(want));
+    process.exitCode = 1;
+  }
+}
+`
+	cmd := exec.Command(node, "--input-type=module", "--no-warnings", "-e", script)
+	cmd.Dir = "static"
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Errorf("%v\n%s", err, out)
+	}
+}
+
+// «Скрытие» в «Настройках → Каналы»: отметка сразу включает «Сохранить» (найдено вживую, 11b-А: кнопка
+// включалась только перерисовкой опроса раз в 5 с — с пульта ТВ фокус на неё не попадал).
+func TestPultHideCardSaveEnables(t *testing.T) {
+	node := lookNode(t)
+	script := `
+globalThis.Node = class {};
+class El extends Node {
+  constructor(tag) { super(); this.tag = tag; this.attrs = {}; this.listeners = {}; this.children = []; this.style = {}; }
+  setAttribute(k, v) { this.attrs[k] = v; }
+  addEventListener(k, f) { this.listeners[k] = f; }
+  append(...k) { this.children.push(...k); }
+  all() { return [this, ...this.children.flatMap((c) => (c instanceof El ? c.all() : []))]; }
+}
+globalThis.document = { createElement: (t) => new El(t), createElementNS: (_, t) => new El(t) };
+const { hideCard } = await import('./views/settings-iptv.js');
+const iv = { hiddenCategories: [], hiddenCountries: [], hiddenLanguages: [], hideOtherZones: false };
+const all = { categories: [], countries: [{ id: 'RU', name: 'Россия', count: 2 }],
+  languages: [{ id: 'rus', name: 'русский', count: 2 }, { id: 'eng', name: 'английский', count: 1 }] };
+const draft = { categories: [], countries: [], languages: [], otherZones: false };
+let saved = 0;
+const card = hideCard(iv, all, draft, true, () => saved++);
+const find = (key) => card.all().find((e) => e.attrs['data-key'] === key);
+const btn = find('hide-save');
+const eng = find('hide-languages-eng');
+const checks = [];
+checks.push(['без изменений — выключена', btn.disabled === true]);
+eng.checked = true;
+eng.listeners.change({ target: eng });
+checks.push(['отметили язык — включена сразу', btn.disabled === false]);
+checks.push(['черновик', JSON.stringify(draft.languages) === '["eng"]']);
+eng.checked = false;
+eng.listeners.change({ target: eng });
+checks.push(['сняли отметку — снова выключена', btn.disabled === true]);
+btn.listeners.click();
+checks.push(['нажатие сохраняет', saved === 1]);
+for (const [name, ok] of checks) {
+  if (!ok) {
+    console.error('не выполнено:', name);
+    process.exitCode = 1;
+  }
+}
+`
+	cmd := exec.Command(node, "--input-type=module", "--no-warnings", "-e", script)
+	cmd.Dir = "static"
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Errorf("%v\n%s", err, out)
+	}
+}
+
+// Возврат в каталог, который стал короче (склейка карточек, новый топ), — без бесконечного цикла:
+// глубина — не больше, чем есть у сервера, и порция, которая не пришла, не просится снова (ревью 11b-А).
+func TestPultRestoreDepth(t *testing.T) {
+	node := lookNode(t)
+	script := `
+import { restoreDepth } from './views/catalog.js';
+const checks = [];
+const run = async (name, start, serverPages, saved, pageOnMore) => {
+  let state = { ...start };
+  let calls = 0;
+  const more = async () => {
+    calls++;
+    if (calls > 50) throw new Error('цикл');
+    state = pageOnMore(state);
+  };
+  const t = setTimeout(() => { console.error(name, ': завис'); process.exit(1); }, 2000);
+  await restoreDepth(more, () => state, saved);
+  clearTimeout(t);
+  return { state, calls };
+};
+const grow = (pages) => (s) => (s.page < pages ? { ...s, page: s.page + 1, pages } : s);
+let r = await run('каталог стал короче', { page: 4, pages: 4, error: '' }, 4, 5, grow(4));
+checks.push(['короче — сразу выход', r.calls === 0]);
+r = await run('догрузка до сохранённой', { page: 1, pages: 9, error: '' }, 9, 3, grow(9));
+checks.push(['до сохранённой глубины', r.state.page === 3 && r.calls === 2]);
+r = await run('сервер отдаёт меньше', { page: 1, pages: 2, error: '' }, 2, 5, grow(2));
+checks.push(['не глубже сервера', r.state.page === 2 && r.calls === 1]);
+r = await run('порция не пришла', { page: 1, pages: 5, error: '' }, 5, 4, (s) => s);
+checks.push(['без изменений — выход после одной просьбы', r.calls === 1]);
+r = await run('ошибка', { page: 1, pages: 5, error: 'нет сети' }, 5, 4, grow(5));
+checks.push(['ошибка — выход', r.calls === 0]);
+for (const [name, ok] of checks) {
+  if (!ok) {
+    console.error('не выполнено:', name);
+    process.exitCode = 1;
+  }
+}
+`
+	cmd := exec.Command(node, "--input-type=module", "--no-warnings", "-e", script)
+	cmd.Dir = "static"
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Errorf("%v\n%s", err, out)
+	}
+}
+
+// Повтор порции после ошибки — прокруткой или «вниз» из последнего ряда, когда низ сетки рядом (Review
+// Focus 1; ревью 11b-А: наблюдатель пересечения второй раз не срабатывает, пока низ не ушёл из зоны).
+func TestPultRetryDue(t *testing.T) {
+	node := lookNode(t)
+	script := `
+import { retryDue } from './views/catalog.js';
+const failed = { error: 'нет сети', loading: false, page: 2, pages: 5 };
+const checks = [
+  ['ошибка, низ рядом — повтор', retryDue(failed, 900, 800), true],
+  ['ошибка, низ далеко — нет', retryDue(failed, 2000, 800), false],
+  ['без ошибки — наблюдатель сам', retryDue({ ...failed, error: '' }, 900, 800), false],
+  ['идёт загрузка — нет', retryDue({ ...failed, loading: true }, 900, 800), false],
+  ['список кончился — нет', retryDue({ ...failed, page: 5 }, 900, 800), false],
+  ['первая порция не пришла — повтор', retryDue({ error: 'нет сети', loading: false, page: 0, pages: 1 }, 100, 800), true],
+];
+for (const [name, got, want] of checks) {
+  if (got !== want) {
+    console.error(name, ': получили', got, 'ждали', want);
+    process.exitCode = 1;
+  }
+}
+`
+	cmd := exec.Command(node, "--input-type=module", "--no-warnings", "-e", script)
+	cmd.Dir = "static"
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Errorf("%v\n%s", err, out)
+	}
+}
+
+// Обратно в колонку — на элемент, с которого ушли, даже если экран его пересоздал (строки серий
+// перерисовываются раз в 1–3 с): по data-key (ревью 11b-А).
+func TestPultRememberedByKey(t *testing.T) {
+	node := lookNode(t)
+	script := `
+import { rememberedIndex } from './nav.js';
+const el = (key) => ({ dataset: { key } });
+const a = el('ep-1'), b = el('ep-2'), c = el('ep-3');
+const redrawn = [el('ep-1'), el('ep-2'), el('ep-3')];
+const checks = [
+  ['тот же элемент', rememberedIndex([a, b, c], { el: b, key: 'ep-2' }), 1],
+  ['перерисовали — по ключу', rememberedIndex(redrawn, { el: b, key: 'ep-2' }), 1],
+  ['ключа больше нет', rememberedIndex([a, c], { el: b, key: 'ep-2' }), -1],
+  ['не уходили', rememberedIndex([a, b], undefined), -1],
+  ['без ключа, элемент пересоздан', rememberedIndex(redrawn, { el: b, key: '' }), -1],
+];
+for (const [name, got, want] of checks) {
+  if (got !== want) {
+    console.error(name, ': получили', got, 'ждали', want);
     process.exitCode = 1;
   }
 }

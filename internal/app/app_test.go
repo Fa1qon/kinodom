@@ -896,6 +896,35 @@ func TestReleaseCardThroughAPI(t *testing.T) {
 // «Скачать» → очередь → «Смотреть» через API: раздача Rutor открывается из заранее скачанного
 // .torrent, её видеофайлы хранятся, первый — в фокусе; «Смотреть» переносит фокус (спека этапа 7,
 // раздел 5.5).
+// «Скачать» с серии через API (замечание № 3 этапа 11b): {from: N} — очередь всех серий с N; file и from
+// вместе — 400.
+func TestDownloadFromRoute(t *testing.T) {
+	a := rutorApp(t)
+	base := "http://" + a.API.Addr() + "/api/v1"
+	id := rutorRelease(t, a)
+	var opened struct{ Hash string }
+	postJSON(t, fmt.Sprintf("%s/releases/%d/download", base, id), struct{}{}, &opened)
+	var st torrents.TorrentStatus
+	waitUntil(t, "раздача готова", func() bool {
+		getJSON(t, base+"/torrents/"+opened.Hash, &st)
+		return st.State == torrents.StateReady && len(st.Files) > 1
+	})
+	last := st.Files[len(st.Files)-1].Index
+	postJSON(t, fmt.Sprintf("%s/releases/%d/download", base, id), map[string]int{"from": last}, &opened)
+	getJSON(t, base+"/torrents/"+opened.Hash, &st)
+	if st.Focus != last {
+		t.Fatalf("«Скачать» с последней серии: фокус %d", st.Focus)
+	}
+	resp, err := http.Post(fmt.Sprintf("%s/releases/%d/download", base, id), "application/json", strings.NewReader(`{"file":0,"from":1}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("file и from вместе: %d", resp.StatusCode)
+	}
+}
+
 func TestDownloadAndWatchThroughAPI(t *testing.T) {
 	a := rutorApp(t)
 	base := "http://" + a.API.Addr() + "/api/v1"

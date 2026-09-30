@@ -5,6 +5,7 @@ import (
 	"context"
 	"log/slog"
 	"net/http"
+	"net/url"
 	"strings"
 	"sync"
 	"testing"
@@ -35,6 +36,48 @@ func (m *memSessions) Save(_ context.Context, tracker string, s Session) error {
 	m.saved[tracker] = s
 	m.saves++
 	return nil
+}
+
+func (m *memSessions) Delete(_ context.Context, tracker string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	delete(m.saved, tracker)
+	return nil
+}
+
+// Сменили или стёрли логин (хвост Х40) — сохранённая сессия прежней учётной записи стирается и из
+// хранилища: после перезапуска она не вернулась бы под чужим логином.
+func TestSessionDroppedOnLoginChange(t *testing.T) {
+	s := rutrackertest.NewServer(t)
+	s.Login, s.Password = "user", "pass"
+	store := &memSessions{}
+	r := newRutracker(t, s, func(o *Options) { o.Login, o.Password = "user", "pass" })
+	r.SetSessionStore(store)
+	if _, err := r.Details(ctx, "6914565"); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := store.saved[Name]; !ok || store.saved[Name].Login != "user" {
+		t.Fatalf("сессия не сохранилась под логином: %+v", store.saved[Name])
+	}
+	r.SetCredentials("other", "pass2")
+	if _, ok := store.saved[Name]; ok {
+		t.Fatal("сессия прежнего логина осталась в хранилище")
+	}
+}
+
+// Сохранённая под другим логином сессия при старте не восстанавливается (хвост Х40).
+func TestSessionOtherLoginNotRestored(t *testing.T) {
+	s := rutrackertest.NewServer(t)
+	store := &memSessions{saved: map[string]Session{Name: {Mirror: s.Forum.URL, Login: "user",
+		Cookies: []*http.Cookie{{Name: rutrackertest.SessionCookie, Value: "чужая"}}}}}
+	r := newRutracker(t, s, func(o *Options) { o.Login, o.Password = "other", "pass" })
+	r.SetSessionStore(store)
+	u, _ := url.Parse(s.Forum.URL + "/forum/")
+	for _, c := range r.jar.Cookies(u) {
+		if c.Name == rutrackertest.SessionCookie {
+			t.Fatalf("восстановлена сессия чужого логина: %+v", c)
+		}
+	}
 }
 
 // Пропуск Cloudflare и вход сохраняются; новый процесс (перезапуск службы) берёт их из хранилища —

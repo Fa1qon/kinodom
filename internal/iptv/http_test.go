@@ -8,11 +8,13 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"testing"
 	"time"
 
 	"kinodom/internal/httpx"
+	"kinodom/internal/player"
 )
 
 // testRouter — маршруты модуля на ServeMux; «дом» — как у api.Server.
@@ -151,6 +153,76 @@ func TestHTTPChannelsAndFavorites(t *testing.T) {
 	}
 }
 
+// Фильтры над списком (замечание № 6 этапа 11b): страны и языки, скрытые в настройках, в «Все страны» и
+// «Все языки» не показываются — даже если канал с ними виден (избранное, федеральный блок).
+func TestHTTPFacetsSkipHidden(t *testing.T) {
+	m, c, _ := startHTTP(t)
+	if code := c.json("PUT", "/api/v1/iptv/favorites", fromPhone, map[string]any{"keys": []string{"bbc"}}, nil); code != 204 {
+		t.Fatalf("избранное: %d", code)
+	}
+	m.SetHidden(Hidden{Languages: []string{"eng", ""}, Countries: []string{"GB"}})
+	var resp struct {
+		Channels  []ChannelView `json:"channels"`
+		Countries []Facet       `json:"countries"`
+		Languages []Facet       `json:"languages"`
+	}
+	c.json("GET", "/api/v1/channels", fromPhone, nil, &resp)
+	if got := keys(resp.Channels); got != "bbc:favorite ntv:federal" {
+		t.Fatalf("каналы: %s", got)
+	}
+	for _, f := range resp.Languages {
+		if f.ID == "eng" || f.ID == "" {
+			t.Errorf("скрытый язык в фильтре: %+v", resp.Languages)
+		}
+	}
+	for _, f := range resp.Countries {
+		if f.ID == "GB" {
+			t.Errorf("скрытая страна в фильтре: %+v", resp.Countries)
+		}
+	}
+	var all struct {
+		Languages []Facet `json:"languages"`
+	}
+	c.json("GET", "/api/v1/channels?all=1", fromPhone, nil, &all)
+	if !slices.ContainsFunc(all.Languages, func(f Facet) bool { return f.ID == "eng" }) {
+		t.Errorf("?all=1 (настройки скрытия) — все языки: %+v", all.Languages)
+	}
+}
+
+// Скрытые названия (хвост Х30): скрытое пропадает из «Не распознано» и видно в списке скрытых; «Вернуть»
+// — снова в «Не распознано».
+func TestHTTPHiddenNames(t *testing.T) {
+	_, c, _ := startHTTP(t)
+	type names struct {
+		Items []struct {
+			Name string `json:"name"`
+		} `json:"items"`
+	}
+	var un struct {
+		Total int `json:"total"`
+	}
+	if code := c.json("PUT", "/api/v1/iptv/names", fromPhone, map[string]any{"name": "Неизвестный", "hidden": true}, nil); code != 204 {
+		t.Fatalf("скрыть: %d", code)
+	}
+	var hidden names
+	if code := c.json("GET", "/api/v1/iptv/names?hidden=1", fromPhone, nil, &hidden); code != 200 || len(hidden.Items) != 1 || hidden.Items[0].Name != "неизвестный" {
+		t.Fatalf("скрытые: %d %+v", code, hidden)
+	}
+	c.json("GET", "/api/v1/iptv/unrecognized?q=неизв", fromPhone, nil, &un)
+	if un.Total != 0 {
+		t.Errorf("скрытое осталось в «Не распознано»: %d", un.Total)
+	}
+	if code := c.json("PUT", "/api/v1/iptv/names", fromPhone, map[string]any{"name": "неизвестный", "hidden": false}, nil); code != 204 {
+		t.Fatalf("вернуть: %d", code)
+	}
+	hidden = names{}
+	c.json("GET", "/api/v1/iptv/names?hidden=1", fromPhone, nil, &hidden)
+	c.json("GET", "/api/v1/iptv/unrecognized?q=неизв", fromPhone, nil, &un)
+	if len(hidden.Items) != 0 || un.Total != 1 {
+		t.Errorf("после «Вернуть»: скрытых %d, не распознано %d", len(hidden.Items), un.Total)
+	}
+}
+
 // «Смотреть»: источники с заголовками, .m3u8 для VLC; ссылка kinodom:// — только этому ПК.
 func TestHTTPPlay(t *testing.T) {
 	_, c, f := startHTTP(t)
@@ -165,6 +237,14 @@ func TestHTTPPlay(t *testing.T) {
 	if len(play.Items) != 1 || play.Items[0].Headers.UserAgent != "WINK/1" || play.M3UURL != "http://"+testHostPort+"/m3u/channel/ntv.m3u8" ||
 		play.LaunchURL == nil || !strings.Contains(*play.LaunchURL, "m3u%2Fchannel%2Fntv.m3u8") {
 		t.Errorf("play с ПК: %+v", play)
+	}
+	if play.LaunchURL != nil {
+		_, port, _ := strings.Cut(testHostPort, ":")
+		var p int
+		fmt.Sscan(port, &p)
+		if _, _, err := player.ParseLaunch(*play.LaunchURL, p); err != nil {
+			t.Errorf("kinodom open не принял ссылку канала: %v", err)
+		}
 	}
 	c.json("GET", "/api/v1/channels/ntv/play", fromPhone, nil, &play)
 	if play.LaunchURL != nil {

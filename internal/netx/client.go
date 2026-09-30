@@ -469,8 +469,6 @@ func hostOf(raw string) string {
 
 func seconds(d time.Duration) string { return fmt.Sprintf("%g с", d.Seconds()) }
 
-// SetUserAgent меняет User-Agent следующих запросов: пропуск Cloudflare привязан к UA браузера,
-// а Edge мог обновиться, пока служба работает (ревью этапа 4).
 // UserAgent — User-Agent запросов сейчас.
 func (c *Client) UserAgent() string {
 	c.mu.Lock()
@@ -478,6 +476,8 @@ func (c *Client) UserAgent() string {
 	return c.ua
 }
 
+// SetUserAgent меняет User-Agent следующих запросов: пропуск Cloudflare привязан к UA браузера,
+// а Edge мог обновиться, пока служба работает (ревью этапа 4).
 func (c *Client) SetUserAgent(ua string) {
 	c.mu.Lock()
 	c.ua = ua

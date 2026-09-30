@@ -11,6 +11,7 @@ export const GRADE = {
   unrated: { color: '', label: 'ещё не проверен' },
   black: { color: 'var(--faint)', label: 'не отвечает' },
   alive: { color: '', label: 'ещё не проверен' },
+  hidden: { color: '', label: 'скрыт' }, // источник скрыт вручную и плееру не предлагается (Х32)
 };
 
 // gradeMark — квадрат оценки с подписью для экранного диктора.
@@ -57,7 +58,7 @@ export function logo(c, cls = 'ch-logo') {
 export async function watchChannel(key, ctx) {
   const res = await get(`/channels/${encodeURIComponent(key)}/play`);
   if (ctx.local && res.launchUrl) {
-    openPlayer(res.launchUrl, res.m3uUrl); // обработчика kinodom:// нет — скачается .m3u8
+    openPlayer(res.launchUrl, res.m3uUrl, ctx.status && ctx.status.protocol); // обработчика kinodom:// нет — скачается .m3u8
     return;
   }
   location.href = channelPlayerLink(res);

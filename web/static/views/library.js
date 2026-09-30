@@ -60,8 +60,12 @@ export function render(root, r, ctx) {
   root.append(h('div', { class: 'screen library' }, head, cont, tabs, body));
   post('/library/scan').catch(() => {});
 
-  // load — список; пока идёт обход — раз в 2 с, потом раз в минуту.
+  // load — список; пока идёт обход — раз в 2 с, потом раз в минуту. Новый load отменяет прежний, ещё
+  // не ответивший: действие во время загрузки не заводит вторую цепочку опроса (хвост Х19).
+  let gen = 0;
   async function load() {
+    const my = ++gen;
+    clearTimeout(timer);
     timer = 0;
     try {
       const q = /^\d+$/.test(tab) ? `?category=${tab}` : '';
@@ -71,7 +75,7 @@ export function render(root, r, ctx) {
     } catch (e) {
       error = e.message;
     }
-    if (!alive) return;
+    if (!alive || my !== gen) return;
     draw();
     timer = setTimeout(load, data && data.scan.running ? 2000 : 60000);
   }
@@ -144,7 +148,6 @@ export function render(root, r, ctx) {
     } catch (e) {
       failed = e.message;
     }
-    clearTimeout(timer);
     load();
   }
 

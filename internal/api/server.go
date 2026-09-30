@@ -36,7 +36,8 @@ type Server struct {
 	ln   net.Listener // занятый заранее порт; Run забирает его
 
 	statusMu sync.Mutex
-	status   StatusFunc // поля «Состояния» от приложения; nil — только проблемы и модули
+	status   StatusFunc  // поля «Состояния» от приложения; nil — только проблемы и модули
+	protocol func() bool // обработчик kinodom:// зарегистрирован; nil — поле protocol не отдаётся
 }
 
 func New(addr string, d Deps) *Server {

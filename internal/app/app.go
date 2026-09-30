@@ -12,6 +12,7 @@ import (
 	"net/http"
 	"reflect"
 	"strconv"
+	"sync"
 	"time"
 	"unicode"
 
@@ -37,6 +38,7 @@ import (
 	"kinodom/internal/store"
 	"kinodom/internal/supervisor"
 	"kinodom/internal/torrents"
+	"kinodom/internal/winsvc"
 	"kinodom/web"
 )
 
@@ -173,6 +175,7 @@ func New(ctx context.Context, o Options) (*App, error) {
 	a.initLibrary(ctx)
 	a.initSetup()
 	a.API.SetStatus(a.statusFields)
+	a.API.SetProtocolCheck(cachedCheck(winsvc.KinodomProtocol, time.Minute))
 	// Следующие этапы добавляют сюда свои модули так же: a.Sup.Add(m, a.ModuleEnabled(ctx, m.Name())).
 	return a, nil
 }
@@ -258,7 +261,7 @@ func (a *App) initTorrents(ctx context.Context, o Options, v settings.Values) {
 // без ключа (rating.kinopoisk.ru), поиск ждёт ключа.
 func (a *App) initMeta(ctx context.Context, o Options, v settings.Values) error {
 	images, err := meta.NewImages(meta.ImagesOptions{Dir: a.Paths.Images, Proxy: a.proxy, Log: a.Log.With("module", "images"),
-		AllowPrivate: o.LocalImages})
+		AllowPrivate: o.LocalImages, StubSources: meta.PosterStubSources})
 	if err != nil {
 		return err
 	}
@@ -351,8 +354,10 @@ func oneAddress(site string) []string {
 // initIPTV — модуль iptv (спека этапа 8): плейлисты, каналы, проверки. Логотипы каналов — в своём кэше
 // картинок (data\logos): кэш постеров чистит каталог. Телепрограмма, плейлисты и логотипы — напрямую.
 func (a *App) initIPTV(ctx context.Context, o Options, v settings.Values) error {
+	// Логотип, который не скачался, час не запрашивается снова: список каналов перерисовывается, а
+	// сломанный адрес качался бы на каждой перерисовке (хвост Х29).
 	logos, err := meta.NewImages(meta.ImagesOptions{Dir: a.Paths.Logos, Rate: 20, Log: a.Log.With("module", "logos"),
-		AllowPrivate: o.LocalImages})
+		AllowPrivate: o.LocalImages, FailFor: time.Hour})
 	if err != nil {
 		return err
 	}
@@ -361,6 +366,7 @@ func (a *App) initIPTV(ctx context.Context, o Options, v settings.Values) error 
 	a.IPTV.Register(a.API, func(w http.ResponseWriter, r *http.Request, src string) {
 		key, err := logos.Fetch(r.Context(), src, meta.Direct)
 		if err != nil {
+			w.Header().Set("Cache-Control", "max-age=3600") // браузер ТВ не спрашивает сломанный логотип снова час
 			http.NotFound(w, r)
 			return
 		}
@@ -448,7 +454,8 @@ func metaFiles(fs []torrents.FileInfo) []meta.File {
 
 // handleDownload — «Скачать» (спека этапа 7, раздел 5.5): раздача из каталога открывается —
 // Rutor из заранее скачанного .torrent, иначе по magnet — и все её видеофайлы (или один, {"file": N})
-// встают в очередь загрузки. Работает с любого устройства: телевизор тоже нажимает «Скачать».
+// встают в очередь загрузки; {"from": N} — все, но первой качается серия N (замечание № 3 этапа 11b).
+// Работает с любого устройства: телевизор тоже нажимает «Скачать».
 func (a *App) handleDownload(w http.ResponseWriter, r *http.Request) {
 	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
 	if err != nil {
@@ -457,8 +464,13 @@ func (a *App) handleDownload(w http.ResponseWriter, r *http.Request) {
 	}
 	var req struct {
 		File *int `json:"file"`
+		From *int `json:"from"`
 	}
 	if !httpx.ReadJSON(w, r, &req) {
+		return
+	}
+	if req.File != nil && req.From != nil {
+		httpx.WriteError(w, http.StatusBadRequest, "file и from вместе не задаются")
 		return
 	}
 	rel, err := a.Catalog.Release(r.Context(), id)
@@ -482,7 +494,11 @@ func (a *App) handleDownload(w http.ResponseWriter, r *http.Request) {
 	if req.File != nil {
 		files = []int{*req.File}
 	}
-	switch err := a.Torrents.Download(r.Context(), ih, files); {
+	download := func() error { return a.Torrents.Download(r.Context(), ih, files) }
+	if req.From != nil {
+		download = func() error { return a.Torrents.DownloadFrom(r.Context(), ih, *req.From) }
+	}
+	switch err := download(); {
 	case errors.Is(err, torrents.ErrLowSpace):
 		httpx.WriteError(w, http.StatusInsufficientStorage, err.Error())
 	case errors.Is(err, torrents.ErrNoSuchFile):
@@ -493,6 +509,21 @@ func (a *App) handleDownload(w http.ResponseWriter, r *http.Request) {
 		httpx.WriteError(w, http.StatusInternalServerError, err.Error())
 	default:
 		httpx.WriteJSON(w, http.StatusOK, map[string]string{"hash": ih.HexString()})
+	}
+}
+
+// cachedCheck — проверка раз в every: «Состояние» пульт спрашивает часто, а реестр меняется редко.
+func cachedCheck(check func() bool, every time.Duration) func() bool {
+	var mu sync.Mutex
+	var at time.Time
+	var v bool
+	return func() bool {
+		mu.Lock()
+		defer mu.Unlock()
+		if at.IsZero() || time.Since(at) >= every {
+			v, at = check(), time.Now()
+		}
+		return v
 	}
 }
 

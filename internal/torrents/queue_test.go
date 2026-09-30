@@ -77,6 +77,39 @@ func TestDownloadQueuesEpisodesAndWatchMovesFocus(t *testing.T) {
 	}
 }
 
+// «Скачать» с серии (замечание № 3 этапа 11b): в очередь встают все серии, первой качается выбранная —
+// даже если очередь уже шла с другой; номер не видеофайла или вне списка — ErrNoSuchFile.
+func TestDownloadFromStartsThere(t *testing.T) {
+	ctx := context.Background()
+	s := newTestService(t)
+	ih, ep := archive(t, s)
+	must(t, s.DownloadFrom(ctx, ih, ep[2]))
+	tt, _ := s.Engine().Client().Torrent(ih)
+	st, _ := s.Status(ih)
+	if st.Focus != ep[2] || len(stored(t, s, ih)) != 4 {
+		t.Fatalf("фокус %d, хранятся %v", st.Focus, stored(t, s, ih))
+	}
+	for k, i := range ep {
+		want := torrent.PiecePriorityNone
+		if k == 2 {
+			want = torrent.PiecePriorityNormal
+		}
+		if p := tt.Files()[i].Priority(); p != want {
+			t.Fatalf("серия %d: приоритет %v, ждали %v", k+1, p, want)
+		}
+	}
+	must(t, s.Download(ctx, ih, nil)) // повторное «Скачать» фокус не сбивает
+	must(t, s.DownloadFrom(ctx, ih, ep[1]))
+	if st, _ = s.Status(ih); st.Focus != ep[1] {
+		t.Fatalf("очередь шла с серии 3 — «Скачать» с серии 2 фокус не перенёс: %d", st.Focus)
+	}
+	for _, bad := range []int{-1, len(tt.Files())} {
+		if err := s.DownloadFrom(ctx, ih, bad); !errors.Is(err, ErrNoSuchFile) {
+			t.Fatalf("файл %d: %v", bad, err)
+		}
+	}
+}
+
 // Докачался файл в фокусе — качается следующий, пока не скачано всё; прогресс и цвет — по файлам.
 func TestQueueAdvancesToTheEnd(t *testing.T) {
 	ctx := context.Background()
