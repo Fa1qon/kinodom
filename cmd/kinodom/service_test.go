@@ -216,3 +216,25 @@ func TestCheckCommand(t *testing.T) {
 		t.Fatalf("служба остановлена: код %d\n%s", code, out)
 	}
 }
+
+// Установщик читает текст отказа из файла --result (UTF-8): вывод консоли в Inno Setup — в
+// кодировке, которую не угадать.
+func TestInstallWritesResultFile(t *testing.T) {
+	f, _ := withFake(t)
+	f.PortOwner = "other-server.exe"
+	res := filepath.Join(t.TempDir(), "result.txt")
+	if code, _, _ := runCmd(cmdInstall, "--result", res, "--no-start"); code != 1 {
+		t.Fatalf("код %d", code)
+	}
+	b, err := os.ReadFile(res)
+	if err != nil || !strings.Contains(string(b), "other-server.exe") {
+		t.Fatalf("файл результата %q, %v", b, err)
+	}
+	f.PortOwner = ""
+	if code, _, errOut := runCmd(cmdInstall, "--result", res, "--no-start"); code != 0 {
+		t.Fatalf("код %d: %s", code, errOut)
+	}
+	if b, _ := os.ReadFile(res); len(b) != 0 {
+		t.Fatalf("после успеха в файле %q", b)
+	}
+}

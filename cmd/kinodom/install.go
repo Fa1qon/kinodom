@@ -33,35 +33,51 @@ func cmdInstall(args []string, stdout, stderr io.Writer) int {
 	fs.SetOutput(stderr)
 	downloads := fs.String("downloads", "", "папка загрузок; пусто — не менять")
 	noStart := fs.Bool("no-start", false, "не запускать службу")
+	result := fs.String("result", "", "файл для текста отказа (UTF-8; его читает установщик)")
 	if err := fs.Parse(args); err != nil || fs.NArg() > 0 {
-		fmt.Fprintln(stderr, "использование: kinodom install [--downloads ПАПКА] [--no-start]")
+		fmt.Fprintln(stderr, "использование: kinodom install [--downloads ПАПКА] [--no-start] [--result ФАЙЛ]")
 		return 2
 	}
+	err := install(*downloads, *noStart, stdout)
+	if *result != "" {
+		text := ""
+		if err != nil {
+			text = err.Error()
+		}
+		os.WriteFile(*result, []byte(text), 0o644)
+	}
+	if err != nil {
+		return fail(stderr, err)
+	}
+	return 0
+}
+
+func install(downloads string, noStart bool, stdout io.Writer) error {
 	sys := newSystem()
 	if !sys.IsAdmin() {
-		return fail(stderr, setup.ErrNotAdmin)
+		return setup.ErrNotAdmin
 	}
 	dir, err := programDir()
 	if err != nil {
-		return fail(stderr, err)
+		return err
 	}
 	paths := config.NewPaths(config.DefaultHome())
 	if err := os.MkdirAll(paths.Home, 0o755); err != nil {
-		return fail(stderr, err)
+		return err
 	}
 	boot, err := config.LoadBootstrap(paths.Bootstrap) // нет файла — создаётся с портами по умолчанию
 	if err != nil {
-		return fail(stderr, err)
+		return err
 	}
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
 	defer stop()
-	err = setup.Install(ctx, sys, setup.InstallOptions{Downloads: *downloads, NoStart: *noStart, Home: paths.Home,
+	err = setup.Install(ctx, sys, setup.InstallOptions{Downloads: downloads, NoStart: noStart, Home: paths.Home,
 		ProgramDir: dir, APIPort: boot.APIPort, TorrentPort: boot.TorrentPort}, func(s string) { fmt.Fprintln(stdout, s) })
 	if err != nil {
-		return fail(stderr, err)
+		return err
 	}
 	fmt.Fprintf(stdout, "Kinodom установлен: http://localhost:%d\n", boot.APIPort)
-	return 0
+	return nil
 }
 
 // cmdUninstall — удаление службы, правил и ссылки; --purge — ещё настройки и скачанное.
