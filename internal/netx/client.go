@@ -42,6 +42,8 @@ var (
 	ErrLoginRequired = errors.New("трекер требует войти")
 	ErrRemoved       = errors.New("раздача удалена с трекера")
 	ErrNotConfigured = errors.New("не указан адрес трекера")
+	// ErrNotTracker — на всех зеркалах вместо трекера чужой сайт или заглушка; вместе с ErrTrackerDown.
+	ErrNotTracker = errors.New("по адресу не сайт трекера")
 )
 
 // Page — ответ трекера целиком.
@@ -200,6 +202,7 @@ func (c *Client) Get(ctx context.Context, path string, opts ...GetOption) (*Page
 		o(&g)
 	}
 	var down []string // почему не ответило каждое зеркало — для текста ошибки
+	foreign := true   // все зеркала — чужие сайты (а не молчат)
 	targets := c.targets(path)
 	if targets == nil {
 		return nil, fmt.Errorf("%s: %w", c.o.Name, ErrNotConfigured)
@@ -213,6 +216,7 @@ func (c *Client) Get(ctx context.Context, path string, opts ...GetOption) (*Page
 		var de *downError
 		if errors.As(err, &de) {
 			down = append(down, host+" — "+de.reason)
+			foreign = false
 			args := []any{"mirror", host, "reason", de.reason}
 			if de.raw != nil {
 				args = append(args, "err", de.raw)
@@ -226,6 +230,7 @@ func (c *Client) Get(ctx context.Context, path string, opts ...GetOption) (*Page
 		v, reason := c.judge(p, g)
 		if v == MirrorDown {
 			down = append(down, host+" — "+reason)
+			foreign = foreign && strings.Contains(reason, "чуж")
 			c.o.Log.Warn(c.o.Name+": зеркало не отвечает", "mirror", host, "reason", reason)
 			continue
 		}
@@ -247,7 +252,7 @@ func (c *Client) Get(ctx context.Context, path string, opts ...GetOption) (*Page
 		}
 		return p, nil
 	}
-	return nil, &trackerDownError{name: c.o.Name, reasons: down}
+	return nil, &trackerDownError{name: c.o.Name, reasons: down, foreign: foreign && len(down) > 0}
 }
 
 // targets — адреса попыток по порядку; nil — адрес трекера не введён.
@@ -418,13 +423,16 @@ func (e *downError) Error() string { return e.reason }
 type trackerDownError struct {
 	name    string
 	reasons []string
+	foreign bool // все зеркала — чужие сайты: ErrNotTracker
 }
 
 func (e *trackerDownError) Error() string {
 	return fmt.Sprintf("%s недоступен (%s)", e.name, strings.Join(e.reasons, "; "))
 }
 
-func (e *trackerDownError) Is(target error) bool { return target == ErrTrackerDown }
+func (e *trackerDownError) Is(target error) bool {
+	return target == ErrTrackerDown || (e.foreign && target == ErrNotTracker)
+}
 
 // netReason — причина сетевой ошибки коротко и по-русски: текст уходит в «Проблемы».
 // Сырой текст Go («read tcp …: wsarecv: …») остаётся только в журнале.

@@ -171,6 +171,7 @@ func New(ctx context.Context, o Options) (*App, error) {
 		return fail(err)
 	}
 	a.initLibrary(ctx)
+	a.initSetup()
 	a.API.SetStatus(a.statusFields)
 	// Следующие этапы добавляют сюда свои модули так же: a.Sup.Add(m, a.ModuleEnabled(ctx, m.Name())).
 	return a, nil
