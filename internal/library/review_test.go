@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"kinodom/internal/meta"
+	"kinodom/internal/watch"
 )
 
 // К1: номера единиц и файлов не выдаются повторно — новый фильм не наследует историю удалённого.
@@ -128,7 +129,7 @@ func TestBrokenUnitDoesNotBlock(t *testing.T) {
 // В4: короткий файл, досмотренный до конца, — «просмотрено», несмотря на поправку чтения впереди.
 func TestMediaShortFileWatched(t *testing.T) {
 	quick(t)
-	mediaExtraLead = 12 << 20
+	watch.DiskExtraLead = 12 << 20
 	e, file, unit, _ := withFile(t, "lesson.mp4", make([]byte, 1000))
 	get(t, mediaMux(e.l), mediaURL(file, "lesson.mp4"), fromPhone)
 	e.clk.add(time.Minute)

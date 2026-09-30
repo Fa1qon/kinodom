@@ -27,8 +27,37 @@ type WatchTracker interface {
 func (s *Service) SetWatchTracker(t WatchTracker) {
 	s.watch = t
 	if t != nil {
-		s.tracker = watch.New(t, func() time.Time { return s.now() })
+		s.tracker = watch.New(diskLead{WatchTracker: t, complete: s.fileComplete}, func() time.Time { return s.now() })
 	}
+}
+
+// diskLead — место в истории у скачанного целиком файла (хвост Х15): VLC читает его с диска впереди на
+// весь буфер, как файл медиатеки, — та же поправка (watch.ExtraLeadFor). У недокачанного — без неё.
+type diskLead struct {
+	WatchTracker
+	complete func(hash string, index int) bool
+}
+
+func (d diskLead) Report(ctx context.Context, device, hash string, index int, offset, size int64) {
+	if d.complete(hash, index) {
+		offset = max(offset-watch.ExtraLeadFor(size), 0)
+	}
+	d.WatchTracker.Report(ctx, device, hash, index, offset, size)
+}
+
+// fileComplete — файл раздачи скачан целиком.
+func (s *Service) fileComplete(hash string, index int) bool {
+	var ih metainfo.Hash
+	if err := ih.FromHexString(hash); err != nil {
+		return false
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	ss := s.sessions[ih]
+	if ss == nil || ss.t.Info() == nil || index < 0 || index >= len(ss.t.Files()) {
+		return false
+	}
+	return fileDone(ss.t.Files()[index])
 }
 
 // learnDuration — длительность файла из заголовка, один раз за работу службы (7.2). Куски начала и

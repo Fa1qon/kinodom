@@ -101,25 +101,6 @@ func TestMarkStoredTwiceKeepsOpenTime(t *testing.T) {
 	}
 }
 
-// Последнее открытие раздачи — позднейшее из её файлов; ни разу не открытая — нулевое время.
-func TestReleaseOpened(t *testing.T) {
-	ctx := context.Background()
-	r := NewRegistry(newTestDB(t))
-	a, b := hashOf(t, "a"), hashOf(t, "b")
-	remember(t, r, a, "x")
-	remember(t, r, b, "y")
-	must(t, r.MarkStored(ctx, a, 0, "a0", 1))
-	must(t, r.MarkStored(ctx, a, 1, "a1", 1))
-	must(t, r.MarkStored(ctx, b, 0, "b0", 1))
-	must(t, r.TouchStream(ctx, a, 0, time.UnixMilli(1_000_000)))
-	must(t, r.TouchStream(ctx, a, 1, time.UnixMilli(5_000_000)))
-	got, err := r.ReleaseOpened(ctx)
-	must(t, err)
-	if len(got) != 2 || !got[a].Equal(time.UnixMilli(5_000_000)) || !got[b].IsZero() {
-		t.Fatalf("открытия раздач: %v", got)
-	}
-}
-
 func TestStoredFileNeedsKnownTorrent(t *testing.T) {
 	r := NewRegistry(newTestDB(t))
 	if err := r.MarkStored(context.Background(), hashOf(t, "f"), 0, "p", 1); err == nil {

@@ -435,8 +435,10 @@ func TestScanSingleFlight(t *testing.T) {
 	}
 	var n int
 	e.d.R.QueryRow(`SELECT COUNT(*) FROM lib_units`).Scan(&n)
-	if n != 1 || e.dl.calls != 1 {
-		t.Errorf("единиц %d, обходов %d — нужно по одному", n, e.dl.calls)
+	// Обязательный обход (часовой, смена папок в настройках) во время обхода не теряется — после него ещё
+	// один (хвост Х17); открытие медиатеки во время обхода — ничего не добавляет.
+	if n != 1 || e.dl.calls != 2 {
+		t.Errorf("единиц %d, обходов %d — нужно 1 и 2", n, e.dl.calls)
 	}
 }
 

@@ -282,6 +282,10 @@ func (l *Library) summary(v *view, key string) CardSummary {
 	r := v.rows[key]
 	s := CardSummary{Key: key, Title: r.Title, Year: r.Year, Dupes: len(us) > 1, Category: v.category(key)}
 	first := us[0]
+	// Размечено вручную — ручное название главнее данных раздачи (хвост Х12).
+	if first.State == StateManual && first.ManualTitle != "" {
+		s.Title, s.Year = first.ManualTitle, first.ManualYear
+	}
 	if s.Title == "" {
 		s.Title, s.Year = first.Title, first.Year
 		if first.ManualTitle != "" {

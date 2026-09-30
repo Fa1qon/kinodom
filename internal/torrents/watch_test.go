@@ -61,10 +61,12 @@ func (f *fakeWatch) snapshot() []string {
 // quickWatch — отчёты без ожидания 10 с (тесты); сеанс кончается через 300 мс без запросов.
 func quickWatch(t *testing.T, min time.Duration) {
 	t.Helper()
-	was, wasMin, wasGap, wasLead, wasJump := watch.Every, watch.Min, watch.Gap, watch.Lead, watch.JumpRead
-	watch.Every, watch.Min, watch.Gap, watch.Lead, watch.JumpRead = 20*time.Millisecond, min, 300*time.Millisecond, 0, 64<<10
+	was, wasMin, wasGap, wasLead, wasJump, wasDisk := watch.Every, watch.Min, watch.Gap, watch.Lead, watch.JumpRead, watch.DiskExtraLead
+	// Поправки чтения впереди — ноль: места в тестах сеансов точные (файл тестов скачивается целиком, и
+	// без этого к нему применялась бы поправка файла с диска, хвост Х15).
+	watch.Every, watch.Min, watch.Gap, watch.Lead, watch.JumpRead, watch.DiskExtraLead = 20*time.Millisecond, min, 300*time.Millisecond, 0, 64<<10, 0
 	t.Cleanup(func() {
-		watch.Every, watch.Min, watch.Gap, watch.Lead, watch.JumpRead = was, wasMin, wasGap, wasLead, wasJump
+		watch.Every, watch.Min, watch.Gap, watch.Lead, watch.JumpRead, watch.DiskExtraLead = was, wasMin, wasGap, wasLead, wasJump, wasDisk
 	})
 }
 

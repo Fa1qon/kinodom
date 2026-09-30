@@ -137,11 +137,11 @@ func TestMediaKeepsAwake(t *testing.T) {
 func quick(t *testing.T) {
 	t.Helper()
 	was := [3]time.Duration{watch.Every, watch.Min, watch.Gap}
-	wasLead, wasJump, wasExtra := watch.Lead, watch.JumpRead, mediaExtraLead
-	watch.Every, watch.Min, watch.Gap, watch.Lead, watch.JumpRead, mediaExtraLead = 0, 0, 0, 0, 1, 0
+	wasLead, wasJump, wasExtra := watch.Lead, watch.JumpRead, watch.DiskExtraLead
+	watch.Every, watch.Min, watch.Gap, watch.Lead, watch.JumpRead, watch.DiskExtraLead = 0, 0, 0, 0, 1, 0
 	t.Cleanup(func() {
 		watch.Every, watch.Min, watch.Gap = was[0], was[1], was[2]
-		watch.Lead, watch.JumpRead, mediaExtraLead = wasLead, wasJump, wasExtra
+		watch.Lead, watch.JumpRead, watch.DiskExtraLead = wasLead, wasJump, wasExtra
 	})
 }
 
@@ -248,6 +248,21 @@ func TestM3USeries(t *testing.T) {
 	}
 }
 
+// Курс без номеров серий (хвост Х16): .m3u8 урока идёт дальше через главы (папки) по порядку курса, а не
+// обрывается на последнем уроке главы.
+func TestM3UCourseAcrossChapters(t *testing.T) {
+	e := newEnv(t)
+	e.folder(t, catSeries, "Study", "Go/1. О курсе/a.mp4", "Go/1. О курсе/b.mp4", "Go/2. Память/c.mp4")
+	e.scan(t)
+	var b int64
+	e.d.R.QueryRow(`SELECT id FROM lib_files WHERE path LIKE '%b.mp4'`).Scan(&b)
+	w := get(t, mediaMux(e.l), "/m3u/library/"+strconv.FormatInt(b, 10)+".m3u8", fromPhone)
+	body := w.Body.String()
+	if w.Code != 200 || strings.Count(body, "http://") != 2 || !strings.Contains(body, "c.mp4") {
+		t.Errorf(".m3u8 курса:\n%s", body)
+	}
+}
+
 // «Смотреть»: место из истории устройства; «С начала» — с нуля; kinodom:// — только на этом ПК, на
 // .m3u8 (серии подряд), место — в .m3u8, а не в ссылке (иначе VLC начал бы с него каждую серию).
 func TestPlay(t *testing.T) {
@@ -307,7 +322,7 @@ func launchInner(link string) string {
 // картинке на ~40-й) — у /media поправка больше, чем у раздач.
 func TestMediaLead(t *testing.T) {
 	quick(t)
-	mediaExtraLead = 100
+	watch.DiskExtraLead = 100
 	e, file, unit, _ := withFile(t, "film.mkv", make([]byte, 10000))
 	get(t, mediaMux(e.l), mediaURL(file, "film.mkv"), fromPhone, "Range", "bytes=0-4099")
 	e.clk.add(time.Minute)
@@ -316,7 +331,7 @@ func TestMediaLead(t *testing.T) {
 	if len(fs) != 1 || fs[0].Fraction != 0.4 {
 		t.Errorf("место с поправкой: %+v", fs)
 	}
-	mediaExtraLead = 1 << 20 // больше 2 % файла — поправка 2 %
+	watch.DiskExtraLead = 1 << 20 // больше 2 % файла — поправка 2 %
 	get(t, mediaMux(e.l), mediaURL(file, "film.mkv"), "192.168.0.51:5000", "Range", "bytes=0-4199")
 	e.clk.add(time.Minute)
 	e.l.tracker.Tick(e.clk.now())

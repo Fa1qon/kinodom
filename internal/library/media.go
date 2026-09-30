@@ -27,18 +27,12 @@ var mediaTypes = map[string]string{
 	".mpeg": "video/mpeg", ".vob": "video/mpeg", ".flv": "video/x-flv", ".3gp": "video/3gpp",
 }
 
-// mediaExtraLead — сверх общей поправки watch.Lead: файл с локального диска VLC читает впереди на весь
-// свой буфер, около 16 МБ (вживую 2026-09-30: записано 86 с при картинке на ~40-й секунде; у раздач
-// скорость ограничена, и VLC впереди на 3–4 МБ). Место медиатеки — с поправкой 16 МБ: лучше повторить
-// несколько секунд, чем пропустить.
-var mediaExtraLead int64 = 12 << 20
-
-// mediaReporter — история с поправкой на чтение впереди для файлов с локального диска.
+// mediaReporter — история с поправкой на чтение впереди для файлов с локального диска
+// (watch.ExtraLeadFor: лучше повторить несколько секунд, чем пропустить).
 type mediaReporter struct{ h History }
 
 func (m mediaReporter) Report(ctx context.Context, device, hash string, index int, offset, size int64) {
-	// Не больше 2 % файла: иначе урок на 100 МБ, досмотренный до конца, не стал бы «просмотрено».
-	m.h.Report(ctx, device, hash, index, max(offset-min(mediaExtraLead, size/50), 0), size)
+	m.h.Report(ctx, device, hash, index, max(offset-watch.ExtraLeadFor(size), 0), size)
 }
 
 // mediaReader — открытый файл медиатеки (тесты подменяют открытие, чтобы оборвать чтение).
@@ -94,6 +88,41 @@ func (d db) mediaFile(ctx context.Context, id int64) (mediaFile, error) {
 		return f, errNoFile
 	}
 	return f, err
+}
+
+// errFileGone — файл был в медиатеке, но его больше нет: раздачу удалили в «Загрузках» или файл — с
+// диска, а обхода ещё не было (хвост Х18).
+var errFileGone = errors.New("файла больше нет")
+
+// gone — файла больше нет: у скачанного — раздачи нет в «Загрузках» или файл не хранится; у папки — нет на
+// диске. Список загрузок не прочитался — не мешать (решит обход).
+func (l *Library) gone(ctx context.Context, f mediaFile) bool {
+	if f.Missing {
+		return true
+	}
+	if f.Source != "torrent" {
+		_, err := os.Stat(f.Path)
+		return errors.Is(err, os.ErrNotExist)
+	}
+	tus, err := l.o.Downloads.TorrentUnits(ctx)
+	if err != nil {
+		return false
+	}
+	for _, tu := range tus {
+		if tu.Hash != f.UnitKey {
+			continue
+		}
+		if tu.Missing {
+			return false // раздача ещё не загружена (старт, отключённый диск) — не удалена
+		}
+		for _, tf := range tu.Files {
+			if tf.Index == f.TIndex {
+				return !tf.Stored
+			}
+		}
+		return true
+	}
+	return true
 }
 
 // fileFromPath — файл из {file} адреса («123» или «123.m3u8»); ответ об ошибке уже записан.
@@ -172,11 +201,14 @@ func (l *Library) learnDuration(ctx context.Context, hash string, index int, r i
 
 // fileTitle — название для плеера: карточка и серия («Малахит — 1×02»).
 func (l *Library) fileTitle(ctx context.Context, f mediaFile) string {
-	var title, manual, name string
-	l.d.R.QueryRowContext(ctx, `SELECT title, manual_title, name FROM lib_units WHERE id = ?`, f.Unit).Scan(&title, &manual, &name)
+	var title, manual, name, state string
+	l.d.R.QueryRowContext(ctx, `SELECT title, manual_title, name, state FROM lib_units WHERE id = ?`, f.Unit).Scan(&title, &manual, &name, &state)
 	var card string
 	l.d.R.QueryRowContext(ctx, `SELECT title FROM lib_cards WHERE key = ?`, cardKey(f.Unit, f.KP)).Scan(&card)
 	t := card
+	if state == StateManual && manual != "" {
+		t = manual // размечено вручную — главнее данных раздачи (хвост Х12)
+	}
 	for _, s := range []string{manual, title, name} {
 		if t == "" {
 			t = s
@@ -212,6 +244,10 @@ func (l *Library) handlePlay(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
+	if l.gone(r.Context(), f) {
+		httpx.WriteError(w, http.StatusGone, errFileGone.Error())
+		return
+	}
 	hash, index := f.hash()
 	out := playResponse{StreamURL: "http://" + r.Host + f.streamPath(), Title: l.fileTitle(r.Context(), f), Hash: hash, Index: index}
 	if r.URL.Query().Get("fromStart") == "" && l.o.History != nil {
@@ -242,6 +278,10 @@ func (l *Library) handleM3U(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
+	if l.gone(r.Context(), f) {
+		httpx.WriteError(w, http.StatusGone, errFileGone.Error())
+		return
+	}
 	files, err := l.d.files(r.Context(), f.Unit)
 	if err != nil {
 		httpx.WriteError(w, http.StatusInternalServerError, "медиатека не читается: "+err.Error())
@@ -257,7 +297,9 @@ func (l *Library) handleM3U(w http.ResponseWriter, r *http.Request) {
 		if !on {
 			continue
 		}
-		if x.Season != f.Season || x.Section != f.Section {
+		// Граница сезона обрывает плейлист; граница раздела — только у серий с номером: курс без номеров
+		// идёт через главы по порядку (хвост Х16).
+		if x.Season != f.Season || (x.Section != f.Section && f.Episode > 0) {
 			break
 		}
 		mf := f
