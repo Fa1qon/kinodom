@@ -66,8 +66,11 @@ func recognize(ctx context.Context, kp KP, p Parsed, alt []string, layout Layout
 			troubled = true // 500 на кириллице, сеть — следующий вариант
 			continue
 		}
-		if f, ok := pick(films, targets, p.Year, layout, checkType); ok {
+		switch f, n := pick(films, targets, p.Year, layout, checkType); {
+		case n == 1:
 			return Result{KP: f.ID, State: StateFound}, nil
+		case n > 1: // несколько точных совпадений — другой вариант не разрешит, а ошибиться может
+			return Result{State: StateUnrecognized}, nil
 		}
 	}
 	if troubled {
@@ -76,9 +79,9 @@ func recognize(ctx context.Context, kp KP, p Parsed, alt []string, layout Layout
 	return Result{State: StateUnrecognized}, nil
 }
 
-// pick — единственный фильм выдачи, у которого русское или оригинальное название совпадает с одним
-// из искомых, год — ±1 (если известен), тип — подходит устройству (если checkType).
-func pick(films []meta.Film, targets map[string]bool, year int, layout Layout, checkType bool) (meta.Film, bool) {
+// pick — фильмы выдачи, у которых русское или оригинальное название совпадает с одним из искомых,
+// год — ±1 (если известен), тип — подходит устройству (если checkType): первый из них и сколько их.
+func pick(films []meta.Film, targets map[string]bool, year int, layout Layout, checkType bool) (meta.Film, int) {
 	var found []meta.Film
 	for _, f := range films {
 		if !targets[Norm(f.NameRu)] && !targets[Norm(f.NameOrig)] {
@@ -104,8 +107,8 @@ func pick(films []meta.Film, targets map[string]bool, year int, layout Layout, c
 			found = append(found, f)
 		}
 	}
-	if len(found) != 1 {
-		return meta.Film{}, false
+	if len(found) == 0 {
+		return meta.Film{}, 0
 	}
-	return found[0], true
+	return found[0], len(found)
 }
