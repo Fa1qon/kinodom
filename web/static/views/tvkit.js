@@ -1,6 +1,6 @@
 // Общее для экранов каналов (спека этапа 8, раздел 6): оценка проверки, время передач, «Смотреть»,
 // избранное устройства, логотип.
-import { h, icon } from '../ui.js';
+import { h, icon, openPlayer } from '../ui.js';
 import { get, put, del } from '../api.js';
 
 // GRADE — оценка первого источника канала: цвет и подпись (цвет считает сервер).
@@ -48,7 +48,7 @@ export function logo(c, cls = 'ch-logo') {
 export async function watchChannel(key, ctx) {
   const res = await get(`/channels/${encodeURIComponent(key)}/play`);
   if (ctx.local && res.launchUrl) {
-    location.href = res.launchUrl;
+    openPlayer(res.launchUrl, res.m3uUrl); // обработчика kinodom:// нет — скачается .m3u8
     return;
   }
   location.href = channelPlayerLink(res);

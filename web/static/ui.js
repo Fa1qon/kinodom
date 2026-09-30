@@ -215,6 +215,22 @@ export function poll(fn, ms) {
   };
 }
 
+// openPlayer — «Смотреть» на этом ПК: ссылка kinodom:// открывает плеер. Если обработчик ссылки не
+// установлен (kinodom protocol install / инсталлятор), браузер молча ничего не делает — тогда через
+// 1,5 с, если плеер не забрал фокус, открывается запасной адрес (.m3u8). env — для тестов.
+export function openPlayer(launchUrl, fallbackUrl, env = { win: window, loc: location, doc: document, wait: (f) => setTimeout(f, 1500) }) {
+  let left = false;
+  const onBlur = () => {
+    left = true;
+  };
+  env.win.addEventListener('blur', onBlur);
+  env.loc.href = launchUrl;
+  env.wait(() => {
+    env.win.removeEventListener('blur', onBlur);
+    if (!left && !env.doc.hidden) env.loc.href = fallbackUrl;
+  });
+}
+
 // copyText — текст в буфер обмена. Пульт открывают по http с адреса в домашней сети, а там
 // navigator.clipboard нет — запасной путь через выделение.
 export async function copyText(text) {
