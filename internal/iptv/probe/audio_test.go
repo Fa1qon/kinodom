@@ -70,6 +70,12 @@ func TestAudio(t *testing.T) {
 		{"CODECS со звуком", `#EXT-X-STREAM-INF:BANDWIDTH=100000,CODECS="avc1.64001f,mp4a.40.2"`, make([]byte, 30000), &yes},
 		{"таблица дорожек сильнее CODECS", `#EXT-X-STREAM-INF:BANDWIDTH=100000,CODECS="avc1.64001f,mp4a.40.2"`, tsWith(0x1B), &no},
 		{"ничего не понять", "", make([]byte, 30000), nil},
+		// Звук отдельной дорожкой (EXT-X-MEDIA с URI): в сегментах видео его и не должно быть
+		// (финальное ревью: ложное «без звука» у мультиязычных каналов Flussonic).
+		{"звук отдельной дорожкой", `#EXT-X-MEDIA:TYPE=AUDIO,GROUP-ID="aac",NAME="rus",URI="audio.m3u8"
+#EXT-X-STREAM-INF:BANDWIDTH=100000,AUDIO="aac"`, tsWith(0x1B), &yes},
+		{"группа AUDIO без URI — звук в сегментах", `#EXT-X-MEDIA:TYPE=AUDIO,GROUP-ID="aac",NAME="rus"
+#EXT-X-STREAM-INF:BANDWIDTH=100000,AUDIO="aac"`, tsWith(0x1B), &no},
 	}
 	for _, c := range cases {
 		mux := http.NewServeMux()

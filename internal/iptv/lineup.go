@@ -42,8 +42,9 @@ type Channel struct {
 	Federal int       // номер кнопки 1–20; 0 — не федеральный
 	Sources []*Stream // предлагаемые источники по порядку
 	Others  []*Stream // остальные привязанные: молчат, мертвы, новые
-	// Rejected — скрытые у канала вручную («Скрыть» в настройках канала): не предлагаются и не
-	// проверяются в фоне.
+	// Rejected — скрытые у канала вручную («Скрыть» в настройках канала): не предлагаются и полной
+	// проверкой в фоне не проверяются (лёгкой — да: они запасные). Других предлагаемых нет — живые
+	// скрытые переходят в Sources запасными, чтобы канал не пропал вместе с кнопкой «Вернуть».
 	Rejected []*Stream
 	Grade    string // оценка первого источника: green, yellow, red, unrated; "" — источников нет
 	Hidden   string // почему скрыт (без учёта избранного); "" — на экране
@@ -317,6 +318,17 @@ func build(in buildInput) *Lineup {
 			c.Sources = append(c.Sources, s)
 		default:
 			c.Others = append(c.Others, s)
+		}
+	}
+	for _, c := range l.ByKey {
+		if len(c.Sources) == 0 {
+			c.Rejected = slices.DeleteFunc(c.Rejected, func(s *Stream) bool {
+				if offered(s, limited) {
+					c.Sources = append(c.Sources, s)
+					return true
+				}
+				return false
+			})
 		}
 	}
 	for _, g := range groups {

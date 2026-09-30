@@ -266,7 +266,7 @@ func (m *Module) handleChannel(w http.ResponseWriter, r *http.Request) {
 	for i, s := range all {
 		sv := SourceView{ID: s.ID, URL: s.URL, Playlists: []string{}, Kind: s.Kind, Quality: streamQuality(s), State: s.State,
 			Grade: s.Grade, TTFBMs: s.TTFB, Ratio: s.Ratio, Mbps: s.Mbps, Error: s.Error, Week: weeks[s.ID],
-			Pinned: c.Pinned != "" && s.URL == c.Pinned, Offered: i < len(c.Sources), Hidden: i >= len(c.Sources)+len(c.Others), Audio: s.Audio}
+			Pinned: c.Pinned != "" && s.URL == c.Pinned, Offered: i < len(c.Sources), Audio: s.Audio}
 		if s.FullAt.After(s.LightAt) {
 			sv.CheckedAt = timePtr(s.FullAt)
 		} else {
@@ -284,6 +284,9 @@ func (m *Module) handleChannel(w http.ResponseWriter, r *http.Request) {
 	}
 	o := m.pool.overrides[key]
 	m.mu.Unlock()
+	for i := range out.Sources { // скрытый может быть и предлагаемым — запасным, когда других нет
+		out.Sources[i].Hidden = slices.Contains(o.HiddenURLs, out.Sources[i].URL)
+	}
 	out.Override = OverrideView{Hidden: o.Hidden, Category: o.Category, Country: o.Country, Languages: o.Languages}
 	if g != nil {
 		loc := m.Location()
