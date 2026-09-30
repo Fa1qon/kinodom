@@ -9,6 +9,15 @@ import { pickFolder, grantControl } from './folders.js';
 const LAYOUTS = [['films', 'Как фильмы — файл или папка = фильм'], ['series', 'Как сериалы — папка = сериал, курс']];
 const PROBLEM = { not_found: 'папка не найдена', no_access: 'папка не читается — нет прав' };
 
+// stillDenied — у какой-то папки нет доступа службы: после «Разрешить доступ» категории перечитываются,
+// пока это так (хвост Х41).
+export function stillDenied(cats) {
+  return !!cats && cats.some((c) => (c.folders || []).some((f) => f.problem === 'no_access'));
+}
+
+const GRANT_EVERY = 2000; // после «Разрешить доступ» — раз в 2 с…
+const GRANT_FOR = 120000; // …не дольше 2 минут: окно Windows «Да/Нет» и обход займут время
+
 export function render(root, r, ctx) {
   const content = layout(root, 'library', 'Медиатека');
   let alive = true;
@@ -40,6 +49,21 @@ export function render(root, r, ctx) {
       failed = e.message;
     }
     await load();
+  }
+
+  // watchGrant — нажали «Разрешить доступ»: итог окна Windows придёт позже — перечитывать категории.
+  let grantTimer = 0;
+  function watchGrant() {
+    const until = Date.now() + GRANT_FOR;
+    clearInterval(grantTimer);
+    grantTimer = setInterval(async () => {
+      if (!alive || Date.now() > until) {
+        clearInterval(grantTimer);
+        return;
+      }
+      await load();
+      if (!stillDenied(cats)) clearInterval(grantTimer);
+    }, GRANT_EVERY);
   }
 
   const canEdit = () => ctx.canEdit;
@@ -99,7 +123,7 @@ export function render(root, r, ctx) {
       h('div', { class: 'list' }, c.folders.map((f) => h('div', { class: 'row' },
         icon('folder'), h('span', { class: 'grow ellipsis', title: f.path }, f.path),
         f.problem ? h('span', { class: 'tag warn-tag' }, icon('warning', 16), PROBLEM[f.problem] || f.problem) : null,
-        canEdit() ? grantControl(ctx, f, `grant-${f.id}`) : null,
+        canEdit() ? grantControl(ctx, f, `grant-${f.id}`, watchGrant) : null,
         canEdit() ? h('button', { class: 'sq', type: 'button', 'aria-label': `Убрать папку ${f.path}`, 'data-key': `unfolder-${f.id}`,
           onclick: () => save(c, { folders: c.folders.filter((x) => x.id !== f.id).map((x) => x.path) }) }, icon('close')) : null))),
       canEdit() ? h('form', { class: 'row gap10', onsubmit: (e) => {
@@ -135,6 +159,7 @@ export function render(root, r, ctx) {
   ctx.listeners.add(onStatus); // canEdit пришёл позже — кнопки правки появляются
   return () => {
     alive = false;
+    clearInterval(grantTimer);
     ctx.listeners.delete(onStatus);
   };
 }

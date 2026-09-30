@@ -333,15 +333,23 @@ const env = () => {
   return e;
 };
 const a = env();
-openPlayer('kinodom://play?x', '/m3u/a.m3u8', a);
+openPlayer('kinodom://play?x', '/m3u/a.m3u8', undefined, a);
 a.timers.forEach((f) => f());
 const b = env();
-openPlayer('kinodom://play?x', '/m3u/a.m3u8', b);
+openPlayer('kinodom://play?x', '/m3u/a.m3u8', undefined, b);
 b.listeners.blur();
 b.timers.forEach((f) => f());
+// Сервер знает, зарегистрирован ли обработчик (хвост Х33): есть — только kinodom://, без таймера;
+// нет — сразу .m3u8.
+const c = env();
+openPlayer('kinodom://play?x', '/m3u/a.m3u8', true, c);
+const d = env();
+openPlayer('kinodom://play?x', '/m3u/a.m3u8', false, d);
 const checks = [
   [a.loc.href, '/m3u/a.m3u8'], // плеер не открылся — скачать .m3u8
   [b.loc.href, 'kinodom://play?x'], // плеер забрал фокус — ничего больше
+  [c.loc.href + ' ' + c.timers.length, 'kinodom://play?x 0'],
+  [d.loc.href + ' ' + d.timers.length, '/m3u/a.m3u8 0'],
 ];
 for (const [got, want] of checks) {
   if (got !== want) {
@@ -641,6 +649,63 @@ const checks = [
   ['нашли, постеры догружаются — опрос идёт', keepPolling(pending, 0, 60000), true],
   ['догружаются дольше 2 минут — хватит', keepPolling(pending, 0, 121000), false],
   ['всё догружено — хватит', keepPolling(done, 0, 5000), false],
+];
+for (const [name, got, want] of checks) {
+  if (got !== want) {
+    console.error(name, ': получили', got, 'ждали', want);
+    process.exitCode = 1;
+  }
+}
+`
+	cmd := exec.Command(node, "--input-type=module", "--no-warnings", "-e", script)
+	cmd.Dir = "static"
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Errorf("%v\n%s", err, out)
+	}
+}
+
+// «Загрузки» (хвост Х27): надпись «Сейчас смотрят — …» после удаления раздачи исчезает через 10 с;
+// ошибка действия — остаётся до следующего действия. «Состояние» (хвост Х23): текст входа Rutracker, который
+// повторяет строку трекера, второй раз не показывается.
+func TestPultDownloadNoteAndLoginText(t *testing.T) {
+	node := lookNode(t)
+	script := `
+import { noteText } from './views/downloads.js';
+import { loginExtra } from './views/settings-status.js';
+const checks = [
+  ['надпись свежая', noteText({ text: 'Сейчас смотрят — 1 серия осталась', until: 10000 }, 5000), 'Сейчас смотрят — 1 серия осталась'],
+  ['надпись через 10 с', noteText({ text: 'Сейчас смотрят — 1 серия осталась', until: 10000 }, 10001), ''],
+  ['ошибка без срока', noteText({ text: 'этот файл не скачан', until: 0 }, 99999), 'этот файл не скачан'],
+  ['нет записи', noteText(undefined, 1), ''],
+  ['вход повторяет строку трекера', loginExtra('Rutracker: неверный логин или пароль', 'Неверный логин или пароль'), ''],
+  ['вход — новое', loginExtra('Rutracker: не отвечает', 'Неверный логин или пароль'), 'Неверный логин или пароль'],
+  ['строки трекера нет', loginExtra('', 'Вход выполнен'), 'Вход выполнен'],
+];
+for (const [name, got, want] of checks) {
+  if (got !== want) {
+    console.error(name, ': получили', JSON.stringify(got), 'ждали', JSON.stringify(want));
+    process.exitCode = 1;
+  }
+}
+`
+	cmd := exec.Command(node, "--input-type=module", "--no-warnings", "-e", script)
+	cmd.Dir = "static"
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Errorf("%v\n%s", err, out)
+	}
+}
+
+// «Настройки → Медиатека» после «Разрешить доступ» (хвост Х41): категории перечитываются, пока у какой-то
+// папки нет доступа.
+func TestPultLibraryGrantWatch(t *testing.T) {
+	node := lookNode(t)
+	script := `
+import { stillDenied } from './views/settings-library.js';
+const cats = (problem) => [{ folders: [{ problem: '' }] }, { folders: [{ problem }] }];
+const checks = [
+  ['есть папка без доступа', stillDenied(cats('no_access')), true],
+  ['доступ выдан', stillDenied(cats('')), false],
+  ['нет категорий', stillDenied(null), false],
 ];
 for (const [name, got, want] of checks) {
   if (got !== want) {

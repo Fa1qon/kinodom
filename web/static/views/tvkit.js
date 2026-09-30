@@ -58,7 +58,7 @@ export function logo(c, cls = 'ch-logo') {
 export async function watchChannel(key, ctx) {
   const res = await get(`/channels/${encodeURIComponent(key)}/play`);
   if (ctx.local && res.launchUrl) {
-    openPlayer(res.launchUrl, res.m3uUrl); // обработчика kinodom:// нет — скачается .m3u8
+    openPlayer(res.launchUrl, res.m3uUrl, ctx.status && ctx.status.protocol); // обработчика kinodom:// нет — скачается .m3u8
     return;
   }
   location.href = channelPlayerLink(res);

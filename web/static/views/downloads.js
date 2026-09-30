@@ -14,6 +14,14 @@ const STATE = {
 // ORDER — состояние раздачи, если у серий разные: первое, что есть.
 const ORDER = ['watching', 'downloading', 'paused', 'queued', 'done'];
 const CONFIRM_FOR = 3000; // «Удалить?» ждёт второго нажатия 3 с
+const NOTE_FOR = 10000; // «Сейчас смотрят — …» после удаления раздачи видно 10 с (хвост Х27)
+
+// noteText — надпись под корзиной: {text, until} — until 0 — до следующего действия (ошибка), иначе
+// видна до этого времени.
+export function noteText(entry, now) {
+  if (!entry || (entry.until && now >= entry.until)) return '';
+  return entry.text;
+}
 
 export function render(root, r, ctx) {
   let alive = true;
@@ -21,7 +29,7 @@ export function render(root, r, ctx) {
   let confirming = ''; // корзина, которая превратилась в «Удалить?»: «hash» — раздача, «hash-i» — серия
   let confirmTimer = 0;
   const open = new Set(); // раскрытые раздачи — остаются раскрытыми при опросе
-  const errors = new Map(); // корзина → текст ошибки или «сейчас смотрят»
+  const errors = new Map(); // корзина → {text, until}: ошибка или «сейчас смотрят» (noteText)
   const warn = h('div');
   const total = h('div', { class: 'total' });
   const list = h('div', { class: 'dl-list' });
@@ -116,7 +124,8 @@ export function render(root, r, ctx) {
   }
 
   function errorOf(key) {
-    return errors.has(key) ? h('div', { class: 'error' }, errors.get(key)) : null;
+    const text = noteText(errors.get(key), Date.now());
+    return text ? h('div', { class: 'error' }, text) : null;
   }
 
   // trash — корзина: первое нажатие — «Удалить?» на 3 с, второе — удалить. То, что смотрят, удалить
@@ -144,10 +153,14 @@ export function render(root, r, ctx) {
     clearTimeout(confirmTimer);
     try {
       const note = await remove();
-      if (note) errors.set(key, note);
-      else errors.delete(key);
+      if (note) {
+        errors.set(key, { text: note, until: Date.now() + NOTE_FOR });
+        setTimeout(() => {
+          if (alive && view) draw();
+        }, NOTE_FOR + 50);
+      } else errors.delete(key);
     } catch (e) {
-      errors.set(key, e.message);
+      errors.set(key, { text: e.message, until: 0 });
     }
     if (alive) refresh.now();
   }

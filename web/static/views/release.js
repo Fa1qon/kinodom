@@ -325,7 +325,7 @@ export function render(root, r, ctx) {
     drawLive();
     try {
       const res = await post(`/torrents/${rel.hash}/files/${f.index}/watch`, fromStart ? { fromStart: true } : {});
-      if (ctx.local && res.launchUrl) openPlayer(res.launchUrl, res.m3uUrl);
+      if (ctx.local && res.launchUrl) openPlayer(res.launchUrl, res.m3uUrl, ctx.status && ctx.status.protocol);
       else location.href = playerLink(res);
     } catch (e) {
       actionError = e.message;
