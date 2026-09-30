@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"kinodom/internal/httpx"
+	"kinodom/internal/player"
 )
 
 // testRouter — маршруты модуля на ServeMux; «дом» — как у api.Server.
@@ -165,6 +166,14 @@ func TestHTTPPlay(t *testing.T) {
 	if len(play.Items) != 1 || play.Items[0].Headers.UserAgent != "WINK/1" || play.M3UURL != "http://"+testHostPort+"/m3u/channel/ntv.m3u8" ||
 		play.LaunchURL == nil || !strings.Contains(*play.LaunchURL, "m3u%2Fchannel%2Fntv.m3u8") {
 		t.Errorf("play с ПК: %+v", play)
+	}
+	if play.LaunchURL != nil {
+		_, port, _ := strings.Cut(testHostPort, ":")
+		var p int
+		fmt.Sscan(port, &p)
+		if _, _, err := player.ParseLaunch(*play.LaunchURL, p); err != nil {
+			t.Errorf("kinodom open не принял ссылку канала: %v", err)
+		}
 	}
 	c.json("GET", "/api/v1/channels/ntv/play", fromPhone, nil, &play)
 	if play.LaunchURL != nil {
