@@ -84,7 +84,9 @@ function buildHeader() {
   menuButton = h('button', { class: 'sq narrow-only', type: 'button', 'aria-label': 'Меню', 'aria-controls': 'nav', 'aria-expanded': 'false',
     onclick: () => setMenu(!top.classList.contains('open')) }, icon('menu'));
   top.append(
-    h('a', { class: 'logo', href: '#/' }, 'Kinodom'),
+    // Логотип заказчика: иконка, затем надпись (нарезка — assets/logo/cut.py).
+    h('a', { class: 'logo', href: '#/', 'aria-label': 'Kinodom' },
+      h('img', { class: 'logo-icon', src: 'logo-icon.png', alt: '' }), h('img', { class: 'logo-text', src: 'logo-text.png', alt: '' })),
     nav,
     h('div', { class: 'grow' }),
     search,

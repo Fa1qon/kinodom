@@ -82,7 +82,9 @@ h2 { margin: 0; font-size: 20px; font-weight: 700; }
 
 /* Шапка */
 .top { height: 64px; display: flex; align-items: stretch; gap: 40px; padding: 0 var(--pad); border-bottom: 1px solid var(--line); }
-.logo { display: flex; align-items: center; font: 700 18px var(--display); letter-spacing: .08em; text-transform: uppercase; }
+.logo { display: flex; align-items: center; gap: 10px; flex-shrink: 0; }
+.logo-icon { height: 32px; width: auto; }
+.logo-text { height: 16px; width: auto; }
 .nav { display: flex; }
 .nav a, .nav .soon { display: flex; align-items: center; gap: 8px; padding: 0 16px; font-size: 15px; color: var(--muted); border-bottom: 2px solid transparent; margin-bottom: -1px; }
 .nav a.on { color: var(--text); border-bottom-color: var(--text); }
