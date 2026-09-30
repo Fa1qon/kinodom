@@ -258,6 +258,8 @@ a.res-row:hover { background: var(--hover); }
 .tile { flex: 1; padding: 18px 22px; border: 1px solid var(--line); }
 .tile .v { font: 700 28px var(--display); margin-top: 6px; }
 .two-cols { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; align-items: start; }
+/* hidden сильнее display из классов (.col — flex): иначе свёрнутое не сворачивается. */
+[hidden] { display: none !important; }
 .col { display: flex; flex-direction: column; gap: 16px; min-width: 0; }
 .card.tight { gap: 4px; }
 

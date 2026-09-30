@@ -3,6 +3,7 @@ package web
 import (
 	"bytes"
 	"io/fs"
+	"os"
 	"os/exec"
 	"path"
 	"regexp"
@@ -1205,5 +1206,17 @@ for (const [name, ok] of checks) {
 	cmd.Dir = "static"
 	if out, err := cmd.CombinedOutput(); err != nil {
 		t.Errorf("%v\n%s", err, out)
+	}
+}
+
+// Атрибут hidden скрывает и элементы с display в стилях (.col — flex): иначе «Дополнительно» в
+// «Параметрах» не сворачивалось (найдено вживую, 11b-Б).
+func TestPultHiddenWins(t *testing.T) {
+	css, err := os.ReadFile("static/style.css")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !regexp.MustCompile(`\[hidden\]\s*\{\s*display:\s*none\s*!important`).Match(css) {
+		t.Fatal("в style.css нет [hidden] { display: none !important }")
 	}
 }
