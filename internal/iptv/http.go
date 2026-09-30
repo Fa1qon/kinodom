@@ -68,6 +68,15 @@ func (m *Module) Register(r Router, logo func(w http.ResponseWriter, r *http.Req
 	r.Handle("POST /api/v1/iptv/playlists/{id}/refresh", n, http.HandlerFunc(m.handleRefresh))
 	r.Handle("GET /api/v1/iptv/unrecognized", n, http.HandlerFunc(m.handleUnrecognized))
 	r.HandleHome("PUT /api/v1/iptv/names", n, http.HandlerFunc(m.handleNameRule))
+	r.Handle("GET /api/v1/iptv/names", n, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		items := []map[string]string{}
+		if r.URL.Query().Get("hidden") == "1" {
+			for _, name := range m.HiddenNames() {
+				items = append(items, map[string]string{"name": name})
+			}
+		}
+		httpx.WriteJSON(w, http.StatusOK, map[string]any{"items": items})
+	}))
 	r.HandleHome("PUT /api/v1/iptv/streams/{id}", n, http.HandlerFunc(m.handleStreamRule))
 	r.Handle("GET /api/v1/iptv/epg-channels", n, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		httpx.WriteJSON(w, http.StatusOK, map[string]any{"items": m.SearchEPG(r.URL.Query().Get("q"), 20)})

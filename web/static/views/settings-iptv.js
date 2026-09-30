@@ -3,7 +3,7 @@
 // категорий, стран и языков, скрытые поштучно каналы, избранное этого устройства.
 import { h, fill, icon, poll, keepFocus, ago, plural, fileBase64 } from '../ui.js';
 import { get, put, post, del } from '../api.js';
-import { layout, remoteNote } from './settings-layout.js';
+import { layout, remoteNote, channelTabs } from './settings-layout.js';
 import { CATEGORIES } from './channel-settings.js';
 
 // progressLine — «лёгкая: 1200 из 19 000» или «последняя — 2 ч назад».
@@ -14,6 +14,7 @@ export function progressLine(name, p) {
 
 export function render(root, r, ctx) {
   const content = layout(root, 'iptv', 'Каналы');
+  content.append(channelTabs('iptv'));
   let alive = true;
   let pls = null; // /iptv/playlists
   let settings = null; // /settings
