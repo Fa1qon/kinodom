@@ -230,13 +230,70 @@ func TestProxyDownStopsWithoutTryingMirrors(t *testing.T) {
 
 func TestNewClientRejectsBadOptions(t *testing.T) {
 	cases := map[string]Options{
-		"нет зеркал":        {Name: "Трекер"},
 		"зеркало без схемы": {Name: "Трекер", Mirrors: []string{"rutor.info"}},
 	}
 	for name, o := range cases {
 		if _, err := NewClient(o); err == nil {
 			t.Errorf("%s: ошибки нет", name)
 		}
+	}
+}
+
+// Адрес трекера не введён (этап 11a): клиент создаётся, но никуда не ходит — ни по пути, ни по
+// полному адресу — и отвечает ErrNotConfigured.
+func TestClientWithoutMirrorsIsNotConfigured(t *testing.T) {
+	s := newSite(t, page(trackerPage))
+	c, err := NewClient(Options{Name: "Трекер", ExtraHosts: []string{hostOf(s.URL)}, Rate: 1000})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.Mirror() != "" || c.Configured() {
+		t.Fatalf("зеркало %q, настроен %v", c.Mirror(), c.Configured())
+	}
+	for _, path := range []string{"/browse", s.URL + "/download/1"} {
+		if _, err := c.Get(context.Background(), path); !errors.Is(err, ErrNotConfigured) {
+			t.Errorf("Get(%s): %v", path, err)
+		}
+	}
+	if s.hits.Load() != 0 {
+		t.Fatal("клиент без адреса сходил в сеть")
+	}
+}
+
+// Адрес поменяли в пульте — следующий запрос идёт на новый сайт; прежний хост больше не «свой»,
+// новый дополнительный — свой.
+func TestSetMirrorsSwitchesOnTheFly(t *testing.T) {
+	old, fresh, dl := newSite(t, page(trackerPage)), newSite(t, page(trackerPage)), newSite(t, page(trackerPage))
+	c := newTestClient(t, old.URL)
+	if _, err := c.Get(context.Background(), "/a"); err != nil {
+		t.Fatal(err)
+	}
+	if err := c.SetMirrors([]string{fresh.URL + "/"}, hostOf(dl.URL)); err != nil {
+		t.Fatal(err)
+	}
+	if c.Mirror() != fresh.URL {
+		t.Fatalf("зеркало %q", c.Mirror())
+	}
+	if _, err := c.Get(context.Background(), "/b"); err != nil || fresh.hits.Load() != 1 || old.hits.Load() != 1 {
+		t.Fatalf("err %v, новый %d, старый %d", err, fresh.hits.Load(), old.hits.Load())
+	}
+	if _, err := c.Get(context.Background(), dl.URL+"/download/1"); err != nil {
+		t.Fatalf("дополнительный хост: %v", err)
+	}
+	if _, err := c.Get(context.Background(), old.URL+"/x"); err == nil {
+		t.Fatal("прежний сайт всё ещё свой")
+	}
+	if err := c.SetMirrors([]string{"не адрес"}); err == nil {
+		t.Fatal("мусор принят")
+	}
+	if c.Mirror() != fresh.URL {
+		t.Fatalf("после отказа зеркало %q", c.Mirror())
+	}
+	if err := c.SetMirrors(nil); err != nil || c.Configured() {
+		t.Fatalf("сброс адреса: %v, настроен %v", err, c.Configured())
+	}
+	if _, err := c.Get(context.Background(), "/c"); !errors.Is(err, ErrNotConfigured) {
+		t.Fatalf("после сброса: %v", err)
 	}
 }
 

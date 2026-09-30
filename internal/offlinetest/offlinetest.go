@@ -1,7 +1,7 @@
-// Package offlinetest закрывает тестам интернет: встроенные адреса трекеров и Кинопоиска ведут на
-// локальную «растяжку», которая записывает запрос и рвёт соединение (для кода это «трекер
-// недоступен», без проверки Cloudflare и Edge). Тест, забывший подставить свои адреса, не уходит
-// в интернет по недосмотру — прогон пакета падает со списком таких запросов.
+// Package offlinetest закрывает тестам интернет: встроенные адреса Кинопоиска ведут на локальную
+// «растяжку», которая записывает запрос и рвёт соединение. Тест, забывший подставить свои адреса,
+// не уходит в интернет по недосмотру — прогон пакета падает со списком таких запросов. Адресов
+// трекеров в программе нет (этап 11a): без них трекеры выключены и в сеть не ходят.
 package offlinetest
 
 import (
@@ -15,8 +15,6 @@ import (
 
 	"kinodom/internal/iptv"
 	"kinodom/internal/meta"
-	"kinodom/internal/source/rutor"
-	"kinodom/internal/source/rutracker"
 )
 
 // Main — тело TestMain пакета: func TestMain(m *testing.M) { offlinetest.Main(m) }.
@@ -31,11 +29,6 @@ func Main(m *testing.M) {
 			conn.Close()
 		}
 	}))
-	rutor.DefaultMirrors = []string{trip.URL}
-	rutor.DefaultDownloadBase = trip.URL
-	rutracker.DefaultMirrors = []string{trip.URL}
-	rutracker.DefaultAPIBase = trip.URL
-	rutracker.DefaultFeedBase = trip.URL
 	meta.DefaultKinopoiskAPI = trip.URL
 	meta.DefaultRatingBase = trip.URL
 	// Телепрограмма и база iptv-org: модуль IPTV скачивает их сам при старте — это не забытый адрес,
@@ -49,7 +42,7 @@ func Main(m *testing.M) {
 	mu.Lock()
 	defer mu.Unlock()
 	if len(hits) > 0 {
-		fmt.Fprintf(os.Stderr, "FAIL: тесты пошли бы в интернет по встроенным адресам трекеров или Кинопоиска (%d запросов): %s\n",
+		fmt.Fprintf(os.Stderr, "FAIL: тесты пошли бы в интернет по встроенным адресам Кинопоиска (%d запросов): %s\n",
 			len(hits), strings.Join(hits[:min(len(hits), 5)], "; "))
 		code = 1
 	}

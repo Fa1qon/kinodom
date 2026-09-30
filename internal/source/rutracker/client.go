@@ -23,6 +23,7 @@ import (
 	"golang.org/x/time/rate"
 
 	"kinodom/internal/netx"
+	"kinodom/internal/source"
 )
 
 // Name — имя источника в каталоге; title — в текстах ошибок.
@@ -31,24 +32,19 @@ const (
 	title = "Rutracker"
 )
 
-// Встроенные адреса (спека, разделы 5 и 6).
-var (
-	DefaultMirrors  = []string{"https://rutracker.org", "https://rutracker.net"}
-	DefaultAPIBase  = "https://api.rutracker.cc"
-	DefaultFeedBase = "https://feed.rutracker.cc"
-)
-
 // Passer добывает пропуск Cloudflare (edge.Fetcher): cookie сайта после прохода проверки и
 // User-Agent, с которым браузер её прошёл. Пропуск привязан к UA; после обновления Edge UA новый.
 type Passer interface {
 	Pass(ctx context.Context, pageURL string) (cookies []*http.Cookie, userAgent string, err error)
 }
 
+// Адресов Rutracker в программе нет: адрес сайта вводит пользователь, адреса API и ленты — по
+// правилу из него (спека этапа 11a, раздел 6). Без адреса источник выключен.
 type Options struct {
 	Proxy           *netx.Proxy   // прокси для трекеров из настроек; nil — напрямую
-	Mirrors         []string      // пусто — DefaultMirrors
-	APIBase         string        // пусто — DefaultAPIBase
-	FeedBase        string        // пусто — DefaultFeedBase
+	Mirrors         []string      // адреса сайта; пусто — адрес не введён, источник выключен
+	APIBase         string        // пусто — по правилу из первого адреса сайта
+	FeedBase        string        // пусто — по правилу из первого адреса сайта
 	UserAgent       string        // UA Edge (edge.UserAgent): пропуск Cloudflare привязан к нему
 	Passer          Passer        // nil — пропуск не добыть: работает только API
 	Login, Password string        // пусто — без входа: поиск недоступен
@@ -61,18 +57,20 @@ type Options struct {
 }
 
 type Rutracker struct {
-	forum    *netx.Client // сайт: зеркала, cookie, признаки ответа форума
-	api      *netx.Client // api.rutracker.cc и лента feed.rutracker.cc
-	feedBase string
-	mirrors  []string // все зеркала: при смене учётной записи сессия сбрасывается на каждом
-	jar      http.CookieJar
-	onLogin  func(LoginInfo)
-	passer   Passer
-	passes   singleflight.Group
-	log      *slog.Logger
-	now      func() time.Time // часы (тесты подменяют)
+	forum   *netx.Client // сайт: зеркала, cookie, признаки ответа форума
+	api     *netx.Client // API и лента
+	jar     http.CookieJar
+	onLogin func(LoginInfo)
+	passer  Passer
+	passes  singleflight.Group
+	log     *slog.Logger
+	now     func() time.Time // часы (тесты подменяют)
 
 	loginMu sync.Mutex // один вход за раз: одновременные запросы ждут его, а не входят сами
+
+	addrMu   sync.Mutex
+	feedBase string   // адрес ленты без «/» на конце
+	mirrors  []string // все зеркала: при смене учётной записи сессия сбрасывается на каждом
 
 	mu              sync.Mutex
 	login, password string
@@ -89,45 +87,105 @@ type Rutracker struct {
 }
 
 func New(o Options) (*Rutracker, error) {
-	mirrors := o.Mirrors
-	if len(mirrors) == 0 {
-		mirrors = DefaultMirrors
-	}
-	mirrors = slices.Clone(mirrors) // список по умолчанию — общий, его правка не должна менять источник
-	if o.APIBase == "" {
-		o.APIBase = DefaultAPIBase
-	}
-	if o.FeedBase == "" {
-		o.FeedBase = DefaultFeedBase
-	}
 	if o.Rate == 0 {
 		o.Rate = 1
 	}
 	if o.Log == nil {
 		o.Log = slog.New(slog.DiscardHandler)
 	}
-	feed, err := url.Parse(o.FeedBase)
-	if err != nil || feed.Host == "" {
-		return nil, fmt.Errorf("Rutracker: адрес ленты %q — не адрес сайта", o.FeedBase)
-	}
 	jar, _ := cookiejar.New(nil)
 	lim := rate.NewLimiter(o.Rate, 1) // 1 запрос/с на весь Rutracker: форум, API и лента вместе
 	forum, err := netx.NewClient(netx.Options{
-		Name: title, Mirrors: mirrors, Proxy: o.Proxy, UserAgent: o.UserAgent,
+		Name: title, Proxy: o.Proxy, UserAgent: o.UserAgent,
 		Classify: classify, Jar: jar, Limiter: lim, Timeout: o.Timeout, Log: o.Log,
 	})
 	if err != nil {
 		return nil, err
 	}
 	api, err := netx.NewClient(netx.Options{
-		Name: title + " API", Mirrors: []string{o.APIBase}, ExtraHosts: []string{feed.Host},
-		Proxy: o.Proxy, Limiter: lim, Timeout: o.Timeout, Log: o.Log,
+		Name: title + " API", Proxy: o.Proxy, Limiter: lim, Timeout: o.Timeout, Log: o.Log,
 	})
 	if err != nil {
 		return nil, err
 	}
-	return &Rutracker{forum: forum, api: api, feedBase: strings.TrimRight(o.FeedBase, "/"), mirrors: mirrors, jar: jar,
-		onLogin: o.OnLogin, passer: o.Passer, log: o.Log, now: time.Now, login: o.Login, password: o.Password}, nil
+	r := &Rutracker{forum: forum, api: api, jar: jar,
+		onLogin: o.OnLogin, passer: o.Passer, log: o.Log, now: time.Now, login: o.Login, password: o.Password}
+	if err := r.setAddresses(o.Mirrors, o.APIBase, o.FeedBase); err != nil {
+		return nil, err
+	}
+	return r, nil
+}
+
+// SetAddresses — адрес сайта и служебные адреса из настроек; api и feed "" — по правилу из адреса
+// сайта, site "" — источник выключен. Действует со следующего запроса; пауза входа после временной
+// неудачи и неудачные добычи пропуска забываются — новый адрес пробуется сразу.
+func (r *Rutracker) SetAddresses(site, api, feed string) error {
+	var mirrors []string
+	if site != "" {
+		mirrors = []string{site}
+	}
+	if err := r.setAddresses(mirrors, api, feed); err != nil {
+		return err
+	}
+	r.mu.Lock()
+	r.loginRetryAt, r.loginRetryErr, r.passFail = time.Time{}, nil, nil
+	r.mu.Unlock()
+	r.noteLoginState()
+	return nil
+}
+
+func (r *Rutracker) setAddresses(mirrors []string, api, feed string) error {
+	mirrors = slices.Clone(mirrors)
+	for i := range mirrors {
+		mirrors[i] = strings.TrimRight(mirrors[i], "/")
+	}
+	if len(mirrors) == 0 {
+		api, feed = "", ""
+	} else if api == "" || feed == "" {
+		ruleAPI, ruleFeed := source.RutrackerService(mirrors[0])
+		if api == "" {
+			api = ruleAPI
+		}
+		if feed == "" {
+			feed = ruleFeed
+		}
+	}
+	var apiMirrors, extra []string
+	if api != "" {
+		fu, err := url.Parse(feed)
+		if err != nil || fu.Host == "" {
+			return fmt.Errorf("Rutracker: адрес ленты %q — не адрес сайта", feed)
+		}
+		apiMirrors, extra = []string{api}, []string{fu.Host}
+	}
+	if err := r.forum.SetMirrors(mirrors); err != nil {
+		return err
+	}
+	if err := r.api.SetMirrors(apiMirrors, extra...); err != nil {
+		return err
+	}
+	r.addrMu.Lock()
+	r.mirrors, r.feedBase = mirrors, strings.TrimRight(feed, "/")
+	r.addrMu.Unlock()
+	return nil
+}
+
+// Configured — адрес Rutracker введён.
+func (r *Rutracker) Configured() bool { return r.forum.Configured() }
+
+// notConfigured — ошибка «адрес не введён» с именем трекера; nil — адрес есть.
+func (r *Rutracker) notConfigured() error {
+	if r.Configured() {
+		return nil
+	}
+	return fmt.Errorf("%s: %w", title, source.ErrNotConfigured)
+}
+
+// feed — адрес ленты; "" — адрес не введён.
+func (r *Rutracker) feed() string {
+	r.addrMu.Lock()
+	defer r.addrMu.Unlock()
+	return r.feedBase
 }
 
 func (r *Rutracker) Name() string { return Name }
@@ -135,9 +193,13 @@ func (r *Rutracker) Name() string { return Name }
 // Mirror — зеркало форума, ответившее последним.
 func (r *Rutracker) Mirror() string { return r.forum.Mirror() }
 
-// TopicURL — страница раздачи на текущем зеркале (ссылка «На трекере» в пульте).
+// TopicURL — страница раздачи на текущем зеркале (ссылка «На трекере» в пульте); "" — адрес не введён.
 func (r *Rutracker) TopicURL(id string) string {
-	return r.forum.Mirror() + "/forum/viewtopic.php?t=" + id
+	m := r.forum.Mirror()
+	if m == "" {
+		return ""
+	}
+	return m + "/forum/viewtopic.php?t=" + id
 }
 
 // forumPage — страница форума (путь от корня зеркала: /forum/…); form != "" — POST формы.
