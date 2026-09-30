@@ -21,7 +21,7 @@ const catalogUsage = `Использование:
   kinodom catalog list --home ПАПКА [--tracker T] [--category N] [--limit 20]
   kinodom catalog search --home ПАПКА <запрос>
       флаги: --proxy URL | --t1 URL | --t1-download URL | --t2 URL | --t2-api URL |
-             --t2-feed URL | --kinopoisk URL | --no-edge
+             --t2-feed URL | --kinopoisk URL | --no-edge | --sections «t1:12,t2:46+»
       логин и пароль t2 — KINODOM_t2_LOGIN и KINODOM_t2_PASSWORD, ключ
       Кинопоиска — KINODOM_KP_KEY (в базу не записываются); разделы — настройка catalog.categories
 `
@@ -41,6 +41,7 @@ func cmdCatalog(args []string, stdout, stderr io.Writer) int {
 	tracker := fs.String("tracker", "", "только этот трекер")
 	category := fs.String("category", "", "только этот раздел")
 	proxy := fs.String("proxy", "", "прокси для трекеров")
+	sections := fs.String("sections", "", "разделы каталога вместо настройки catalog.categories")
 	var t app.Trackers
 	t1URL := fs.String("t1", "", "адрес t1 вместо настройки t1.address")
 	rtURL := fs.String("t2", "", "адрес t2 вместо настройки t2.address")
@@ -68,6 +69,9 @@ func cmdCatalog(args []string, stdout, stderr io.Writer) int {
 		"t2.password": os.Getenv("KINODOM_t2_PASSWORD"),
 		"kinopoisk.key":      os.Getenv("KINODOM_KP_KEY"),
 		"proxy.trackers":     *proxy,
+	}
+	if *sections != "" {
+		settings["catalog.categories"] = *sections
 	}
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
 	defer stop()

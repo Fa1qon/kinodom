@@ -64,7 +64,7 @@ func TestCatalogCommand(t *testing.T) {
 	t.Cleanup(kp.Close)
 	trackers := []string{"--home", home, "--t1", t1.Mirror.URL, "--t1-download", t1.Download.URL,
 		"--t2", rt.Forum.URL, "--t2-api", rt.API.URL, "--t2-feed", rt.Feed.URL, "--no-edge",
-		"--proxy", localProxy(t), "--kinopoisk", kp.URL}
+		"--proxy", localProxy(t), "--kinopoisk", kp.URL, "--sections", "t1:12"} // подраздел t2 — десятки форумов по 1 запросу в секунду
 	code, out, errOut := runCatalog(t, append(append([]string{"refresh"}, trackers...), "--wait", "30s", "--limit", "3")...)
 	if code != 0 || !strings.Contains(out, "Карточек") || !strings.Contains(out, "[t1:") {
 		t.Fatalf("refresh: код %d\n%s\n%s", code, out, errOut)

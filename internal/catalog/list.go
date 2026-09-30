@@ -53,7 +53,7 @@ func (c *Catalog) List(ctx context.Context, o ListOptions) (entries []Entry, tot
 	}
 	var filtered []row
 	for _, r := range rs {
-		if (o.Tracker == "" || r.Tracker == o.Tracker) && (o.Category == "" || r.CategoryID == o.Category) {
+		if (o.Tracker == "" || r.Tracker == o.Tracker) && (o.Category == "" || r.Section == o.Category) {
 			filtered = append(filtered, r)
 		}
 	}
@@ -164,7 +164,7 @@ func (c *Catalog) Categories(ctx context.Context) ([]Category, error) {
 	count := map[CategoryRef]int{}
 	for _, trs := range byTracker {
 		for _, r := range collapse(trs) {
-			count[CategoryRef{r.Tracker, r.CategoryID}]++
+			count[CategoryRef{r.Tracker, r.Section}]++
 		}
 	}
 	var refs []row
