@@ -89,14 +89,15 @@ func kpPaused(err error) bool {
 }
 
 // pick — фильмы выдачи, у которых русское или оригинальное название совпадает с одним из искомых,
-// год — ±1 (если известен), тип — подходит устройству (если checkType): первый из них и сколько их.
+// год (если известен) — у фильма ±1, у сериала — по годам выхода: в названии папки сериала год сезона
+// (ревью 11b-Б), тип — подходит устройству (если checkType): первый из них и сколько их.
 func pick(films []meta.Film, targets map[string]bool, year int, layout Layout, checkType bool) (meta.Film, int) {
 	var found []meta.Film
 	for _, f := range films {
 		if !targets[Norm(f.NameRu)] && !targets[Norm(f.NameOrig)] {
 			continue
 		}
-		if year > 0 && (f.Year == 0 || f.Year < year-1 || f.Year > year+1) {
+		if year > 0 && !meta.YearFits(f, year) {
 			continue
 		}
 		if checkType {

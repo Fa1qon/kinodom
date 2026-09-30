@@ -2,10 +2,12 @@ package meta
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/http"
 	"path/filepath"
 	"slices"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -742,5 +744,82 @@ func TestRatingsRetryResumesKeyword(t *testing.T) {
 	}
 	if n := f.Hits("search:Бегущая"); n != 2 {
 		t.Fatalf("«Бегущая» искали %d раз", n)
+	}
+}
+
+// Ревью 11b-Б, Important 1: сериал позднего сезона, найденный без токена, с ключом через месяц сохраняет
+// номер — год начала сериала в карточке по ключу для сезона 2028 не «чужой год».
+func TestRatingsSeriesKeepsNumberWithKey(t *testing.T) {
+	f, w := newFakeKP(t), newFakeKPWeb(t)
+	w.suggest["Трудно быть богом"] = "kpweb-suggest-trudno.json"
+	f.films[7954692] = strings.Replace(filmJSON(7954692, "Трудно быть богом", "", 2026, 6.8), `"FILM"`, `"TV_SERIES"`, 1)
+	r, clk, _ := newRatingsWeb(t, f, w, testKey)
+	it := Item{Release: "rutor:5", Title: "Трудно быть богом [S03] (2028) WEB-DL 1080p"}
+	for _, after := range []time.Duration{0, 31 * 24 * time.Hour, 31 * 24 * time.Hour} {
+		clk.add(after)
+		enqueue(t, r, 1, it)
+		drain(t, r)
+		if got, ok := ratingOf(t, r, "rutor:5"); !ok || got.KinopoiskID != 7954692 {
+			t.Fatalf("через %v: %+v, %v", after, got, ok)
+		}
+	}
+	if f.Hits("film") == 0 {
+		t.Fatal("рейтинг через месяц — по ключу, проверка года не пройдена")
+	}
+}
+
+// Ревью 11b-Б, Important 2: проблема kinopoisk.blocked прошлого запуска снимается при старте — пауза
+// сайта живёт в памяти, запись из прошлого процесса заведомо устарела.
+func TestRatingsStaleBlockedClearedOnStart(t *testing.T) {
+	r, _, db := newRatingsWeb(t, newFakeKP(t), newFakeKPWeb(t), "")
+	if err := db.SetProblem(ctx, ProblemKinopoiskBlocked, "Кинопоиск не отвечает — ответ 403, пауза до 15:04"); err != nil {
+		t.Fatal(err)
+	}
+	run, stop := context.WithCancel(ctx)
+	done := make(chan struct{})
+	go func() { r.Run(run); close(done) }()
+	defer func() { stop(); <-done }()
+	waitFor(t, "проблема прошлого запуска снята", func() bool { return !hasProblem(t, db, ProblemKinopoiskBlocked) })
+}
+
+// Ревью 11b-Б, Important 2: отказ, пойманный не очередью (медиатека, правка из пульта), — тоже в
+// «Состоянии»; пауза кончилась — проблема снимается и при пустой очереди.
+func TestRatingsBlockedByOtherCallerShown(t *testing.T) {
+	w := newFakeKPWeb(t)
+	w.status = http.StatusForbidden
+	r, clk, db := newRatingsWeb(t, newFakeKP(t), w, "")
+	if _, err := r.web.Suggest(ctx, KPBackground, "Матрица"); !errors.Is(err, ErrKPBlocked) {
+		t.Fatalf("отказ: %v", err)
+	}
+	drain(t, r)
+	if !hasProblem(t, db, ProblemKinopoiskBlocked) {
+		t.Fatal("отказ, пойманный медиатекой, — не в «Состоянии»")
+	}
+	w.set(func() { w.status = 0 })
+	clk.add(6*time.Hour + time.Second)
+	drain(t, r)
+	if hasProblem(t, db, ProblemKinopoiskBlocked) {
+		t.Fatal("пауза кончилась — проблема висит")
+	}
+}
+
+// Ревью 11b-Б, Important 4: раздача без номера получает номер соседа сразу при постановке — и во время
+// паузы сайта, когда очередь поиска не делает; порядок постановки не важен.
+func TestRatingsNeighborLinkedDuringPause(t *testing.T) {
+	f, w := newFakeKP(t), newFakeKPWeb(t)
+	f.xml[5325705] = `<?xml version="1.0" encoding="WINDOWS-1251"?><rating><kp_rating num_vote="1">7.969</kp_rating><imdb_rating num_vote="1">0</imdb_rating></rating>`
+	w.status = http.StatusForbidden
+	r, _, _ := newRatingsWeb(t, f, w, "")
+	r.web.Suggest(ctx, KPBackground, "Законник") // сайт отказал — пауза
+	err := r.EnqueueCatalog(ctx, []Item{
+		{Release: "rutor:8", Title: "Законник [01-10 из 10] (2023) WEB-DL 2160p"},
+		{Release: "rutor:7", KinopoiskID: 5325705, Title: "Законник [S01] (2023) WEB-DL 1080p"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	drain(t, r)
+	if got, ok := ratingOf(t, r, "rutor:8"); !ok || got.KinopoiskID != 5325705 || got.Kinopoisk != 7.969 {
+		t.Fatalf("соседняя раздача на паузе: %+v, %v", got, ok)
 	}
 }
