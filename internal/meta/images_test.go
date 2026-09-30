@@ -2,6 +2,8 @@ package meta
 
 import (
 	"bytes"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"image"
 	"image/png"
@@ -248,7 +250,7 @@ func TestStubImageDetected(t *testing.T) {
 	}))
 	t.Cleanup(srv.Close)
 	dir := t.TempDir()
-	im, err := NewImages(ImagesOptions{Dir: dir, Rate: 1000, AllowPrivate: true})
+	im, err := NewImages(ImagesOptions{Dir: dir, Rate: 1000, AllowPrivate: true, StubSources: PosterStubSources})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -272,7 +274,7 @@ func TestStubImageDetected(t *testing.T) {
 	if _, err := im.Fetch(ctx, srv.URL+"/real.png", Direct); err != nil {
 		t.Fatalf("настоящий постер: %v", err)
 	}
-	again, err := NewImages(ImagesOptions{Dir: dir, Rate: 1000, AllowPrivate: true})
+	again, err := NewImages(ImagesOptions{Dir: dir, Rate: 1000, AllowPrivate: true, StubSources: PosterStubSources})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -289,7 +291,7 @@ func TestStubRecognizedDuringConcurrentFetch(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { w.Write(stub) }))
 	t.Cleanup(srv.Close)
 	for round := range 60 {
-		im, err := NewImages(ImagesOptions{Dir: t.TempDir(), Rate: 1000, AllowPrivate: true})
+		im, err := NewImages(ImagesOptions{Dir: t.TempDir(), Rate: 1000, AllowPrivate: true, StubSources: PosterStubSources})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -315,6 +317,32 @@ func TestStubRecognizedDuringConcurrentFetch(t *testing.T) {
 				t.Fatalf("круг %d: ключ %s заглушки отдан, но не снят (снятые %v)", round, k, dropped)
 			}
 		}
+	}
+}
+
+// Логотипы каналов: часовые версии канала и зеркала ведут на один файл с разных адресов — это не
+// заглушка хостинга. Без StubSources заглушки не распознаются и прежний stubs.txt не читается
+// (ревью 11b-А: иначе логотип федерального канала пропадал навсегда).
+func TestStubDetectionOffByDefault(t *testing.T) {
+	logo := pngBytes(t)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { w.Write(logo) }))
+	t.Cleanup(srv.Close)
+	dir := t.TempDir()
+	sum := sha256.Sum256(logo)
+	if err := os.WriteFile(filepath.Join(dir, stubsFile), []byte(hex.EncodeToString(sum[:])+"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	im, err := NewImages(ImagesOptions{Dir: dir, Rate: 1000, AllowPrivate: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, p := range []string{"/perviy.png", "/perviy-plus2.png", "/perviy-plus4.png", "/perviy-plus6.png"} {
+		if _, err := im.Fetch(ctx, srv.URL+p, Direct); err != nil {
+			t.Fatalf("логотип %s: %v", p, err)
+		}
+	}
+	if got := im.Stubbed(); len(got) != 0 {
+		t.Fatalf("сняты как заглушки: %v", got)
 	}
 }
 
