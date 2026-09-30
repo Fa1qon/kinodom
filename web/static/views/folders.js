@@ -26,12 +26,13 @@ export function grantView(ctx, folder, port = Number(globalThis.location && glob
   return { link: 'kinodom://grant?' + new URLSearchParams({ path: folder.path, port: String(port) }).toString() };
 }
 
-// grantControl — кнопка или строка «Разрешить доступ» для папки.
-export function grantControl(ctx, folder, key) {
+// grantControl — кнопка или строка «Разрешить доступ» для папки. onGrant — нажали: экран снова
+// опрашивает сервер (итог окна Windows «Да/Нет» придёт позже).
+export function grantControl(ctx, folder, key, onGrant) {
   const g = grantView(ctx, folder);
   if (!g) return null;
   if (g.hint) return h('span', { class: 'muted small' }, g.hint);
-  return h('a', { class: 'btn', href: g.link, 'data-key': key }, icon('lock_open'), 'Разрешить доступ');
+  return h('a', { class: 'btn', href: g.link, 'data-key': key, onclick: onGrant }, icon('lock_open'), 'Разрешить доступ');
 }
 
 // PROFILE — русские названия папок профиля (их предлагает сервер, когда профиль службе не виден).

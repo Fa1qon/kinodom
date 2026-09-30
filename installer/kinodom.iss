@@ -253,19 +253,21 @@ begin
     Exit;
   if StoppedByUs and FileExists(ExpandConstant('{app}\kinodom.exe')) then
     Exec(ExpandConstant('{app}\kinodom.exe'), 'install', '', SW_HIDE, ewWaitUntilTerminated, Code)
-  else if CopyStarted and not WasInstalled and FileExists(ExpandConstant('{app}\unins000.exe')) then
+  else if CopyStarted and FileExists(ExpandConstant('{app}\unins000.exe')) then
     Exec(ExpandConstant('{app}\unins000.exe'), '/VERYSILENT /SUPPRESSMSGBOXES /NORESTART', '', SW_HIDE,
       ewWaitUntilTerminated, Code);
 end;
 
-{ Удаление: вопрос о данных, затем kinodom.exe uninstall — до удаления файлов. Отказ (служба не
-  остановилась) — его текст, и файлы не удаляются: иначе осталась бы служба без программы. }
-function InitializeUninstall: Boolean;
+{ Удаление — после стандартного «Вы действительно хотите удалить Kinodom?»: вопрос о данных, затем
+  kinodom.exe uninstall, пока файлы на месте. Отказ (служба не остановилась) — его текст и Abort: файлы
+  не удаляются, иначе осталась бы служба без программы. }
+procedure CurUninstallStepChanged(CurUninstallStep: TUninstallStep);
 var
   Params, ResultFile, Msg: String;
   Code: Integer;
 begin
-  Result := True;
+  if CurUninstallStep <> usUninstall then
+    Exit;
   Params := 'uninstall';
   if not UninstallSilent and
      (MsgBox('Удалить также скачанное и настройки?', mbConfirmation, MB_YESNO or MB_DEFBUTTON2) = IDYES) then
@@ -278,5 +280,5 @@ begin
   Msg := ResultText(ResultFile, Code);
   if not UninstallSilent then
     MsgBox('Kinodom не удалён: ' + Msg, mbError, MB_OK);
-  Result := False;
+  Abort;
 end;

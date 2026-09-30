@@ -225,6 +225,11 @@ export function render(root, r, ctx) {
       const folderKey = (cs) => JSON.stringify(cs.map((c) => [c.id, c.folders.map((f) => [f.id, f.problem])]));
       let drawn = '';
       let quiet = 0; // опросов подряд без перемен после конца обхода
+      // watchAgain — после «Разрешить доступ»: окно Windows «Да/Нет» и обход займут время, опрос снова.
+      const watchAgain = () => {
+        quiet = 0;
+        if (!stop) stop = poll(watch, 2000).stop;
+      };
       const draw = () => keepFocus(box, () => {
         drawn = folderKey(cats);
         fill(box, wanted.map(([builtin, label]) => {
@@ -235,7 +240,7 @@ export function render(root, r, ctx) {
           return h('div', { class: 'card' }, h('div', { class: 'h' }, label),
             c.folders.map((f) => h('div', { class: 'row folder-row' }, icon('folder'), h('span', { class: 'grow ellipsis', title: f.path }, f.path),
               f.problem ? h('span', { class: 'tag warn-tag' }, icon('warning', 16), f.problem === 'no_access' ? 'нет доступа' : 'не найдена') : null,
-              grantControl(ctx, f, `grant-${f.id}`))),
+              grantControl(ctx, f, `grant-${f.id}`, watchAgain))),
             inputs.map((el, i) => h('div', { class: 'row gap10' }, h('div', { class: 'grow' }, el),
               h('button', { class: 'btn', type: 'button', 'data-key': `browse-${c.id}-${i}`, disabled: !canEdit(), onclick: async () => {
                 const p = await pickFolder(el.value.trim());

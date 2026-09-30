@@ -25,3 +25,17 @@ func TestLoadIcon(t *testing.T) {
 	}
 	destroyIcon(h)
 }
+
+// При входе в Windows проводник может ещё не принимать значки: добавление повторяется; не вышло —
+// значок завершается и не держит «один значок на сеанс» (второе ревью, мелочь 4).
+func TestRetryAdd(t *testing.T) {
+	calls := 0
+	ok := retry(func() bool { calls++; return calls == 3 }, 5, 0)
+	if !ok || calls != 3 {
+		t.Fatalf("успех с третьей попытки: %v, попыток %d", ok, calls)
+	}
+	calls = 0
+	if retry(func() bool { calls++; return false }, 4, 0) || calls != 4 {
+		t.Fatalf("всегда отказ: попыток %d", calls)
+	}
+}
