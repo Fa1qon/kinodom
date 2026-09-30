@@ -157,7 +157,8 @@ func (m *Module) handleChannels(w http.ResponseWriter, r *http.Request) {
 		Categories []Facet       `json:"categories"`
 		Countries  []Facet       `json:"countries"`
 		Languages  []Facet       `json:"languages"`
-	}{Channels: []ChannelView{}}
+		UTCOffset  int           `json:"utcOffset"`
+	}{Channels: []ChannelView{}, UTCOffset: m.utcOffset()}
 	cats, countries, langs := map[string]int{}, map[string]int{}, map[string]int{}
 	for _, c := range l.WithFavorites(favs, all) {
 		v := m.view(c, g, at, isFav[c.Key])
@@ -214,6 +215,8 @@ type SourceView struct {
 	Week      Week       `json:"week"`
 	Pinned    bool       `json:"pinned"`
 	Offered   bool       `json:"offered"`
+	Hidden    bool       `json:"hidden"` // скрыт у канала вручную
+	Audio     *bool      `json:"audio"`  // есть ли звук; null — не знаем
 }
 
 // OverrideView — правки канала; null — не правили.
@@ -243,8 +246,9 @@ func (m *Module) handleChannel(w http.ResponseWriter, r *http.Request) {
 		Sources   []SourceView      `json:"sources"`
 		Override  OverrideView      `json:"override"`
 		Programme []xmltv.Programme `json:"programme"`
-	}{ChannelView: m.view(c, g, at, slices.Contains(favs, key)), Sources: []SourceView{}, Programme: []xmltv.Programme{}}
-	all := append(append([]*Stream{}, c.Sources...), c.Others...)
+		UTCOffset int               `json:"utcOffset"`
+	}{ChannelView: m.view(c, g, at, slices.Contains(favs, key)), Sources: []SourceView{}, Programme: []xmltv.Programme{}, UTCOffset: m.utcOffset()}
+	all := slices.Concat(c.Sources, c.Others, c.Rejected)
 	ids := make([]int64, len(all))
 	for i, s := range all {
 		ids[i] = s.ID
@@ -262,7 +266,7 @@ func (m *Module) handleChannel(w http.ResponseWriter, r *http.Request) {
 	for i, s := range all {
 		sv := SourceView{ID: s.ID, URL: s.URL, Playlists: []string{}, Kind: s.Kind, Quality: streamQuality(s), State: s.State,
 			Grade: s.Grade, TTFBMs: s.TTFB, Ratio: s.Ratio, Mbps: s.Mbps, Error: s.Error, Week: weeks[s.ID],
-			Pinned: c.Pinned != "" && s.URL == c.Pinned, Offered: i < len(c.Sources)}
+			Pinned: c.Pinned != "" && s.URL == c.Pinned, Offered: i < len(c.Sources), Hidden: i >= len(c.Sources)+len(c.Others), Audio: s.Audio}
 		if s.FullAt.After(s.LightAt) {
 			sv.CheckedAt = timePtr(s.FullAt)
 		} else {
@@ -316,7 +320,14 @@ func (m *Module) handleEPG(w http.ResponseWriter, r *http.Request) {
 			items = ps
 		}
 	}
-	httpx.WriteJSON(w, http.StatusOK, map[string]any{"items": items})
+	httpx.WriteJSON(w, http.StatusOK, map[string]any{"items": items, "utcOffset": m.utcOffset()})
+}
+
+// utcOffset — пояс каналов в часах от UTC: пульт показывает время программы по нему, а не по часам
+// устройства (отзыв заказчика 2026-09-30: на ПК московское время, в настройках UTC+7).
+func (m *Module) utcOffset() int {
+	_, off := m.now().In(m.Location()).Zone()
+	return off / 3600
 }
 
 // maxPlay — сколько источников отдавать плееру (спека этапа 8, раздел 5.9).
@@ -425,7 +436,8 @@ func (o *optional[T]) UnmarshalJSON(b []byte) error {
 	return nil
 }
 
-// handleOverride — правки канала из карточки: скрыть, категория, страна, языки, закреплённый источник.
+// handleOverride — правки канала из карточки: скрыть, категория, страна, языки, основной (закреплённый)
+// источник, скрыть и вернуть источник.
 func (m *Module) handleOverride(w http.ResponseWriter, r *http.Request) {
 	key := r.PathValue("key")
 	var req struct {
@@ -434,6 +446,8 @@ func (m *Module) handleOverride(w http.ResponseWriter, r *http.Request) {
 		Country      optional[string]   `json:"country"`
 		Languages    optional[[]string] `json:"languages"`
 		PinnedSource optional[int64]    `json:"pinnedSource"`
+		HideSource   *int64             `json:"hideSource"`
+		ShowSource   *int64             `json:"showSource"`
 	}
 	if !httpx.ReadJSON(w, r, &req) {
 		return
@@ -481,6 +495,25 @@ func (m *Module) handleOverride(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 		}
+	}
+	for _, id := range []*int64{req.HideSource, req.ShowSource} {
+		if id != nil && m.StreamURL(*id) == "" {
+			httpx.WriteError(w, http.StatusNotFound, ErrNoStream.Error())
+			return
+		}
+	}
+	if req.HideSource != nil {
+		u := m.StreamURL(*req.HideSource)
+		if !slices.Contains(o.HiddenURLs, u) {
+			o.HiddenURLs = append(slices.Clone(o.HiddenURLs), u)
+		}
+		if o.PinnedURL == u {
+			o.PinnedURL = "" // скрытый не может быть основным
+		}
+	}
+	if req.ShowSource != nil {
+		u := m.StreamURL(*req.ShowSource)
+		o.HiddenURLs = slices.DeleteFunc(slices.Clone(o.HiddenURLs), func(x string) bool { return x == u })
 	}
 	if err := m.SetOverride(r.Context(), key, o); err != nil {
 		writeEditError(w, err)
