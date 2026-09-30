@@ -4,6 +4,7 @@ import (
 	"net"
 	"net/http/httptest"
 	"testing"
+	"time"
 )
 
 // setOwn подменяет адреса интерфейсов ПК на время теста.
@@ -99,4 +100,59 @@ func TestHomeAddresses(t *testing.T) {
 			t.Fatalf("адреса %v, ждали %v", got, want)
 		}
 	}
+}
+
+// Адрес ПК сменился (DHCP, другой Wi-Fi) — новый адрес — «этот ПК» без перезапуска, старый — уже нет:
+// промах перечитывает список (не чаще раза в 10 с), а список старше минуты перечитывается сам
+// (хвост 7b, спека этапа 11a, раздел 8).
+func TestOwnAddressChange(t *testing.T) {
+	setOwn(t, "127.0.0.1/8", "192.168.0.26/24")
+	clock := time.Date(2026, 9, 30, 12, 0, 0, 0, time.UTC)
+	was := now
+	now = func() time.Time { return clock }
+	t.Cleanup(func() { now = was })
+	pc := func(addr string) bool {
+		r := httptest.NewRequest("GET", "/", nil)
+		r.RemoteAddr = addr + ":5000"
+		return FromThisPC(r)
+	}
+	if !pc("192.168.0.26") {
+		t.Fatal("свой адрес не узнан")
+	}
+	setAddrs(t, "127.0.0.1/8", "192.168.0.40/24")
+	clock = clock.Add(11 * time.Second)
+	if !pc("192.168.0.40") {
+		t.Fatal("новый адрес ПК не узнан без перезапуска")
+	}
+	if pc("192.168.0.26") {
+		t.Fatal("старый адрес ПК всё ещё «этот ПК»")
+	}
+	// Без промахов: адрес ушёл — через минуту он уже не свой.
+	setAddrs(t, "127.0.0.1/8", "192.168.0.50/24")
+	clock = clock.Add(2 * time.Second)
+	if !pc("192.168.0.40") {
+		t.Fatal("список перечитан раньше минуты")
+	}
+	clock = clock.Add(time.Minute)
+	if pc("192.168.0.40") {
+		t.Fatal("ушедший адрес — «этот ПК» дольше минуты")
+	}
+	if !IsOwnIP(net.ParseIP("192.168.0.50")) || IsOwnIP(net.ParseIP("192.168.0.99")) {
+		t.Fatal("IsOwnIP")
+	}
+}
+
+// setAddrs меняет адреса интерфейсов, не сбрасывая кэш: как настоящая смена адреса.
+func setAddrs(t *testing.T, cidrs ...string) {
+	t.Helper()
+	var addrs []net.Addr
+	for _, c := range cidrs {
+		ip, n, err := net.ParseCIDR(c)
+		if err != nil {
+			t.Fatal(err)
+		}
+		n.IP = ip
+		addrs = append(addrs, n)
+	}
+	interfaceAddrs = func() ([]net.Addr, error) { return addrs, nil }
 }
