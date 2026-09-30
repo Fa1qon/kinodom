@@ -283,13 +283,14 @@ func (s catalogStore) release(ctx context.Context, id int64) (r row, description
 	return r, description, magnet, torrent, removed, err
 }
 
-// missingPosters — раздачи без картинки со страницей раздачи: в каталоге или тронутые после since.
+// missingPosters — раздачи без картинки (и без страницы: постер по номеру Кинопоиска — спека 11b, 5.4):
+// в каталоге или тронутые после since.
 // missingPosters — раздачи со страницей, но без картинки (в каталоге или тронутые с since) и адреса
 // постеров их страниц ("" — на странице постера нет).
 func (s catalogStore) missingPosters(ctx context.Context, since time.Time) ([]row, []string, error) {
 	rows, err := s.db.R.QueryContext(ctx,
 		`SELECT `+rowColumns+`, r.poster_url FROM releases r
-		 WHERE r.image_key = '' AND r.details_at > 0 AND r.removed = 0
+		 WHERE r.image_key = '' AND r.removed = 0
 		   AND (r.updated_at >= ? OR r.id IN (SELECT release_id FROM catalog_entries))`, ms(since))
 	if err != nil {
 		return nil, nil, err
@@ -307,6 +308,27 @@ func (s catalogStore) missingPosters(ctx context.Context, since time.Time) ([]ro
 		urls = append(urls, u)
 	}
 	return out, urls, rows.Err()
+}
+
+// postersWithImage — раздачи каталога и недавние с картинкой: кандидаты на постер Кинопоиска.
+func (s catalogStore) postersWithImage(ctx context.Context, since time.Time) ([]row, error) {
+	rows, err := s.db.R.QueryContext(ctx,
+		`SELECT `+rowColumns+` FROM releases r
+		 WHERE r.image_key != '' AND r.removed = 0
+		   AND (r.updated_at >= ? OR r.id IN (SELECT release_id FROM catalog_entries))`, ms(since))
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []row
+	for rows.Next() {
+		r, err := scanRow(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, r)
+	}
+	return out, rows.Err()
 }
 
 // missingTorrents — раздачи трекеров trackers (у которых есть .torrent) со страницей, но без .torrent.

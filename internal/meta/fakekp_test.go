@@ -34,6 +34,8 @@ type fakeKP struct {
 	last   string         // последний запрос API (путь и параметры)
 	keys   string         // образец ответа лимитов
 	onFilm func(id int)   // если задан — вызывается посреди запроса /films/{id} (тесты гонок)
+	// onSearch — если задан и вернул не 0 — так отвечает поиск по этому ключевому слову.
+	onSearch func(keyword string) int
 }
 
 func newFakeKP(t *testing.T) *fakeKP {
@@ -124,6 +126,13 @@ func (f *fakeKP) serve(w http.ResponseWriter, r *http.Request) {
 		f.hits["imdb"]++
 	case p == "/api/v2.2/films" && q.Get("keyword") != "":
 		f.hits["search"]++
+		f.hits["search:"+q.Get("keyword")]++
+		if f.onSearch != nil {
+			if code := f.onSearch(q.Get("keyword")); code != 0 {
+				w.WriteHeader(code)
+				return
+			}
+		}
 	}
 	if f.status != 0 {
 		w.WriteHeader(f.status)

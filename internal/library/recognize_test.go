@@ -15,9 +15,17 @@ type fakeKP struct {
 	errs    map[string]error
 	details map[int]meta.FilmDetails
 	calls   []string
+	block   chan struct{} // не nil — поиск ждёт, пока канал не закроют (Кинопоиск без токена занят каталогом)
+	web     bool          // поиск сайта без токена: год в запрос не входит, выдача — вся
 }
 
 func (f *fakeKP) Search(_ context.Context, keyword string, year int) ([]meta.Film, error) {
+	f.mu.Lock()
+	b := f.block
+	f.mu.Unlock()
+	if b != nil {
+		<-b
+	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.calls = append(f.calls, keyword)
@@ -29,7 +37,7 @@ func (f *fakeKP) Search(_ context.Context, keyword string, year int) ([]meta.Fil
 	}
 	var out []meta.Film
 	for _, x := range f.search[keyword] {
-		if year == 0 || x.Year == 0 || (x.Year >= year-1 && x.Year <= year+1) { // как yearFrom/yearTo API
+		if f.web || year == 0 || x.Year == 0 || (x.Year >= year-1 && x.Year <= year+1) { // как yearFrom/yearTo API
 			out = append(out, x)
 		}
 	}
@@ -119,5 +127,30 @@ func TestRecognizeCanceled(t *testing.T) {
 	kp := &fakeKP{errs: map[string]error{"*": context.Canceled}}
 	if _, err := recognize(ctx, kp, Parsed{Title: "x"}, nil, LayoutFilms, true); err == nil {
 		t.Errorf("отмена должна вернуться ошибкой")
+	}
+}
+
+// Ревью 11b-Б: год в названии папки сериала — год сезона; сериал подходит по годам выхода (как MatchKP),
+// у фильма — по-прежнему ±1.
+func TestRecognizeLateSeason(t *testing.T) {
+	tlou := meta.Film{ID: 30, NameRu: "Одни из нас", NameOrig: "The Last of Us", Year: 2023, Type: "TV_SERIES"}
+	ended := meta.Film{ID: 31, NameRu: "Декстер", NameOrig: "Dexter", Year: 2006, YearEnd: 2013, Type: "TV_SERIES"}
+	send := film(5, "На помощь!", "Send Help", 2023, "FILM")
+	for _, c := range []struct {
+		name   string
+		f      meta.Film
+		p      Parsed
+		layout Layout
+		want   Result
+	}{
+		{"сезон 2025 сериала с 2023", tlou, Parsed{Title: "The Last of Us", Year: 2025}, LayoutSeries, Result{30, StateFound}},
+		{"сериал кончился в 2013", ended, Parsed{Title: "Dexter", Year: 2021}, LayoutSeries, Result{0, StateUnrecognized}},
+		{"фильм — ±1", send, Parsed{Title: "Send Help", Year: 2026}, LayoutFilms, Result{0, StateUnrecognized}},
+	} {
+		kp := &fakeKP{search: map[string][]meta.Film{c.p.Title: {c.f}}, web: true}
+		got, err := recognize(context.Background(), kp, c.p, nil, c.layout, true)
+		if err != nil || got != c.want {
+			t.Errorf("%s: %+v (%v), нужно %+v", c.name, got, err, c.want)
+		}
 	}
 }

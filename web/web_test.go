@@ -3,6 +3,7 @@ package web
 import (
 	"bytes"
 	"io/fs"
+	"os"
 	"os/exec"
 	"path"
 	"regexp"
@@ -933,10 +934,13 @@ for (const [got, want] of checks) {
 func TestPultSetup(t *testing.T) {
 	node := lookNode(t)
 	script := `
-import { STEPS, nextStep, prevStep, shouldOpenSetup, kpInstruction } from './views/setup.js';
+import * as setup from './views/setup.js';
+const { STEPS, nextStep, prevStep, shouldOpenSetup } = setup;
 const home = { canEdit: true, setupDone: false };
 const checks = [
-  [STEPS.map((s) => s.id).join(','), 'trackers,kinopoisk,channels,library,done'],
+  // Шага «Кинопоиск» нет (спека 11b, 5.7): Кинопоиск работает без ключа.
+  [STEPS.map((s) => s.id).join(','), 'trackers,channels,library,done'],
+  [setup.kpInstruction, undefined],
   [nextStep(0), 1], [nextStep(STEPS.length - 1), STEPS.length - 1], [prevStep(0), 0], [prevStep(3), 2],
   [shouldOpenSetup(home, ''), true],
   [shouldOpenSetup(home, '#/'), true],
@@ -946,8 +950,6 @@ const checks = [
   [shouldOpenSetup({ canEdit: false, setupDone: false }, ''), false],
   [shouldOpenSetup({ canEdit: true, setupDone: true }, ''), false],
   [shouldOpenSetup(null, ''), false],
-  [kpInstruction.items.length, 3],
-  [kpInstruction.link.startsWith('https://'), true],
 ];
 for (const [got, want] of checks) {
   if (got !== want) {
@@ -1146,5 +1148,75 @@ for (const [name, got, want] of checks) {
 	cmd.Dir = "static"
 	if out, err := cmd.CombinedOutput(); err != nil {
 		t.Errorf("%v\n%s", err, out)
+	}
+}
+
+// Ключ Кинопоиска можно стереть (Х22): «Стереть» — пустой ключ; пустое поле без «Стереть» — не менять.
+func TestPultKeyErase(t *testing.T) {
+	node := lookNode(t)
+	script := `
+import { kpKeyPatch } from './views/settings-params.js';
+const s = (v) => JSON.stringify(v);
+const checks = [
+  [s(kpKeyPatch('', true)), '{"key":""}'],
+  [s(kpKeyPatch('новый', true)), '{"key":""}'],
+  [s(kpKeyPatch(' abc ', false)), '{"key":"abc"}'],
+  [s(kpKeyPatch('  ', false)), 'null'],
+];
+for (const [got, want] of checks) {
+  if (got !== want) {
+    console.error(got, '≠', want);
+    process.exitCode = 1;
+  }
+}
+`
+	cmd := exec.Command(node, "--input-type=module", "--no-warnings", "-e", script)
+	cmd.Dir = "static"
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Errorf("%v\n%s", err, out)
+	}
+}
+
+// «Состояние» → Кинопоиск (спека 11b, 5.7): без токена — работает или пауза до ЧЧ:ММ; ключ — не задан
+// (не жёлтым), N из M, не подошёл, квота до ЧЧ:ММ.
+func TestPultStatusKinopoisk(t *testing.T) {
+	node := lookNode(t)
+	script := `
+import { kpLine } from './views/settings-status.js';
+const base = { keySet: false, badKey: false, dailyUsed: 0, dailyLimit: 0, quotaUntil: null, keyless: { pausedUntil: null, reason: '', today: 3 } };
+const checks = [];
+let r = kpLine(base);
+checks.push(['без ключа', r.text === 'без токена: работает · ключ не задан' && !r.warn]);
+r = kpLine({ ...base, keyless: { pausedUntil: '2026-09-30T18:05:00Z', reason: 'капча', today: 40 } });
+checks.push(['пауза', /^без токена: пауза до \d\d:\d\d \(капча\) · ключ не задан$/.test(r.text) && r.warn]);
+r = kpLine({ ...base, keySet: true, dailyUsed: 20, dailyLimit: 500 });
+checks.push(['ключ задан', r.text === 'без токена: работает · ключ: 20 из 500 за сутки' && !r.warn]);
+r = kpLine({ ...base, keySet: true, badKey: true });
+checks.push(['ключ не подошёл', r.text.endsWith('ключ не подошёл') && r.warn]);
+r = kpLine({ ...base, keySet: true, quotaUntil: '2026-09-30T19:00:00Z' });
+checks.push(['квота', /ключ: квота до \d\d:\d\d$/.test(r.text)]);
+for (const [name, ok] of checks) {
+  if (!ok) {
+    console.error('не выполнено:', name, JSON.stringify(r));
+    process.exitCode = 1;
+  }
+}
+`
+	cmd := exec.Command(node, "--input-type=module", "--no-warnings", "-e", script)
+	cmd.Dir = "static"
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Errorf("%v\n%s", err, out)
+	}
+}
+
+// Атрибут hidden скрывает и элементы с display в стилях (.col — flex): иначе «Дополнительно» в
+// «Параметрах» не сворачивалось (найдено вживую, 11b-Б).
+func TestPultHiddenWins(t *testing.T) {
+	css, err := os.ReadFile("static/style.css")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !regexp.MustCompile(`\[hidden\]\s*\{\s*display:\s*none\s*!important`).Match(css) {
+		t.Fatal("в style.css нет [hidden] { display: none !important }")
 	}
 }

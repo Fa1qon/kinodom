@@ -71,12 +71,17 @@ func (f *fakeRatings) AddFilm(_ context.Context, m meta.Film) error {
 type fakePosters struct {
 	mu      sync.Mutex
 	fetched []string
+	fail    map[string]int // адрес → сколько раз ещё не отдать
 }
 
 func (f *fakePosters) Fetch(_ context.Context, src string, via meta.Via) (string, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.fetched = append(f.fetched, src)
+	if f.fail[src] > 0 {
+		f.fail[src]--
+		return "", errors.New("хостинг не отдал картинку")
+	}
 	if via != meta.Direct {
 		return "", errors.New("постер Кинопоиска — напрямую")
 	}
@@ -147,11 +152,13 @@ func (e *env) folder(t *testing.T, category int64, name string, files ...string)
 	return dir
 }
 
+// scan — обход и следом цикл распознавания (в работе он идёт отдельно, после обхода).
 func (e *env) scan(t *testing.T) {
 	t.Helper()
 	if err := e.l.scanNow(ctx); err != nil {
 		t.Fatal(err)
 	}
+	e.l.recognizeOnce(ctx)
 }
 
 func (e *env) list(t *testing.T, device string, category int64) ListView {
@@ -283,7 +290,8 @@ func TestCategoriesAndPlain(t *testing.T) {
 	e.clk.add(time.Hour)
 	e.dl.set(malahit(5))
 	e.scan(t)
-	if len(e.kp.calls) != 0 {
+	// Поиска по названию нет; «details» — вид скачанной раздачи (Х11), не своей категории.
+	if slices.ContainsFunc(e.kp.calls, func(c string) bool { return c != "details" }) {
 		t.Errorf("категория без Кинопоиска спрашивала его: %q", e.kp.calls)
 	}
 	v := e.list(t, "pc", 0)

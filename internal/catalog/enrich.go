@@ -159,17 +159,19 @@ func (c *Catalog) fetchPoster(ctx context.Context, posterURL string, kpID int) s
 	if c.images == nil {
 		return ""
 	}
+	// Номер известен — постер Кинопоиска: без водяных знаков трекеров и без медленных хостингов (спека
+	// 11b, 5.4). Не скачался — постер страницы.
+	if kpID > 0 && c.kpPoster != nil {
+		if key, err := c.images.Fetch(ctx, c.kpPoster(kpID), meta.Direct); err == nil {
+			return key
+		}
+	}
 	if posterURL != "" {
 		key, err := c.images.Fetch(ctx, posterURL, meta.ViaProxy)
 		if err == nil {
 			return key
 		}
 		c.log.Info("каталог: постер раздачи не скачался", "url", posterURL, "err", err)
-	}
-	if kpID > 0 && c.kpPoster != nil {
-		if key, err := c.images.Fetch(ctx, c.kpPoster(kpID), meta.Direct); err == nil {
-			return key
-		}
 	}
 	return ""
 }

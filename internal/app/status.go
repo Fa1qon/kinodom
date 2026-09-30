@@ -18,13 +18,30 @@ type trackerStatus struct {
 	Login     *rutracker.LoginInfo `json:"login,omitempty"`
 }
 
-// kinopoiskStatus — ключ и квота Кинопоиска: последние известные модулю рейтингов.
+// kinopoiskStatus — Кинопоиск без токена и запасной ключ с квотой: последние известные модулю рейтингов.
 type kinopoiskStatus struct {
-	KeySet     bool `json:"keySet"`
-	BadKey     bool `json:"badKey"`
-	DailyUsed  int  `json:"dailyUsed"`
-	DailyLimit int  `json:"dailyLimit"`
-	TotalLimit int  `json:"totalLimit"` // −1 — общего лимита нет
+	KeySet     bool             `json:"keySet"`
+	BadKey     bool             `json:"badKey"`
+	DailyUsed  int              `json:"dailyUsed"`
+	DailyLimit int              `json:"dailyLimit"`
+	TotalLimit int              `json:"totalLimit"` // −1 — общего лимита нет
+	QuotaUntil *time.Time       `json:"quotaUntil"` // квота ключа кончилась — до; null — нет
+	Keyless    kinopoiskKeyless `json:"keyless"`
+}
+
+// kinopoiskKeyless — Кинопоиск без токена (спека 11b, 5.7): пауза после отказа сайта и запросов за сутки.
+type kinopoiskKeyless struct {
+	PausedUntil *time.Time `json:"pausedUntil"` // null — работает
+	Reason      string     `json:"reason"`
+	Today       int        `json:"today"`
+}
+
+// timeOrNil — нулевое время — null в JSON.
+func timeOrNil(t time.Time) *time.Time {
+	if t.IsZero() {
+		return nil
+	}
+	return &t
 }
 
 // streamsStatus — потоки всех модулей и скорости торрентов.
@@ -93,7 +110,8 @@ func (a *App) statusFields(ctx context.Context) (map[string]any, error) {
 		"setupDone": a.Settings.Current().SetupDone, // пульт открывает мастер начальных настроек
 		"trackers":  trackers,
 		"kinopoisk": kinopoiskStatus{KeySet: rs.HasKey, BadKey: rs.BadKey, DailyUsed: rs.Quota.DailyUsed,
-			DailyLimit: rs.Quota.DailyLimit, TotalLimit: rs.Quota.TotalLimit},
+			DailyLimit: rs.Quota.DailyLimit, TotalLimit: rs.Quota.TotalLimit, QuotaUntil: timeOrNil(rs.PausedUntil),
+			Keyless: kinopoiskKeyless{PausedUntil: timeOrNil(rs.Keyless.PausedUntil), Reason: rs.Keyless.Reason, Today: rs.Keyless.Today}},
 		"disk":    disk,
 		"streams": streamsStatus{Count: a.Power.Active(), DownloadSpeed: down, UploadSpeed: up},
 		"iptv":    a.IPTV.Status(),

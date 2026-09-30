@@ -12,6 +12,7 @@ import (
 	"net/http"
 	"reflect"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 	"unicode"
@@ -52,7 +53,7 @@ type Options struct {
 	ListenAddr   string // адрес API; пусто — ":<apiPort>" из kinodom.json
 	Offline      bool   // торрент-движок без сети, на случайном порту (тесты)
 	DownloadsDir string // папка загрузок; пусто — настройка downloads.dir
-	KinopoiskAPI string // адрес API и рейтингов Кинопоиска вместо настоящих (тесты)
+	KinopoiskAPI string // адрес API, рейтингов и сайта Кинопоиска (GraphQL — <адрес>/graphql/) вместо настоящих (тесты)
 	// Settings — поверх настроек из базы и не сохраняются: тесты и kinodom catalog (логин, пароль
 	// Rutracker и ключ Кинопоиска — из переменных окружения, не в базу).
 	Settings map[string]string
@@ -93,6 +94,7 @@ type App struct {
 
 	version   string
 	kp        *meta.Kinopoisk
+	kpweb     *meta.KPWeb // Кинопоиск без токена (11b-Б)
 	rutor     *rutor.Rutor
 	rutracker *rutracker.Rutracker
 	proxy     *netx.Proxy // прокси для трекеров: один на всех, меняется в пульте на ходу
@@ -267,8 +269,13 @@ func (a *App) initMeta(ctx context.Context, o Options, v settings.Values) error 
 	}
 	a.Images = images
 	a.API.Handle("GET /img/{key}", "", images.Handler())
-	a.kp = meta.NewKinopoisk(meta.KinopoiskOptions{Key: v.KinopoiskKey, APIBase: o.KinopoiskAPI, RatingBase: o.KinopoiskAPI})
-	a.Ratings = meta.NewRatings(meta.RatingsOptions{KP: a.kp, DB: a.DB, Log: a.Log.With("module", "ratings")})
+	a.kp = meta.NewKinopoisk(meta.KinopoiskOptions{Key: v.KinopoiskKey, APIBase: o.KinopoiskAPI, RatingBase: o.KinopoiskAPI, PosterBase: o.KinopoiskAPI})
+	wo := meta.KPWebOptions{Log: a.Log.With("module", "kinopoisk")}
+	if o.KinopoiskAPI != "" {
+		wo.GraphQL, wo.Site = strings.TrimRight(o.KinopoiskAPI, "/")+"/graphql/", o.KinopoiskAPI
+	}
+	a.kpweb = meta.NewKPWeb(wo)
+	a.Ratings = meta.NewRatings(meta.RatingsOptions{KP: a.kp, Web: a.kpweb, DB: a.DB, Log: a.Log.With("module", "ratings")})
 	a.Sup.Add(a.Ratings, a.ModuleEnabled(ctx, a.Ratings.Name()))
 	return nil
 }

@@ -86,7 +86,8 @@ type Options struct {
 	KP           KP // nil — без Кинопоиска
 	Ratings      Ratings
 	Posters      Posters
-	Downloads    Downloads // nil — без скачанного
+	KPPoster     func(id int) string // постер Кинопоиска по номеру — повтор, когда постер карточки не скачался (Х9)
+	Downloads    Downloads           // nil — без скачанного
 	History      History
 	Power        *power.Keeper
 	DownloadsDir func() string // папка загрузок: её нельзя добавить в категорию
@@ -112,6 +113,8 @@ type Library struct {
 	lastScan time.Time
 	problems map[int64]string // папка категории → not_found, no_access
 	kpPause  time.Time        // квота Кинопоиска кончилась — распознавание не раньше
+	retries  map[string]retry // «details:<номер>», «poster:<номер>» → повтор после сбоя (Х9)
+	recWake  chan struct{}    // разбудить цикл распознавания (после обхода)
 
 	tracker  *watch.Tracker                         // место по чтению потока файлов из папок
 	durTried sync.Map                               // «раздача/номер» → длительность уже пробовали узнать
@@ -149,7 +152,7 @@ func New(o Options) *Library {
 	if o.KeepDays == nil {
 		o.KeepDays = func() int { return 14 }
 	}
-	l := &Library{o: o, d: db{o.DB}, log: o.Log, now: o.Now, problems: map[int64]string{}}
+	l := &Library{o: o, d: db{o.DB}, log: o.Log, now: o.Now, problems: map[int64]string{}, retries: map[string]retry{}, recWake: make(chan struct{}, 1)}
 	var rep watch.Reporter
 	if o.History != nil {
 		rep = mediaReporter{o.History}
@@ -163,6 +166,7 @@ func (l *Library) Name() string { return "library" }
 // Run — обход при старте и раз в час; обход по запросу пульта — Scan.
 func (l *Library) Run(ctx context.Context) error {
 	l.start(ctx)
+	go l.recognizeLoop(ctx)
 	supervisor.Ready(ctx)
 	l.startScan(true)
 	t := time.NewTicker(scanEvery)
@@ -319,10 +323,61 @@ func (l *Library) scanNow(ctx context.Context) error {
 	} else if err := l.d.syncTorrents(ctx, tus, now); err != nil {
 		return err
 	}
-	if err := l.recognizePending(ctx, tus); err != nil {
+	// Распознавание и описания Кинопоиска — своим циклом (recognizeLoop): без токена запросы идут не чаще
+	// раза в 3 с и после каталога, обход их не ждёт (11b-Б, найдено вживую).
+	if err := l.refreshCards(ctx, tus, 0, true); err != nil {
 		return err
 	}
-	return l.refreshCards(ctx, tus)
+	l.wakeRecognizer()
+	return nil
+}
+
+// recognizeEvery — цикл распознавания заглядывает и сам: повторы по паузе (Х9), ожидавшие квоту.
+const recognizeEvery = 10 * time.Minute
+
+func (l *Library) wakeRecognizer() {
+	select {
+	case l.recWake <- struct{}{}:
+	default:
+	}
+}
+
+// recognizeLoop — распознавание новых единиц и описания карточек с Кинопоиска: после каждого обхода и раз
+// в recognizeEvery.
+func (l *Library) recognizeLoop(ctx context.Context) {
+	t := time.NewTicker(recognizeEvery)
+	defer t.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-l.recWake:
+		case <-t.C:
+		}
+		l.recognizeOnce(ctx)
+	}
+}
+
+// recognizeOnce — один проход распознавания; паника и ошибки не роняют модуль.
+func (l *Library) recognizeOnce(ctx context.Context) {
+	defer func() {
+		if p := recover(); p != nil {
+			l.log.Error("медиатека: сбой распознавания", "panic", fmt.Sprint(p), "stack", string(debug.Stack()))
+		}
+	}()
+	tus, err := l.torrents(ctx)
+	if err != nil {
+		tus = nil
+	}
+	if err := l.recognizePending(ctx, tus, 0); err != nil {
+		if ctx.Err() == nil {
+			l.log.Warn("медиатека: распознавание не удалось", "err", err)
+		}
+		return
+	}
+	if err := l.refreshCards(ctx, tus, 0, false); err != nil && ctx.Err() == nil {
+		l.log.Warn("медиатека: описания Кинопоиска не загрузились", "err", err)
+	}
 }
 
 // syncProblems — недоступные папки категорий — проблемы в «Состоянии» (спека, раздел 5.11);

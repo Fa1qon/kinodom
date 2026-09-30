@@ -6,8 +6,10 @@ import (
 	"net/http"
 	"slices"
 	"strconv"
+	"sync"
 
 	"kinodom/internal/httpx"
+	"kinodom/internal/meta"
 )
 
 // kinopoiskIDs — номер Кинопоиска раздач: из описания, иначе найденный очередью рейтингов (спека этапа 7,
@@ -37,35 +39,72 @@ func (c *Catalog) kinopoiskIDs(ctx context.Context, rs []row) (map[int64]int, er
 	return out, nil
 }
 
-// films — одна карточка на фильм: из раздач с одним номером Кинопоиска остаётся раздача в формате в
-// приоритете с наибольшим числом раздающих, а если такой нет — с наибольшим числом раздающих. Раздачи
-// без номера не склеиваются. Порядок — по раздающим оставшихся раздач.
-func films(rs []row, kp map[int64]int, pref string) []row {
+// workKeys — ключ произведения по названию раздачи: список каталога разбирает сотни названий на каждый запрос.
+var workKeys sync.Map
+
+// workKey — ключ произведения раздачи: название + год + фильм/сериал (спека 11b, 5.3).
+func workKey(r row) string {
+	if k, ok := workKeys.Load(r.Title); ok {
+		return k.(string)
+	}
+	k := meta.WorkKey(meta.ParseTitle(r.Title))
+	workKeys.Store(r.Title, k)
+	return k
+}
+
+// films — одна карточка на произведение (спека 11b, 5.3): раздачи с одним номером Кинопоиска; раздача
+// без номера, чей ключ произведения совпал с ключом раздачи с номером, — в карточку этого номера;
+// остальные без номера — по ключу произведения (дубли уходят, ещё до того как номер найден). Из группы
+// остаётся раздача в формате в приоритете с наибольшим числом раздающих, а если такой нет — с
+// наибольшим числом раздающих. Порядок — по раздающим оставшихся. size — раздач в группе оставшейся.
+func films(rs []row, kp map[int64]int, pref string) (out []row, size map[int64]int) {
 	better := func(a, b row) bool { // a лучше b
 		if pa, pb := prefers(a.Format, pref), prefers(b.Format, pref); pa != pb {
 			return pa
 		}
 		return a.Seeders > b.Seeders
 	}
-	best := map[int]int{} // номер Кинопоиска → индекс в out
-	out := make([]row, 0, len(rs))
-	for _, r := range rs {
-		id := kp[r.ID]
-		if id == 0 {
-			out = append(out, r)
-			continue
+	keys := make([]string, len(rs))
+	kpOfWork := map[string]int{}
+	for i, r := range rs {
+		keys[i] = workKey(r)
+		if id := kp[r.ID]; id > 0 && keys[i] != "" {
+			if _, ok := kpOfWork[keys[i]]; !ok {
+				kpOfWork[keys[i]] = id
+			}
 		}
-		if i, ok := best[id]; ok {
-			if better(r, out[i]) {
-				out[i] = r
+	}
+	best := map[string]int{} // группа → индекс в out
+	count := map[string]int{}
+	out = make([]row, 0, len(rs))
+	for i, r := range rs {
+		g := ""
+		switch id := kp[r.ID]; {
+		case id > 0:
+			g = "kp:" + strconv.Itoa(id)
+		case keys[i] != "" && kpOfWork[keys[i]] > 0:
+			g = "kp:" + strconv.Itoa(kpOfWork[keys[i]])
+		case keys[i] != "":
+			g = "w:" + keys[i]
+		default:
+			g = "id:" + strconv.FormatInt(r.ID, 10)
+		}
+		count[g]++
+		if j, ok := best[g]; ok {
+			if better(r, out[j]) {
+				out[j] = r
 			}
 			continue
 		}
-		best[id] = len(out)
+		best[g] = len(out)
 		out = append(out, r)
 	}
+	size = make(map[int64]int, len(out))
+	for g, j := range best {
+		size[out[j].ID] = count[g]
+	}
 	slices.SortStableFunc(out, func(a, b row) int { return b.Seeders - a.Seeders })
-	return out
+	return out, size
 }
 
 // variantRows — живые раздачи фильмов kpIDs на обоих трекерах: по номеру из описания и по найденному
@@ -147,9 +186,71 @@ func (c *Catalog) variantsOf(ctx context.Context, id int64) (row, []row, error) 
 		if err != nil {
 			return row{}, nil, err
 		}
-		rs = withCurrent(vs[film], r, c.PreferredFormat())
+		same, err := c.unnumberedOfWork(ctx, r.Tracker, append(vs[film], r))
+		if err != nil {
+			return row{}, nil, err
+		}
+		all := collapse(append(vs[film], same...))
+		preferFirst(all, c.PreferredFormat())
+		rs = withCurrent(all, r, c.PreferredFormat())
+	} else if wk := workKey(r); wk != "" {
+		// Без номера — раздачи того же произведения в каталоге этого трекера (спека 11b, 5.3).
+		all, err := c.st.catalogRows(ctx, c.enabled())
+		if err != nil {
+			return row{}, nil, err
+		}
+		var same []row
+		for _, x := range all {
+			if x.Tracker == r.Tracker && workKey(x) == wk {
+				same = append(same, x)
+			}
+		}
+		same = collapse(same)
+		preferFirst(same, c.PreferredFormat())
+		rs = withCurrent(same, r, c.PreferredFormat())
 	}
 	return r, rs, nil
+}
+
+// unnumberedOfWork — раздачи каталога трекера без номера Кинопоиска с тем же ключом произведения, что у
+// раздач group этого трекера: films() склеивает их в карточку номера, и «Другие раздачи» её должны
+// показывать, пока очередь рейтингов номер им не дала (ревью 11b-Б, Important 4).
+func (c *Catalog) unnumberedOfWork(ctx context.Context, tracker string, group []row) ([]row, error) {
+	keys := map[string]bool{}
+	in := map[int64]bool{}
+	for _, x := range group {
+		in[x.ID] = true
+		if x.Tracker == tracker {
+			if wk := workKey(x); wk != "" {
+				keys[wk] = true
+			}
+		}
+	}
+	if len(keys) == 0 {
+		return nil, nil
+	}
+	all, err := c.st.catalogRows(ctx, c.enabled())
+	if err != nil {
+		return nil, err
+	}
+	var cand []row
+	for _, x := range all {
+		if x.Tracker == tracker && x.KinopoiskID == 0 && !in[x.ID] && keys[workKey(x)] {
+			in[x.ID] = true
+			cand = append(cand, x)
+		}
+	}
+	kp, err := c.kinopoiskIDs(ctx, cand)
+	if err != nil {
+		return nil, err
+	}
+	var out []row
+	for _, x := range cand {
+		if kp[x.ID] == 0 {
+			out = append(out, x)
+		}
+	}
+	return out, nil
 }
 
 // withCurrent — открытая раздача r в списке раздач фильма: пульт отмечает в нём текущую. Если её
