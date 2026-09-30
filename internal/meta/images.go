@@ -49,6 +49,10 @@ type ImagesOptions struct {
 	// FailFor — неудача сети или ответ не 200 запоминается по адресу на столько: адрес не запрашивается
 	// снова (логотипы каналов — хвост Х29). 0 — не запоминается (постеры повторяет каталог).
 	FailFor time.Duration
+	// StubSources — одна и та же картинка со стольких разных адресов — заглушка хостинга (хвост Х6):
+	// постеры раздач — PosterStubSources; 0 — не распознаются (логотипы каналов: часовые версии и
+	// зеркала законно ведут на один файл — ревью 11b-А).
+	StubSources int
 }
 
 // Images — картинки, которые сервер скачивает к себе и отдаёт клиентам сам (спека, раздел 8):
@@ -72,8 +76,11 @@ type Images struct {
 	dropped []string                   // ключи, удалённые как заглушки: каталог снимает их с раздач
 }
 
-// stubSources — с стольких разных адресов одна и та же картинка — заглушка хостинга.
-const stubSources = 3
+// PosterStubSources — с стольких разных адресов одна и та же картинка у постеров — заглушка хостинга.
+const PosterStubSources = 3
+
+// seenLimit — сколько разных картинок помнится для распознавания заглушек.
+const seenLimit = 20000
 
 type failure struct {
 	at  time.Time
@@ -118,9 +125,13 @@ func NewImages(o ImagesOptions) (*Images, error) {
 		// Через прокси соединение идёт только с прокси, и PublicOnly не видит, куда ведёт редирект.
 		proxied.CheckRedirect, direct.CheckRedirect = publicRedirect, publicRedirect
 	}
+	stubs := map[string]bool{}
+	if o.StubSources > 0 {
+		stubs = loadStubs(o.Dir)
+	}
 	return &Images{o: o, proxied: proxied, direct: direct, lim: rate.NewLimiter(o.Rate, 1),
 		noImage: map[string]time.Time{}, failed: map[string]failure{}, seen: map[string]map[string]bool{},
-		stubs: loadStubs(o.Dir), keyHash: map[string]string{}}, nil
+		stubs: stubs, keyHash: map[string]string{}}, nil
 }
 
 // publicRedirect — редирект картинки на адрес этого ПК или домашней сети не выполняется (M10);
@@ -222,7 +233,7 @@ func (im *Images) fetch(ctx context.Context, u *url.URL, src, key string, via Vi
 	}
 	sum := sha256.Sum256(body)
 	h := hex.EncodeToString(sum[:])
-	if im.stubContent(h, src) {
+	if im.o.StubSources > 0 && im.stubContent(h, src) {
 		return "", ErrNoImage
 	}
 	// Сначала во временный файл: оборванная запись не должна выглядеть готовой картинкой.
@@ -267,11 +278,14 @@ func (im *Images) stubContent(h, src string) bool {
 	}
 	set := im.seen[h]
 	if set == nil {
+		if len(im.seen) >= seenLimit {
+			clear(im.seen) // память — не больше seenLimit разных картинок; заглушка наберётся снова
+		}
 		set = map[string]bool{}
 		im.seen[h] = set
 	}
 	set[src] = true
-	if len(set) < stubSources {
+	if len(set) < im.o.StubSources {
 		return false
 	}
 	im.stubs[h] = true

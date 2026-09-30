@@ -67,8 +67,17 @@ export function enterColumn(items, from, main, remembered) {
   return best;
 }
 
-// leftFrom — колонка → элемент, с которого из неё ушли стрелкой вбок: обратно — на него.
+// leftFrom — колонка → {el, key} элемента, с которого из неё ушли стрелкой вбок: обратно — на него.
 const leftFrom = new WeakMap();
+
+// rememberedIndex — номер элемента, с которого ушли из колонки: сам элемент, а если экран его пересоздал
+// (строки серий перерисовываются раз в 1–3 с) — элемент с тем же data-key; -1 — нет (ревью 11b-А).
+export function rememberedIndex(items, memo) {
+  if (!memo) return -1;
+  const i = items.indexOf(memo.el);
+  if (i >= 0) return i;
+  return memo.key ? items.findIndex((el) => el.dataset && el.dataset.key === memo.key) : -1;
+}
 
 // columnJump — стрелка вбок, когда в своём ряду ничего нет (спека 11b, 4.1): переход в соседнюю колонку
 // экрана [data-nav-column] (боковая панель раздачи). null — колонок нет или в той стороне пусто.
@@ -80,11 +89,10 @@ function columnJump(active, dir, all) {
   const ci = nextColumn(rectOf(col), cols.map(rectOf), dir);
   if (ci < 0) return null;
   const items = all.filter((el) => cols[ci].contains(el));
-  const remembered = leftFrom.get(cols[ci]);
   const i = enterColumn(items.map(rectOf), rectOf(active), items.findIndex((el) => el.hasAttribute('data-nav-main')),
-    remembered ? items.indexOf(remembered) : -1);
+    rememberedIndex(items, leftFrom.get(cols[ci])));
   if (i < 0) return null;
-  leftFrom.set(col, active);
+  leftFrom.set(col, { el: active, key: (active.dataset && active.dataset.key) || '' });
   return items[i];
 }
 
@@ -113,9 +121,14 @@ export function move(dir) {
     return !!first;
   }
   const others = all.filter((el) => el !== active);
-  const i = pick(rectOf(active), others.map(rectOf), dir);
+  // Вбок из колонки — сначала в своей колонке, потом в соседнюю колонку: иначе липкая панель раздачи
+  // перехватывает стрелку у строк основной колонки на её высоте, и «обратно» теряется (ревью 11b-А).
+  const side = dir === 'left' || dir === 'right';
+  const col = side && active.closest ? active.closest('[data-nav-column]') : null;
+  const near = col ? others.filter((el) => col.contains(el)) : others;
+  const i = pick(rectOf(active), near.map(rectOf), dir);
   if (i >= 0) {
-    focusOn(others[i]);
+    focusOn(near[i]);
     return true;
   }
   const jump = dir === 'left' || dir === 'right' ? columnJump(active, dir, others) : null;

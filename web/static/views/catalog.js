@@ -33,6 +33,24 @@ export function oneAtATime(fn) {
   };
 }
 
+// restoreDepth — возврат со страницы раздачи: догрузить столько порций, сколько было (pages), но не
+// больше, чем есть у сервера сейчас, и не просить снова порцию, которая не пришла — каталог мог стать
+// короче (склейка карточек, новый топ), иначе цикл без конца вешает пульт (ревью 11b-А).
+export async function restoreDepth(more, getState, pages) {
+  for (;;) {
+    const s = getState();
+    if (s.error || s.page >= Math.min(pages, s.pages)) return;
+    await more();
+    if (getState().page === s.page) return;
+  }
+}
+
+// retryDue — порция не пришла, а низ сетки на экране или рядом: прокрутка или «вниз» просят её снова
+// (наблюдатель пересечения второй раз не срабатывает, пока низ не ушёл из зоны — ревью 11b-А).
+export function retryDue(state, tailTop, viewportH) {
+  return !!state.error && !state.loading && state.page < state.pages && tailTop < viewportH + 600;
+}
+
 export function render(root, r, ctx) {
   const tracker = TRACKERS.some(([id]) => id === r.parts[1]) ? r.parts[1] : 'rutor';
   const section = r.parts[2] || '';
@@ -119,13 +137,21 @@ export function render(root, r, ctx) {
       if (es.some((e) => e.isIntersecting)) more();
     }, { rootMargin: '600px 0px' })
     : null;
-  grid.addEventListener('focusin', (e) => {
+  const inLastRow = (el) => {
     const last = grid.lastElementChild;
-    if (last && e.target.closest && e.target.closest('.entry') && e.target.getBoundingClientRect().top >= last.getBoundingClientRect().top - 1) more();
+    return !!last && !!el.closest && !!el.closest('.entry') && el.getBoundingClientRect().top >= last.getBoundingClientRect().top - 1;
+  };
+  grid.addEventListener('focusin', (e) => {
+    if (inLastRow(e.target)) more();
     remember();
+  });
+  // «Вниз» из последнего ряда: идти некуда, а порция не пришла — попросить снова (пульт ТВ).
+  grid.addEventListener('keydown', (e) => {
+    if (e.key === 'ArrowDown' && inLastRow(e.target) && retryDue(state, tail.getBoundingClientRect().top, window.innerHeight)) more();
   });
   let scrollTimer = 0;
   const onScroll = () => {
+    if (retryDue(state, tail.getBoundingClientRect().top, window.innerHeight)) more();
     clearTimeout(scrollTimer);
     scrollTimer = setTimeout(remember, 200);
   };
@@ -156,7 +182,7 @@ export function render(root, r, ctx) {
     }
     // Возврат со страницы раздачи — столько же порций, то же место и та же карточка.
     if (saved) {
-      while (alive && state.page < saved.pages && !state.error) await more();
+      await restoreDepth(more, () => state, saved.pages);
       if (!alive) return;
       window.scrollTo(0, saved.scrollY || 0);
       const el = saved.focusKey ? grid.querySelector(`[data-key="${CSS.escape(saved.focusKey)}"]`) : null;
