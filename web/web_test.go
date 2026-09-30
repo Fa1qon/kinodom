@@ -247,6 +247,9 @@ const checks = [
   [sourceMarks({ offered: true, pinned: true, audio: false }, 0).join(), 'основной — выбран вручную,без звука'],
   [sourceMarks({ offered: true, audio: null }, 1).join(), ''],
   [sourceMarks({ offered: false, hidden: true }, 3).join(), 'скрыт'],
+  // Скрытый, но других рабочих нет — плеер получит его запасным (финальное ревью).
+  [sourceMarks({ offered: true, hidden: true, audio: false }, 0).join(), 'скрыт, но других рабочих нет — плеер получит его,без звука'],
+  [sourceButtons({ offered: true, hidden: true }, 0, [{ offered: true, hidden: true }]).join(), 'show'],
   [sourceButtons({ offered: true }, 0, [{ offered: true }, { offered: true }]).join(), 'keep,hide,other'],
   [sourceButtons({ offered: true }, 1, [{ offered: true }, { offered: true }]).join(), 'main,hide,other'],
   [sourceButtons({ offered: true, pinned: true }, 0, [{ offered: true }, { offered: true }]).join(), 'unpin,hide,other'],

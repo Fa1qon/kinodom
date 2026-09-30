@@ -81,7 +81,7 @@ type Override struct {
 	Country    *string
 	Languages  []string // nil — не правили
 	PinnedURL  string
-	HiddenURLs []string // скрытые у канала источники: не предлагаются и не проверяются
+	HiddenURLs []string // скрытые у канала источники: не предлагаются, пока есть другие
 }
 
 func (o Override) empty() bool {

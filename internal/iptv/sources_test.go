@@ -68,8 +68,16 @@ func TestHiddenSource(t *testing.T) {
 			t.Errorf("скрытый источник в полной проверке")
 		}
 	}
-	if k := l.ByKey["spas"]; k == nil || k.Offered() || len(k.Rejected) != 1 {
-		t.Errorf("канал, у которого скрыт единственный источник, предлагается")
+	// Других рабочих нет — скрытый живой идёт плееру запасным: канал не пропадает из списка, а «Вернуть»
+	// остаётся достижимым (финальное ревью). Скрыть канал целиком — «Скрыть канал».
+	if k := l.ByKey["spas"]; k == nil || len(k.Sources) != 1 || k.Sources[0].ID != 3 || len(k.Rejected) != 0 {
+		t.Errorf("Спас без других источников: предлагаются %v, скрытые %v", k.Sources, k.Rejected)
+	}
+	p.streams[1].State = StateAlive // скрытый ожил,
+	p.streams[2].State = StateDead  // а последний не скрытый умер
+	l = buildTest(t, p, Hidden{}, 4)
+	if c := l.ByKey["ntv"]; !c.Offered() || c.Sources[0].ID != 1 || slices.IndexFunc(l.Order, func(x *Channel) bool { return x.Key == "ntv" }) < 0 {
+		t.Errorf("НТВ пропал, хотя скрытый источник жив: предлагаются %v", c.Sources)
 	}
 }
 

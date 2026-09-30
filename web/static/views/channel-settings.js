@@ -25,13 +25,14 @@ export function labelPatch(c, d) {
 }
 
 // sourceMarks — пометки источника i: «основной» — его плеер получит первым (выбран вручную или
-// первый по проверкам); «без звука» — по полной проверке; «скрыт» — скрыт у канала вручную.
+// первый по проверкам); «скрыт» — скрыт у канала вручную (других рабочих нет — сервер отдаёт его
+// плееру запасным); «без звука» — по полной проверке.
 export function sourceMarks(s, i) {
   const out = [];
-  if (s.pinned) out.push(s.offered ? 'основной — выбран вручную' : 'выбран основным, но сейчас не отвечает');
+  if (s.hidden) out.push(s.offered ? 'скрыт, но других рабочих нет — плеер получит его' : 'скрыт');
+  else if (s.pinned) out.push(s.offered ? 'основной — выбран вручную' : 'выбран основным, но сейчас не отвечает');
   else if (s.offered && i === 0) out.push('основной');
   if (s.audio === false) out.push('без звука');
-  if (s.hidden) out.push('скрыт');
   return out;
 }
 
@@ -162,7 +163,7 @@ export function render(root, r, ctx) {
       const info = [s.quality || null, s.kind === 'hls' ? 'HLS' : s.kind === 'dash' ? 'DASH' : s.kind === 'live' ? 'поток' : null,
         s.ttfbMs ? `${(s.ttfbMs / 1000).toFixed(1).replace('.', ',')} с до данных` : null, s.ratio ? `запас ${s.ratio.toFixed(1).replace('.', ',')}×` : null].filter(Boolean).join(' · ');
       const marks = sourceMarks(s, n).map((m) => h('span', { class: m === 'без звука' ? 'tag warn-tag' : 'tag' },
-        icon({ 'без звука': 'warning', скрыт: 'visibility_off' }[m] || 'push_pin', 16), m));
+        icon(m === 'без звука' ? 'warning' : m.startsWith('скрыт') ? 'visibility_off' : 'push_pin', 16), m));
       const row = h('div', { class: s.offered ? 'src' : 'src off' },
         h('div', { class: 'row' }, h('span', { class: 'num' }, String(n + 1)), gradeMark(s.offered ? (s.grade || 'unrated') : 'black'),
           h('span', { class: 'grow strong ellipsis', title: s.name }, s.name || s.playlists.join(', '))),

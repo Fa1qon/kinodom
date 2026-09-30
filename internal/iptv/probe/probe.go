@@ -243,9 +243,11 @@ func (p *Prober) start(ctx context.Context, t Target, full bool) (Result, *playl
 	pl := parsePlaylist(string(body))
 	if len(pl.variants) > 0 {
 		v := pl.variants[0] // лёгкая — первый вариант
+		separate := false
 		if full {
 			v = pl.best()
 			r.Audio = codecsAudio(v.codecs, v.audio != "" && pl.audioMedia)
+			separate = v.audio != "" && pl.audioURI[v.audio]
 		}
 		for _, x := range pl.variants {
 			r.Height = max(r.Height, x.height)
@@ -260,7 +262,7 @@ func (p *Prober) start(ctx context.Context, t Target, full bool) (Result, *playl
 			return fail(r, err)
 		}
 		media := parsePlaylist(string(b))
-		media.bandwidth = v.bandwidth
+		media.bandwidth, media.separateAudio = v.bandwidth, separate
 		pl, base = media, final
 	}
 	if len(pl.segments) == 0 {
@@ -301,7 +303,8 @@ func (p *Prober) segment(ctx context.Context, t Target, r Result, pl *playlist, 
 		r.Grade, r.Error = GradeRed, "сегмент не скачался"
 		return r
 	}
-	if a := tsAudio(data.Bytes()); a != nil { // таблица дорожек сегмента точнее CODECS
+	// Таблица дорожек сегмента точнее CODECS — кроме звука отдельной дорожкой: в сегментах видео его нет.
+	if a := tsAudio(data.Bytes()); a != nil && !pl.separateAudio {
 		r.Audio = a
 	}
 	got := float64(n + 1)
@@ -453,6 +456,10 @@ type playlist struct {
 	segments   []segment
 	bandwidth  int64 // у плейлиста варианта — BANDWIDTH из мастер-плейлиста
 	audioMedia bool  // у мастер-плейлиста есть EXT-X-MEDIA:TYPE=AUDIO
+	// audioURI — группы AUDIO, у которых звук отдельной дорожкой (EXT-X-MEDIA с URI).
+	audioURI map[string]bool
+	// separateAudio — у плейлиста варианта звук отдельной дорожкой: в его сегментах звука нет.
+	separateAudio bool
 }
 
 func (pl playlist) best() variant {
@@ -463,6 +470,17 @@ func (pl playlist) best() variant {
 		}
 	}
 	return b
+}
+
+// mediaAttr — значение атрибута тега без кавычек; ok — атрибут есть.
+func mediaAttr(line, name string) (string, bool) {
+	_, attrs, _ := strings.Cut(line, ":")
+	for _, kv := range splitAttrs(attrs) {
+		if k, val, _ := strings.Cut(kv, "="); strings.EqualFold(k, name) {
+			return strings.Trim(val, `"`), true
+		}
+	}
+	return "", false
 }
 
 func parsePlaylist(s string) playlist {
@@ -493,6 +511,14 @@ func parsePlaylist(s string) playlist {
 			pending = &v
 		case strings.HasPrefix(line, "#EXT-X-MEDIA:") && strings.Contains(strings.ToUpper(line), "TYPE=AUDIO"):
 			pl.audioMedia = true
+			if group, ok := mediaAttr(line, "GROUP-ID"); ok {
+				if _, uri := mediaAttr(line, "URI"); uri {
+					if pl.audioURI == nil {
+						pl.audioURI = map[string]bool{}
+					}
+					pl.audioURI[group] = true
+				}
+			}
 		case strings.HasPrefix(line, "#EXTINF:"):
 			d, _, _ := strings.Cut(strings.TrimPrefix(line, "#EXTINF:"), ",")
 			dur, _ = strconv.ParseFloat(strings.TrimSpace(d), 64)
