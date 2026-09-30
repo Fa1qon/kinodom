@@ -52,7 +52,12 @@ type searchRun struct {
 // ошибок) и сразу отвечает тем, что уже есть. Найденное сохраняется в базе: карточку можно
 // открыть (этап 7).
 func (c *Catalog) Search(ctx context.Context, query string) (SearchState, error) {
-	run, q, err := c.startSearch(query, false, true)
+	return c.search(ctx, query, false)
+}
+
+// search — Search; poll — повторный опрос того же поиска (законченный с ошибкой трекера не ищет заново).
+func (c *Catalog) search(ctx context.Context, query string, poll bool) (SearchState, error) {
+	run, q, err := c.startSearch(query, poll, true)
 	if err != nil {
 		return SearchState{}, err
 	}

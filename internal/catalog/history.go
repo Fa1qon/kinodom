@@ -92,12 +92,13 @@ func (c *Catalog) handleSearch(w http.ResponseWriter, r *http.Request) {
 		httpx.WriteError(w, http.StatusBadRequest, "пустой поисковый запрос")
 		return
 	}
-	st, err := c.Search(r.Context(), q)
+	poll := r.URL.Query().Get("poll") == "1"
+	st, err := c.search(r.Context(), q, poll)
 	if err != nil {
 		httpx.WriteError(w, http.StatusInternalServerError, "поиск не удался: "+err.Error())
 		return
 	}
-	if r.URL.Query().Get("poll") != "1" {
+	if !poll {
 		if err := c.rememberQuery(r.Context(), q); err != nil {
 			c.log.Error("поиск: запрос не записался в историю", "err", err)
 		}

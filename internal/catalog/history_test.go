@@ -2,6 +2,7 @@ package catalog
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -90,6 +91,31 @@ func TestSearchRoutesAndHistory(t *testing.T) {
 	mux.ServeHTTP(rec, httptest.NewRequest("DELETE", "/api/v1/search/history?q=КОСМОС", nil))
 	if rec.Code != http.StatusNoContent || len(historyQueries(t, c)) != 0 {
 		t.Fatalf("убрать запрос: %d %v", rec.Code, historyQueries(t, c))
+	}
+}
+
+// Опрос (poll=1) законченного с ошибкой трекера поиска не запускает его заново и после 10 секунд:
+// пульт опрашивает, пока догружаются постеры найденного, и найденное не должно пропадать с экрана
+// (найдено вживую, 11b-А: Rutracker без логина — каждый опрос искал заново).
+func TestSearchPollKeepsFinishedWithErrors(t *testing.T) {
+	rutor, rt := newFake("rutor"), newFake("rutracker")
+	rutor.search = []source.Release{rel("rutor", "5", "Космос (1980) BDRip", 40, 1<<30, "k")}
+	rt.searchErr = errors.New("Rutracker: не заданы логин и пароль — поиск недоступен")
+	c, clk := newCatalog(t, openDB(t), nil, rutor, rt)
+	mux := http.NewServeMux()
+	c.Register(muxRouter{mux})
+	var v SearchView
+	getJSON(t, mux, "/api/v1/search?q=космос", &v)
+	for deadline := time.Now().Add(5 * time.Second); !v.Complete; time.Sleep(20 * time.Millisecond) {
+		getJSON(t, mux, "/api/v1/search?q=космос&poll=1", &v)
+		if time.Now().After(deadline) {
+			t.Fatalf("поиск не закончился: %+v", v)
+		}
+	}
+	clk.add(11 * time.Second)
+	getJSON(t, mux, "/api/v1/search?q=космос&poll=1", &v)
+	if !v.Complete || len(v.Results) != 1 || rutor.Calls("search") != 1 {
+		t.Fatalf("опрос через 11 с: готово %v, найдено %d, поисков %d — опрос не ищет заново", v.Complete, len(v.Results), rutor.Calls("search"))
 	}
 }
 
