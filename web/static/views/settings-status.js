@@ -13,6 +13,24 @@ const MODULE_STATE = {
   stopped: ['остановлен', 'var(--yellow)'],
   disabled: ['выключен', 'var(--faint)'],
 };
+// hhmm — «18:05» по часам устройства.
+const hhmm = (t) => {
+  const d = new Date(t);
+  return String(d.getHours()).padStart(2, '0') + ':' + String(d.getMinutes()).padStart(2, '0');
+};
+
+// kpLine — строка Кинопоиска (спека 11b, 5.7): без токена — работает или пауза до ЧЧ:ММ; ключ — не задан
+// (не беда: он запасной), N из M за сутки, не подошёл, квота до ЧЧ:ММ. warn — жёлтым.
+export function kpLine(k) {
+  const kl = k.keyless || {};
+  const web = kl.pausedUntil ? `без токена: пауза до ${hhmm(kl.pausedUntil)}` + (kl.reason ? ` (${kl.reason})` : '') : 'без токена: работает';
+  const key = !k.keySet ? 'ключ не задан'
+    : k.badKey ? 'ключ не подошёл'
+      : k.quotaUntil ? `ключ: квота до ${hhmm(k.quotaUntil)}`
+        : `ключ: ${k.dailyUsed} из ${k.dailyLimit} за сутки`;
+  return { text: `${web} · ${key}`, warn: !!kl.pausedUntil || (k.keySet && k.badKey) };
+}
+
 const LOGIN = {
   none: 'логин не задан',
   unknown: 'вход ещё не проверялся',
@@ -59,9 +77,9 @@ export function render(root, r, ctx) {
     const [text, color] = MODULE_STATE[m.state] || [m.state, 'var(--yellow)'];
     let detail = text;
     if (id === 'ratings' && m.state === 'running') {
-      const k = st.kinopoisk;
-      detail = !k.keySet ? 'ключ не задан' : k.badKey ? 'ключ не подошёл' : `${k.dailyUsed} из ${k.dailyLimit} запросов за сутки`;
-      if (!k.keySet || k.badKey) return row('var(--yellow)', name, detail, 'var(--yellow)');
+      const { text: line, warn } = kpLine(st.kinopoisk);
+      if (warn) return row('var(--yellow)', name, line, 'var(--yellow)');
+      detail = line;
     }
     if (m.lastError && m.state !== 'running') detail += ' · ' + m.lastError;
     return row(color, name, detail, color === 'var(--green)' ? 'var(--muted)' : color);

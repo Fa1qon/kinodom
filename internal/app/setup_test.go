@@ -89,33 +89,16 @@ func TestSetupCheckTrackers(t *testing.T) {
 }
 
 // Ключ Кинопоиска в мастере: подходит — сколько запросов осталось на сутки; ключ — не в журнал.
-func TestSetupCheckKinopoisk(t *testing.T) {
-	kp := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path == "/api/v1/api_keys/SECRET-GOOD-KEY" {
-			io.WriteString(w, `{"totalQuota":{"value":-1,"used":0},"dailyQuota":{"value":500,"used":20},"accountType":"FREE"}`)
-			return
-		}
-		w.WriteHeader(http.StatusUnauthorized)
-	}))
-	t.Cleanup(kp.Close)
-	home := t.TempDir()
-	a := startAppWith(t, Options{Home: home, ListenAddr: "127.0.0.1:0", Offline: true, DownloadsDir: t.TempDir(), KinopoiskAPI: kp.URL})
-	base := "http://" + a.API.Addr()
-	if r := setupCheck(t, base, map[string]bool{"kinopoisk": true}); r.OK || r.Text != "Ключ не указан" {
-		t.Fatalf("без ключа: %+v", r)
+func TestSetupCheckNoKinopoisk(t *testing.T) {
+	// Шага «Кинопоиск» в мастере нет (спека 11b, 5.7): проверка ключа из мастера убрана.
+	a := startAppWith(t, Options{Home: t.TempDir(), ListenAddr: "127.0.0.1:0", Offline: true, DownloadsDir: t.TempDir()})
+	resp, err := http.Post("http://"+a.API.Addr()+"/api/v1/setup/check", "application/json", strings.NewReader(`{"kinopoisk":true}`))
+	if err != nil {
+		t.Fatal(err)
 	}
-	putJSON(t, base+"/api/v1/settings", map[string]any{"kinopoisk": map[string]any{"key": "SECRET-GOOD-KEY"}})
-	r := setupCheck(t, base, map[string]bool{"kinopoisk": true})
-	if !r.OK || r.Text != "Ключ подходит, осталось 480 запросов в сутки" || r.DailyLeft == nil || *r.DailyLeft != 480 {
-		t.Fatalf("ключ подходит: %+v", r)
-	}
-	putJSON(t, base+"/api/v1/settings", map[string]any{"kinopoisk": map[string]any{"key": "SECRET-BAD-KEY"}})
-	if r := setupCheck(t, base, map[string]bool{"kinopoisk": true}); r.OK || r.Text != "Ключ не подходит" {
-		t.Fatalf("ключ не подходит: %+v", r)
-	}
-	logs, _ := os.ReadFile(filepath.Join(home, "data", "logs", "kinodom.log"))
-	if strings.Contains(string(logs), "SECRET-") {
-		t.Fatal("ключ Кинопоиска в журнале")
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("проверка ключа из мастера: %d", resp.StatusCode)
 	}
 }
 
