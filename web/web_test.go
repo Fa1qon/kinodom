@@ -592,6 +592,11 @@ const redrawn = new El('button'); redrawn.setAttribute('data-key', 'pick-0'); vi
 body.find('dlg-no').fire('click');
 await p;
 checks.push(['после перерисовки фокус — на тот же ключ', document.activeElement === redrawn]);
+// Ревью 14В: безвозвратное (удалить своё с диска) — фокус на «Нет»: второе OK на пульте ТВ не удаляет.
+p = confirmDialog({ title: 'Удалить «Фильм» с диска навсегда?', yes: 'Удалить', safe: true });
+checks.push(['безвозвратное — фокус на «Нет»', document.activeElement === body.find('dlg-no')]);
+body.find('dlg-no').fire('click');
+checks.push(['«Нет» — false', (await p) === false]);
 for (const [name, ok] of checks) {
   if (!ok) {
     console.error('не выполнено:', name);

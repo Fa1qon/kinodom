@@ -1,6 +1,7 @@
 package torrents
 
 import (
+	"bytes"
 	"context"
 	"database/sql"
 	"errors"
@@ -146,8 +147,8 @@ func (r *Registry) Folders(ctx context.Context, defaultDir string) ([]string, er
 		if err := ih.FromHexString(hexHash); err != nil {
 			return nil, err
 		}
-		var info metainfo.Info
-		if err := bencode.Unmarshal(mi, &info); err != nil {
+		info, ok := infoOf(mi)
+		if !ok {
 			continue // испорченная метаинфо: папку не вычислить, раздача и не восстановится
 		}
 		if dir == "" {
@@ -156,6 +157,21 @@ func (r *Registry) Folders(ctx context.Context, defaultDir string) ([]string, er
 		out = append(out, torrentDir(dir, &info, ih))
 	}
 	return out, rows.Err()
+}
+
+// infoOf — info раздачи из сохранённой метаинфо: полный .torrent (так её пишет saveMetainfo), у старых
+// записей — одна часть info (ревью 14В: разбор полного как info давал пустое имя и чужую папку).
+func infoOf(mi []byte) (metainfo.Info, bool) {
+	if m, err := metainfo.Load(bytes.NewReader(mi)); err == nil && len(m.InfoBytes) > 0 {
+		if info, err := m.UnmarshalInfo(); err == nil {
+			return info, true
+		}
+	}
+	var info metainfo.Info
+	if err := bencode.Unmarshal(mi, &info); err != nil || info.Name == "" && len(info.Files) == 0 {
+		return metainfo.Info{}, false
+	}
+	return info, true
 }
 
 // Pending — раздачи, для которых нажали «Скачать» до того, как пришёл список файлов: после

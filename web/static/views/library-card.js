@@ -11,7 +11,7 @@ import { libPoster, continueLabel } from './library.js';
 export function deleteRequest(v) {
   const name = (v.path || '').split(/[\\/]/).filter(Boolean).pop() || '';
   if (v.hash && !v.hash.startsWith('lib-')) return { path: `/downloads/${v.hash}`, text: `Удалить скачанное «${name}» с диска?` };
-  return { path: `/library/units/${v.unit}`, text: `Удалить «${name}» с диска?` };
+  return { path: `/library/units/${v.unit}`, text: `Удалить «${name}» с диска навсегда?`, safe: true };
 }
 
 // seasonsOf — серии по сезонам и разделам: без сезона — первыми (вступление курса), потом сезоны по
@@ -256,7 +256,7 @@ export function render(root, r, ctx) {
     }
     out.push(h('button', { class: 'btn', type: 'button', 'data-key': 'delete', onclick: async () => {
       const req = deleteRequest(v);
-      if (!(await confirmDialog({ title: req.text, yes: 'Удалить' }))) return;
+      if (!(await confirmDialog({ title: req.text, yes: 'Удалить', safe: !!req.safe }))) return;
       act(async () => {
         await del(req.path);
         ctx.go('#/library');
