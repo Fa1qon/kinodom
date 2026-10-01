@@ -18,7 +18,8 @@ import (
 func (a *App) initFollow(ctx context.Context) {
 	every, _ := time.ParseDuration(os.Getenv("KINODOM_FOLLOW_EVERY"))
 	a.Follow = follow.New(follow.Options{DB: a.DB, Catalog: a.Catalog, Torrents: a.Torrents, History: a.History,
-		Rekey: rekeyUpgrade, Types: a.kpType, Every: every, Log: a.Log.With("module", "follow")})
+		Rekey: rekeyUpgrade, Types: a.kpType, Every: every, Log: a.Log.With("module", "follow"),
+		NewDir: func(ctx context.Context) string { return a.downloadDir(ctx, true) }})
 	a.Follow.Register(a.API)
 	a.Sup.Add(a.Follow, a.ModuleEnabled(ctx, a.Follow.Name()))
 }

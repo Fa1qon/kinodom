@@ -91,3 +91,32 @@ func TestVideoForums(t *testing.T) {
 		t.Errorf("группы: %v", t2Groups)
 	}
 }
+
+// План 14В: сериал или фильм — куда качать (папка «Сериалов» или «Фильмов»): сезон или серии в названии,
+// раздел сериалов t1 (4, 16), форум группы t2 «Сериалы» (c18) на любой глубине.
+func TestIsSeries(t *testing.T) {
+	rt := newFake("t2")
+	rt.tree = []source.Category{
+		{ID: "c2", Name: "Кино, Видео и ТВ"}, {ID: "7", Name: "Зарубежное кино", ParentID: "c2"}, {ID: "313", Name: "HD", ParentID: "7"},
+		{ID: "c18", Name: "Сериалы"}, {ID: "189", Name: "Зарубежные сериалы", ParentID: "c18"}, {ID: "2100", Name: "HD", ParentID: "189"},
+	}
+	c, _ := newCatalog(t, openDB(t), func(o *Options) { o.Sections = []Section{{"t2", "7", false}} }, rt, newFake("t1"))
+	refresh(t, c, false) // дерево
+	cases := []struct {
+		e    Entry
+		want bool
+	}{
+		{Entry{Tracker: "t1", CategoryID: "1", Title: "Фильм (2026) WEB-DL 1080p"}, false},
+		{Entry{Tracker: "t1", CategoryID: "4", Title: "Фильм (2026) WEB-DL 1080p"}, true},
+		{Entry{Tracker: "t1", CategoryID: "16", Title: "Наш сериал (2026)"}, true},
+		{Entry{Tracker: "t1", CategoryID: "1", Title: "Сериал / Show [S01] (2026) WEB-DL"}, true},
+		{Entry{Tracker: "t1", CategoryID: "12", Title: "Nat Geo Wild: Дикая Япония [01-02 из 02] (2021) HDTV"}, true},
+		{Entry{Tracker: "t2", CategoryID: "313", Title: "Фильм (2026) WEB-DL"}, false},
+		{Entry{Tracker: "t2", CategoryID: "2100", Title: "Шоу / Show (2026) WEB-DL"}, true},
+	}
+	for _, x := range cases {
+		if got := c.IsSeries(ctx, x.e); got != x.want {
+			t.Errorf("%s %s %q: %v", x.e.Tracker, x.e.CategoryID, x.e.Title, got)
+		}
+	}
+}
