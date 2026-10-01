@@ -1968,6 +1968,41 @@ for (const [got, want] of checks) {
 	}
 }
 
+// План 14Д: «Смотреть» источника — вид плеера по источнику, строка статистики; библиотеки плеера и их
+// лицензии — в пульте.
+func TestPultPreview(t *testing.T) {
+	for _, f := range []string{"vendor/hls.light.min.js", "vendor/hls.js-LICENSE", "vendor/mpegts.js", "vendor/mpegts.js-LICENSE"} {
+		if _, err := fs.Stat(Static, f); err != nil {
+			t.Errorf("нет %s", f)
+		}
+	}
+	node := lookNode(t)
+	script := `
+const { playerKind, previewStats } = await import('./views/preview.js');
+const checks = [
+  [playerKind({ kind: 'hls', url: 'http://x/a' }), 'hls'],
+  [playerKind({ kind: 'live', url: 'http://x/a' }), 'ts'],
+  [playerKind({ kind: 'dash', url: 'http://x/a' }), 'dash'],
+  [playerKind({ kind: '', url: 'http://x/live/index.m3u8?token=1' }), 'hls'],
+  [playerKind({ kind: '', url: 'http://x/manifest.mpd' }), 'dash'],
+  [playerKind({ kind: '', url: 'http://x/stream' }), 'ts'],
+  [previewStats({ w: 1920, h: 1080, firstMs: 1200, stalls: 0 }), '1920×1080 · 1,2 с до кадра · подвисаний 0'],
+  [previewStats({ w: 0, h: 0, firstMs: 0, stalls: 2, latency: 8.4 }), 'подвисаний 2 · задержка 8 с'],
+];
+for (const [got, want] of checks) {
+  if (got !== want) {
+    console.error(JSON.stringify(got), '≠', JSON.stringify(want));
+    process.exitCode = 1;
+  }
+}
+`
+	cmd := exec.Command(node, "--input-type=module", "--no-warnings", "-e", script)
+	cmd.Dir = "static"
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Errorf("%v\n%s", err, out)
+	}
+}
+
 // План 14А, задача 3: на странице сериала крупно — какой сезон скачается.
 func TestPultSeasonLabel(t *testing.T) {
 	node := lookNode(t)

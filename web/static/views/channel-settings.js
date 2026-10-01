@@ -5,6 +5,7 @@
 import { h, fill, icon, poll, keepFocus, ago } from '../ui.js';
 import { get, put, post } from '../api.js';
 import { gradeMark } from './tvkit.js';
+import { openPreview, grabFrame } from './preview.js';
 
 // CATEGORIES — постоянный набор категорий (спека этапа 8, раздел 5.4), как у сервера.
 export const CATEGORIES = [
@@ -69,6 +70,8 @@ export function render(root, r, ctx) {
   let card = null;
   let error = '';
   let facets = null; // страны и языки для правки меток — из /channels?all=1
+  let framing = false; // «Кадры» снимаются
+  let shots = {}; // источник → кадр (data URL) или 'none'
   let draft = null; // черновик меток: {category, country, langs}; null — как у канала
   let reassign = 0; // источник, для которого открыт поиск «Это другой канал»
   let found = [];
@@ -130,10 +133,35 @@ export function render(root, r, ctx) {
           await post('/iptv/probe', { channel: c.version || key });
           probing = Date.now();
         }) }, icon('network_check'), probing ? 'Проверяется…' : 'Проверить источники'),
+        ctx.canEdit ? h('button', { class: 'btn', type: 'button', disabled: framing, 'data-key': 'frames', onclick: frames },
+          icon('live_tv'), framing ? 'Кадры…' : 'Кадры') : null,
         error ? h('span', { class: 'error' }, error) : null);
       drawSources();
       drawEdit();
     });
+  }
+
+  // nowTitle — передача канала сейчас: с ней сверяют картинку источника («Смотреть», план 14Д).
+  function nowTitle() {
+    const t = Date.now();
+    const p = (card.programme || []).find((x) => new Date(x.start).getTime() <= t && t < new Date(x.stop).getTime());
+    return p ? `Сейчас: ${p.title}` : '';
+  }
+
+  // frames — «Кадры»: источники по очереди без звука, кадр каждого рядом с ним; без картинки за 8 с — «нет
+  // картинки» (план 14Д).
+  async function frames() {
+    if (framing || !card) return;
+    framing = true;
+    shots = {};
+    draw();
+    for (const s of card.sources) {
+      if (!alive) return;
+      shots[s.id] = (await grabFrame(s)) || 'none';
+      if (alive) drawSources();
+    }
+    framing = false;
+    if (alive) draw();
   }
 
   function week(w) {
@@ -179,15 +207,19 @@ export function render(root, r, ctx) {
         s.ttfbMs ? `${(s.ttfbMs / 1000).toFixed(1).replace('.', ',')} с до данных` : null, s.ratio ? `запас ${s.ratio.toFixed(1).replace('.', ',')}×` : null].filter(Boolean).join(' · ');
       const marks = sourceMarks(s, n).map((m) => h('span', { class: m === 'без звука' ? 'tag warn-tag' : 'tag' },
         icon(m === 'без звука' ? 'warning' : m.startsWith('скрыт') ? 'visibility_off' : 'push_pin', 16), m));
+      const shot = shots[s.id];
       const row = h('div', { class: s.offered ? 'src' : 'src off' },
         h('div', { class: 'row' }, h('span', { class: 'num' }, String(n + 1)), gradeMark(sourceGrade(s)),
           h('span', { class: 'grow strong ellipsis', title: s.name }, s.name || s.playlists.join(', '))),
+        shot ? (shot === 'none' ? h('div', { class: 'muted small frame-none' }, 'нет картинки') : h('img', { class: 'src-frame', src: shot, alt: '' })) : null,
         marks.length ? h('div', { class: 'tags' }, marks) : null,
         h('div', { class: 'muted small' }, [s.playlists.join(', '), info, STATE[s.state] + (s.checkedAt ? `, проверен ${ago(s.checkedAt)}` : '')].filter(Boolean).join(' · ')),
         h('div', { class: 'muted small' }, 'Неделя: ' + week(s.week)),
         s.error ? h('div', { class: 'error' }, s.error) : null);
       if (ctx.canEdit) {
-        row.append(h('div', { class: 'row wrap gap10' }, sourceButtons(s, n, card.sources, (card.versions || []).length > 1).map((id) => button(s, id))));
+        const watch = h('button', { class: 'btn', type: 'button', 'data-key': `watch-${s.id}`, onclick: () => openPreview(s, card.name, nowTitle()) },
+          icon('play_arrow'), 'Смотреть');
+        row.append(h('div', { class: 'row wrap gap10' }, watch, sourceButtons(s, n, card.sources, (card.versions || []).length > 1).map((id) => button(s, id))));
         if (reassign === s.id) row.append(reassignBox(s));
       }
       out.push(row);
