@@ -157,10 +157,24 @@ func (c *Catalog) Release(ctx context.Context, id int64) (Release, error) {
 			out.DetailsPending = true
 		}
 	}
-	if out.ImageKey == "" && !r.DetailsAt.IsZero() {
-		c.posterOnOpen(r, out.Rating.KinopoiskID)
-	}
 	return out, nil
+}
+
+// PosterOnOpen — экран раздачи открыт человеком (GET /releases/{id}): у раздачи со страницей нет картинки —
+// постер сразу, на местах открытых (спека 11b, 14.2). Отдельно от Release: медиатека и подписка читают
+// раздачи в фоне и места открытых занимать не должны (финальное ревью 11b-Ж).
+func (c *Catalog) PosterOnOpen(ctx context.Context, rel Release) {
+	if rel.ImageKey != "" || c.images == nil {
+		return
+	}
+	rs, err := c.st.rowsByID(ctx, []int64{rel.ID})
+	if err != nil {
+		c.log.Warn("каталог: раздача не читается", "err", err)
+		return
+	}
+	if r, ok := rs[rel.ID]; ok && !r.DetailsAt.IsZero() && r.ImageKey == "" {
+		c.posterOnOpen(r, rel.Rating.KinopoiskID)
+	}
 }
 
 // posterOnOpen — открыли раздачу со страницей, а картинки нет: постер (Кинопоиска по номеру, иначе со

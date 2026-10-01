@@ -8,6 +8,15 @@ import { poster, returnTo } from './catalog.js';
 import { trackerTags, trackerLabel, backTo } from './search.js';
 
 const PENDING_FOR = 120000; // догрузку страницы раздачи ждём не дольше 2 минут (трекер мог лечь)
+const POSTER_FOR = 60000; // постер после страницы — не дольше минуты: сервер пробует его раз в минуту (спека 11b, 14.2)
+
+// releaseDone — опрос раздачи можно остановить: страницу ждали дольше PENDING_FOR, или страница пришла (pageAt)
+// и постер есть либо ждали его POSTER_FOR (финальное ревью 11b-Ж: раньше опрос вставал на странице, и
+// постер, начатый при открытии, на экране не появлялся).
+export function releaseDone(rel, started, pageAt, now) {
+  if (rel.detailsPending) return now - started > PENDING_FOR;
+  return !!rel.imageKey || now - pageAt > POSTER_FOR;
+}
 const SEARCH_FOR = 30000; // поиск других раздач сервер держит не дольше 30 с
 const FORMATS_FOR = 120000; // формат найденных ждём не дольше 2 минут: их страницы догружаются
 const MISSING_EVERY = 3000; // раздача не открыта (404) — её могут открыть с другого устройства: проверяем раз в 3 с
@@ -34,6 +43,7 @@ export function render(root, r, ctx) {
   let descOpen = false; // описание развёрнуто
   let focusNext = ''; // после «Скачать» с пульта ТВ — куда перевести фокус, когда появится «Смотреть»
   const started = Date.now();
+  let pageAt = 0; // когда пришла страница раздачи
   let variants = null; // /releases/{id}/variants — «Другие раздачи»
   let searchPoll = null; // «Искать на трекерах» идёт
   let searchStarted = 0;
@@ -84,8 +94,10 @@ export function render(root, r, ctx) {
       drawHead();
     }
     drawLive();
-    // Найденное поиском догружается при открытии — опрашиваем, пока страница не загрузится.
-    if (!rel.detailsPending || Date.now() - started > PENDING_FOR) releasePoll.stop();
+    // Найденное поиском догружается при открытии — опрашиваем, пока страница не загрузится, а после неё —
+    // пока не придёт постер.
+    if (!rel.detailsPending && !pageAt) pageAt = Date.now();
+    if (releaseDone(rel, started, pageAt, Date.now())) releasePoll.stop();
     if (rel.hash && !torrentPoll) watchTorrent();
     if (rel.hash && !historyPoll) watchHistory();
   }, 1000);

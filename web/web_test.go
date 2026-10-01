@@ -1597,3 +1597,33 @@ for (const [name, got, want] of checks) {
 		t.Errorf("%v\n%s", err, out)
 	}
 }
+
+// Финальное ревью 11b-Ж, Important 2: экран раздачи спрашивает её, пока не пришла страница (не дольше 2 минут),
+// а после страницы — пока не пришёл постер, не дольше минуты (сервер пробует постер открытой раздачи раз в
+// минуту; спека 11b, 14.2). Раньше опрос вставал на странице, и постер, начатый при открытии, не появлялся.
+func TestPultReleaseDone(t *testing.T) {
+	node := lookNode(t)
+	script := `
+import { releaseDone } from './views/release.js';
+const s = 1000000;
+const checks = [
+  ['страницы нет, 10 с', releaseDone({ detailsPending: true }, s, 0, s + 10000), false],
+  ['страницы нет, больше 2 минут', releaseDone({ detailsPending: true }, s, 0, s + 121000), true],
+  ['страница и постер', releaseDone({ detailsPending: false, imageKey: 'k' }, s, s + 5000, s + 5000), true],
+  ['страница без постера, 30 с', releaseDone({ detailsPending: false, imageKey: '' }, s, s + 5000, s + 35000), false],
+  ['страница без постера, больше минуты', releaseDone({ detailsPending: false, imageKey: '' }, s, s + 5000, s + 66000), true],
+  ['страница пришла поздно — минута на постер от неё', releaseDone({ detailsPending: false, imageKey: '' }, s, s + 110000, s + 150000), false],
+];
+for (const [name, got, want] of checks) {
+  if (got !== want) {
+    console.error(name, ':', got, '≠', want);
+    process.exitCode = 1;
+  }
+}
+`
+	cmd := exec.Command(node, "--input-type=module", "--no-warnings", "-e", script)
+	cmd.Dir = "static"
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Errorf("%v\n%s", err, out)
+	}
+}

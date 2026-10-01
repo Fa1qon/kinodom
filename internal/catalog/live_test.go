@@ -188,12 +188,23 @@ func stallCatalog(t *testing.T, h *stallHost, rutor *fakeSource) (*Catalog, *clo
 	return newCatalog(t, openDB(t), func(o *Options) { o.Images = im }, rutor)
 }
 
+// openScreen — экран раздачи спрашивает её, как пульт (GET /releases/{id}: Release и PosterOnOpen).
+func openScreen(t *testing.T, c *Catalog, id int64) Release {
+	t.Helper()
+	r, err := c.Release(ctx, id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	c.PosterOnOpen(ctx, r)
+	return r
+}
+
 // waitImage — открытая раздача получает картинку за 3 с (экран раздачи спрашивает её, как пульт).
 func waitImage(t *testing.T, c *Catalog, id int64, what string) {
 	t.Helper()
 	deadline := time.Now().Add(3 * time.Second)
 	for {
-		if r, err := c.Release(ctx, id); err == nil && r.ImageKey != "" {
+		if r := openScreen(t, c, id); r.ImageKey != "" {
 			return
 		}
 		if time.Now().After(deadline) {
@@ -290,9 +301,7 @@ func TestOpenedPosterOncePerMinute(t *testing.T) {
 	open := func() {
 		t.Helper()
 		for range 5 {
-			if _, err := c.Release(ctx, y); err != nil {
-				t.Fatal(err)
-			}
+			openScreen(t, c, y)
 			c.posterWG.Wait()
 		}
 	}
@@ -326,9 +335,7 @@ func TestOpenedPosterOnceWithPage(t *testing.T) {
 		t.Fatal(did, err)
 	}
 	for range 3 {
-		if _, err := c.Release(ctx, ids[0]); err != nil {
-			t.Fatal(err)
-		}
+		openScreen(t, c, ids[0])
 		c.posterWG.Wait()
 	}
 	if n := h.Hits("/down/y.jpg"); n != 1 {
@@ -424,4 +431,88 @@ func TestBackgroundPagesOneAtATime(t *testing.T) {
 		t.Fatalf("фон: страниц одновременно %d", n)
 	}
 	close(block)
+}
+
+// Финальное ревью 11b-Ж, Important 1: страница, которая не загрузилась (не «трекер лежит», а, скажем,
+// сломанный разбор), ждёт паузу повтора (30 мин) — пульт, спрашивающий карточку раз в 3 с, не ставит её
+// снова вне очереди: иначе трекеру — запрос той же страницы каждые 3 с.
+func TestCardsRespectRetryPause(t *testing.T) {
+	c, rutor, mux := rutorSection(t, manyDesc("rutor", 1))
+	rutor.set(func() { rutor.detailsErr["1"] = fmt.Errorf("Rutor: не разобрать страницу") })
+	id := list(t, c, ListOptions{Tracker: "rutor", Category: "12"})[0].ID
+	if did, err := c.enrichStep(ctx, "rutor"); !did || err != nil {
+		t.Fatal(did, err)
+	}
+	for range 5 {
+		if code := getJSON(t, mux, fmt.Sprintf("/api/v1/catalog/cards?ids=%d", id), nil); code != 200 {
+			t.Fatalf("ответ %d", code)
+		}
+		listAfter(t, mux, "rutor", "12", -1)
+		if _, err := c.enrichStep(ctx, "rutor"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if n := rutor.Calls("details:1"); n != 1 {
+		t.Fatalf("страница запрошена %d раз до конца паузы повтора", n)
+	}
+}
+
+// Финальное ревью 11b-Ж, Important 3: разбор страницы в раздатчике видимых упал паникой — это ошибка
+// модуля каталога (сторож перезапустит его), а не падение всей программы.
+func TestSoonLoopPanicIsError(t *testing.T) {
+	rutor := newFake("rutor")
+	rutor.atOnce = 3
+	r := rel("rutor", "300", "Паника (2026) WEB-DL", 5, 1, "pp")
+	rutor.detailsPanic = map[string]bool{"300": true}
+	c, _ := newCatalog(t, openDB(t), nil, rutor)
+	ids, err := c.st.saveFound(ctx, []source.Release{r}, c.now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	c.enqueueFound(ctx, "rutor", ids, searchToEnrich)
+	lctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	done := make(chan error, 1)
+	go func() { done <- c.soonLoop(lctx, "rutor") }()
+	select {
+	case err := <-done:
+		if err == nil || !strings.Contains(err.Error(), "паника") {
+			t.Fatalf("раздатчик вернул %v", err)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("паника в раздатчике не стала ошибкой")
+	}
+	c.mu.Lock()
+	busy := len(c.inFlight)
+	c.mu.Unlock()
+	if busy != 0 {
+		t.Fatalf("после паники раздача осталась занятой: %d", busy)
+	}
+}
+
+// Финальное ревью 11b-Ж (медиатека): Release без экрана — медиатека, подписка — постер открытой раздачи не
+// запускает: места открытых — только для экрана раздачи (PosterOnOpen, GET /releases/{id}).
+func TestReleaseWithoutScreenNoPoster(t *testing.T) {
+	h := newStallHost(t)
+	rutor := newFake("rutor")
+	rutor.top["12"] = []source.Release{rel("rutor", "2", "Игрек (2020) WEB-DL", 5, 1, "y")}
+	rutor.details["2"] = source.Details{Release: source.Release{Title: "Игрек (2020) WEB-DL"}, PosterURL: h.URL + "/down/y.jpg"}
+	c, _ := stallCatalog(t, h, rutor)
+	refresh(t, c, true)
+	enrichAll(t, c, "rutor")
+	y := list(t, c, ListOptions{})[0].ID
+	for range 3 {
+		if _, err := c.Release(ctx, y); err != nil {
+			t.Fatal(err)
+		}
+		c.posterWG.Wait()
+	}
+	if n := h.Hits("/down/y.jpg"); n != 1 {
+		t.Fatalf("Release без экрана: попыток постера %d (была одна — при догрузке)", n-1)
+	}
+	openScreen(t, c, y)
+	c.posterWG.Wait()
+	if n := h.Hits("/down/y.jpg"); n != 2 {
+		t.Fatalf("экран раздачи: попыток %d, нужна одна", n-1)
+	}
 }

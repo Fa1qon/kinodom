@@ -180,8 +180,11 @@ func (c *Catalog) enqueueFound(ctx context.Context, name string, ids []int64, li
 		return
 	}
 	var batch []int64
+	now := c.now()
 	for _, id := range ids {
-		if r, ok := byID[id]; ok && r.DetailsAt.IsZero() {
+		// Страница не загрузилась (не «трекер лежит») — ждёт паузу повтора: пульт спрашивает карточки раз в
+		// 3 с, и без неё трекеру уходил бы запрос той же страницы каждые 3 с (финальное ревью 11b-Ж).
+		if r, ok := byID[id]; ok && r.DetailsAt.IsZero() && !r.RetryAt.After(now) {
 			if batch = append(batch, id); len(batch) == limit {
 				break
 			}
