@@ -1,6 +1,7 @@
 package rutracker
 
 import (
+	"errors"
 	"slices"
 	"testing"
 	"time"
@@ -39,6 +40,31 @@ func TestForumsUnderSearchCategories(t *testing.T) {
 	allowed := tree.forumsUnder("2", "18", "20", "10")
 	if !allowed["46"] || !allowed["2076"] || allowed["c20"] {
 		t.Fatalf("разделы поиска: 46=%v 2076=%v", allowed["46"], allowed["2076"])
+	}
+}
+
+// Весь список раздела (limit ≤ 0) — для каталога без ограничения по количеству (спека 11b, 7.2).
+func TestTopWholeList(t *testing.T) {
+	s := rutrackertest.NewServer(t)
+	r := newRutracker(t, s, nil)
+	rs, err := r.Top(ctx, "56", 0)
+	if err != nil || len(rs) != 1279 {
+		t.Fatalf("весь список: %d, %v", len(rs), err)
+	}
+	for i := 1; i < len(rs); i++ {
+		if rs[i].Seeders > rs[i-1].Seeders {
+			t.Fatal("не по раздающим")
+		}
+	}
+}
+
+// Форум без раздач (подборки ссылок) API отдаёт 404 — ошибка source.ErrNoSection: каталог такой форум
+// пропускает (вживую 11b-Г).
+func TestTopMissingForum(t *testing.T) {
+	s := rutrackertest.NewServer(t)
+	_, err := newRutracker(t, s, nil).Top(ctx, "1640", 0)
+	if !errors.Is(err, source.ErrNoSection) {
+		t.Fatalf("404: %v", err)
 	}
 }
 

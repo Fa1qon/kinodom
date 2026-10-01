@@ -56,7 +56,8 @@ func PassCookie() *http.Cookie { return &http.Cookie{Name: "cf_clearance", Value
 //	       /forum/tracker.php — без сессии редирект на login.php, с сессией — search-f2076-seeds
 //	       /forum/login.php — GET: форма; POST: верные Login/Password → cookie bb_session и
 //	       редирект на index.php (login-result), иначе — login-wrong (ошибка и капча)
-//	API:   /v1/static/cat_forum_tree, /v1/static/pvc/f/{id} (2076 и 56 — образцы, иначе пусто)
+//	API:   /v1/static/cat_forum_tree, /v1/static/pvc/f/{id} (2076 и 56 — образцы, 1640 — 404, как у
+//	       форума подборок ссылок вживую, иначе пусто)
 //	Feed:  /atom/f/{id}.atom (313 — образец, иначе пустая лента)
 type Server struct {
 	Forum, API, Feed *httptest.Server
@@ -204,6 +205,8 @@ func (s *Server) api(w http.ResponseWriter, r *http.Request) {
 	case r.URL.Path == "/v1/static/cat_forum_tree":
 		b, _ := files.ReadFile("testdata/api-cat_forum_tree.json")
 		w.Write(b)
+	case r.URL.Path == "/v1/static/pvc/f/1640":
+		http.NotFound(w, r)
 	case strings.HasPrefix(r.URL.Path, "/v1/static/pvc/f/"):
 		if b, err := files.ReadFile("testdata/api-pvc-f" + strings.TrimPrefix(r.URL.Path, "/v1/static/pvc/f/") + ".json"); err == nil {
 			w.Write(b)

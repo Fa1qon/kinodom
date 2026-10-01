@@ -22,6 +22,9 @@ type fakeSource struct {
 	mu           sync.Mutex
 	top          map[string][]source.Release // раздел → топ
 	topErr       error
+	pageErr      error                     // ошибка страницы топа (порции глубже первой сотни)
+	topErrs      map[string]error          // ошибка топа одного форума
+	repeatAfter  int                       // > 0 — страницы топа дальше этой повторяют её
 	details      map[string]source.Details // номер → страница
 	detailsErr   map[string]error
 	torrents     map[string][]byte
@@ -71,7 +74,27 @@ func (f *fakeSource) Top(_ context.Context, cat string, _ int) ([]source.Release
 	if f.topErr != nil {
 		return nil, f.topErr
 	}
+	if err := f.topErrs[cat]; err != nil {
+		return nil, err
+	}
 	return append([]source.Release(nil), f.top[cat]...), nil
+}
+
+// TopPage — страница топа по 100 (как Rutor): page 0 — первая сотня; pageErr — ошибка страницы.
+func (f *fakeSource) TopPage(_ context.Context, cat string, page int) ([]source.Release, bool, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.calls["toppage"]++
+	if f.pageErr != nil {
+		return nil, false, f.pageErr
+	}
+	all := f.top[cat]
+	if f.repeatAfter > 0 && page > f.repeatAfter {
+		page = f.repeatAfter // за концом списка — снова последняя страница (как может ответить сайт)
+	}
+	from := min(page*100, len(all))
+	to := min(from+100, len(all))
+	return append([]source.Release(nil), all[from:to]...), to-from == 100, nil
 }
 
 func (f *fakeSource) Details(_ context.Context, id string) (source.Details, error) {

@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -37,10 +38,10 @@ type CategoryRef struct {
 
 func (c CategoryRef) String() string { return c.Tracker + ":" + c.ID }
 
-// DefaultCategories — категории по умолчанию (спека, раздел 6).
+// DefaultCategories — категории по умолчанию. Спека 11b, 7.1: «Зарубежное кино», «Наше кино», «Русские сериалы», «Зарубежные сериалы», «Документальные
+// фильмы и телепередачи» (подразделы первого уровня Rutracker со всеми видеоподфорумами) и Rutor «Зарубежные фильмы».
 var DefaultCategories = []CategoryRef{
-	{"rutracker", "2110"}, {"rutracker", "2164"}, {"rutracker", "2166"}, {"rutracker", "2169"}, {"rutracker", "979"},
-	{"rutracker", "56"}, {"rutracker", "2076"}, {"rutracker", "249"}, {"rutracker", "552"}, {"rutracker", "500"},
+	{"rutracker", "7"}, {"rutracker", "22"}, {"rutracker", "9"}, {"rutracker", "189"}, {"rutracker", "46"},
 	{"rutor", "12"},
 }
 
@@ -108,7 +109,11 @@ type Catalog struct {
 	forumPaused map[string]time.Time  // трекер → до какого времени не ходить за страницами раздач
 	runCtx      context.Context       // для фонового поиска: живёт, пока работает модуль
 	searches    map[string]*searchRun
-	preferred   string // формат в приоритете
+	preferred   string                   // формат в приоритете
+	deep        map[CategoryRef]deepList // раздел → весь список после обновления (порции глубже первой сотни)
+	deepPos     map[CategoryRef]int      // раздел → курсор порций: у Rutor — страница, у Rutracker — место в списке
+	deepEnd     map[CategoryRef]bool     // раздел → список трекера кончился
+	deepEmpty   map[CategoryRef]int      // раздел → порций подряд без новых раздач
 }
 
 func New(o Options) *Catalog {
@@ -123,7 +128,7 @@ func New(o Options) *Catalog {
 		refreshNow: make(chan struct{}, 1), sectionsChanged: make(chan struct{}, 1), enrichWake: map[string]chan struct{}{},
 		postersWake: make(chan struct{}, 1), urgent: map[string][]int64{}, found: map[string][]int64{}, torrentNow: map[int64]bool{}, yield: map[string]func(){}, retries: map[string]retryState{}, forced: map[int64]bool{},
 		posterSem: make(chan struct{}, 2), urgentSem: make(chan struct{}, 2),
-		forumPaused: map[string]time.Time{}, searches: map[string]*searchRun{}, torrentFormat: o.TorrentFormat,
+		forumPaused: map[string]time.Time{}, searches: map[string]*searchRun{}, torrentFormat: o.TorrentFormat, deep: map[CategoryRef]deepList{}, deepPos: map[CategoryRef]int{}, deepEnd: map[CategoryRef]bool{}, deepEmpty: map[CategoryRef]int{},
 		preferred: o.PreferredFormat}
 	// До первого прохода (там дерево и раскрытие «+») — разделы как записаны, без подразделов.
 	for _, s := range o.Sections {
@@ -265,29 +270,37 @@ func (c *Catalog) refreshPass(ctx context.Context, force bool) (time.Duration, e
 	return retryDelays[min(c.failures, len(retryDelays))-1], nil
 }
 
+// topSize — сколько раздач раздела обновляется раз в 6 часов; глубже — порциями по запросу (спека 11b, 7.2).
+const topSize = 100
+
 // refreshCategory — топ одного раздела (спека, раздел 7, «Обновление категории»).
 func (c *Catalog) refreshCategory(ctx context.Context, cat CategoryRef, src source.Source, last int, now time.Time) error {
-	rs, err := src.Top(ctx, cat.ID, 100)
+	raw, err := c.sectionTop(ctx, cat, src)
 	if err != nil {
 		return err
 	}
+	rs := withSeeders(slices.Clone(raw))
+	rs = rs[:min(len(rs), topSize)]
+	// Места первой сотни — по раздающим: по ним раздел и показывается, порции встают за ней.
+	slices.SortStableFunc(rs, func(a, b source.Release) int { return b.Seeders - a.Seeders })
 	problem := "catalog." + cat.String()
 	name := c.st.categoryName(ctx, cat.Tracker, cat.ID)
 	switch {
+	case brokenNumbers(raw[:min(len(raw), topSize)]):
+		// Переименованное поле на странице дало бы нули без ошибки разбора (хвост этапа 3).
+		err := keptError{fmt.Sprintf("%s: в разделе «%s» у всех раздач нет раздающих или размера — похоже, трекер изменил разметку", title(cat.Tracker), name)}
+		c.setProblem(ctx, problem, err.Error())
+		return err
 	case last > 0 && len(rs)*10 < last*3:
 		// Пришло меньше 30 % от прошлого раза — позиции не заменяются.
 		err := keptError{fmt.Sprintf("%s: в разделе «%s» пришло %d раздач вместо %d", title(cat.Tracker), name, len(rs), last)}
-		c.setProblem(ctx, problem, err.Error())
-		return err
-	case brokenNumbers(rs):
-		// Переименованное поле на странице дало бы нули без ошибки разбора (хвост этапа 3).
-		err := keptError{fmt.Sprintf("%s: в разделе «%s» у всех раздач нет раздающих или размера — похоже, трекер изменил разметку", title(cat.Tracker), name)}
 		c.setProblem(ctx, problem, err.Error())
 		return err
 	}
 	if err := c.st.replaceTop(ctx, cat, rs, now); err != nil {
 		return dbError{err}
 	}
+	c.resetDeep(cat) // глубокие порции прежнего списка заменены новой сотней
 	c.clearProblem(ctx, problem)
 	return nil
 }

@@ -5,17 +5,19 @@ import { get } from '../api.js';
 
 export const TRACKERS = [['rutracker', 'Rutracker'], ['rutor', 'Rutor']];
 
-// portions — подгрузка каталога порциями (замечание № 9 этапа 11b): {loaded, page, pages, loading, error}.
-// 'more' — просить следующую (не во время загрузки и не после конца списка), 'loaded' — пришла,
-// 'failed' — не пришла (можно попросить снова).
+// portions — подгрузка каталога порциями (замечание № 9 этапа 11b): {loaded, page, next, more, loading,
+// error}; page — сколько порций пришло, next — курсор (место последней карточки раздела, -1 — с начала;
+// ревью 11b-Г). 'more' — просить следующую (не во время загрузки и не после конца списка), 'loaded' —
+// пришла, 'failed' — не пришла (можно попросить снова, с того же места).
 export function portions(state, action) {
-  const s = state || { loaded: [], page: 0, pages: 1, loading: false, error: '' };
+  const s = state || { loaded: [], page: 0, next: -1, more: true, loading: false, error: '' };
   switch (action.type) {
     case 'more':
-      if (s.loading || s.page >= s.pages) return s;
+      if (s.loading || !s.more) return s;
       return { ...s, loading: true, error: '' };
     case 'loaded':
-      return { loaded: [...s.loaded, ...action.list.entries], page: action.list.page, pages: action.list.pages, loading: false, error: '' };
+      return { loaded: [...s.loaded, ...action.list.entries], page: s.page + 1, next: action.list.next, more: action.list.more,
+        loading: false, error: '' };
     case 'failed':
       return { ...s, loading: false, error: action.error };
     default:
@@ -39,7 +41,7 @@ export function oneAtATime(fn) {
 export async function restoreDepth(more, getState, pages) {
   for (;;) {
     const s = getState();
-    if (s.error || s.page >= Math.min(pages, s.pages)) return;
+    if (s.error || !s.more || s.page >= pages) return;
     await more();
     if (getState().page === s.page) return;
   }
@@ -48,7 +50,27 @@ export async function restoreDepth(more, getState, pages) {
 // retryDue — порция не пришла, а низ сетки на экране или рядом: прокрутка или «вниз» просят её снова
 // (наблюдатель пересечения второй раз не срабатывает, пока низ не ушёл из зоны — ревью 11b-А).
 export function retryDue(state, tailTop, viewportH) {
-  return !!state.error && !state.loading && state.page < state.pages && tailTop < viewportH + 600;
+  return !!state.error && !state.loading && state.more && tailTop < viewportH + 600;
+}
+
+// fillDue — порция пришла, а низ сетки всё ещё рядом: следующую — сразу, не дожидаясь наблюдателя
+// (он срабатывает только на вход в зону; вживую 11b-Г низ оставался в зоне, и подгрузка вставала).
+export function fillDue(state, tailTop, viewportH) {
+  return !state.error && !state.loading && state.more && tailTop < viewportH + 600;
+}
+
+// groupBar — ряды над сеткой (спека 11b, 7.1): у Rutracker — группы («Кино · Сериалы · Документалистика»,
+// только где что-то выбрано; выбранная — по разделу, ссылка — на первый её подраздел) и подразделы
+// выбранной группы; раздел без группы — в ряду всегда. У Rutor групп нет — один ряд, как раньше.
+export function groupBar(sections, current) {
+  const groups = [];
+  for (const s of sections) {
+    if (s.group && !groups.some((g) => g.id === s.group)) groups.push({ id: s.group, name: s.groupName, first: s.id, on: false });
+  }
+  const cur = sections.find((s) => s.id === current);
+  const on = cur && cur.group ? cur.group : groups.length > 0 && !(cur && !cur.group) ? groups[0].id : '';
+  for (const g of groups) g.on = g.id === on;
+  return { groups, sections: sections.filter((s) => !s.group || s.group === on) };
 }
 
 export function render(root, r, ctx) {
@@ -104,7 +126,7 @@ export function render(root, r, ctx) {
     if (next === state) return;
     state = next;
     drawTail();
-    const q = new URLSearchParams({ tracker, page: String(state.page + 1) });
+    const q = new URLSearchParams({ tracker, after: String(state.next) });
     if (shownSection) q.set('section', shownSection);
     let list;
     try {
@@ -123,6 +145,9 @@ export function render(root, r, ctx) {
     grid.append(...state.loaded.slice(was).map(entry));
     drawTail();
     remember();
+    setTimeout(() => {
+      if (alive && fillDue(state, tail.getBoundingClientRect().top, window.innerHeight)) more();
+    }, 0);
   }
 
   function drawTail() {
@@ -150,8 +175,11 @@ export function render(root, r, ctx) {
     if (e.key === 'ArrowDown' && inLastRow(e.target) && retryDue(state, tail.getBoundingClientRect().top, window.innerHeight)) more();
   });
   let scrollTimer = 0;
+  // Прокрутка сама проверяет, близко ли низ: наблюдатель пересечения сообщает только смену «в зоне / вне
+  // зоны» и вживую пропускал уход низа из зоны после порции — подгрузка вставала (11b-Г).
   const onScroll = () => {
-    if (retryDue(state, tail.getBoundingClientRect().top, window.innerHeight)) more();
+    const tailTop = tail.getBoundingClientRect().top;
+    if (retryDue(state, tailTop, window.innerHeight) || fillDue(state, tailTop, window.innerHeight)) more();
     clearTimeout(scrollTimer);
     scrollTimer = setTimeout(remember, 200);
   };
@@ -163,7 +191,17 @@ export function render(root, r, ctx) {
     if (!alive) return;
     if (watcher) watcher.observe(tail); // только теперь: пустая сетка не должна просить порцию сама
     const off = ctx.status && ctx.status.trackers && ctx.status.trackers[tracker] && ctx.status.trackers[tracker].state === 'off';
-    bar.replaceChildren(...sections.map((s) => h('a', {
+    const gb = groupBar(sections, shownSection);
+    if (gb.groups.length > 0) {
+      const groups = h('nav', { class: 'filters', 'aria-label': 'Группы' }, ...gb.groups.map((g) => h('a', {
+        class: g.on ? 'fil on' : 'fil',
+        href: `#/catalog/${tracker}/${encodeURIComponent(g.first)}`,
+        'aria-current': g.on ? 'true' : null,
+        'data-key': `grp-${g.id}`,
+      }, g.name)));
+      bar.before(groups);
+    }
+    bar.replaceChildren(...gb.sections.map((s) => h('a', {
       class: s.id === shownSection ? 'fil on' : 'fil',
       href: `#/catalog/${tracker}/${encodeURIComponent(s.id)}`,
       'aria-current': s.id === shownSection ? 'page' : null,

@@ -46,6 +46,8 @@ type row struct {
 	DetailsAt   time.Time
 	RetryAt     time.Time // страница раздачи не загрузилась — не раньше
 	Format      string    // «MKV», «AVI, MKV»; "" — неизвестен или ещё не определяли
+	Section     string    // раздел каталога записи (catalog_entries); у Rutracker — подраздел первого уровня, а CategoryID — форум раздачи
+	Pos         int       // место записи в разделе: первая сотня — по раздающим при обновлении, порции — в конце
 }
 
 const rowColumns = `r.id, r.tracker, r.topic_id, r.title, r.category_id, r.seeders, r.leechers, r.size,
@@ -113,6 +115,50 @@ func (s catalogStore) replaceTop(ctx context.Context, cat CategoryRef, rs []sour
 	return tx.Commit()
 }
 
+// appendEntries — порция раздела глубже загруженного: раздачи — в базу, в раздел — те, которых в нём ещё
+// нет, в конец. Возвращает, сколько добавлено.
+func (s catalogStore) appendEntries(ctx context.Context, cat CategoryRef, rs []source.Release, now time.Time) (int, error) {
+	tx, err := s.db.W.BeginTx(ctx, nil)
+	if err != nil {
+		return 0, err
+	}
+	defer tx.Rollback()
+	var next int
+	if err := tx.QueryRowContext(ctx, `SELECT COALESCE(MAX(position) + 1, 0) FROM catalog_entries WHERE tracker = ? AND category_id = ?`,
+		cat.Tracker, cat.ID).Scan(&next); err != nil {
+		return 0, err
+	}
+	added := 0
+	for _, r := range rs {
+		id, err := upsertRelease(ctx, tx, r, now)
+		if err != nil {
+			return 0, err
+		}
+		var n int
+		if err := tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM catalog_entries WHERE tracker = ? AND category_id = ? AND release_id = ?`,
+			cat.Tracker, cat.ID, id).Scan(&n); err != nil {
+			return 0, err
+		}
+		if n > 0 {
+			continue
+		}
+		if _, err := tx.ExecContext(ctx, `INSERT INTO catalog_entries(tracker, category_id, position, release_id) VALUES(?, ?, ?, ?)`,
+			cat.Tracker, cat.ID, next, id); err != nil {
+			return 0, err
+		}
+		next++
+		added++
+	}
+	return added, tx.Commit()
+}
+
+// sectionCount — сколько раздач в разделе сейчас (первая сотня и порции).
+func (s catalogStore) sectionCount(ctx context.Context, cat CategoryRef) (int, error) {
+	var n int
+	err := s.db.R.QueryRowContext(ctx, `SELECT COUNT(*) FROM catalog_entries WHERE tracker = ? AND category_id = ?`, cat.Tracker, cat.ID).Scan(&n)
+	return n, err
+}
+
 // saveFound — раздачи из поиска: в базу, чтобы карточку можно было открыть (спека, раздел 7).
 func (s catalogStore) saveFound(ctx context.Context, rs []source.Release, now time.Time) ([]int64, error) {
 	tx, err := s.db.W.BeginTx(ctx, nil)
@@ -147,7 +193,7 @@ func (s catalogStore) catalogRows(ctx context.Context, cats []CategoryRef) ([]ro
 		enabled[c] = true
 	}
 	rows, err := s.db.R.QueryContext(ctx,
-		`SELECT `+rowColumns+`, e.tracker, e.category_id
+		`SELECT `+rowColumns+`, e.tracker, e.category_id, e.position
 		 FROM catalog_entries e JOIN releases r ON r.id = e.release_id
 		 WHERE r.removed = 0
 		 ORDER BY r.seeders DESC, r.id`)
@@ -159,7 +205,8 @@ func (s catalogStore) catalogRows(ctx context.Context, cats []CategoryRef) ([]ro
 	seen := map[int64]bool{}
 	for rows.Next() {
 		var ref CategoryRef
-		r, err := scanRow(rows, &ref.Tracker, &ref.ID)
+		var pos int
+		r, err := scanRow(rows, &ref.Tracker, &ref.ID, &pos)
 		if err != nil {
 			return nil, err
 		}
@@ -167,6 +214,7 @@ func (s catalogStore) catalogRows(ctx context.Context, cats []CategoryRef) ([]ro
 			continue
 		}
 		seen[r.ID] = true
+		r.Section, r.Pos = ref.ID, pos
 		if r.CategoryID == "" {
 			r.CategoryID = ref.ID
 		}

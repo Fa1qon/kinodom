@@ -87,14 +87,15 @@ func TestOneCardPerFilm(t *testing.T) {
 	}
 	mustExec(t, db, `UPDATE releases SET format = 'MKV' WHERE topic_id IN ('2', '3', '8')`)
 	c.SetPreferredFormat("MKV")
-	if got, want := cards(t, c), "4:1 2:4 5:1 6:1 8:2"; got != want {
+	// Карточка — на месте своей самой раздаваемой раздачи (порции не двигают показанное), лицо — MKV.
+	if got, want := cards(t, c), "2:4 8:2 4:1 5:1 6:1"; got != want {
 		t.Fatalf("MKV в приоритете: карточки %s, нужно %s", got, want)
 	}
 	mux := http.NewServeMux()
 	c.Register(muxRouter{mux})
 	var v ListView
-	if code := getJSON(t, mux, "/api/v1/catalog?tracker=rutor&section=12", &v); code != 200 || v.Pages != 1 || len(v.Entries) != 5 ||
-		v.Entries[1].Variants != 4 || v.Entries[1].Format != "MKV" {
+	if code := getJSON(t, mux, "/api/v1/catalog?tracker=rutor&section=12", &v); code != 200 || v.More || len(v.Entries) != 5 ||
+		v.Entries[0].Variants != 4 || v.Entries[0].Format != "MKV" {
 		t.Fatalf("список: %d %+v", code, v)
 	}
 }

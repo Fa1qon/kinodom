@@ -136,9 +136,9 @@ func (r *Rutracker) Categories(ctx context.Context) ([]source.Category, error) {
 	return t.categories(), nil
 }
 
-// Top — первые limit раздач раздела по раздающим (limit ≤ 0 — 100) по API: без входа и без
-// Cloudflare, с infohash и цифрами, но без названий — их даёт Details или Recent. Только сам
-// раздел: «галочка на разделе = только этот раздел» (спека, раздел 6).
+// Top — первые limit раздач раздела по раздающим (limit ≤ 0 — весь список: каталог без ограничения по
+// количеству, спека 11b, 7.2) по API: без входа и без Cloudflare, с infohash и цифрами, но без названий —
+// их даёт Details или Recent. Только сам раздел; подфорумы собирает каталог.
 func (r *Rutracker) Top(ctx context.Context, categoryID string, limit int) ([]source.Release, error) {
 	if !isNumber(categoryID) {
 		return nil, fmt.Errorf("Rutracker: раздел %q — не номер раздела", categoryID)
@@ -152,10 +152,7 @@ func (r *Rutracker) Top(ctx context.Context, categoryID string, limit int) ([]so
 		return nil, err
 	}
 	sortBySeeders(rs)
-	if limit <= 0 {
-		limit = 100
-	}
-	if len(rs) > limit {
+	if limit > 0 && len(rs) > limit {
 		rs = rs[:limit]
 	}
 	return rs, nil
@@ -254,6 +251,9 @@ func (r *Rutracker) apiBody(ctx context.Context, path string) ([]byte, error) {
 	p, err := r.api.Get(ctx, path)
 	if err != nil {
 		return nil, err
+	}
+	if p.Status == http.StatusNotFound {
+		return nil, fmt.Errorf("Rutracker API: %s — ответ 404 (%w)", path, source.ErrNoSection)
 	}
 	if p.Status != http.StatusOK {
 		return nil, fmt.Errorf("Rutracker API: %s — ответ %d", path, p.Status)

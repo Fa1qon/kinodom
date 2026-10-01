@@ -584,8 +584,8 @@ for (const [got, want] of checks) {
 	}
 }
 
-// Каталог подгружается при прокрутке (замечание № 9 этапа 11b): следующая порция — одна за раз; конец
-// списка — больше не просим; ошибка порции — можно попросить снова.
+// Каталог подгружается при прокрутке (замечание № 9 этапа 11b): следующая порция — одна за раз, по
+// курсору (место последней карточки, ревью 11b-Г); конец списка — больше не просим; ошибка — снова.
 func TestPultCatalogPortions(t *testing.T) {
 	node := lookNode(t)
 	script := `
@@ -593,18 +593,19 @@ import { portions } from './views/catalog.js';
 const e = (id) => ({ id });
 let s = portions(undefined, { type: 'init' });
 const checks = [];
+checks.push(['с начала', s.next === -1 && s.more === true]);
 s = portions(s, { type: 'more' });
 checks.push(['первая порция просится', s.loading === true && s.page === 0]);
 checks.push(['вторая просьба во время загрузки — без изменений', portions(s, { type: 'more' }) === s]);
-s = portions(s, { type: 'loaded', list: { entries: [e(1), e(2)], page: 1, pages: 2 } });
-checks.push(['порция 1', s.loaded.length === 2 && !s.loading && s.page === 1]);
+s = portions(s, { type: 'loaded', list: { entries: [e(1), e(2)], next: 7, more: true } });
+checks.push(['порция 1', s.loaded.length === 2 && !s.loading && s.page === 1 && s.next === 7]);
 s = portions(s, { type: 'more' });
 s = portions(s, { type: 'failed', error: 'нет сети' });
 checks.push(['ошибка — не загружается, текст есть', !s.loading && s.error === 'нет сети' && s.loaded.length === 2]);
 s = portions(s, { type: 'more' });
 checks.push(['после ошибки можно снова', s.loading === true && s.error === '']);
-s = portions(s, { type: 'loaded', list: { entries: [e(3)], page: 2, pages: 2 } });
-checks.push(['порция 2', s.loaded.map((x) => x.id).join() === '1,2,3' && s.page === 2]);
+s = portions(s, { type: 'loaded', list: { entries: [e(3)], next: 9, more: false } });
+checks.push(['порция 2', s.loaded.map((x) => x.id).join() === '1,2,3' && s.page === 2 && s.next === 9]);
 checks.push(['конец списка — больше не просим', portions(s, { type: 'more' }) === s]);
 for (const [name, ok] of checks) {
   if (!ok) {
@@ -753,45 +754,6 @@ checks.push(['после окончания — снова вызов', calls ==
 for (const [name, ok] of checks) {
   if (!ok) {
     console.error('не выполнено:', name);
-    process.exitCode = 1;
-  }
-}
-`
-	cmd := exec.Command(node, "--input-type=module", "--no-warnings", "-e", script)
-	cmd.Dir = "static"
-	if out, err := cmd.CombinedOutput(); err != nil {
-		t.Errorf("%v\n%s", err, out)
-	}
-}
-
-// Разделы каталога деревом: строка настройки читается и пишется без потерь; категория целиком —
-// «cN+», раздел со всеми подразделами — «раздел+», только собственные раздачи раздела — «раздел».
-func TestPultSectionsEncoding(t *testing.T) {
-	node := lookNode(t)
-	script := `
-import { buildTree, decodeSections, encodeSections, units } from './views/settings-sections.js';
-// c2: 46 (подразделы 2110, 2111), 47; c9: 90.
-const tree = buildTree([
-  { id: 'c2', name: 'Кино', parentId: '' }, { id: 'c9', name: 'Программы', parentId: '' },
-  { id: '46', name: 'Документальные', parentId: 'c2' }, { id: '47', name: 'Спорт', parentId: 'c2' },
-  { id: '2110', name: 'HD', parentId: '46' }, { id: '2111', name: 'SD', parentId: '46' },
-  { id: '90', name: 'Windows', parentId: 'c9' },
-]);
-const enc = (entries) => encodeSections(tree, decodeSections(tree, entries).selected).join(',');
-const checks = [
-  [enc(['46+']), '46+'],
-  [enc(['46', '2110']), '46,2110'],
-  [enc(['46', '2110', '2111']), '46+'],
-  [enc(['2110', '2111']), '2110,2111'],
-  [enc(['c2+']), 'c2+'],
-  [enc(['46+', '47']), 'c2+'],
-  [enc(['47', '90', '999']), '47,c9+'], // 90 — единственный раздел c9: категория отмечена целиком (спека, 6.3)
-  [units(tree.byId.get('c2')).join(','), '46,2110,2111,47'],
-  [[...decodeSections(tree, ['2110']).expanded].sort().join(','), '46,c2'],
-];
-for (const [got, want] of checks) {
-  if (got !== want) {
-    console.error(JSON.stringify(got), '≠', JSON.stringify(want));
     process.exitCode = 1;
   }
 }
@@ -1067,16 +1029,16 @@ const run = async (name, start, serverPages, saved, pageOnMore) => {
   clearTimeout(t);
   return { state, calls };
 };
-const grow = (pages) => (s) => (s.page < pages ? { ...s, page: s.page + 1, pages } : s);
-let r = await run('каталог стал короче', { page: 4, pages: 4, error: '' }, 4, 5, grow(4));
+const grow = (pages) => (s) => (s.page < pages ? { ...s, page: s.page + 1, more: s.page + 1 < pages } : s);
+let r = await run('каталог стал короче', { page: 4, more: false, error: '' }, 4, 5, grow(4));
 checks.push(['короче — сразу выход', r.calls === 0]);
-r = await run('догрузка до сохранённой', { page: 1, pages: 9, error: '' }, 9, 3, grow(9));
+r = await run('догрузка до сохранённой', { page: 1, more: true, error: '' }, 9, 3, grow(9));
 checks.push(['до сохранённой глубины', r.state.page === 3 && r.calls === 2]);
-r = await run('сервер отдаёт меньше', { page: 1, pages: 2, error: '' }, 2, 5, grow(2));
+r = await run('сервер отдаёт меньше', { page: 1, more: true, error: '' }, 2, 5, grow(2));
 checks.push(['не глубже сервера', r.state.page === 2 && r.calls === 1]);
-r = await run('порция не пришла', { page: 1, pages: 5, error: '' }, 5, 4, (s) => s);
+r = await run('порция не пришла', { page: 1, more: true, error: '' }, 5, 4, (s) => s);
 checks.push(['без изменений — выход после одной просьбы', r.calls === 1]);
-r = await run('ошибка', { page: 1, pages: 5, error: 'нет сети' }, 5, 4, grow(5));
+r = await run('ошибка', { page: 1, more: true, error: 'нет сети' }, 5, 4, grow(5));
 checks.push(['ошибка — выход', r.calls === 0]);
 for (const [name, ok] of checks) {
   if (!ok) {
@@ -1098,14 +1060,14 @@ func TestPultRetryDue(t *testing.T) {
 	node := lookNode(t)
 	script := `
 import { retryDue } from './views/catalog.js';
-const failed = { error: 'нет сети', loading: false, page: 2, pages: 5 };
+const failed = { error: 'нет сети', loading: false, page: 2, more: true };
 const checks = [
   ['ошибка, низ рядом — повтор', retryDue(failed, 900, 800), true],
   ['ошибка, низ далеко — нет', retryDue(failed, 2000, 800), false],
   ['без ошибки — наблюдатель сам', retryDue({ ...failed, error: '' }, 900, 800), false],
   ['идёт загрузка — нет', retryDue({ ...failed, loading: true }, 900, 800), false],
-  ['список кончился — нет', retryDue({ ...failed, page: 5 }, 900, 800), false],
-  ['первая порция не пришла — повтор', retryDue({ error: 'нет сети', loading: false, page: 0, pages: 1 }, 100, 800), true],
+  ['список кончился — нет', retryDue({ ...failed, more: false }, 900, 800), false],
+  ['первая порция не пришла — повтор', retryDue({ error: 'нет сети', loading: false, page: 0, more: true }, 100, 800), true],
 ];
 for (const [name, got, want] of checks) {
   if (got !== want) {
@@ -1218,5 +1180,119 @@ func TestPultHiddenWins(t *testing.T) {
 	}
 	if !regexp.MustCompile(`\[hidden\]\s*\{\s*display:\s*none\s*!important`).Match(css) {
 		t.Fatal("в style.css нет [hidden] { display: none !important }")
+	}
+}
+
+// Каталог Rutracker: ряд групп и ряд подразделов выбранной группы; у Rutor групп нет (спека 11b, 7.1).
+func TestPultGroupBar(t *testing.T) {
+	node := lookNode(t)
+	script := `
+import { groupBar } from './views/catalog.js';
+const secs = [
+  { id: '7', name: 'Зарубежное кино', group: 'c2', groupName: 'Кино' },
+  { id: '22', name: 'Наше кино', group: 'c2', groupName: 'Кино' },
+  { id: '189', name: 'Зарубежные сериалы', group: 'c18', groupName: 'Сериалы' },
+  { id: '46', name: 'Документальные', group: 'c20', groupName: 'Документалистика' },
+];
+const s = (v) => JSON.stringify(v);
+let r = groupBar(secs, '189');
+const checks = [
+  ['группы', s(r.groups.map((g) => g.name)), '["Кино","Сериалы","Документалистика"]'],
+  ['выбранная — по разделу', s(r.groups.filter((g) => g.on).map((g) => g.id)), '["c18"]'],
+  ['подразделы группы', s(r.sections.map((x) => x.id)), '["189"]'],
+  ['ссылка группы — на первый её подраздел', s(r.groups.map((g) => g.first)), '["7","189","46"]'],
+];
+r = groupBar(secs, '');
+checks.push(['без раздела — первая группа', s(r.sections.map((x) => x.id)), '["7","22"]']);
+r = groupBar([{ id: '12', name: 'Зарубежные фильмы', group: '' }, { id: '4', name: 'Сериалы', group: '' }], '4');
+checks.push(['Rutor — без групп', s([r.groups.length, r.sections.length]), '[0,2]']);
+for (const [name, got, want] of checks) {
+  if (got !== want) {
+    console.error(name, ':', got, '≠', want);
+    process.exitCode = 1;
+  }
+}
+`
+	cmd := exec.Command(node, "--input-type=module", "--no-warnings", "-e", script)
+	cmd.Dir = "static"
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Errorf("%v\n%s", err, out)
+	}
+}
+
+// «Разделы каталога» Rutracker: три группы и подразделы первого уровня (спека 11b, 7.1). Прежний выбор —
+// подфорумы, «раздел+», «cN+» — отмечает свои подразделы первого уровня; сохраняется «подраздел+».
+func TestPultSectionsGroups(t *testing.T) {
+	node := lookNode(t)
+	script := `
+import { buildTree, decodeGroups, encodeGroups } from './views/settings-sections.js';
+const full = buildTree([
+  { id: 'c2', name: 'Кино, Видео и ТВ', parentId: '' }, { id: 'c20', name: 'Документалистика и юмор', parentId: '' },
+  { id: '7', name: 'Зарубежное кино', parentId: 'c2' }, { id: '252', name: 'Фильмы 2026', parentId: '7' },
+  { id: '22', name: 'Наше кино', parentId: 'c2' },
+  { id: '1629', name: 'Предложения', parentId: 'c20' }, { id: '19', name: 'СМИ', parentId: 'c20' },
+  { id: '46', name: 'Документальные', parentId: 'c20' }, { id: '2076', name: '[Док] Космос', parentId: '46' },
+  { id: '314', name: 'Документальные (HD Video)', parentId: 'c20' }, { id: '2110', name: '[HD] Природа', parentId: '314' },
+]);
+const groups = buildTree([
+  { id: 'c2', name: 'Кино', parentId: '' }, { id: '7', name: 'Зарубежное кино', parentId: 'c2' }, { id: '22', name: 'Наше кино', parentId: 'c2' },
+  { id: 'c20', name: 'Документалистика', parentId: '' }, { id: '19', name: 'СМИ', parentId: 'c20' },
+  { id: '46', name: 'Документальные', parentId: 'c20' }, { id: '314', name: 'Документальные (HD Video)', parentId: 'c20' },
+]);
+const dec = (entries) => [...decodeGroups(full, groups, entries)].sort().join(',');
+const checks = [
+  ['подфорумы — свои подразделы', dec(['2110', '2076']), '314,46'],
+  ['группа целиком — без служебных', dec(['c20+']), '19,314,46'],
+  ['подраздел+ и подраздел', dec(['46+', '7']), '46,7'],
+  ['чего нет в дереве — пропуск', dec(['999', '252']), '7'],
+  ['сохранение — подраздел+, по порядку групп', encodeGroups(groups, new Set(['46', '22'])).join(','), '22+,46+'],
+];
+for (const [name, got, want] of checks) {
+  if (got !== want) {
+    console.error(name, ':', got, '≠', want);
+    process.exitCode = 1;
+  }
+}
+`
+	cmd := exec.Command(node, "--input-type=module", "--no-warnings", "-e", script)
+	cmd.Dir = "static"
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Errorf("%v\n%s", err, out)
+	}
+}
+
+// Вживую 11b-Г: браузер держит прокрутку за низом сетки (якорь прокрутки) — порция пришла, а низ остался
+// в зоне наблюдателя, нового события нет, подгрузка вставала и перескакивала пришедшую порцию. Низ сетки
+// не якорь; пришла порция, а низ всё ещё рядом — следующая сразу.
+func TestPultFillDue(t *testing.T) {
+	node := lookNode(t)
+	script := `
+import { fillDue } from './views/catalog.js';
+const st = { error: '', loading: false, page: 6, more: true };
+const checks = [
+  ['низ рядом — следующая', fillDue(st, 852, 900), true],
+  ['низ далеко — наблюдатель сам', fillDue(st, 2700, 900), false],
+  ['ошибка — не сама (повтор — прокруткой)', fillDue({ ...st, error: 'нет сети' }, 852, 900), false],
+  ['идёт загрузка — нет', fillDue({ ...st, loading: true }, 852, 900), false],
+  ['список кончился — нет', fillDue({ ...st, more: false }, 852, 900), false],
+];
+for (const [name, got, want] of checks) {
+  if (got !== want) {
+    console.error(name, ': получили', got, 'ждали', want);
+    process.exitCode = 1;
+  }
+}
+`
+	cmd := exec.Command(node, "--input-type=module", "--no-warnings", "-e", script)
+	cmd.Dir = "static"
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Errorf("%v\n%s", err, out)
+	}
+	css, err := os.ReadFile("static/style.css")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !regexp.MustCompile(`\.grid-tail\s*\{[^}]*overflow-anchor:\s*none`).Match(css) {
+		t.Error("низ сетки — якорь прокрутки: .grid-tail без overflow-anchor: none")
 	}
 }

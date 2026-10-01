@@ -38,6 +38,19 @@ func sortedBySeeders(rs []source.Release) bool {
 	return slices.IsSortedFunc(rs, func(a, b source.Release) int { return b.Seeders - a.Seeders })
 }
 
+// Страница раздела глубже первой (спека 11b, 7.2): /browse/1/12/0/2, полная — «есть ещё».
+func TestRutorTopPage(t *testing.T) {
+	s := rutortest.NewServer(t)
+	r := newRutor(t, s)
+	rs, more, err := r.TopPage(ctx, "12", 1)
+	if err != nil || len(rs) != 100 || !more || rs[0].CategoryID != "12" {
+		t.Fatalf("страница 1: %d, ещё %v, %v", len(rs), more, err)
+	}
+	if !slices.Contains(s.Paths(), "/browse/1/12/0/2") {
+		t.Fatalf("запросы: %v", s.Paths())
+	}
+}
+
 func TestTopSortedAndLimited(t *testing.T) {
 	s := rutortest.NewServer(t)
 	rs, err := newRutor(t, s).Top(ctx, "12", 10)

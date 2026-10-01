@@ -137,6 +137,7 @@ h2 { margin: 0; font-size: 20px; font-weight: 700; }
 .fil { display: inline-flex; align-items: center; height: 36px; padding: 0 14px; border: 1px solid var(--line); color: var(--muted); font-size: 14px; white-space: nowrap; }
 .fil.on { background: var(--inv-bg); border-color: var(--inv-bg); color: var(--inv-text); font-weight: 600; }
 .grid { display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); gap: 28px 20px; padding-top: 8px; }
+.grid-tail { overflow-anchor: none; } /* низ сетки не якорь прокрутки: иначе порция не сдвигает его из зоны подгрузки */
 .entry { display: flex; flex-direction: column; gap: 8px; min-width: 0; }
 .poster { position: relative; aspect-ratio: 2 / 3; overflow: hidden; background: #1A1D21; display: flex; flex-direction: column; justify-content: flex-end; padding: 14px; }
 .poster img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; }
@@ -316,13 +317,10 @@ a.res-row:hover { background: var(--hover); }
 .check { display: flex; align-items: center; gap: 10px; font-size: 15px; color: var(--soft); cursor: pointer; }
 .check input { width: 18px; height: 18px; margin: 0; accent-color: var(--inv-bg); }
 .sections-grid { display: grid; grid-template-columns: minmax(0, 3fr) minmax(0, 2fr); gap: 16px; align-items: start; }
-.small-field { width: 280px; height: 36px; }
-.tree { display: flex; flex-direction: column; }
-.node { display: flex; align-items: center; gap: 8px; min-height: 36px; font-size: 15px; color: var(--soft); }
-.node:hover { background: #1A1D21; }
-.chev { display: inline-flex; align-items: center; justify-content: center; width: 28px; height: 28px; padding: 0; flex-shrink: 0; border: 0; background: transparent; color: var(--dim); cursor: pointer; }
-.node-label { display: flex; align-items: center; gap: 10px; min-width: 0; flex-grow: 1; cursor: pointer; }
-.node-label input, .list input { width: 18px; height: 18px; margin: 0; flex-shrink: 0; accent-color: var(--inv-bg); }
+.groups { display: flex; flex-direction: column; gap: 14px; }
+.group-head { min-height: 36px; font-weight: 600; color: var(--text); }
+.group .list { padding-left: 28px; }
+.list input { width: 18px; height: 18px; margin: 0; flex-shrink: 0; accent-color: var(--inv-bg); }
 .count { margin-left: auto; padding-right: 10px; font-size: 13px; color: var(--dim); white-space: nowrap; }
 .list { display: flex; flex-direction: column; }
 .list .check { min-height: 36px; }
@@ -483,7 +481,6 @@ a.res-row:hover { background: var(--hover); }
   .three { gap: 8px; }
   .card { padding: 16px; }
   .mod-name { width: 100px; }
-  .small-field { width: 100%; }
   .checks { flex-wrap: wrap; gap: 16px; }
 
   /* Каналы */
