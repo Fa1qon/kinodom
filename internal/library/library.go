@@ -92,8 +92,13 @@ type Options struct {
 	Power        *power.Keeper
 	DownloadsDir func() string // папка загрузок: её нельзя добавить в категорию
 	KeepDays     func() int    // срок хранения скачанного (torrents.keepDays)
-	Log          *slog.Logger
-	Now          func() time.Time
+	// TorrentFolders — папки раздач Kinodom (torrents.Service.Folders): обход их пропускает — скачанное в
+	// папку медиатеки приходит единицей раздачи (план 14В). nil — нет.
+	TorrentFolders func(ctx context.Context) ([]string, error)
+	// Writable — служба может писать в папку (папки «Фильмов» и «Сериалов» — для скачанного); nil — проба файлом.
+	Writable func(dir string) bool
+	Log      *slog.Logger
+	Now      func() time.Time
 }
 
 // Library — модуль «library».
@@ -275,11 +280,24 @@ func (l *Library) scanNow(ctx context.Context) error {
 	}
 	problems := map[int64]string{}
 	now := l.now()
+	torrentDirs := map[string]bool{}
+	if l.o.TorrentFolders != nil {
+		ps, err := l.o.TorrentFolders(ctx)
+		if err != nil {
+			l.log.Warn("медиатека: папки раздач не прочитались", "err", err)
+		}
+		for _, p := range ps {
+			torrentDirs[pathKey(p)] = true
+		}
+	}
 	for _, c := range cats {
 		for _, f := range c.Folders {
 			dl := l.o.DownloadsDir()
 			skip := func(p string) bool {
 				if dl != "" && pathKey(p) == pathKey(dl) { // скачанное и так в медиатеке, недокачанное — пустое
+					return true
+				}
+				if torrentDirs[pathKey(p)] { // раздача Kinodom в папке медиатеки — единица скачанного (план 14В)
 					return true
 				}
 				id, ok := folders[pathKey(p)]
@@ -298,6 +316,9 @@ func (l *Library) scanNow(ctx context.Context) error {
 			}
 			if err := l.d.syncFolder(ctx, f.ID, c, units, now); err != nil {
 				return err
+			}
+			if (c.Builtin == "films" || c.Builtin == "series") && !l.Writable(f.Path) {
+				problems[f.ID] = "no_write" // сюда качается скачанное (план 14В)
 			}
 		}
 	}
@@ -391,6 +412,8 @@ func (l *Library) syncProblems(ctx context.Context, cats []Category, problems ma
 				want[problemID(f.ID)] = "Папка медиатеки не найдена: " + f.Path + " (категория «" + c.Name + "»)"
 			case "no_access":
 				want[problemID(f.ID)] = "Папка медиатеки не читается — нет прав: " + f.Path + " (категория «" + c.Name + "»)"
+			case "no_write":
+				want[problemID(f.ID)] = "Нет права записи в папку медиатеки: " + f.Path + " (категория «" + c.Name + "») — скачанное идёт в папку загрузок"
 			}
 		}
 	}
