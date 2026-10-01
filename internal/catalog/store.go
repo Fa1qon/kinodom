@@ -317,6 +317,31 @@ func (s catalogStore) rowsByID(ctx context.Context, ids []int64) (map[int64]row,
 	return out, nil
 }
 
+// liveRowsByID — раздачи по номерам без ушедших с трекера (карточки пульта: догружать их нечего).
+func (s catalogStore) liveRowsByID(ctx context.Context, ids []int64) (map[int64]row, error) {
+	out := map[int64]row{}
+	if len(ids) == 0 {
+		return out, nil
+	}
+	args := make([]any, len(ids))
+	for i, id := range ids {
+		args[i] = id
+	}
+	rows, err := s.db.R.QueryContext(ctx, `SELECT `+rowColumns+` FROM releases r WHERE r.removed = 0 AND r.id IN (?`+strings.Repeat(", ?", len(ids)-1)+`)`, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		r, err := scanRow(rows)
+		if err != nil {
+			return nil, err
+		}
+		out[r.ID] = r
+	}
+	return out, rows.Err()
+}
+
 // rowsWhere — живые раздачи по условию (часть после WHERE), по убыванию раздающих.
 func (s catalogStore) rowsWhere(ctx context.Context, where string, args ...any) ([]row, error) {
 	rows, err := s.db.R.QueryContext(ctx,
