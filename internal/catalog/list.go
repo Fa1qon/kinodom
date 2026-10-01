@@ -27,9 +27,12 @@ type Entry struct {
 	Rating     meta.Rating // KinopoiskID = 0 — фильм не найден (или ещё не искали)
 	Format     string      // «MKV», «AVI, MKV»; "" — неизвестен (спека этапа 7, раздел 10.2)
 	Variants   int         // раздач этого фильма на обоих трекерах — у карточки каталога; 0 — не считали
-	// Preferred — формат в приоритете (основной формат раздачи совпадает с настройкой); у карточки — хоть у
-	// одной раздачи фильма (план 14А): пульт подсвечивает формат.
+	// Preferred — формат в приоритете (основной формат раздачи совпадает с настройкой; план 14А): пульт
+	// подсвечивает формат.
 	Preferred bool
+	// PreferredAlt — у карточки, чья раздача не в формате в приоритете, а другая раздача фильма — в нём:
+	// этот формат («MKV»), пульт показывает его отдельной меткой (ревью 14А, Important 2); иначе "".
+	PreferredAlt string
 	// DetailsPending — страницу раздачи ещё не загружали: формата и номера Кинопоиска может не быть.
 	DetailsPending bool
 }
@@ -98,8 +101,8 @@ func (c *Catalog) cards(ctx context.Context, page []row, kp map[int64]int, size 
 	for i, r := range page {
 		entries[i].Variants = max(1, len(vs[kp[r.ID]]), size[r.ID])
 		for _, v := range vs[kp[r.ID]] {
-			if prefers(v.Format, pref) {
-				entries[i].Preferred = true
+			if !entries[i].Preferred && prefers(v.Format, pref) {
+				entries[i].PreferredAlt = pref
 			}
 		}
 	}

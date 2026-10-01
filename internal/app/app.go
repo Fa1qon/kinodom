@@ -522,8 +522,13 @@ func (a *App) handleDownload(w http.ResponseWriter, r *http.Request) {
 	case err != nil:
 		httpx.WriteError(w, http.StatusInternalServerError, "раздача не читается: "+err.Error())
 		return
-	case len(rel.Torrent) == 0 && rel.Magnet == "":
+	case len(rel.Torrent) == 0 && rel.Magnet == "" && rel.DetailsPending:
 		httpx.WriteError(w, http.StatusConflict, "у раздачи ещё нет magnet-ссылки — страница раздачи догружается, попробуйте через минуту")
+		return
+	case len(rel.Torrent) == 0 && rel.Magnet == "":
+		// Страница загружена, а хэша нет ни на ней, ни в списке трекера (ревью 14А): ждать нечего.
+		a.Log.Warn("каталог: на странице раздачи нет magnet-ссылки", "tracker", rel.Tracker, "topic", rel.TopicID)
+		httpx.WriteError(w, http.StatusConflict, "на странице раздачи нет magnet-ссылки — откройте раздачу на трекере")
 		return
 	}
 	ih, err := a.Torrents.Open(r.Context(), torrents.Source{Torrent: rel.Torrent, Magnet: rel.Magnet})
