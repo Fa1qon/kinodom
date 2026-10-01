@@ -97,8 +97,9 @@ func TestUpdatesDismiss(t *testing.T) {
 	}
 }
 
-// Переход раздачи на новую версию: известный infohash подписки и оповещения — новые, номера файлов — по
-// сопоставлению, файлы без пары — убираются из оповещения.
+// Переход раздачи на новую версию: infohash оповещений — новый, номера файлов — по сопоставлению, файлы без
+// пары — убираются из оповещения; известную версию подписки модуль сдвигает сам, записав оповещение (иначе
+// сбой после перехода терял серию — финальное ревью 11b-В).
 func TestFollowRekeyTx(t *testing.T) {
 	db := openDB(t)
 	st := followDB{db}
@@ -119,7 +120,7 @@ func TestFollowRekeyTx(t *testing.T) {
 	}
 	f, _, _ := st.get(ctx, id)
 	us, _ := st.updates(ctx)
-	if f.InfoHash != "new" || len(us) != 1 || us[0].InfoHash != "new" || len(us[0].Files) != 1 || us[0].Files[0] != (UpdateFile{7, "e07.mkv"}) {
+	if f.InfoHash != "old" || len(us) != 1 || us[0].InfoHash != "new" || len(us[0].Files) != 1 || us[0].Files[0] != (UpdateFile{7, "e07.mkv"}) {
 		t.Fatalf("после перехода: %+v %+v", f, us)
 	}
 }

@@ -45,6 +45,14 @@ type upgradeRec struct {
 	Root     string        `json:"root"`  // папка прежней версии — удаляется после переноса
 	Focus    int           `json:"focus"` // файл в очереди загрузки (номер в новой версии); −1 — никакой
 	Moves    []upgradeMove `json:"moves"`
+	Download []int         `json:"download"` // новые серии и перезалитые — в очередь после перехода (и после сбоя)
+}
+
+// isUpgrading — переход раздачи ih (прежней или новой версии) идёт в этом процессе.
+func (s *Service) isUpgrading(ih metainfo.Hash) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.upgrading[ih]
 }
 
 // SetRekey — перенос ключей для перехода, который доводится при старте (Upgrade получает свой).
@@ -58,7 +66,9 @@ func (s *Service) SetRekey(r Rekey) {
 // размера переносятся (сопоставление — matchFiles), остальные старые удаляются вместе с папкой прежней
 // версии; файлы, что были скачаны, но в новой версии другого размера (перезалиты), и download (новые
 // серии) встают в очередь после проверки перенесённого. Смотрят (поток открыт или был меньше
-// busyAfterStream назад, идёт перепроверка) — ErrBusy, ничего не меняется. Возвращает infohash новой версии.
+// busyAfterStream назад, идёт перепроверка) — ErrBusy, ничего не меняется. Возвращает infohash новой версии;
+// ошибка вместе с ним — переход записан (ключи перенесены), а файлы не перенеслись: его доведёт уборка.
+// Докачка новых серий не встала (мало места) — не ошибка перехода: только в журнал.
 func (s *Service) Upgrade(ctx context.Context, old metainfo.Hash, newRaw []byte, download []int, rekey Rekey) (metainfo.Hash, error) {
 	mi, err := metainfo.Load(bytes.NewReader(newRaw))
 	if err != nil {
@@ -97,6 +107,16 @@ func (s *Service) Upgrade(ctx context.Context, old metainfo.Hash, newRaw []byte,
 		s.spaceMu.Unlock()
 		return metainfo.Hash{}, ErrBusy
 	}
+	if s.upgrading == nil {
+		s.upgrading = map[metainfo.Hash]bool{}
+	}
+	s.upgrading[old], s.upgrading[newIH] = true, true
+	defer func() {
+		s.mu.Lock()
+		delete(s.upgrading, old)
+		delete(s.upgrading, newIH)
+		s.mu.Unlock()
+	}()
 	oldInfo := ss.t.Info()
 	dir := s.eng.TorrentDir(old)
 	index := matchFiles(oldInfo, &info)
@@ -116,6 +136,7 @@ func (s *Service) Upgrade(ctx context.Context, old metainfo.Hash, newRaw []byte,
 	if j, ok := index[ss.focus]; ok {
 		rec.Focus = j
 	}
+	rec.Download = append(again, download...)
 	err = s.reg.upgrade(ctx, rec, info.BestName(), newRaw, s.now(), func(tx *sql.Tx) error {
 		if rekey == nil {
 			return nil
@@ -140,12 +161,19 @@ func (s *Service) Upgrade(ctx context.Context, old metainfo.Hash, newRaw []byte,
 	if err != nil {
 		return newIH, err
 	}
-	if want := append(again, download...); len(want) > 0 {
-		if err := s.Download(ctx, newIH, want); err != nil {
-			return newIH, err
-		}
-	}
+	s.queueAfterUpgrade(ctx, rec)
 	return newIH, nil
+}
+
+// queueAfterUpgrade — новые серии и перезалитые файлы — в очередь загрузки. Не встали (мало места) —
+// переход всё равно состоялся: «Смотреть» скачает серию потоком, а место — забота правил «Загрузок».
+func (s *Service) queueAfterUpgrade(ctx context.Context, rec upgradeRec) {
+	if len(rec.Download) == 0 {
+		return
+	}
+	if err := s.Download(ctx, rec.New, rec.Download); err != nil {
+		s.log.Warn("новые серии после перехода не встали в очередь", "hash", rec.New.HexString(), "err", err)
+	}
 }
 
 // finishUpgrade — вторая половина перехода (и доведение после сбоя): перенести файлы, убрать папку
@@ -231,13 +259,25 @@ func (s *Service) stopAt(phase string, rec upgradeRec) error {
 	return s.upgradeStop(phase, rec)
 }
 
-// resumeUpgrades — при старте: переходы, прерванные сбоем, доводятся (до восстановления раздач).
+// resumeUpgrades — переходы, прерванные сбоем, доводятся (до восстановления раздач): при старте и уборкой,
+// если в прошлый раз не вышло (диск не подключён, файл заняли). Не трогаются переход, идущий в этом
+// процессе, и уже доведённый (новая версия в движке — пометка снимется после проверки): иначе уборка раз
+// в 5 минут ставила бы проверку заново и гонялась бы с переносом файлов (финальное ревью 11b-В).
 func (s *Service) resumeUpgrades(ctx context.Context) error {
 	recs, err := s.reg.upgrades(ctx)
 	if err != nil {
 		return err
 	}
 	for _, rec := range recs {
+		if s.isUpgrading(rec.Old) || s.isUpgrading(rec.New) {
+			continue
+		}
+		if _, ok := s.eng.cl.Torrent(rec.New); ok {
+			continue
+		}
+		if _, err := os.Stat(rec.Dir); err != nil {
+			continue // диск не подключён: «уже перенесён» по пропавшему файлу было бы неправдой
+		}
 		raw, ok, err := s.reg.Metainfo(ctx, rec.New)
 		if err != nil {
 			return err
@@ -251,8 +291,10 @@ func (s *Service) resumeUpgrades(ctx context.Context) error {
 			return err
 		}
 		if err := s.finishUpgrade(ctx, rec, mi, true); err != nil {
-			s.log.Warn("переход раздачи не доведён — повтор при следующем старте", "hash", rec.New.HexString(), "err", err)
+			s.log.Warn("переход раздачи не доведён — повтор при уборке", "hash", rec.New.HexString(), "err", err)
+			continue
 		}
+		s.queueAfterUpgrade(ctx, rec)
 	}
 	return nil
 }
