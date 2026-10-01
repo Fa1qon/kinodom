@@ -70,6 +70,7 @@ type StorageView struct {
 type CatalogView struct {
 	Sections        map[string][]string `json:"sections"`
 	PreferredFormat string              `json:"preferredFormat"` // "" — нет
+	Order           string              `json:"order"`           // порядок разделов по умолчанию
 }
 
 // IPTVView — настройки каналов (спека этапа 8, раздел 5.6).
@@ -94,7 +95,7 @@ func (v Values) View() View {
 		Search:    SearchView{Address: v.SearchAddress, KeySet: v.SearchKey != ""},
 		Storage:   StorageView{DownloadsDir: v.DownloadsDir, KeepDays: v.KeepDays, KeepBehind: v.KeepBehind, MinFreeGB: v.MinFreeGB, UploadLimitMBps: v.UploadMBps},
 		Player:    v.Player,
-		Catalog:   CatalogView{Sections: splitSections(v.Sections), PreferredFormat: v.PreferredFormat},
+		Catalog:   CatalogView{Sections: splitSections(v.Sections), PreferredFormat: v.PreferredFormat, Order: v.CatalogOrder},
 		IPTV: IPTVView{EPGURL: v.EPGURL, HiddenCategories: nonNil(v.HiddenCategories), HiddenCountries: nonNil(v.HiddenCountries),
 			HiddenLanguages: nonNil(v.HiddenLanguages), UTCOffset: v.UTCOffset},
 	}
@@ -159,6 +160,7 @@ type StoragePatch struct {
 type CatalogPatch struct {
 	Sections        map[string][]string `json:"sections"`
 	PreferredFormat *string             `json:"preferredFormat"`
+	Order           *string             `json:"order"`
 }
 
 // IPTVPatch — изменения настроек каналов.

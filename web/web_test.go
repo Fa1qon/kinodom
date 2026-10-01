@@ -1883,6 +1883,52 @@ for (const [got, want] of checks) {
 	}
 }
 
+// План 14Б: переключатель порядка над разделом и цифра порядка на карточке.
+func TestPultCatalogOrder(t *testing.T) {
+	node := lookNode(t)
+	script := `
+const { orderLinks, orderStat, readOrderMemory, orderParams } = await import('./views/catalog.js');
+const op = (...a) => JSON.stringify(orderParams(...a));
+const os = [{ id: 'seeders', name: 'Раздающие' }, { id: 'new', name: 'Новые' }];
+const ls = orderLinks(os, 'new', '#/catalog/rutor/12');
+const st = (e, o) => { const x = orderStat(e, o); return x ? x.text : null; };
+const checks = [
+  [ls.length, 2],
+  [ls[1].on && !ls[0].on, true],
+  [ls[0].href, '#/catalog/rutor/12?order=seeders'],
+  [ls[1].name, 'Новые'],
+  [st({ seeders: 5 }, 'seeders'), null],
+  [st({ leechers: 7 }, 'leechers'), '7'],
+  [st({ downloads: 23992 }, 'downloads'), '23\u00a0992'],
+  [st({ downloads: 0 }, 'downloads'), null],
+  [st({ added: '2026-09-30T12:00:00Z' }, 'new'), '30.09'],
+  [st({}, 'new'), null],
+  [st({ leechers: 3 }, undefined), null],
+  // Ревью 14Б: память выбора — с умолчанием, при котором выбрали (старая память — просто строка).
+  [JSON.stringify(readOrderMemory('{"o":"new","d":"seeders"}')), '{"o":"new","d":"seeders"}'],
+  [JSON.stringify(readOrderMemory('leechers')), '{"o":"leechers","d":""}'],
+  [JSON.stringify(readOrderMemory(null)), '{"o":"","d":""}'],
+  // Порядок запроса: показанный (следующие порции) → из адреса → из памяти с since → умолчание сервера.
+  [op('', { o: 'new', d: 'seeders' }, 'leechers'), '{"order":"leechers"}'],
+  [op('downloads', { o: 'new', d: 'seeders' }, ''), '{"order":"downloads"}'],
+  [op('', { o: 'new', d: 'seeders' }, ''), '{"order":"new","since":"seeders"}'],
+  [op('', { o: 'new', d: '' }, ''), '{"order":"new"}'],
+  [op('', { o: '', d: '' }, ''), '{}'],
+];
+for (const [got, want] of checks) {
+  if (got !== want) {
+    console.error(JSON.stringify(got), '≠', JSON.stringify(want));
+    process.exitCode = 1;
+  }
+}
+`
+	cmd := exec.Command(node, "--input-type=module", "--no-warnings", "-e", script)
+	cmd.Dir = "static"
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Errorf("%v\n%s", err, out)
+	}
+}
+
 // План 14А, задача 3: на странице сериала крупно — какой сезон скачается.
 func TestPultSeasonLabel(t *testing.T) {
 	node := lookNode(t)

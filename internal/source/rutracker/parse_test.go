@@ -29,9 +29,17 @@ func TestParseSearch(t *testing.T) {
 	}
 	want := source.Release{Tracker: "rutracker", TopicID: "4215143", CategoryID: "2076",
 		Title:   "Космос: Персональное путешествие с Карлом Саганом / Cosmos: A Personal Voyage (Carl Sagan) [1980, научно-популярный, DVDRip-AVC, RUS/ENG]",
-		Seeders: 37, Leechers: 12, Size: 14528543148, Added: time.Unix(1400655625, 0)}
+		Seeders: 37, Leechers: 12, Size: 14528543148, Added: time.Unix(1400655625, 0), Downloads: 23992}
 	if got := rs[0]; got != want {
 		t.Fatalf("первая строка:\n%+v\nнужно\n%+v", got, want)
+	}
+}
+
+// Страница раздачи — «Скачан: 839 раз» (план 14Б).
+func TestParseTopicDownloads(t *testing.T) {
+	d, err := parseTopic(utf8Page(t, "topic.src.html"))
+	if err != nil || d.Downloads != 839 {
+		t.Fatalf("скачиваний %d, %v", d.Downloads, err)
 	}
 }
 

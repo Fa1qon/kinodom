@@ -480,3 +480,30 @@ func TestRutorDetailsAtOnce(t *testing.T) {
 		t.Fatalf("страниц сразу %d", n)
 	}
 }
+
+// Страницы раздела в порядке сайта (план 14Б): новые — /0/0, качающие — /0/4.
+func TestRutorSortedPage(t *testing.T) {
+	s := rutortest.NewServer(t)
+	r := newRutor(t, s)
+	if got := r.SortOrders(); !slices.Equal(got, []string{source.OrderLeechers, source.OrderNew}) {
+		t.Fatalf("порядки: %v", got)
+	}
+	rs, more, err := r.SortedPage(ctx, []string{"12"}, source.OrderNew, 0)
+	if err != nil || len(rs) != 100 || !more || rs[0].CategoryID != "12" {
+		t.Fatalf("новые: %d, ещё %v, %v", len(rs), more, err)
+	}
+	if _, _, err := r.SortedPage(ctx, []string{"12"}, source.OrderLeechers, 2); err != nil {
+		t.Fatal(err)
+	}
+	if got := s.Paths(); !slices.Equal(got, []string{"/browse/0/12/0/0", "/browse/2/12/0/4"}) {
+		t.Fatalf("запросы %v", got)
+	}
+	for _, bad := range []struct {
+		forums []string
+		order  string
+	}{{[]string{"12"}, source.OrderDownloads}, {[]string{"12", "1"}, source.OrderNew}, {[]string{"x"}, source.OrderNew}} {
+		if _, _, err := r.SortedPage(ctx, bad.forums, bad.order, 0); err == nil {
+			t.Fatalf("%v %s принято", bad.forums, bad.order)
+		}
+	}
+}

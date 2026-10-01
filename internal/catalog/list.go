@@ -35,6 +35,7 @@ type Entry struct {
 	PreferredAlt string
 	// DetailsPending — страницу раздачи ещё не загружали: формата и номера Кинопоиска может не быть.
 	DetailsPending bool
+	Downloads      int // сколько раз скачана; 0 — неизвестно (план 14Б)
 }
 
 type ListOptions struct {
@@ -72,7 +73,7 @@ func (c *Catalog) List(ctx context.Context, o ListOptions) (entries []Entry, tot
 	if err != nil {
 		return nil, 0, err
 	}
-	filtered, size, _ := films(filtered, kp, c.PreferredFormat(), !inSection)
+	filtered, size, _ := films(filtered, kp, c.PreferredFormat(), !inSection, false)
 	total = len(filtered)
 	if o.Offset >= total {
 		return []Entry{}, total, nil
@@ -124,12 +125,18 @@ func (c *Catalog) SectionPage(ctx context.Context, tracker, section string, afte
 			filtered = append(filtered, r)
 		}
 	}
-	filtered = c.collapse(filtered)
-	kp, err := c.kinopoiskIDs(ctx, filtered)
+	return c.pageOf(ctx, filtered, after, limit, false)
+}
+
+// pageOf — карточки строк раздела (или списка порядка) после места after: склейка дублей и фильмов, место
+// карточки — наименьшее место её раздач; byPlace — карточка показывает раздачу этого места (порядки).
+func (c *Catalog) pageOf(ctx context.Context, rs []row, after, limit int, byPlace bool) (entries []Entry, next, rest int, err error) {
+	rs = c.collapse(rs)
+	kp, err := c.kinopoiskIDs(ctx, rs)
 	if err != nil {
 		return nil, after, 0, err
 	}
-	out, size, place := films(filtered, kp, c.PreferredFormat(), false)
+	out, size, place := films(rs, kp, c.PreferredFormat(), false, byPlace)
 	from := len(out)
 	for i, r := range out {
 		if place[r.ID] > after {
@@ -198,7 +205,7 @@ func (c *Catalog) entries(ctx context.Context, rs []row) ([]Entry, error) {
 	for i, r := range rs {
 		out[i] = Entry{ID: r.ID, Tracker: r.Tracker, TopicID: r.TopicID, Title: r.Title, Quality: meta.ParseTitle(r.Title).Quality,
 			CategoryID: r.CategoryID, Category: cmp.Or(names[CategoryRef{r.Tracker, r.CategoryID}], r.CategoryID), Seeders: r.Seeders,
-			Leechers: r.Leechers, Size: r.Size, Added: r.Added, InfoHash: r.InfoHash, ImageKey: r.ImageKey, Format: r.Format,
+			Leechers: r.Leechers, Size: r.Size, Added: r.Added, InfoHash: r.InfoHash, ImageKey: r.ImageKey, Format: r.Format, Downloads: r.Downloads,
 			DetailsPending: r.DetailsAt.IsZero(), Rating: ratings[r.Tracker+":"+r.TopicID], Preferred: prefers(r.Format, pref)}
 		if out[i].Rating.KinopoiskID == 0 && r.KinopoiskID > 0 {
 			out[i].Rating.KinopoiskID = r.KinopoiskID // номер из описания — до очереди рейтингов (медиатека, 11b-Б)

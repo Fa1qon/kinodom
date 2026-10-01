@@ -157,10 +157,39 @@ func (r *Rutor) Top(ctx context.Context, categoryID string, limit int) ([]source
 // TopPage — страница категории по раздающим (0 — первая, по 100 строк): порции каталога глубже первой
 // сотни (спека 11b, 7.2). more — страница полная, дальше, возможно, есть ещё.
 func (r *Rutor) TopPage(ctx context.Context, categoryID string, page int) (rs []source.Release, more bool, err error) {
+	if rs, more, err = r.browse(ctx, categoryID, page, "2"); err != nil {
+		return nil, false, err
+	}
+	sortBySeeders(rs)
+	return rs, more, nil
+}
+
+// sortCode — порядок раздела → последняя часть адреса /browse (проверено вживую 2026-10-01: 0 — новые
+// первыми, 4 — по качающим, 2 — по раздающим).
+var sortCode = map[string]string{source.OrderNew: "0", source.OrderLeechers: "4", source.OrderSeeders: "2"}
+
+// SortOrders — порядки раздела, которые каталог берёт у сайта (план 14Б); числа скачиваний у Rutor нет.
+func (r *Rutor) SortOrders() []string { return []string{source.OrderLeechers, source.OrderNew} }
+
+// SortedPage — страница раздела (forums — один его номер) в порядке сайта order, по 100 строк, page 0 —
+// первая; строки не пересортированы. more — страница полная.
+func (r *Rutor) SortedPage(ctx context.Context, forums []string, order string, page int) ([]source.Release, bool, error) {
+	code, ok := sortCode[order]
+	if !ok {
+		return nil, false, fmt.Errorf("Rutor: порядка %q нет", order)
+	}
+	if len(forums) != 1 {
+		return nil, false, fmt.Errorf("Rutor: раздел — один номер, а не %q", forums)
+	}
+	return r.browse(ctx, forums[0], page, code)
+}
+
+// browse — страница раздела /browse/<стр>/<раздел>/0/<порядок> по 100 строк.
+func (r *Rutor) browse(ctx context.Context, categoryID string, page int, code string) (rs []source.Release, more bool, err error) {
 	if !isNumber(categoryID) || page < 0 {
 		return nil, false, fmt.Errorf("Rutor: категория %q — не номер", categoryID)
 	}
-	p, err := r.page(ctx, "/browse/"+strconv.Itoa(page)+"/"+categoryID+"/0/2")
+	p, err := r.page(ctx, "/browse/"+strconv.Itoa(page)+"/"+categoryID+"/0/"+code)
 	if err != nil {
 		return nil, false, err
 	}
@@ -171,9 +200,7 @@ func (r *Rutor) TopPage(ctx context.Context, categoryID string, page int) (rs []
 	for i := range rs {
 		rs[i].CategoryID = categoryID
 	}
-	more = len(rs) >= 100
-	sortBySeeders(rs)
-	return rs, more, nil
+	return rs, len(rs) >= 100, nil
 }
 
 // Search ищет по видеокатегориям: шесть запросов, не больше трёх одновременно и мимо
