@@ -258,7 +258,7 @@ func (c *Catalog) kinopoiskSoon(ctx context.Context, ids []int64) {
 	}
 	for _, key := range keys {
 		if kp := known[key].KinopoiskID; kp > 0 {
-			c.posterLater(ctx, noImage[key], "", kp, true)
+			c.posterLater(ctx, noImage[key], "", kp, posterSoon)
 			continue
 		}
 		c.mu.Lock()

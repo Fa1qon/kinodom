@@ -158,13 +158,31 @@ func (c *Catalog) Release(ctx context.Context, id int64) (Release, error) {
 		}
 	}
 	if out.ImageKey == "" && !r.DetailsAt.IsZero() {
-		// Картинки нет, а человек открыл раздачу — постер (страницы или Кинопоиска) без паузы повтора.
-		c.mu.Lock()
-		c.forced[r.ID] = true
-		c.mu.Unlock()
-		c.wakePosters()
+		c.posterOnOpen(r, out.Rating.KinopoiskID)
 	}
 	return out, nil
+}
+
+// posterOnOpen — открыли раздачу со страницей, а картинки нет: постер (Кинопоиска по номеру, иначе со
+// страницы) — сразу, на местах открытых, а не когда кончится фоновый проход повторов (тот висит на мёртвых
+// хостингах до минуты на постер; спека 11b, 14.2). Экран раздачи спрашивает её каждую секунду — попытка не
+// чаще openPosterEvery.
+func (c *Catalog) posterOnOpen(r row, kp int) {
+	if c.images == nil || !c.openPosterDue(r.ID) {
+		return
+	}
+	c.mu.Lock()
+	base := c.runCtx
+	c.mu.Unlock()
+	if base == nil {
+		base = context.Background()
+	}
+	url, err := c.st.posterURL(base, r.ID)
+	if err != nil {
+		c.log.Warn("каталог: адрес постера не читается", "err", err)
+		return
+	}
+	c.posterLater(base, r.ID, url, kp, posterOpened)
 }
 
 // descWait — сколько ждать описание Кинопоиска открытой раздачи без страницы.
@@ -379,14 +397,10 @@ func (c *Catalog) failed(kind string, id int64, now time.Time) {
 	c.retries[k] = st
 }
 
-// due — пора пробовать: ещё не пробовали, прошла пауза или (постер) раздачу открыли.
+// due — пора пробовать: ещё не пробовали или прошла пауза.
 func (c *Catalog) due(kind string, id int64, now time.Time) bool {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	if kind == "poster" && c.forced[id] {
-		delete(c.forced, id)
-		return true
-	}
 	st, ok := c.retries[kind+":"+strconv.FormatInt(id, 10)]
 	return !ok || !now.Before(st.next)
 }
@@ -401,13 +415,49 @@ func (c *Catalog) succeeded(kind string, id int64) {
 const bgPostersQueued = 4
 
 // posterLater — постер раздачи вне шага догрузки (хвост Х8): срочная раздача не ждёт чужой медленный
-// хостинг. urgent (открытая, найденная) — свои два места, не за фоновыми (ревью 11b-А); фоновых — два
-// места и не больше bgPostersQueued ждущих, остальные подберёт fixPosters.
-func (c *Catalog) posterLater(ctx context.Context, id int64, url string, kp int, urgent bool) {
+// хостинг. Открытая — свои два места, не за показанной сеткой (спека 11b, 14.2); найденная и показанная —
+// свои, не за фоновыми (ревью 11b-А); фоновых — два места и не больше bgPostersQueued ждущих, остальные
+// подберёт fixPosters.
+// openPosterDue — пора пробовать постер открытой раздачи (не пробовали openPosterEvery); попытка
+// отмечается. Отмечает и шаг догрузки открытой раздачи: экран, спросивший её до постера, второй попытки не
+// начинает.
+func (c *Catalog) openPosterDue(id int64) bool {
+	now := c.now()
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if at, ok := c.openPoster[id]; ok && now.Sub(at) < openPosterEvery {
+		return false
+	}
+	for k, at := range c.openPoster {
+		if now.Sub(at) >= openPosterEvery {
+			delete(c.openPoster, k)
+		}
+	}
+	c.openPoster[id] = now
+	return true
+}
+
+// posterTier — чей постер: у каждого уровня свои места, чтобы срочное не стояло за менее срочным.
+type posterTier int
+
+const (
+	posterBackground posterTier = iota // фон: два места, не больше bgPostersQueued ждущих
+	posterSoon                         // найденное поиском и показанное в сетке: свои два места
+	posterOpened                       // открытая в пульте раздача: свои два места (спека 11b, 14.2)
+)
+
+// openPosterEvery — постер открытой раздачи без картинки пробуется не чаще.
+const openPosterEvery = time.Minute
+
+func (c *Catalog) posterLater(ctx context.Context, id int64, url string, kp int, tier posterTier) {
+	urgent := tier != posterBackground
 	if c.images == nil || (url == "" && (kp == 0 || c.kpPoster == nil)) {
 		return
 	}
 	sem := c.urgentSem
+	if tier == posterOpened {
+		sem = c.openSem
+	}
 	if !urgent {
 		c.mu.Lock()
 		if c.bgWaiting >= bgPostersQueued {
@@ -464,15 +514,7 @@ func (c *Catalog) noteKPPoster(id int64, kp int, key string) {
 // быстрый, а у каталога, где номера нашлись позже, таких сотни.
 const kpSwitchPerPass = 60
 
-func (c *Catalog) wakePosters() {
-	select {
-	case c.postersWake <- struct{}{}:
-	default:
-	}
-}
-
-// postersLoop раз в 10 минут (и сразу, когда открыли раздачу без картинки) догружает постеры
-// Кинопоиска раздачам без картинки.
+// postersLoop раз в 10 минут догружает постеры раздачам без картинки (открытым — сразу, posterOnOpen).
 func (c *Catalog) postersLoop(ctx context.Context) error {
 	for {
 		if err := c.fixPosters(ctx); err != nil {
@@ -481,7 +523,6 @@ func (c *Catalog) postersLoop(ctx context.Context) error {
 		select {
 		case <-ctx.Done():
 			return nil
-		case <-c.postersWake:
 		case <-time.After(postersEvery):
 		}
 	}
@@ -567,15 +608,7 @@ func (c *Catalog) fixPosters(ctx context.Context) error {
 				kps[i] = r.KinopoiskID
 			}
 		}
-		order := make([]int, len(rs))
-		for i := range order {
-			order[i] = i
-		}
-		c.mu.Lock()
-		slices.SortStableFunc(order, func(a, b int) int { return b2i(c.forced[rs[b].ID]) - b2i(c.forced[rs[a].ID]) })
-		c.mu.Unlock()
-		for _, i := range order {
-			r := rs[i]
+		for i, r := range rs {
 			if budget == 0 {
 				break
 			}
@@ -637,11 +670,4 @@ func (c *Catalog) fixPosters(ctx context.Context) error {
 		}
 	}
 	return nil
-}
-
-func b2i(b bool) int {
-	if b {
-		return 1
-	}
-	return 0
 }

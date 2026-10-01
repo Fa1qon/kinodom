@@ -173,9 +173,9 @@ func TestUrgentPosterNotBehindBackground(t *testing.T) {
 	bctx, cancel := context.WithCancel(ctx)
 	t.Cleanup(cancel)
 	for i, id := range ids[:6] {
-		c.posterLater(bctx, id, fmt.Sprintf("%s/slow/%d.jpg", host.URL, i), 0, false)
+		c.posterLater(bctx, id, fmt.Sprintf("%s/slow/%d.jpg", host.URL, i), 0, posterBackground)
 	}
-	c.posterLater(ctx, ids[6], host.URL+"/fast.jpg", 0, true)
+	c.posterLater(ctx, ids[6], host.URL+"/fast.jpg", 0, posterSoon)
 	deadline := time.Now().Add(3 * time.Second)
 	for {
 		r, err := c.Release(ctx, ids[6])

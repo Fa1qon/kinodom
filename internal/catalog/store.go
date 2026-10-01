@@ -317,6 +317,13 @@ func (s catalogStore) rowsByID(ctx context.Context, ids []int64) (map[int64]row,
 	return out, nil
 }
 
+// posterURL — адрес постера со страницы раздачи; "" — нет.
+func (s catalogStore) posterURL(ctx context.Context, id int64) (string, error) {
+	var u string
+	err := s.db.R.QueryRowContext(ctx, `SELECT poster_url FROM releases WHERE id = ?`, id).Scan(&u)
+	return u, err
+}
+
 // liveRowsByID — раздачи по номерам без ушедших с трекера (карточки пульта: догружать их нечего).
 func (s catalogStore) liveRowsByID(ctx context.Context, ids []int64) (map[int64]row, error) {
 	out := map[int64]row{}
