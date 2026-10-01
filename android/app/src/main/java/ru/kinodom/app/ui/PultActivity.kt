@@ -54,6 +54,7 @@ class PultActivity : Activity() {
     private var overlay: View? = null
     private var overlayClosable = false // окно обновления — «Назад» закрывает; «Kinodom не отвечает» — нет
     private var pendingApk: File? = null // скачанное обновление ждёт разрешения «устанавливать из Kinodom»
+    private var pendingApp: ServerApp? = null
 
     @SuppressLint("SetJavaScriptEnabled")
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -122,11 +123,14 @@ class PultActivity : Activity() {
     override fun onResume() {
         super.onResume()
         if (::web.isInitialized) web.onResume()
-        // Вернулись из настроек «устанавливать из Kinodom» — поставить скачанное.
+        // Вернулись из настроек «устанавливать из Kinodom»: разрешили — поставить скачанное; нет — снова окно
+        // «Есть новая версия», «Обновить» — сразу к разрешению (файл уже скачан).
         val apk = pendingApk
-        if (apk != null && ::updater.isInitialized && updater.canInstall()) {
+        val app = pendingApp
+        if (apk != null && app != null && ::updater.isInitialized) {
             pendingApk = null
-            install(apk)
+            pendingApp = null
+            if (updater.canInstall()) install(apk) else offerUpdate(app, apk)
         }
     }
 
@@ -179,11 +183,19 @@ class PultActivity : Activity() {
         }
     }
 
-    private fun offerUpdate(app: ServerApp) {
+    // offerUpdate — «Есть новая версия Kinodom»; ready — файл уже скачан (не дали разрешение на установку).
+    private fun offerUpdate(app: ServerApp, ready: File? = null) {
         val c = Screens.column(this)
         c.addView(Screens.title(this, getString(R.string.update_title)))
         c.addView(Screens.note(this, app.version))
-        val now = Screens.button(this, getString(R.string.update_now)) { startUpdate(app) }
+        val now = Screens.button(this, getString(R.string.update_now)) {
+            if (ready != null) {
+                closeOverlay()
+                installOrAsk(app, ready)
+            } else {
+                startUpdate(app)
+            }
+        }
         c.addView(now)
         c.addView(Screens.button(this, getString(R.string.update_later)) {
             postponed = true
@@ -212,16 +224,23 @@ class PultActivity : Activity() {
                 return@launch
             }
             closeOverlay()
-            if (updater.canInstall()) {
-                install(f)
-            } else {
-                pendingApk = f
-                try {
-                    startActivity(updater.askInstallPermission())
-                } catch (e: ActivityNotFoundException) {
-                    pendingApk = null
-                }
-            }
+            installOrAsk(app, f)
+        }
+    }
+
+    // installOrAsk — установщик Android; Android 8+ без разрешения «устанавливать из Kinodom» — сначала настройки.
+    private fun installOrAsk(app: ServerApp, f: File) {
+        if (updater.canInstall()) {
+            install(f)
+            return
+        }
+        pendingApk = f
+        pendingApp = app
+        try {
+            startActivity(updater.askInstallPermission())
+        } catch (e: ActivityNotFoundException) {
+            pendingApk = null
+            pendingApp = null
         }
     }
 
