@@ -280,6 +280,8 @@ func (c *Catalog) refreshCategory(ctx context.Context, cat CategoryRef, src sour
 	}
 	rs := withSeeders(slices.Clone(raw))
 	rs = rs[:min(len(rs), topSize)]
+	// Места первой сотни — по раздающим: по ним раздел и показывается, порции встают за ней.
+	slices.SortStableFunc(rs, func(a, b source.Release) int { return b.Seeders - a.Seeders })
 	problem := "catalog." + cat.String()
 	name := c.st.categoryName(ctx, cat.Tracker, cat.ID)
 	switch {

@@ -178,3 +178,52 @@ func TestDeepPortionEnqueuedInOrder(t *testing.T) {
 		t.Fatalf("в догрузке %v, на странице первая %v", found, v.Entries[0].ID)
 	}
 }
+
+// Вживую 11b-Г: t1 считает раздающих неточно — на следующей странице трекера бывает раздача «выше»
+// хвоста первой сотни. Порция не сдвигает уже показанные страницы: карточки не повторяются и не теряются.
+func TestDeepPortionKeepsShownPages(t *testing.T) {
+	t1 := newFake("t1")
+	rs := manyDesc("t1", 250)
+	rs[150].Seeders = 950 // вторая страница трекера, а раздающих больше, чем у половины первой сотни
+	t1.top["12"] = rs
+	c, _ := newCatalog(t, openDB(t), func(o *Options) { o.Sections = []Section{{"t1", "12", false}} }, t1)
+	refresh(t, c, true)
+	mux := http.NewServeMux()
+	c.Register(muxRouter{mux})
+	seen := map[int64]int{}
+	for p := 1; p <= 20; p++ {
+		v, code := listPage(t, mux, "t1", "12", p)
+		if code != 200 {
+			t.Fatalf("страница %d: %d", p, code)
+		}
+		for _, e := range v.Entries {
+			seen[e.ID]++
+		}
+		if p >= v.Pages {
+			break
+		}
+	}
+	var dups []int64
+	for id, n := range seen {
+		if n > 1 {
+			dups = append(dups, id)
+		}
+	}
+	if len(dups) > 0 || len(seen) != 250 {
+		t.Fatalf("карточек %d из 250, повторы %v", len(seen), dups)
+	}
+}
+
+// Вживую 11b-Г: форум без раздач API отдаёт 404 — подраздел обновляется без него, а не встаёт целиком.
+func TestSectionSkipsMissingForum(t *testing.T) {
+	rt := newFake("t2")
+	rt.tree = groupsTree()
+	rt.top["252"] = []source.Release{rel("t2", "252", "Фильм (2026) WEB-DL", 10, 1<<30, "h252")}
+	rt.topErrs = map[string]error{"1950": fmt.Errorf("t2 API: /v1/static/pvc/f/1950 — ответ 404 (%w)", source.ErrNoSection)}
+	c, _ := newCatalog(t, openDB(t), func(o *Options) { o.Sections = []Section{{"t2", "7", true}} }, rt)
+	refresh(t, c, false)
+	refresh(t, c, true)
+	if es := list(t, c, ListOptions{Tracker: "t2", Category: "7"}); len(es) != 1 {
+		t.Fatalf("подраздел без форума с 404: %d карточек", len(es))
+	}
+}

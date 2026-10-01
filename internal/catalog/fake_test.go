@@ -23,6 +23,7 @@ type fakeSource struct {
 	top          map[string][]source.Release // раздел → топ
 	topErr       error
 	pageErr      error                     // ошибка страницы топа (порции глубже первой сотни)
+	topErrs      map[string]error          // ошибка топа одного форума
 	details      map[string]source.Details // номер → страница
 	detailsErr   map[string]error
 	torrents     map[string][]byte
@@ -71,6 +72,9 @@ func (f *fakeSource) Top(_ context.Context, cat string, _ int) ([]source.Release
 	f.calls["top"]++
 	if f.topErr != nil {
 		return nil, f.topErr
+	}
+	if err := f.topErrs[cat]; err != nil {
+		return nil, err
 	}
 	return append([]source.Release(nil), f.top[cat]...), nil
 }

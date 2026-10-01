@@ -2,6 +2,7 @@ package catalog
 
 import (
 	"context"
+	"errors"
 	"slices"
 	"strings"
 	"time"
@@ -35,6 +36,11 @@ func (c *Catalog) sectionTop(ctx context.Context, cat CategoryRef, src source.So
 	seen := map[string]bool{}
 	for _, f := range forums {
 		rs, err := src.Top(ctx, f, 0)
+		if errors.Is(err, source.ErrNoSection) {
+			// Форум без раздач (подборки ссылок) — подраздел обновляется без него (вживую 11b-Г).
+			c.log.Info("каталог: форума нет в API — пропущен", "tracker", cat.Tracker, "section", cat.ID, "forum", f)
+			continue
+		}
 		if err != nil {
 			return nil, err
 		}
