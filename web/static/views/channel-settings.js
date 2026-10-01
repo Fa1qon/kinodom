@@ -62,6 +62,9 @@ export function sourceButtons(s, i, sources) {
 export function render(root, r, ctx) {
   const key = r.parts[1];
   const enc = encodeURIComponent(key);
+  // Версия по времени (спека 11b, 13.3): источники — её; «Скрыть канал» и метки сервер кладёт на канал.
+  const version = (r.query && r.query.get('v')) || '';
+  const page = version ? `#/channel/${enc}?v=${encodeURIComponent(version)}` : `#/channel/${enc}`;
   let alive = true;
   let card = null;
   let error = '';
@@ -73,16 +76,19 @@ export function render(root, r, ctx) {
   // Поле поиска создаётся один раз: экран перерисовывается при опросе, а набранное не должно пропадать.
   const reInput = h('input', { class: 'input', name: 'channel', placeholder: 'Название канала', 'aria-label': 'Название канала', 'data-key': 'reassign-q' });
 
-  const back = h('a', { class: 'back', href: `#/channel/${enc}` }, icon('chevron_left', 18), 'Канал');
+  const back = h('a', { class: 'back', href: page }, icon('chevron_left', 18), 'Канал');
   const top = h('div');
   const actions = h('div', { class: 'row wrap' });
   const srcs = h('section', { class: 'card', 'aria-label': 'Источники' });
   const edit = h('section', { class: 'card', 'aria-label': 'Метки' });
   root.append(h('div', { class: 'screen channel' }, back, top, actions, h('div', { class: 'chan-grid' }, srcs, edit)));
 
+  // venc — ключ версии для правок: источники — у неё, «Скрыть канал» и метки сервер кладёт на канал.
+  const venc = () => encodeURIComponent((card && card.version) || key);
+
   const cardPoll = poll(async () => {
     try {
-      card = await get(`/channels/${enc}`);
+      card = await get(`/channels/${enc}` + (version ? `?version=${encodeURIComponent(version)}` : ''));
       error = '';
     } catch (e) {
       if (e.status === 404) {
@@ -114,14 +120,14 @@ export function render(root, r, ctx) {
     }
     const c = card;
     keepFocus(root, () => {
-      fill(back, icon('chevron_left', 18), c.name);
+      fill(back, icon('chevron_left', 18), (c.versions || []).length > 1 ? `${c.name} · ${c.versionLabel}` : c.name);
       fill(top, h('h1', null, 'Настройки канала'),
         ctx.canEdit ? null : h('p', { class: 'muted' }, 'Менять можно только из домашней сети'));
       fill(actions,
-        ctx.canEdit ? h('button', { class: 'btn', type: 'button', 'data-key': 'hide', onclick: () => act(() => put(`/channels/${enc}`, { hidden: !c.override.hidden })) },
+        ctx.canEdit ? h('button', { class: 'btn', type: 'button', 'data-key': 'hide', onclick: () => act(() => put(`/channels/${venc()}`, { hidden: !c.override.hidden })) },
           icon(c.override.hidden ? 'visibility' : 'visibility_off'), c.override.hidden ? 'Вернуть канал в список' : 'Скрыть канал') : null,
         h('button', { class: 'btn', type: 'button', disabled: !!probing, 'data-key': 'probe', onclick: () => act(async () => {
-          await post('/iptv/probe', { channel: key });
+          await post('/iptv/probe', { channel: c.version || key });
           probing = Date.now();
         }) }, icon('network_check'), probing ? 'Проверяется…' : 'Проверить источники'),
         error ? h('span', { class: 'error' }, error) : null);
@@ -136,7 +142,7 @@ export function render(root, r, ctx) {
   }
 
   function button(s, id) {
-    const change = (patch) => () => act(() => put(`/channels/${enc}`, patch));
+    const change = (patch) => () => act(() => put(`/channels/${venc()}`, patch));
     switch (id) {
       case 'keep':
         return h('button', { class: 'btn', type: 'button', 'data-key': `pin-${s.id}`, title: 'Сейчас он первый по проверкам — закрепить, чтобы так и осталось',
@@ -252,11 +258,11 @@ export function render(root, r, ctx) {
       h('div', { class: 'row gap10' },
         h('button', { class: 'btn inv', type: 'button', 'data-key': 'save-labels', onclick: () => act(async () => {
           const p = labelPatch(card, draft);
-          if (Object.keys(p).length) await put(`/channels/${enc}`, p);
+          if (Object.keys(p).length) await put(`/channels/${venc()}`, p);
           draft = null;
         }) }, icon('save'), 'Сохранить'),
         overridden ? h('button', { class: 'btn', type: 'button', 'data-key': 'reset-labels', onclick: () => act(async () => {
-          await put(`/channels/${enc}`, { category: null, country: null, languages: null });
+          await put(`/channels/${venc()}`, { category: null, country: null, languages: null });
           draft = null;
         }) }, 'Как было') : null));
   }

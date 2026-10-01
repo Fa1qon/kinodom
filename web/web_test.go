@@ -1469,3 +1469,33 @@ process.exit();
 		t.Errorf("%v\n%s", err, out)
 	}
 }
+
+// Версии канала по времени (спека 11b, 13.3): страница — ключ канала, «Смотреть», .m3u8, программа и
+// настройки — ключ выбранной версии; у московской версии ключ совпадает с ключом канала (Review Focus 5).
+func TestPultVersionLinks(t *testing.T) {
+	node := lookNode(t)
+	script := `
+import { versionLinks } from './views/channel.js';
+const pl4 = versionLinks({ key: 'pervy', version: 'pervy-pl4' });
+const msk = versionLinks({ key: 'pervy', version: 'pervy' });
+const shifted = versionLinks({ key: 'sts', version: 'sts~1' });
+const checks = [
+  [pl4.watch, 'pervy-pl4'], [pl4.m3u, '/m3u/channel/pervy-pl4.m3u8'], [pl4.epg, '/channels/pervy-pl4/epg'],
+  [pl4.settings, '#/channel/pervy/settings?v=pervy-pl4'], [pl4.page('pervy-mn1'), '#/channel/pervy?v=pervy-mn1'],
+  [pl4.api('pervy'), '/channels/pervy?version=pervy'], [pl4.api(''), '/channels/pervy'],
+  [msk.watch, 'pervy'], [msk.settings, '#/channel/pervy/settings?v=pervy'],
+  [shifted.m3u, '/m3u/channel/sts~1.m3u8'],
+];
+for (const [got, want] of checks) {
+  if (got !== want) {
+    console.error(got, '≠', want);
+    process.exitCode = 1;
+  }
+}
+`
+	cmd := exec.Command(node, "--input-type=module", "--no-warnings", "-e", script)
+	cmd.Dir = "static"
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Errorf("%v\n%s", err, out)
+	}
+}
