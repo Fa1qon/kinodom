@@ -82,6 +82,8 @@ func (m *Module) Register(r Router, logo func(w http.ResponseWriter, r *http.Req
 		httpx.WriteJSON(w, http.StatusOK, map[string]any{"items": m.SearchEPG(r.URL.Query().Get("q"), 20)})
 	}))
 	r.Handle("POST /api/v1/iptv/probe", n, http.HandlerFunc(m.handleProbe))
+	r.HandleHome("GET /api/v1/iptv/streams/{id}/watch", n, http.HandlerFunc(m.handleWatch)) // просмотр источника в пульте (план 14Д)
+	r.HandleHome("GET /api/v1/iptv/relay", n, http.HandlerFunc(m.handleRelay))
 	r.Handle("GET /m3u/channel/{file}", n, http.HandlerFunc(m.handleM3U))
 	if logo != nil {
 		r.Handle("GET /logo/{key}", n, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
