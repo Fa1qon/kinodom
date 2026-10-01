@@ -7,6 +7,7 @@ package kpcat
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
 	"time"
 
@@ -26,8 +27,10 @@ type Options struct {
 	KP      Lister
 	Posters func(ctx context.Context, src string) (string, error) // постер в кэш картинок: ключ /img/{key}
 	Every   time.Duration                                         // 0 — раз в сутки
-	Log     *slog.Logger
-	Now     func() time.Time
+	// FirstDelay — первое обновление после запуска; 0 — через минуту (каталог трекеров и медиатека первыми).
+	FirstDelay time.Duration
+	Log        *slog.Logger
+	Now        func() time.Time
 }
 
 // section — раздел каталога: список сайта и сколько из него брать.
@@ -84,50 +87,86 @@ func (m *Module) Name() string { return "kpcat" }
 // Run — обновление разделов раз в Every, между ними — оценки IMDb порциями. Отказ Кинопоиска — повтор позже.
 func (m *Module) Run(ctx context.Context) error {
 	supervisor.Ready(ctx)
-	timer := time.NewTimer(time.Minute) // после запуска — не сразу: каталог трекеров и медиатека первыми
+	first := m.o.FirstDelay
+	if first == 0 {
+		first = time.Minute
+	}
+	timer := time.NewTimer(first)
 	defer timer.Stop()
+	// Свои сроки у обновления и у оценок (ревью 14Г): сбой обновления — не раньше чем через 30 мин, и оценки,
+	// пришедшие в ту же итерацию, этот срок не сбивают — иначе неудачный раздел выбирал бы суточный предел.
+	var refreshAt, imdbAt time.Time
 	for {
 		select {
 		case <-ctx.Done():
 			return nil
 		case <-timer.C:
 		}
-		wait := time.Hour
-		if due, err := m.st.refreshDue(ctx, m.now().Add(-m.o.Every)); err == nil && due {
-			if err := m.Refresh(ctx); err != nil && ctx.Err() == nil {
+		now := m.now()
+		if !now.Before(refreshAt) {
+			refreshAt = now.Add(time.Hour)
+			if err := m.refreshDue(ctx); err != nil && ctx.Err() == nil {
 				m.log.Info("каталог Кинопоиска: обновление не удалось", "err", err)
-				wait = 30 * time.Minute
+				refreshAt = now.Add(30 * time.Minute)
 			}
 		}
-		if did, err := m.fillIMDb(ctx, 20); err != nil && ctx.Err() == nil {
-			m.log.Info("каталог Кинопоиска: оценки IMDb не пришли", "err", err)
-			wait = 30 * time.Minute
-		} else if did > 0 {
-			wait = time.Second
+		if !now.Before(imdbAt) {
+			imdbAt = now.Add(time.Hour)
+			if did, err := m.fillIMDb(ctx, 20); err != nil && ctx.Err() == nil {
+				m.log.Info("каталог Кинопоиска: оценки IMDb не пришли", "err", err)
+				imdbAt = now.Add(30 * time.Minute)
+			} else if did > 0 {
+				imdbAt = now.Add(time.Second)
+			}
 		}
-		timer.Reset(wait)
+		next := refreshAt
+		if imdbAt.Before(next) {
+			next = imdbAt
+		}
+		timer.Reset(max(time.Second, next.Sub(m.now())))
 	}
+}
+
+// refreshDue — разделы, которые не обновляли дольше Every (или ни разу).
+func (m *Module) refreshDue(ctx context.Context) error {
+	fresh, err := m.st.freshSections(ctx, m.now().Add(-m.o.Every))
+	if err != nil {
+		return err
+	}
+	var due []section
+	for _, s := range sections {
+		if !fresh[s.id] {
+			due = append(due, s)
+		}
+	}
+	return m.refresh(ctx, due)
 }
 
 // Refresh — все разделы: раздел целиком в память, потом места заменяются одной транзакцией; отказ сайта
 // посреди раздела — раздел не трогается (Review Focus 1), остальные обновляются.
-func (m *Module) Refresh(ctx context.Context) error {
+func (m *Module) Refresh(ctx context.Context) error { return m.refresh(ctx, sections) }
+
+func (m *Module) refresh(ctx context.Context, secs []section) error {
 	var errs []error
-	for _, s := range sections {
+	for _, s := range secs {
 		var all []meta.ListFilm
 		var err error
+		total := 0
 		for offset := 0; offset < s.max; offset += pageLimit {
 			q := s.q
 			q.Limit, q.Offset = min(pageLimit, s.max-offset), offset
 			var page []meta.ListFilm
-			var total int
-			if page, total, err = m.o.KP.List(ctx, meta.KPBackground, q); err != nil {
+			if page, total, err = m.o.KP.List(ctx, meta.KPList, q); err != nil {
 				break
 			}
 			all = append(all, page...)
 			if len(page) == 0 || offset+len(page) >= total {
 				break
 			}
+		}
+		if err == nil && len(all)*10 < min(total, s.max)*9 {
+			// Сайт обещал больше, чем отдал (пустая страница посреди раздела) — раздел не обрезается.
+			err = fmt.Errorf("Кинопоиск: в разделе «%s» пришло %d из %d", s.name, len(all), min(total, s.max))
 		}
 		if err != nil {
 			errs = append(errs, err)
@@ -153,7 +192,15 @@ func (m *Module) fillIMDb(ctx context.Context, n int) (did int, err error) {
 	for _, id := range ids {
 		r, v, err := m.o.KP.IMDb(ctx, id)
 		if err != nil {
-			return did, err
+			if ctx.Err() != nil || errors.Is(err, meta.ErrKPBlocked) {
+				return did, err
+			}
+			// Сбой по одному фильму — повтор через сутки, очередь идёт дальше (ревью 14Г).
+			if err := m.st.saveIMDbRetry(ctx, id, m.now().Add(-imdbFor+24*time.Hour)); err != nil {
+				return did, err
+			}
+			did++
+			continue
 		}
 		if err := m.st.saveIMDb(ctx, id, r, v, m.now()); err != nil {
 			return did, err
@@ -184,7 +231,7 @@ func orderOf(o string) string {
 
 // list — фильмы раздела в порядке order со смещения offset, не больше limit; total — всего в разделе.
 func (m *Module) list(ctx context.Context, sec, order string, offset, limit int) ([]FilmView, int, error) {
-	rows, total, err := m.st.list(ctx, sec, orderOf(order), offset, limit)
+	rows, total, err := m.st.list(ctx, sec, orderOf(order), offset, limit, m.now())
 	if err != nil {
 		return nil, 0, err
 	}
@@ -193,4 +240,17 @@ func (m *Module) list(ctx context.Context, sec, order string, offset, limit int)
 		out[i] = r.view()
 	}
 	return out, total, nil
+}
+
+// ImageKeys — ключи постеров каталога в кэше картинок: чистка кэша их не удаляет (ревью 14Г).
+func (m *Module) ImageKeys(ctx context.Context) (map[string]bool, error) {
+	ps, err := m.st.posters(ctx)
+	if err != nil {
+		return nil, err
+	}
+	out := make(map[string]bool, len(ps))
+	for _, p := range ps {
+		out[meta.ImageKey(p)] = true
+	}
+	return out, nil
 }

@@ -50,6 +50,9 @@ const (
 	KPNormal KPClass = iota
 	KPBackground
 	KPUrgent
+	// KPList — каталог «Кинопоиск» (план 14Г): очередь фоновая (ждёт каталог и правку), а предел — как у
+	// каталога, без резерва правки и медиатеки (ревью 14Г).
+	KPList
 )
 
 type KPWebOptions struct {
@@ -88,6 +91,7 @@ type KPWeb struct {
 	blockReason   string
 	troubles      int                  // сбоев без отказа подряд (сеть, 5xx, непонятный ответ)
 	opPaused      map[string]time.Time // запрос, который сайт больше не принимает
+	ratingClient  *http.Client         // оценки IMDb: без переходов (переход — капча)
 	ratingNext    time.Time            // оценки IMDb: не раньше — следующий запрос
 	ratingBlocked time.Time            // оценки IMDb: отказ — пауза до
 }
@@ -131,7 +135,10 @@ func NewKPWeb(o KPWebOptions) *KPWeb {
 	if o.Log == nil {
 		o.Log = slog.New(slog.DiscardHandler)
 	}
-	return &KPWeb{o: o, http: &http.Client{Transport: netx.NewTransport(nil), Timeout: o.Timeout}, opPaused: map[string]time.Time{}}
+	tr := netx.NewTransport(nil)
+	return &KPWeb{o: o, http: &http.Client{Transport: tr, Timeout: o.Timeout}, opPaused: map[string]time.Time{},
+		ratingClient: &http.Client{Transport: tr, Timeout: o.Timeout,
+			CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}}
 }
 
 // Status — пауза поиска без токена и запросов за сегодня. Суточный предел исчерпан — пауза до полуночи
@@ -167,10 +174,11 @@ func (w *KPWeb) rollDay(now time.Time) {
 // ждёт, пока есть ждущие KPNormal и KPUrgent.
 func (w *KPWeb) acquire(ctx context.Context, class KPClass) error {
 	limit := w.o.DailyLimit
-	if class == KPNormal {
+	if class == KPNormal || class == KPList {
 		limit -= w.o.Reserve
 	}
-	if class != KPBackground {
+	background := class == KPBackground || class == KPList
+	if !background {
 		w.mu.Lock()
 		w.normalWaiting++
 		w.mu.Unlock()
@@ -189,7 +197,7 @@ func (w *KPWeb) acquire(ctx context.Context, class KPClass) error {
 		}
 		t := time.Now()
 		var wait time.Duration
-		if class == KPBackground && w.normalWaiting > 0 {
+		if background && w.normalWaiting > 0 {
 			wait = max(w.next.Sub(t), 5*time.Millisecond)
 		} else if !t.Before(w.next) {
 			w.next = t.Add(w.o.Every)

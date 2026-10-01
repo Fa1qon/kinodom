@@ -1,7 +1,9 @@
 package meta
 
 import (
+	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -19,6 +21,9 @@ import (
 
 // DefaultKPRating — сервис оценок Кинопоиска (КП и IMDb одного фильма, XML в cp1251).
 var DefaultKPRating = "https://rating.kinopoisk.ru"
+
+// opList — запрос списка сайта.
+const opList = "MovieDesktopListPage"
 
 // ListQuery — список Кинопоиска.
 type ListQuery struct {
@@ -119,7 +124,14 @@ func (w *KPWeb) List(ctx context.Context, class KPClass, q ListQuery) (items []L
 			} `json:"movies"`
 		} `json:"movieListBySlug"`
 	}
-	if err := w.gql(ctx, class, "MovieDesktopListPage", vars, &out); err != nil {
+	err = w.gql(ctx, class, opList, vars, &out)
+	if errors.Is(err, errKPNotAllowed) {
+		w.pauseOp(opList) // сайт обновил сборку — не спрашивать раньше паузы (ревью 14Г)
+	}
+	if errors.Is(err, errKPNotAllowed) || errors.Is(err, errKPOpPaused) {
+		return nil, 0, ErrKPBlocked
+	}
+	if err != nil {
 		return nil, 0, err
 	}
 	if out.MovieListBySlug == nil {
@@ -199,18 +211,22 @@ func (w *KPWeb) IMDb(ctx context.Context, id int) (rating float64, votes int, er
 	if err != nil {
 		return 0, 0, err
 	}
-	resp, err := w.http.Do(req)
+	resp, err := w.ratingClient.Do(req)
 	if err != nil {
 		return 0, 0, kpTrouble{text: "оценки IMDb не отвечают"}
 	}
 	defer resp.Body.Close()
-	switch resp.StatusCode {
-	case http.StatusOK:
-	case http.StatusForbidden, http.StatusTooManyRequests:
+	block := func() (float64, int, error) {
 		w.mu.Lock()
 		w.ratingBlocked = w.o.Now().Add(w.o.Pause)
 		w.mu.Unlock()
 		return 0, 0, ErrKPBlocked
+	}
+	switch {
+	case resp.StatusCode == http.StatusOK:
+	case resp.StatusCode == http.StatusForbidden || resp.StatusCode == http.StatusTooManyRequests ||
+		resp.StatusCode >= 300 && resp.StatusCode < 400: // переход — на капчу (ревью 14Г)
+		return block()
 	default:
 		return 0, 0, kpTrouble{text: fmt.Sprintf("оценки IMDb: ответ %d", resp.StatusCode)}
 	}
@@ -220,6 +236,9 @@ func (w *KPWeb) IMDb(ctx context.Context, id int) (rating float64, votes int, er
 	}
 	if u, err := charmap.Windows1251.NewDecoder().Bytes(b); err == nil {
 		b = u
+	}
+	if !bytes.Contains(b, []byte("<rating")) && !bytes.Contains(b, []byte("kp_rating")) {
+		return block() // не оценки, а страница (капча) — не «у фильма нет IMDb»
 	}
 	m := reIMDbRating.FindSubmatch(b)
 	if m == nil {

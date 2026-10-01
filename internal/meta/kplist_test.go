@@ -9,6 +9,7 @@ import (
 	"os"
 	"slices"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -103,5 +104,90 @@ func TestKPIMDb(t *testing.T) {
 	}
 	if _, _, err := w.IMDb(context.Background(), 7); err == nil || errors.Is(err, ErrKPBlocked) || strings.Contains(err.Error(), srv.URL) {
 		t.Fatalf("404: %v", err)
+	}
+}
+
+// Ревью 14Г, Important 1: сайт больше не принимает запрос списка — пауза этому запросу (повтор не идёт на
+// сайт), ErrKPBlocked; пустой список — сбой, а не «пусто».
+func TestKPListNotAllowedPauses(t *testing.T) {
+	var hits atomic.Int32
+	body := "not"
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		hits.Add(1)
+		w.Header().Set("Content-Type", "application/json")
+		if body == "null" {
+			w.Write([]byte(`{"data":{"movieListBySlug":null}}`))
+			return
+		}
+		w.WriteHeader(http.StatusBadRequest)
+		w.Write([]byte(sample(t, "kpweb-not-allowed.json")))
+	}))
+	defer srv.Close()
+	w := NewKPWeb(KPWebOptions{GraphQL: srv.URL + "/graphql/", Site: srv.URL, Every: time.Millisecond})
+	for i := range 3 {
+		if _, _, err := w.List(context.Background(), KPList, ListQuery{Slug: "popular-films", Limit: 50}); !errors.Is(err, ErrKPBlocked) {
+			t.Fatalf("попытка %d: %v", i+1, err)
+		}
+	}
+	if n := hits.Load(); n != 1 {
+		t.Fatalf("запросов к сайту %d, нужен 1 (дальше — пауза)", n)
+	}
+	body = "null"
+	w2 := NewKPWeb(KPWebOptions{GraphQL: srv.URL + "/graphql/", Site: srv.URL, Every: time.Millisecond})
+	if _, _, err := w2.List(context.Background(), KPList, ListQuery{Slug: "popular-films", Limit: 50}); err == nil {
+		t.Fatal("пустой список — нужна ошибка")
+	}
+}
+
+// Ревью 14Г, Important 1: каталог «Кинопоиск» (KPList) не берёт резерв суточного предела — он для правки и
+// медиатеки; ждёт, пока идут запросы каталога и правки, как фоновая очередь.
+func TestKPListNoReserve(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Write([]byte(sample(t, "kp_list_series.json")))
+	}))
+	defer srv.Close()
+	w := NewKPWeb(KPWebOptions{GraphQL: srv.URL + "/graphql/", Site: srv.URL, Every: time.Millisecond, DailyLimit: 5, Reserve: 2})
+	for i := range 3 {
+		if _, _, err := w.List(context.Background(), KPList, ListQuery{Limit: 50}); err != nil {
+			t.Fatalf("запрос %d: %v", i+1, err)
+		}
+	}
+	if _, _, err := w.List(context.Background(), KPList, ListQuery{Limit: 50}); !errors.Is(err, ErrKPDailyLimit) {
+		t.Fatalf("резерв: %v", err)
+	}
+	if _, _, err := w.List(context.Background(), KPBackground, ListQuery{Limit: 50}); err != nil {
+		t.Fatalf("медиатеке резерв доступен: %v", err)
+	}
+}
+
+// Ревью 14Г, Important 2: капча у сервиса оценок (переход на страницу или HTML вместо XML) — пауза оценкам и
+// ErrKPBlocked, а не «у фильма нет IMDb»; следующий запрос на сервис не идёт.
+func TestKPIMDbCaptcha(t *testing.T) {
+	var hits atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		hits.Add(1)
+		switch r.URL.Path {
+		case "/1.xml":
+			http.Redirect(w, r, "/showcaptcha?retpath=x", http.StatusFound)
+		case "/2.xml":
+			w.Header().Set("Content-Type", "text/html")
+			w.Write([]byte("<html><body>Подтвердите, что вы не робот</body></html>"))
+		default:
+			w.Write([]byte("<html>captcha</html>"))
+		}
+	}))
+	defer srv.Close()
+	for _, id := range []int{1, 2} {
+		hits.Store(0)
+		w := NewKPWeb(KPWebOptions{RatingBase: srv.URL, Every: time.Millisecond, RatingEvery: time.Millisecond})
+		if _, _, err := w.IMDb(context.Background(), id); !errors.Is(err, ErrKPBlocked) {
+			t.Fatalf("%d: %v", id, err)
+		}
+		if _, _, err := w.IMDb(context.Background(), 3); !errors.Is(err, ErrKPBlocked) {
+			t.Fatalf("%d, после капчи: %v", id, err)
+		}
+		if n := hits.Load(); n != 1 {
+			t.Fatalf("%d: запросов %d — после капчи пауза", id, n)
+		}
 	}
 }
