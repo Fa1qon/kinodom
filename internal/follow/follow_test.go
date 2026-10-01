@@ -267,7 +267,7 @@ func TestFollowNewEpisodeDownloaded(t *testing.T) {
 	}
 	us, err := r.m.Updates(ctx)
 	if err != nil || len(us) != 1 || us[0].Label != "1×07" || us[0].Hash != h2.HexString() || len(us[0].Files) != 1 || us[0].Files[0].Index != 6 ||
-		us[0].Title != "Холод [01-07 из 08] (2026) WEB-DL" || us[0].ImageKey != "img1" || us[0].Release != id {
+		us[0].Title != "Холод [01-07 из 08] (2026) WEB-DL" || us[0].Name != "Холод" || us[0].ImageKey != "img1" || us[0].Release != id {
 		t.Fatalf("оповещение: %+v %v", us, err)
 	}
 	if n, _ := r.m.Unread(ctx); n != 1 {

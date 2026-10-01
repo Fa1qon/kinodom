@@ -19,7 +19,7 @@ var required = []string{
 	"fonts/unbounded-cyrillic.woff2", "fonts/unbounded-latin.woff2",
 	"fonts/OFL-golos-text.txt", "fonts/OFL-unbounded.txt",
 	"views/catalog.js", "views/release.js", "views/search.js", "views/downloads.js",
-	"views/settings-layout.js", "views/settings-status.js", "views/settings-params.js", "views/settings-sections.js",
+	"views/settings-layout.js", "views/settings-status.js", "views/settings-params.js", "views/settings-sections.js", "views/updates.js",
 	"views/channels.js", "views/channel.js", "views/channel-settings.js", "views/tvkit.js", "views/settings-iptv.js", "views/settings-unrecognized.js",
 	"views/history.js", "views/library.js", "views/library-card.js", "views/settings-library.js", "views/folders.js", "views/setup.js",
 }
@@ -1294,5 +1294,59 @@ for (const [name, got, want] of checks) {
 	}
 	if !regexp.MustCompile(`\.grid-tail\s*\{[^}]*overflow-anchor:\s*none`).Match(css) {
 		t.Error("низ сетки — якорь прокрутки: .grid-tail без overflow-anchor: none")
+	}
+}
+
+// «Следить» — у сериала и только из домашней сети; следят — «Не следить» (спека 11b, 6.1).
+func TestPultFollowButton(t *testing.T) {
+	node := lookNode(t)
+	script := `
+import { followButton } from './views/release.js';
+const s = (v) => JSON.stringify(v);
+const checks = [
+  ['сериал — «Следить»', s(followButton({ series: true, follow: '' }, true)), s({ label: 'Следить', on: false })],
+  ['следят — «Не следить»', s(followButton({ series: true, follow: 'active' }, true)), s({ label: 'Не следить', on: true })],
+  ['закончилась — снова «Следить»', s(followButton({ series: true, follow: 'finished' }, true)), s({ label: 'Следить', on: false })],
+  ['фильм — нет', s(followButton({ series: false, follow: '' }, true)), 'null'],
+  ['не из дома — нет', s(followButton({ series: true, follow: '' }, false)), 'null'],
+];
+for (const [name, got, want] of checks) {
+  if (got !== want) {
+    console.error(name, ':', got, '≠', want);
+    process.exitCode = 1;
+  }
+}
+`
+	cmd := exec.Command(node, "--input-type=module", "--no-warnings", "-e", script)
+	cmd.Dir = "static"
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Errorf("%v\n%s", err, out)
+	}
+}
+
+// Строка «Новых серий»: «<название> — 1×07»; снятая — «— Раздача снята с трекера»; число у колокольчика.
+func TestPultUpdateLabel(t *testing.T) {
+	node := lookNode(t)
+	script := `
+import { updateLabel, bellText } from './views/updates.js';
+const checks = [
+  ['серии', updateLabel({ name: 'Холод', title: 'Холод [01-07 из 08] (2026)', kind: 'episodes', label: '1×07–1×08' }), 'Холод — 1×07–1×08'],
+  ['без имени — название раздачи', updateLabel({ name: '', title: 'Холод [01-07 из 08]', kind: 'episodes', label: '1×07' }), 'Холод [01-07 из 08] — 1×07'],
+  ['снята', updateLabel({ name: 'Холод', kind: 'removed', label: 'Раздача снята с трекера' }), 'Холод — Раздача снята с трекера'],
+  ['колокольчик пуст', bellText(0), ''],
+  ['колокольчик', bellText(3), '3'],
+  ['колокольчик много', bellText(120), '99+'],
+];
+for (const [name, got, want] of checks) {
+  if (got !== want) {
+    console.error(name, ':', got, '≠', want);
+    process.exitCode = 1;
+  }
+}
+`
+	cmd := exec.Command(node, "--input-type=module", "--no-warnings", "-e", script)
+	cmd.Dir = "static"
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Errorf("%v\n%s", err, out)
 	}
 }
