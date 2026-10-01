@@ -2,9 +2,11 @@ package catalog
 
 import (
 	"context"
+	"fmt"
 	"net/http"
 	"slices"
 	"strconv"
+	"strings"
 	"time"
 
 	"kinodom/internal/httpx"
@@ -14,6 +16,9 @@ import (
 // PageSize — раздач на странице каталога: шесть рядов по четыре на широком экране, по два — на
 // узком.
 const PageSize = 24
+
+// cardsLimit — сколько карточек можно спросить по номерам за раз (пульт спрашивает до 48 у экрана).
+const cardsLimit = 100
 
 // Router — то, что модулю нужно от HTTP-сервера; api.Server ему соответствует.
 type Router interface {
@@ -25,6 +30,7 @@ func (c *Catalog) Register(r Router) {
 	r.Handle("GET /api/v1/sources/{tracker}/categories", c.Name(), http.HandlerFunc(c.handleTree))
 	r.Handle("GET /api/v1/catalog/sections", c.Name(), http.HandlerFunc(c.handleSections))
 	r.Handle("GET /api/v1/catalog", c.Name(), http.HandlerFunc(c.handleList))
+	r.Handle("GET /api/v1/catalog/cards", c.Name(), http.HandlerFunc(c.handleCards))
 	r.Handle("GET /api/v1/releases/{id}/variants", c.Name(), http.HandlerFunc(c.handleVariants))
 	r.Handle("GET /api/v1/search", c.Name(), http.HandlerFunc(c.handleSearch))
 	r.Handle("GET /api/v1/search/history", c.Name(), http.HandlerFunc(c.handleHistory))
@@ -74,6 +80,33 @@ type ListView struct {
 	More      bool        `json:"more"`      // есть ещё (у трекера или в базе); общее число раздач пульт не показывает
 	UpdatedAt *time.Time  `json:"updatedAt"` // последнее удачное обновление разделов трекера; null — ещё не было
 	Entries   []EntryView `json:"entries"`
+}
+
+// handleCards — карточки по номерам раздач (спека 11b, 14.1): ?ids=1,2,3 — не больше cardsLimit, не числа
+// пропускаются. Пульт так обновляет на месте карточки у экрана, которым не хватает страницы или постера.
+func (c *Catalog) handleCards(w http.ResponseWriter, r *http.Request) {
+	var ids []int64
+	for _, s := range strings.Split(r.URL.Query().Get("ids"), ",") {
+		if id, err := strconv.ParseInt(strings.TrimSpace(s), 10, 64); err == nil && id > 0 {
+			ids = append(ids, id)
+		}
+	}
+	if len(ids) > cardsLimit {
+		httpx.WriteError(w, http.StatusBadRequest, fmt.Sprintf("не больше %d карточек за раз", cardsLimit))
+		return
+	}
+	es, err := c.Cards(r.Context(), ids)
+	if err != nil {
+		httpx.WriteError(w, http.StatusInternalServerError, "каталог не читается: "+err.Error())
+		return
+	}
+	out := struct {
+		Entries []EntryView `json:"entries"`
+	}{Entries: make([]EntryView, 0, len(es))}
+	for _, e := range es {
+		out.Entries = append(out.Entries, e.View())
+	}
+	httpx.WriteJSON(w, http.StatusOK, out)
 }
 
 // portionsPerList — сколько порций с трекера может взять одна просьба пульта: склейка дублей бывает
