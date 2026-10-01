@@ -151,11 +151,21 @@ func (c *Catalog) handleList(w http.ResponseWriter, r *http.Request) {
 				httpx.WriteError(w, http.StatusInternalServerError, "каталог не читается: "+err.Error())
 				return
 			}
-			// Запас — ещё порция пульта в базе: следующая просьба не ждёт трекер.
-			if !trackerMore || portions == portionsPerList || (len(es) == PageSize && rest >= PageSize) {
+			if !trackerMore || portions == portionsPerList {
 				break
 			}
-			more, err := c.ensureOne(r.Context(), cat)
+			// Есть что показать — сразу; запаса в базе меньше порции — следующая страница раздела с трекера в
+			// фоне: Rutor отдаёт её до 77 с, API Rutracker не отвечает и по 90 с — пульт не ждёт (№ 20).
+			if len(es) > 0 {
+				if rest < PageSize {
+					c.prefetchDeep(cat)
+				}
+				break
+			}
+			more, err := c.deepFetch(r.Context(), cat, func() (bool, error) {
+				es, _, _, err := c.SectionPage(r.Context(), name, out.Section, after, PageSize)
+				return len(es) == 0, err
+			})
 			if isDBError(err) {
 				httpx.WriteError(w, http.StatusInternalServerError, "каталог не читается: "+err.Error())
 				return

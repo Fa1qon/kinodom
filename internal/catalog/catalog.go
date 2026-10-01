@@ -124,14 +124,16 @@ type Catalog struct {
 	forumPaused map[string]time.Time  // трекер → до какого времени не ходить за страницами раздач
 	runCtx      context.Context       // для фонового поиска: живёт, пока работает модуль
 	searches    map[string]*searchRun
-	preferred   string                   // формат в приоритете
-	deep        map[CategoryRef]deepList // раздел → весь список после обновления (порции глубже первой сотни)
-	deepPos     map[CategoryRef]int      // раздел → курсор порций: у Rutor — страница, у Rutracker — место в списке
-	deepEnd     map[CategoryRef]bool     // раздел → список трекера кончился
-	deepEmpty   map[CategoryRef]int      // раздел → порций подряд без новых раздач
-	kpWait      map[string]int64         // «трекер:номер» → раздача без страницы из поиска: ждёт номер Кинопоиска для постера
-	descNow     map[int64]bool           // описание Кинопоиска открытой раздачи без страницы качается сейчас
-	inFlight    map[int64]bool           // раздачи, чья страница качается сейчас (основной цикл и раздатчик видимых)
+	preferred   string                        // формат в приоритете
+	deep        map[CategoryRef]deepList      // раздел → весь список после обновления (порции глубже первой сотни)
+	deepPos     map[CategoryRef]int           // раздел → курсор порций: у Rutor — страница, у Rutracker — место в списке
+	deepEnd     map[CategoryRef]bool          // раздел → список трекера кончился
+	deepEmpty   map[CategoryRef]int           // раздел → порций подряд без новых раздач
+	kpWait      map[string]int64              // «трекер:номер» → раздача без страницы из поиска: ждёт номер Кинопоиска для постера
+	descNow     map[int64]bool                // описание Кинопоиска открытой раздачи без страницы качается сейчас
+	inFlight    map[int64]bool                // раздачи, чья страница качается сейчас (основной цикл и раздатчик видимых)
+	deepWG      sync.WaitGroup                // фоновые подкачки страниц раздела (тесты ждут их)
+	deepBusy    map[CategoryRef]chan struct{} // раздел → замок «страница раздела с трекера качается» (одна за раз)
 }
 
 func New(o Options) *Catalog {
@@ -143,7 +145,7 @@ func New(o Options) *Catalog {
 	}
 	c := &Catalog{st: catalogStore{o.DB}, db: o.DB, sources: map[string]source.Source{}, sections: o.Sections,
 		ratings: o.Ratings, images: o.Images, kpPoster: o.KinopoiskPoster, keepImages: o.KeepImages, log: o.Log, now: time.Now,
-		refreshNow: make(chan struct{}, 1), sectionsChanged: make(chan struct{}, 1), enrichWake: map[string]chan struct{}{}, soonWake: map[string]chan struct{}{}, inFlight: map[int64]bool{},
+		refreshNow: make(chan struct{}, 1), sectionsChanged: make(chan struct{}, 1), enrichWake: map[string]chan struct{}{}, soonWake: map[string]chan struct{}{}, inFlight: map[int64]bool{}, deepBusy: map[CategoryRef]chan struct{}{},
 		urgent: map[string][]int64{}, found: map[string][]int64{}, torrentNow: map[int64]bool{}, yield: map[string]func(){}, retries: map[string]retryState{}, openPoster: map[int64]time.Time{},
 		posterSem: make(chan struct{}, 2), urgentSem: make(chan struct{}, 2), openSem: make(chan struct{}, 2),
 		forumPaused: map[string]time.Time{}, searches: map[string]*searchRun{}, torrentFormat: o.TorrentFormat, deep: map[CategoryRef]deepList{}, deepPos: map[CategoryRef]int{}, deepEnd: map[CategoryRef]bool{}, deepEmpty: map[CategoryRef]int{},
