@@ -227,6 +227,10 @@ func (a *App) initTorrents(ctx context.Context, o Options, v settings.Values) {
 		Offline:     o.Offline,
 		Log:         log,
 	}
+	reg := torrents.NewRegistry(a.DB)
+	// Отметки кусков раздач, которых нет в реестре (прежняя версия после перехода на обновлённую), — при
+	// старте движка удаляются (спека 11b, 6.3.7).
+	cfg.KeepMarks = func() ([]metainfo.Hash, error) { return reg.Hashes(context.Background()) }
 	a.Torrents = torrents.NewLazyService(
 		func() (*torrents.Engine, error) {
 			// Папка — текущая из настроек: если прежняя была недоступна, её могли сменить в пульте.
@@ -234,7 +238,7 @@ func (a *App) initTorrents(ctx context.Context, o Options, v settings.Values) {
 			c.DownloadsDir = a.Settings.Current().DownloadsDir
 			return torrents.NewEngine(c)
 		},
-		torrents.NewRegistry(a.DB), log,
+		reg, log,
 		func(err error) {
 			if err != nil {
 				log.Error("торрент-движок не запустился", "err", err)
