@@ -45,6 +45,13 @@ func startAppRaw(t *testing.T, o Options) *App {
 		// Адресов трекеров нет — трекеры выключены и в сеть не ходят (этап 11a); Edge не нужен.
 		o.Trackers = Trackers{NoEdge: true, Rate: 1000}
 	}
+	if o.KinopoiskAPI == "" {
+		// Трекер могут включить настройкой посреди теста (мастер): номер Кинопоиска из описания раздачи
+		// очередь рейтингов спросила бы у настоящего Кинопоиска — ловушка offlinetest, нестабильно (11b-В).
+		kp := httptest.NewServer(http.NotFoundHandler())
+		t.Cleanup(kp.Close)
+		o.KinopoiskAPI = kp.URL
+	}
 	ctx, cancel := context.WithCancel(context.Background())
 	a, err := New(ctx, o)
 	if err != nil {
