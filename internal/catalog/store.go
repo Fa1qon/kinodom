@@ -66,6 +66,9 @@ func scanRow(sc interface{ Scan(...any) error }, extra ...any) (row, error) {
 
 // upsertRelease — строка списка (топ, поиск): цифры свежие; название, раздел и infohash — только
 // если пришли (у топа Rutracker названий нет). Возвращает номер раздачи.
+// newVersion — условие в upsertRelease: пришёл infohash, и он другой, чем был.
+const newVersion = `excluded.infohash != '' AND releases.infohash != '' AND excluded.infohash != releases.infohash`
+
 func upsertRelease(ctx context.Context, tx *sql.Tx, r source.Release, now time.Time) (int64, error) {
 	var id int64
 	err := tx.QueryRowContext(ctx,
@@ -78,6 +81,11 @@ func upsertRelease(ctx context.Context, tx *sql.Tx, r source.Release, now time.T
 		   size = CASE WHEN excluded.size > 0 THEN excluded.size ELSE releases.size END,
 		   added_at = CASE WHEN excluded.added_at > 0 THEN excluded.added_at ELSE releases.added_at END,
 		   infohash = CASE WHEN excluded.infohash != '' THEN excluded.infohash ELSE releases.infohash END,
+		   -- Новая версия раздачи (другой infohash): magnet и .torrent прежней сбрасываются, страница —
+		   -- заново, иначе «Скачать» открыл бы прежнюю версию (спека 11b, 6.2).
+		   magnet = CASE WHEN `+newVersion+` THEN '' ELSE releases.magnet END,
+		   torrent = CASE WHEN `+newVersion+` THEN NULL ELSE releases.torrent END,
+		   details_at = CASE WHEN `+newVersion+` THEN 0 ELSE releases.details_at END,
 		   removed = 0, updated_at = excluded.updated_at
 		 RETURNING id`,
 		r.Tracker, r.TopicID, r.Title, r.CategoryID, r.Seeders, r.Leechers, r.Size, ms(r.Added), r.InfoHash, ms(now)).Scan(&id)
@@ -484,6 +492,22 @@ func (s catalogStore) formatless(ctx context.Context, limit int) ([]formatRow, e
 
 func (s catalogStore) saveFormat(ctx context.Context, id int64, format string) error {
 	_, err := s.db.W.ExecContext(ctx, `UPDATE releases SET format = ? WHERE id = ?`, format, id)
+	return err
+}
+
+// saveVersion — страница раздачи после проверки подписки: название, infohash, magnet и .torrent этой
+// версии (nil — нет, только magnet), цифры.
+func (s catalogStore) saveVersion(ctx context.Context, id int64, d source.Details, torrent []byte, now time.Time) error {
+	_, err := s.db.W.ExecContext(ctx,
+		`UPDATE releases SET
+		   title = CASE WHEN ? != '' THEN ? ELSE title END,
+		   infohash = ?, magnet = ?, torrent = ?, removed = 0,
+		   seeders = CASE WHEN ? > 0 THEN ? ELSE seeders END,
+		   leechers = CASE WHEN ? > 0 THEN ? ELSE leechers END,
+		   size = CASE WHEN ? > 0 THEN ? ELSE size END,
+		   details_at = ?, retry_at = 0
+		 WHERE id = ?`,
+		d.Title, d.Title, d.InfoHash, d.Magnet, torrent, d.Seeders, d.Seeders, d.Leechers, d.Leechers, d.Size, d.Size, ms(now), id)
 	return err
 }
 

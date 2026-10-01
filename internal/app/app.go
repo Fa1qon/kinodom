@@ -24,6 +24,7 @@ import (
 	"kinodom/internal/catalog"
 	"kinodom/internal/config"
 	"kinodom/internal/edge"
+	"kinodom/internal/follow"
 	"kinodom/internal/history"
 	"kinodom/internal/httpx"
 	"kinodom/internal/iptv"
@@ -91,6 +92,7 @@ type App struct {
 	IPTV     *iptv.Module      // каналы (модуль iptv, этап 8)
 	History  *history.Service  // история просмотров по устройствам (этап 8c)
 	Library  *library.Library  // медиатека: скачанное и папки заказчика (модуль library, этап 9)
+	Follow   *follow.Module    // подписка на новые серии (модуль follow, этап 11b-В)
 
 	version   string
 	kp        *meta.Kinopoisk
@@ -175,6 +177,7 @@ func New(ctx context.Context, o Options) (*App, error) {
 		return fail(err)
 	}
 	a.initLibrary(ctx)
+	a.initFollow(ctx)
 	a.initSetup()
 	a.API.SetStatus(a.statusFields)
 	a.API.SetProtocolCheck(cachedCheck(winsvc.KinodomProtocol, time.Minute))
@@ -227,6 +230,10 @@ func (a *App) initTorrents(ctx context.Context, o Options, v settings.Values) {
 		Offline:     o.Offline,
 		Log:         log,
 	}
+	reg := torrents.NewRegistry(a.DB)
+	// Отметки кусков раздач, которых нет в реестре (прежняя версия после перехода на обновлённую), — при
+	// старте движка удаляются (спека 11b, 6.3.7).
+	cfg.KeepMarks = func() ([]metainfo.Hash, error) { return reg.Hashes(context.Background()) }
 	a.Torrents = torrents.NewLazyService(
 		func() (*torrents.Engine, error) {
 			// Папка — текущая из настроек: если прежняя была недоступна, её могли сменить в пульте.
@@ -234,7 +241,7 @@ func (a *App) initTorrents(ctx context.Context, o Options, v settings.Values) {
 			c.DownloadsDir = a.Settings.Current().DownloadsDir
 			return torrents.NewEngine(c)
 		},
-		torrents.NewRegistry(a.DB), log,
+		reg, log,
 		func(err error) {
 			if err != nil {
 				log.Error("торрент-движок не запустился", "err", err)
@@ -252,6 +259,7 @@ func (a *App) initTorrents(ctx context.Context, o Options, v settings.Values) {
 	a.Torrents.SetPolicy(policyOf(v))
 	a.initHistory()
 	a.Torrents.SetWatchTracker(a.History) // место по потоку — в историю устройства
+	a.Torrents.SetRekey(rekeyUpgrade)     // переход на обновлённую раздачу, доведённый после сбоя
 	a.Torrents.UseKeeper(a.Power)
 	a.Torrents.Register(a.API)
 	a.API.Handle("GET /api/v1/downloads", a.Torrents.Name(), http.HandlerFunc(a.handleDownloads))
@@ -406,7 +414,9 @@ func (a *App) rutrackerLogin(info rutracker.LoginInfo) {
 // если он известен до «Скачать» (спека этапа 7, раздел 5.4).
 type releaseView struct {
 	catalog.ReleaseView
-	Files []torrents.FileInfo `json:"files"` // [] — неизвестен, пока раздачу не открыли
+	Files  []torrents.FileInfo `json:"files"`  // [] — неизвестен, пока раздачу не открыли
+	Series bool                `json:"series"` // сериал: «Следить» (спека 11b, 6.1)
+	Follow string              `json:"follow"` // подписка: active, finished, removed; "" — не следят
 }
 
 func (a *App) handleRelease(w http.ResponseWriter, r *http.Request) {
@@ -438,6 +448,11 @@ func (a *App) handleRelease(w http.ResponseWriter, r *http.Request) {
 	}
 	if len(out.Files) > 0 { // файлы известны — формат по ним, а не по описанию (спека этапа 7, раздел 10.2)
 		out.Format = meta.Format(metaFiles(out.Files))
+	}
+	out.Series = a.Follow.Series(r.Context(), rel)
+	if out.Follow, err = a.Follow.State(r.Context(), id); err != nil {
+		httpx.WriteError(w, http.StatusInternalServerError, "подписка не читается: "+err.Error())
+		return
 	}
 	httpx.WriteJSON(w, http.StatusOK, out)
 }
@@ -589,7 +604,14 @@ func uploadBytes(v settings.Values) float64 {
 // downloadItem — строка «Загрузок»: файл — от торрентов, название и постер раздачи — от каталога.
 type downloadItem struct {
 	torrents.DownloadItem
-	Release *catalog.ReleaseRef `json:"release"` // null — раздача не из каталога
+	Release *downloadRelease `json:"release"` // null — раздача не из каталога
+}
+
+// downloadRelease — раздача каталога у загрузки: «Следить» у сериала в «Загрузках» (спека 11b, 6.1).
+type downloadRelease struct {
+	catalog.ReleaseRef
+	Series bool   `json:"series"` // по названию
+	Follow string `json:"follow"` // "" — не следят
 }
 
 // handleDownloads — экран «Загрузки» (спека этапа 7, раздел 5.5).
@@ -609,11 +631,22 @@ func (a *App) handleDownloads(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	items := make([]downloadItem, len(v.Items))
+	follows := map[int64]string{}
 	for i, it := range v.Items {
 		items[i].DownloadItem = it
-		if ref, ok := refs[it.Hash]; ok {
-			items[i].Release = &ref
+		ref, ok := refs[it.Hash]
+		if !ok {
+			continue
 		}
+		st, seen := follows[ref.ID]
+		if !seen {
+			if st, err = a.Follow.State(r.Context(), ref.ID); err != nil {
+				httpx.WriteError(w, http.StatusInternalServerError, "загрузки не читаются: "+err.Error())
+				return
+			}
+			follows[ref.ID] = st
+		}
+		items[i].Release = &downloadRelease{ReleaseRef: ref, Series: meta.ParseTitle(ref.Title).Series, Follow: st}
 	}
 	httpx.WriteJSON(w, http.StatusOK, struct {
 		torrents.DownloadsView

@@ -27,13 +27,14 @@ import (
 
 // Config — параметры движка.
 type Config struct {
-	DownloadsDir    string      // куда качать
-	StateDir        string      // отметки кусков (bolt) и узлы DHT
-	ListenPort      int         // 42000; 0 — любой свободный (тесты)
-	UploadLimit     float64     // байт/с; 0 — без ограничения
-	ConnsPerTorrent int         // соединений на раздачу; 0 — 20
-	Proxy           *netx.Proxy // прокси для HTTP-анонсов (общий, меняется в настройках); nil — напрямую
-	Offline         bool        // без DHT, трекеров и проброса порта, только 127.0.0.1 (тесты)
+	DownloadsDir    string                          // куда качать
+	StateDir        string                          // отметки кусков (bolt) и узлы DHT
+	ListenPort      int                             // 42000; 0 — любой свободный (тесты)
+	UploadLimit     float64                         // байт/с; 0 — без ограничения
+	ConnsPerTorrent int                             // соединений на раздачу; 0 — 20
+	Proxy           *netx.Proxy                     // прокси для HTTP-анонсов (общий, меняется в настройках); nil — напрямую
+	Offline         bool                            // без DHT, трекеров и проброса порта, только 127.0.0.1 (тесты)
+	KeepMarks       func() ([]metainfo.Hash, error) // раздачи, чьи отметки кусков нужны; nil — не чистить (спека 11b, 6.3.7)
 	Log             *slog.Logger
 }
 
@@ -68,6 +69,20 @@ func NewEngine(c Config) (*Engine, error) {
 	}
 	if recreated {
 		c.Log.Warn("файл отметок кусков был повреждён — создан заново, скачанное перепроверяется по хэшам")
+	}
+	if c.KeepMarks != nil {
+		// Отметки раздач, которых нет в реестре (прежняя версия после перехода), копились бы в bolt.
+		if keep, err := c.KeepMarks(); err != nil {
+			c.Log.Warn("отметки забытых раздач не почищены: реестр не читается", "err", err)
+		} else {
+			set := make(map[metainfo.Hash]bool, len(keep))
+			for _, ih := range keep {
+				set[ih] = true
+			}
+			if err := forgetMarks(c.StateDir, set); err != nil {
+				c.Log.Warn("отметки забытых раздач не почищены", "err", err)
+			}
+		}
 	}
 	pc, err := storage.NewBoltPieceCompletion(c.StateDir)
 	if err != nil {

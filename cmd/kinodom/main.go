@@ -31,6 +31,7 @@ func commands() []command {
 		{"play", "открыть раздачу на запущенном сервере и получить ссылку для VLC", cmdPlay},
 		{"source", "проверить источник раздач вживую: kinodom source rutor top 12", cmdSource},
 		{"meta", "проверить метаданные вживую: kinodom meta kp film 301", cmdMeta},
+		{"torrent", "проверить движок вживую: kinodom torrent info <magnet> — метаинфо от пиров", cmdTorrent},
 		{"catalog", "каталог вживую на отдельной папке: kinodom catalog refresh --home …", cmdCatalog},
 		{"open", "открыть поток в плеере по ссылке kinodom:// (её открывает браузер на этом ПК)", cmdOpen},
 		{"protocol", "ссылка kinodom:// для этого пользователя: kinodom protocol install | uninstall", cmdProtocol},

@@ -17,10 +17,11 @@ import * as channel from './views/channel.js';
 import * as settingsIPTV from './views/settings-iptv.js';
 import * as settingsUnrecognized from './views/settings-unrecognized.js';
 import * as setup from './views/setup.js';
+import * as updates from './views/updates.js';
 import { settingsRoute } from './views/settings-layout.js';
 
 // views — экраны по первой части адреса; у «Настроек» — по второй.
-const views = { catalog, release, search, downloads, channels, channel, history, library, setup };
+const views = { catalog, release, search, downloads, channels, channel, history, library, setup, updates };
 const settingsViews = { status: settingsStatus, params: settingsParams, sections: settingsSections, iptv: settingsIPTV, unrecognized: settingsUnrecognized,
   library: settingsLibrary };
 
@@ -66,6 +67,8 @@ const top = document.getElementById('top');
 const navLinks = {};
 let searchInput;
 let menuButton;
+let bell; // колокольчик «Новые серии» (спека 11b, 6.1)
+let bellCount;
 
 // buildHeader — шапка: логотип, меню, поиск; на узком экране — значки поиска и меню. Строится один раз: опрос «Состояния» не должен сбивать то, что человек
 // вводит в поиск.
@@ -84,12 +87,15 @@ function buildHeader() {
   } }, h('label', { class: 'field' }, icon('search'), searchInput));
   menuButton = h('button', { class: 'sq narrow-only', type: 'button', 'aria-label': 'Меню', 'aria-controls': 'nav', 'aria-expanded': 'false',
     onclick: () => setMenu(!top.classList.contains('open')) }, icon('menu'));
+  bellCount = h('span', { class: 'bell-n' });
+  bell = h('a', { class: 'sq bell', href: '#/updates', 'aria-label': 'Новые серии', 'data-key': 'bell' }, icon('notifications'), bellCount);
   top.append(
     // Логотип заказчика: иконка, затем надпись (нарезка — assets/logo/cut.py).
     h('a', { class: 'logo', href: '#/', 'aria-label': 'Kinodom' },
       h('img', { class: 'logo-icon', src: 'logo-icon.png', alt: '' }), h('img', { class: 'logo-text', src: 'logo-text.png', alt: '' })),
     nav,
     h('div', { class: 'grow' }),
+    bell,
     search,
     h('a', { class: 'sq narrow-only', href: '#/search', 'aria-label': 'Поиск' }, icon('search')),
     menuButton,
@@ -114,6 +120,10 @@ function updateHeader(r) {
   const settings = navLinks.settings;
   settings.querySelector('.ic')?.remove();
   if (ctx.status && ctx.status.problems.length > 0) settings.append(icon('warning', 18, 'Есть проблемы'));
+  const n = updates.bellText(ctx.status && ctx.status.updates);
+  bellCount.textContent = n;
+  bell.classList.toggle('on', r.parts[0] === 'updates');
+  bell.setAttribute('aria-label', n ? `Новые серии: ${n}` : 'Новые серии');
 }
 
 let cleanup = null;

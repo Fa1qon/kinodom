@@ -40,6 +40,28 @@ func (r *Registry) Remember(ctx context.Context, ih metainfo.Hash, source, dir s
 	return got, err
 }
 
+// Hashes — все раздачи реестра: чьи отметки кусков нужны движку (остальные удаляются при старте).
+func (r *Registry) Hashes(ctx context.Context) ([]metainfo.Hash, error) {
+	rows, err := r.db.R.QueryContext(ctx, `SELECT infohash FROM torrents`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []metainfo.Hash
+	for rows.Next() {
+		var s string
+		if err := rows.Scan(&s); err != nil {
+			return nil, err
+		}
+		var ih metainfo.Hash
+		if err := ih.FromHexString(s); err != nil {
+			continue
+		}
+		out = append(out, ih)
+	}
+	return out, rows.Err()
+}
+
 // PinDirs закрепляет папку за раздачами без папки (записаны до этапа 6): они лежат в папке
 // загрузок, которая действует сейчас. Иначе после смены папки в пульте их искали бы в новой.
 func (r *Registry) PinDirs(ctx context.Context, dir string) error {
