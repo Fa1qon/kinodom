@@ -335,3 +335,93 @@ func TestOpenedPosterOnceWithPage(t *testing.T) {
 		t.Fatalf("попыток постера %d, нужна одна", n)
 	}
 }
+
+// loops — основной цикл догрузки трекера и раздатчик видимых, как их запускает Run (без сторожа).
+func loops(t *testing.T, c *Catalog, tracker string) context.CancelFunc {
+	t.Helper()
+	lctx, cancel := context.WithCancel(ctx)
+	var wg sync.WaitGroup
+	wg.Add(2)
+	go func() { defer wg.Done(); c.enrichLoop(lctx, tracker) }()
+	go func() { defer wg.Done(); c.soonLoop(lctx, tracker) }()
+	t.Cleanup(func() { cancel(); wg.Wait(); c.posterWG.Wait() })
+	return cancel
+}
+
+// Страницы раздач, которые на экране, найдены или открыты, у источника, который это выдерживает (t1), —
+// по несколько сразу (спека 11b, 14.4): вживую t1 отдавал страницу за 4–77 с, по одной экран из 12
+// карточек заполнялся минуты. Каждая раздача — один раз.
+func TestVisiblePagesAtOnce(t *testing.T) {
+	t1 := newFake("t1")
+	t1.atOnce = 3
+	block := make(chan struct{})
+	t1.detailsBlock = block
+	var rels []source.Release
+	for i := range 5 {
+		r := rel("t1", fmt.Sprint(200+i), fmt.Sprintf("Сериал %d (2026) WEB-DL", i), 5, 1, fmt.Sprintf("v%d", i))
+		rels = append(rels, r)
+		t1.details[r.TopicID] = source.Details{Release: r}
+	}
+	c, _ := newCatalog(t, openDB(t), nil, t1)
+	ids, err := c.st.saveFound(ctx, rels, c.now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	c.enqueueFound(ctx, "t1", ids, searchToEnrich)
+	loops(t, c, "t1")
+	deadline := time.Now().Add(3 * time.Second)
+	for t1.MaxDetails() < 3 {
+		if time.Now().After(deadline) {
+			t.Fatalf("страниц одновременно %d — видимые догружаются по одной", t1.MaxDetails())
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	c.enqueueFound(ctx, "t1", ids, searchToEnrich) // пульт спрашивает те же карточки снова, пока они качаются
+	close(block)
+	for _, id := range ids {
+		for {
+			if r, err := c.Release(ctx, id); err == nil && !r.DetailsPending {
+				break
+			}
+			if time.Now().After(deadline.Add(3 * time.Second)) {
+				t.Fatalf("раздача %d не догрузилась", id)
+			}
+			time.Sleep(10 * time.Millisecond)
+		}
+	}
+	for _, r := range rels {
+		if n := t1.Calls("details:" + r.TopicID); n != 1 {
+			t.Fatalf("страница %s — %d раз", r.TopicID, n)
+		}
+	}
+	if n := t1.MaxDetails(); n > 3 {
+		t.Fatalf("одновременно %d страниц, можно 3", n)
+	}
+}
+
+// Фон — по одной странице и у t1: спешит только то, что ждёт человек.
+func TestBackgroundPagesOneAtATime(t *testing.T) {
+	t1 := newFake("t1")
+	t1.atOnce = 3
+	block := make(chan struct{})
+	t1.detailsBlock = block
+	t1.top["12"] = manyDesc("t1", 5)
+	for _, r := range t1.top["12"] {
+		t1.details[r.TopicID] = source.Details{Release: r}
+	}
+	c, _ := newCatalog(t, openDB(t), nil, t1)
+	refresh(t, c, true)
+	loops(t, c, "t1")
+	deadline := time.Now().Add(3 * time.Second)
+	for t1.Calls("details") == 0 {
+		if time.Now().After(deadline) {
+			t.Fatal("фоновая догрузка не началась")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	time.Sleep(200 * time.Millisecond)
+	if n := t1.MaxDetails(); n != 1 {
+		t.Fatalf("фон: страниц одновременно %d", n)
+	}
+	close(block)
+}

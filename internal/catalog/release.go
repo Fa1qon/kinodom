@@ -247,6 +247,7 @@ func (c *Catalog) enrichSoon(tracker string, id int64) {
 		default:
 		}
 	}
+	c.wakeSoon(tracker)
 }
 
 // foundLimit — просьб догрузки вне очереди на трекер: при быстрой прокрутке старые отбрасываются.
@@ -272,6 +273,7 @@ func (c *Catalog) findSoon(tracker string, ids []int64) {
 		default:
 		}
 	}
+	c.wakeSoon(tracker)
 }
 
 // yieldTo — фоновый шаг трекера ждёт .torrent: срочная работа (открыли раздачу, нашли поиском) его
@@ -313,13 +315,54 @@ func (c *Catalog) nextUrgent(ctx context.Context, tracker string) (r row, opened
 		}
 		id := ids[0]
 		q[tracker] = ids[1:]
+		if c.inFlight[id] {
+			c.mu.Unlock()
+			continue // уже качается (пульт спросил карточку снова)
+		}
+		c.inFlight[id] = true
 		c.mu.Unlock()
 		rs, err := c.st.rowsByID(ctx, []int64{id})
 		if err != nil {
+			c.unclaim(id)
 			return row{}, false, false, err
 		}
 		if r, ok := rs[id]; ok && r.DetailsAt.IsZero() {
 			return r, isOpened, true, nil
+		}
+		c.unclaim(id)
+	}
+}
+
+// claim — взять раздачу в догрузку; false — её уже качает другой цикл.
+func (c *Catalog) claim(id int64) bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.inFlight[id] {
+		return false
+	}
+	c.inFlight[id] = true
+	return true
+}
+
+func (c *Catalog) unclaim(id int64) {
+	c.mu.Lock()
+	delete(c.inFlight, id)
+	c.mu.Unlock()
+}
+
+// busy — раздачи, которые качаются сейчас.
+func (c *Catalog) busy() map[int64]bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return maps.Clone(c.inFlight)
+}
+
+// wakeSoon — у раздатчика видимых есть работа или освободилось место.
+func (c *Catalog) wakeSoon(tracker string) {
+	if ch, ok := c.soonWake[tracker]; ok {
+		select {
+		case ch <- struct{}{}:
+		default:
 		}
 	}
 }

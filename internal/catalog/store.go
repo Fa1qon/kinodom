@@ -519,7 +519,7 @@ func (s catalogStore) saveImageKey(ctx context.Context, id int64, key string) er
 }
 
 // nextToEnrich — первая в порядке каталога раздача трекера без страницы раздачи.
-func (s catalogStore) nextToEnrich(ctx context.Context, tracker string, cats []CategoryRef, now time.Time) (row, bool, error) {
+func (s catalogStore) nextToEnrich(ctx context.Context, tracker string, cats []CategoryRef, now time.Time, busy map[int64]bool) (row, bool, error) {
 	rs, err := s.catalogRows(ctx, cats)
 	if err != nil {
 		return row{}, false, err
@@ -529,7 +529,7 @@ func (s catalogStore) nextToEnrich(ctx context.Context, tracker string, cats []C
 	var next row
 	ok := false
 	for _, r := range rs {
-		if r.Tracker == tracker && r.DetailsAt.IsZero() && !r.RetryAt.After(now) && (!ok || r.Pos < next.Pos) {
+		if r.Tracker == tracker && r.DetailsAt.IsZero() && !r.RetryAt.After(now) && !busy[r.ID] && (!ok || r.Pos < next.Pos) {
 			next, ok = r, true
 		}
 	}

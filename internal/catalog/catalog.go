@@ -104,6 +104,7 @@ type Catalog struct {
 	refreshNow      chan struct{}
 	sectionsChanged chan struct{} // разделы сменили в пульте: пройти по разделам без ожидания
 	enrichWake      map[string]chan struct{}
+	soonWake        map[string]chan struct{} // раздатчик видимых: есть работа или освободилось место
 
 	mu          sync.Mutex
 	sections    []Section             // разделы из настроек
@@ -130,6 +131,7 @@ type Catalog struct {
 	deepEmpty   map[CategoryRef]int      // раздел → порций подряд без новых раздач
 	kpWait      map[string]int64         // «трекер:номер» → раздача без страницы из поиска: ждёт номер Кинопоиска для постера
 	descNow     map[int64]bool           // описание Кинопоиска открытой раздачи без страницы качается сейчас
+	inFlight    map[int64]bool           // раздачи, чья страница качается сейчас (основной цикл и раздатчик видимых)
 }
 
 func New(o Options) *Catalog {
@@ -141,7 +143,7 @@ func New(o Options) *Catalog {
 	}
 	c := &Catalog{st: catalogStore{o.DB}, db: o.DB, sources: map[string]source.Source{}, sections: o.Sections,
 		ratings: o.Ratings, images: o.Images, kpPoster: o.KinopoiskPoster, keepImages: o.KeepImages, log: o.Log, now: time.Now,
-		refreshNow: make(chan struct{}, 1), sectionsChanged: make(chan struct{}, 1), enrichWake: map[string]chan struct{}{},
+		refreshNow: make(chan struct{}, 1), sectionsChanged: make(chan struct{}, 1), enrichWake: map[string]chan struct{}{}, soonWake: map[string]chan struct{}{}, inFlight: map[int64]bool{},
 		urgent: map[string][]int64{}, found: map[string][]int64{}, torrentNow: map[int64]bool{}, yield: map[string]func(){}, retries: map[string]retryState{}, openPoster: map[int64]time.Time{},
 		posterSem: make(chan struct{}, 2), urgentSem: make(chan struct{}, 2), openSem: make(chan struct{}, 2),
 		forumPaused: map[string]time.Time{}, searches: map[string]*searchRun{}, torrentFormat: o.TorrentFormat, deep: map[CategoryRef]deepList{}, deepPos: map[CategoryRef]int{}, deepEnd: map[CategoryRef]bool{}, deepEmpty: map[CategoryRef]int{},
@@ -158,6 +160,7 @@ func New(o Options) *Catalog {
 	for _, s := range o.Sources {
 		c.sources[s.Name()] = s
 		c.enrichWake[s.Name()] = make(chan struct{}, 1)
+		c.soonWake[s.Name()] = make(chan struct{}, 1)
 	}
 	return c
 }
@@ -179,6 +182,7 @@ func (c *Catalog) Run(ctx context.Context) error {
 	c.mu.Unlock()
 	for name := range c.sources {
 		supervisor.Go(ctx, func(ctx context.Context) error { return c.enrichLoop(ctx, name) })
+		supervisor.Go(ctx, func(ctx context.Context) error { return c.soonLoop(ctx, name) })
 	}
 	supervisor.Go(ctx, c.imagesLoop)
 	supervisor.Go(ctx, c.postersLoop)
