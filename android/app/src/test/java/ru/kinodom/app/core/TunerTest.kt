@@ -49,6 +49,26 @@ class TunerTest {
         assertEquals(1, t.current)
     }
 
+    // Финальное ревью 13b: «0» и «00» — не номер; у каналов без номера number == 0, первый из них не включается.
+    @Test
+    fun zeroIsNoNumber() {
+        val t = Tuner(five, 1)
+        t.digit(0)
+        assertNull(t.commitNumber())
+        t.digit(0)
+        t.digit(0)
+        assertNull(t.commitNumber())
+        assertEquals(1, t.current)
+    }
+
+    // Финальное ревью 13b: тот же канал после «Канал сейчас не показывает» — запустить заново; играет — не трогать.
+    @Test
+    fun restart() {
+        assertEquals(true, Tuner.restart(2, 1, noSignal = false))
+        assertEquals(false, Tuner.restart(2, 2, noSignal = false))
+        assertEquals(true, Tuner.restart(2, 2, noSignal = true))
+    }
+
     @Test
     fun fourDigitsMax() {
         val t = Tuner(five, 0)
