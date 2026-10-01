@@ -30,6 +30,7 @@ import ru.kinodom.app.BuildConfig
 import ru.kinodom.app.R
 import ru.kinodom.app.core.Action
 import ru.kinodom.app.core.BackDecision
+import ru.kinodom.app.core.Foreground
 import ru.kinodom.app.core.Lineup
 import ru.kinodom.app.core.Links
 import ru.kinodom.app.core.PlayerMode
@@ -143,6 +144,21 @@ class PultActivity : Activity() {
             Action.GoBack -> web.goBack()
             Action.Minimize -> moveTaskToBack(true)
         }
+    }
+
+    // onStart — вход в приложение (запуск или возврат из фона, не возврат из плеера): спросить сервер про новую
+    // версию сразу, не дожидаясь суток; «Позже» — до следующего входа (заказчик 2026-10-01).
+    override fun onStart() {
+        super.onStart()
+        if (Foreground.app.start()) {
+            postponed = false
+            updateCheckedAt = null
+        }
+    }
+
+    override fun onStop() {
+        Foreground.app.stop()
+        super.onStop()
     }
 
     override fun onPause() {
@@ -282,6 +298,15 @@ class PultActivity : Activity() {
             closeOverlay()
         })
         showOverlay(c, closable = true, focus = now)
+    }
+
+    // updateNow — «Обновить» из пульта: на сервере новее — загрузка и установщик; загрузка уже идёт — не вторую.
+    private fun updateNow() {
+        if (overlay != null && !overlayClosable) return
+        scope.launch {
+            val app = updater.check() ?: return@launch
+            if (app.versionCode > BuildConfig.VERSION_CODE) startUpdate(app)
+        }
     }
 
     private fun startUpdate(app: ServerApp) {
@@ -424,6 +449,16 @@ class PultActivity : Activity() {
         fun setPlayer(mode: String) {
             PlayerMode.of(mode)?.let { Prefs(this@PultActivity).player = it }
         }
+
+        // versionCode — номер сборки: пульт сравнивает его с APK на сервере («Обновить» или «Последняя версия»).
+        @JavascriptInterface
+        fun versionCode(): Int = BuildConfig.VERSION_CODE
+
+        // update — «Обновить» в пульте: скачать и поставить новую версию с сервера сразу, без окна и «Позже».
+        @JavascriptInterface
+        fun update() {
+            handler.post { if (::web.isInitialized && web.url?.startsWith(base) == true) updateNow() }
+        }
     }
 
     companion object {
@@ -435,7 +470,7 @@ class PultActivity : Activity() {
         private const val CLOSE_DIALOG = "(function(){var a=document.querySelectorAll('.dlg-back');if(!a.length)return false;" +
             "a[a.length-1].dispatchEvent(new KeyboardEvent('keydown',{key:'Escape',bubbles:true,cancelable:true}));return true})()"
 
-        // postponed — «Позже»: до следующего запуска процесса приложения (спека этапа 13, раздел 6).
+        // postponed — «Позже»: до следующего входа в приложение (запуск или возврат из фона — onStart; заказчик 2026-10-01).
         private var postponed = false
     }
 }

@@ -298,6 +298,8 @@ a.res-row:hover { background: var(--hover); }
 .mod:last-child { border-bottom: 0; }
 .mod-name { width: 130px; flex-shrink: 0; font-weight: 600; }
 .mark { display: inline-block; width: 10px; height: 10px; flex-shrink: 0; }
+.app-card .row { margin-top: 8px; }
+.app-addr { margin-top: 8px; font-size: 18px; font-weight: 700; overflow-wrap: anywhere; }
 .diskbar { display: flex; height: 10px; background: var(--track); }
 .legend { display: flex; flex-wrap: wrap; gap: 24px; }
 .legend > span { display: inline-flex; align-items: center; gap: 8px; }
@@ -511,6 +513,14 @@ a.res-row:hover { background: var(--hover); }
   .sel { flex-grow: 1; min-width: 0; }
   .pl { flex-wrap: wrap; }
   .pl-name { flex-basis: 100%; }
+}
+
+/* Телефон стоя: в строках модулей и трекеров пояснение — под именем, во всю ширину; время проблемы — под
+   текстом (было узкой колонкой в 3–4 строки; заказчик 2026-10-01). */
+@media (max-width: 600px) {
+  .mod { flex-wrap: wrap; row-gap: 4px; }
+  .mod.long .mod-name { width: auto; }
+  .mod.long .mod-text, .mod-when { flex-basis: 100%; padding-left: 24px; }
 }
 
 /* Планшет стоя: каталог в 3 колонки, а не в 2, как на телефоне. */
