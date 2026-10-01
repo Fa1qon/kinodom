@@ -203,11 +203,17 @@ func TestDeleteRoute(t *testing.T) {
 		t.Fatalf("не скачан: %d %q", code, e.Error)
 	}
 	must(t, s.Prepare(ctx, ih, one))
-	must(t, s.reg.TouchStream(ctx, ih, one, time.Now()))
+	s.mu.Lock()
+	s.sessions[ih].readers[one]++ // поток открыт: телевизор смотрит
+	s.mu.Unlock()
 	if code := call(t, "DELETE", url+strconv.Itoa(one), nil, &e); code != http.StatusConflict || e.Error != ErrWatching.Error() {
 		t.Fatalf("смотрят: %d %q", code, e.Error)
 	}
-	s.reg.db.W.Exec("UPDATE stored_files SET last_stream_at = 0")
+	s.mu.Lock()
+	s.sessions[ih].readers[one]--
+	s.mu.Unlock()
+	// Смотрели только что, плеер закрыт — удаляется (замечание № 19, решение заказчика).
+	must(t, s.reg.TouchStream(ctx, ih, one, time.Now()))
 	if code := call(t, "DELETE", url+strconv.Itoa(one), nil, nil); code != http.StatusNoContent {
 		t.Fatalf("удаление: %d", code)
 	}
@@ -227,7 +233,10 @@ func TestDeleteReleaseRoute(t *testing.T) {
 	}
 	must(t, s.Prepare(ctx, ih, one))
 	must(t, s.Prepare(ctx, ih, two))
-	must(t, s.reg.TouchStream(ctx, ih, two, time.Now())) // вторую серию сейчас смотрят
+	must(t, s.reg.TouchStream(ctx, ih, one, time.Now())) // первую смотрели только что, плеер закрыт
+	s.mu.Lock()
+	s.sessions[ih].readers[two]++ // вторую смотрят сейчас
+	s.mu.Unlock()
 	var out struct{ Deleted, Skipped int }
 	if code := call(t, "DELETE", url, nil, &out); code != http.StatusOK || out.Deleted != 1 || out.Skipped != 1 {
 		t.Fatalf("удаление раздачи: %d %+v", code, out)
@@ -258,5 +267,32 @@ func TestDeleteKeepsPieceSharedWithStoredNeighbour(t *testing.T) {
 	}
 	if tt.PieceState(inner).Complete {
 		t.Fatalf("кусок %d удалённой серии всё ещё скачан", inner)
+	}
+}
+
+// Замечание № 19 (спека 11b, 15.1): удаление человеком — мешает только открытый поток; поток 10 минут
+// назад, плеер закрыт — удаляется. Корзина раздачи пропускает только серию с открытым потоком.
+func TestDeleteRecentButNotStreaming(t *testing.T) {
+	ctx := context.Background()
+	s := newTestService(t)
+	ih, ep := archive(t, s)
+	must(t, s.Download(ctx, ih, []int{ep[0], ep[1], ep[2]}))
+	must(t, s.reg.TouchStream(ctx, ih, ep[0], s.now().Add(-10*time.Minute)))
+	if err := s.DeleteFile(ctx, ih, ep[0]); err != nil {
+		t.Fatalf("смотрели 10 минут назад, плеер закрыт: %v", err)
+	}
+	s.mu.Lock()
+	s.sessions[ih].readers[ep[1]]++
+	s.mu.Unlock()
+	if err := s.DeleteFile(ctx, ih, ep[1]); !errors.Is(err, ErrWatching) {
+		t.Fatalf("поток открыт: %v", err)
+	}
+	must(t, s.reg.TouchStream(ctx, ih, ep[2], s.now().Add(-time.Hour)))
+	deleted, skipped, err := s.DeleteRelease(ctx, ih)
+	if err != nil || deleted != 1 || skipped != 1 {
+		t.Fatalf("корзина раздачи: удалено %d, пропущено %d, %v", deleted, skipped, err)
+	}
+	if got := stored(t, s, ih); !slices.Equal(got, []int{ep[1]}) {
+		t.Fatalf("осталось %v", got)
 	}
 }

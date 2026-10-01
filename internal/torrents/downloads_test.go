@@ -78,3 +78,29 @@ func TestDownloadItemNeverOpenedJSON(t *testing.T) {
 		t.Errorf("нулевая дата открытия в ответе: %s", b)
 	}
 }
+
+// «Загрузки» (спека 11b, 15.1): streaming — поток открыт сейчас, watchedAt — последний поток за 6 часов,
+// удалить можно всё, где поток не открыт; метка состояния — прежняя (смотрели за 6 часов — watching).
+func TestDownloadsStreaming(t *testing.T) {
+	ctx := context.Background()
+	s := newTestService(t)
+	ih, ep := archive(t, s)
+	must(t, s.Download(ctx, ih, []int{ep[0], ep[1]}))
+	at := s.now().Add(-10 * time.Minute).Truncate(time.Millisecond)
+	must(t, s.reg.TouchStream(ctx, ih, ep[0], at))
+	s.mu.Lock()
+	s.sessions[ih].readers[ep[1]]++
+	s.mu.Unlock()
+	v, err := s.Downloads(ctx)
+	must(t, err)
+	byIndex := map[int]DownloadItem{}
+	for _, it := range v.Items {
+		byIndex[it.Index] = it
+	}
+	if d := byIndex[ep[0]]; d.State != DownloadWatching || d.Streaming || !d.CanDelete || !d.WatchedAt.Equal(at) {
+		t.Fatalf("смотрели 10 минут назад: %+v", d)
+	}
+	if d := byIndex[ep[1]]; !d.Streaming || d.CanDelete {
+		t.Fatalf("смотрят сейчас: %+v", d)
+	}
+}

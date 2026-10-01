@@ -36,7 +36,9 @@ type DownloadItem struct {
 	Speed        int64         `json:"speed,omitempty"`       // байт/с; только у файла в фокусе
 	LastOpenedAt time.Time     `json:"lastOpenedAt,omitzero"` // нет — ни разу не открывали
 	DeleteInDays *int          `json:"deleteInDays"`          // null — до удаления по сроку больше трёх дней
-	CanDelete    bool          `json:"canDelete"`             // файл, который смотрят, удалить нельзя
+	CanDelete    bool          `json:"canDelete"`             // удалить можно: поток не открыт (№ 19)
+	Streaming    bool          `json:"streaming"`             // поток открыт сейчас: смотрят на каком-то телевизоре
+	WatchedAt    time.Time     `json:"watchedAt,omitzero"`    // последний поток, если за 6 часов: «смотрели в 12:35»
 }
 
 // DownloadsView — экран «Загрузки».
@@ -118,7 +120,12 @@ func (s *Service) Downloads(ctx context.Context) (DownloadsView, error) {
 			}
 		}
 		it.Percent = bufferPercent(it.Done, it.Size)
-		it.CanDelete = !watching
+		// Удалить человек может всё, где поток не открыт (№ 19); смотрели недавно — время для подтверждения.
+		it.Streaming = ss != nil && ss.readers[f.Index] > 0
+		it.CanDelete = !it.Streaming
+		if watching && !f.LastStream.IsZero() {
+			it.WatchedAt = f.LastStream
+		}
 		// Срок — по раздаче целиком; ни разу не открытая не удаляется (спека этапа 9, раздел 5.8).
 		if o := opened[f.InfoHash]; !o.IsZero() && !watching && pol.KeepFor-now.Sub(o) <= deleteWarnDays*24*time.Hour {
 			left := pol.KeepFor - now.Sub(o)
