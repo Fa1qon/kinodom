@@ -128,7 +128,7 @@ type Catalog struct {
 	deepPos     map[CategoryRef]int      // раздел → курсор порций: у Rutor — страница, у Rutracker — место в списке
 	deepEnd     map[CategoryRef]bool     // раздел → список трекера кончился
 	deepEmpty   map[CategoryRef]int      // раздел → порций подряд без новых раздач
-	kpWait      map[string]bool          // раздачи без страницы из поиска ждут номер Кинопоиска для постера
+	kpWait      map[string]int64         // «трекер:номер» → раздача без страницы из поиска: ждёт номер Кинопоиска для постера
 	descNow     map[int64]bool           // описание Кинопоиска открытой раздачи без страницы качается сейчас
 }
 
@@ -145,7 +145,7 @@ func New(o Options) *Catalog {
 		postersWake: make(chan struct{}, 1), urgent: map[string][]int64{}, found: map[string][]int64{}, torrentNow: map[int64]bool{}, yield: map[string]func(){}, retries: map[string]retryState{}, forced: map[int64]bool{},
 		posterSem: make(chan struct{}, 2), urgentSem: make(chan struct{}, 2),
 		forumPaused: map[string]time.Time{}, searches: map[string]*searchRun{}, torrentFormat: o.TorrentFormat, deep: map[CategoryRef]deepList{}, deepPos: map[CategoryRef]int{}, deepEnd: map[CategoryRef]bool{}, deepEmpty: map[CategoryRef]int{},
-		preferred: o.PreferredFormat, extra: o.Extra, filmDesc: o.FilmDescription, kpWait: map[string]bool{}, descNow: map[int64]bool{}}
+		preferred: o.PreferredFormat, extra: o.Extra, filmDesc: o.FilmDescription, kpWait: map[string]int64{}, descNow: map[int64]bool{}}
 	if o.Ratings != nil {
 		o.Ratings.OnResolved(c.ratingResolved)
 	}
@@ -424,15 +424,27 @@ func (c *Catalog) pageless(r row) bool { return r.Link != "" || !c.Own(r.Tracker
 // kpWaitLimit — сколько раздач без страницы ждут номер Кинопоиска для постера; больше — список заново.
 const kpWaitLimit = 500
 
-// ratingResolved — очередь рейтингов решила задачу: раздача без страницы из поиска ждала номер, чтобы
-// показать постер Кинопоиска, — постеры догружаются сразу, а не следующим проходом.
+// ratingResolved — очередь рейтингов решила задачу: раздача без страницы из поиска ждала номер — постер
+// Кинопоиска качается сразу, срочным путём (общий проход постеров бывает занят мёртвыми хостингами).
 func (c *Catalog) ratingResolved(release string) {
 	c.mu.Lock()
-	wait := c.kpWait[release]
+	id, wait := c.kpWait[release]
 	delete(c.kpWait, release)
+	base := c.runCtx
 	c.mu.Unlock()
-	if wait {
-		c.wakePosters()
+	if !wait {
+		return
+	}
+	if base == nil {
+		base = context.Background()
+	}
+	known, err := c.ratings.For(base, []string{release})
+	if err != nil {
+		c.log.Warn("каталог: рейтинги не читаются", "err", err)
+		return
+	}
+	if kp := known[release].KinopoiskID; kp > 0 {
+		c.posterLater(base, id, "", kp, true)
 	}
 }
 

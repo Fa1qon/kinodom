@@ -52,6 +52,9 @@ var (
 	// Части, которые не названия: «Сезон: 1», «Серии: 1-13 из 13», «Season 5» — слово и номер; «Сезон
 	// охоты» — название (\b в Go — только ASCII, кириллицу не ловит — хвост Х2).
 	reSeasonPart = regexp.MustCompile(`(?i)^(?:сезон|серии|серия|season|episodes?)\s*:?\s*\d`)
+	// Хвост названия «1 сезон», «сезон 1» (Bitru: «Название 1 сезон (1-7 из 10) (2026)»): сезон, не часть
+	// названия — иначе номер Кинопоиска по названию не находится (вживую 11b-Д).
+	reSeasonTail = regexp.MustCompile(`(?i)\s+(?:\d{1,3}\s+(?:сезон|season)|(?:сезон|season)\s+\d{1,3})$`)
 	// Хвост названия «- Episode 3», «- Серия 3»: номер серии, не часть названия.
 	reEpisodeTail = regexp.MustCompile(`(?i)\s+[-–—]\s+(?:episode|серия|эпизод)\s*\d+\s*$`)
 	// Сезон и серии: «[S01]», «[S01-24]», «[S02E01-08]», «[02x13 из 13]», «Сезон: 1», «(1-5 серий из 5)»,
@@ -101,7 +104,7 @@ func ParseTitle(s string) Title {
 		names = s[:ru[0]]
 		t.Year, _ = strconv.Atoi(s[ru[2]:ru[3]])
 		rest := s[ru[1]:]
-		for _, sep := range []string{" от ", " | "} {
+		for _, sep := range []string{" | ", " от "} { // что раньше: «WEBRip | от Группа» — «WEBRip»
 			if i := strings.Index(rest, sep); i >= 0 {
 				rest = rest[:i]
 			}
@@ -122,6 +125,9 @@ func ParseTitle(s string) Title {
 		}
 		if tail := reEpisodeTail.FindStringIndex(part); tail != nil {
 			part, t.Series = part[:tail[0]], true
+		}
+		if tail := reSeasonTail.FindStringIndex(part); tail != nil && tail[0] > 0 {
+			part = part[:tail[0]]
 		}
 		t.Names = append(t.Names, part)
 		if t.Orig == "" && hasLetter(part) && !hasCyrillic(part) {

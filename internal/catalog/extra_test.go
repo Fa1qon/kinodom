@@ -3,6 +3,8 @@ package catalog
 import (
 	"context"
 	"errors"
+	"net/http"
+	"net/http/httptest"
 	"slices"
 	"strconv"
 	"sync"
@@ -41,6 +43,29 @@ func kinozal(hash, title string, seeders int) source.Release {
 		Magnet: "magnet:?xt=urn:btih:" + hash + "&tr=http://ann.kinozal.example", Link: "https://kinozal.example/details.php?id=" + hash[:4]}
 }
 
+// kpPosters — хостинг постеров Кинопоиска для тестов: /kp/{номер}.jpg — картинка.
+func kpPosters(t *testing.T) (*meta.Images, func(id int) string) {
+	t.Helper()
+	pic := pngBytes(t)
+	host := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { w.Write(pic) }))
+	t.Cleanup(host.Close)
+	im, err := meta.NewImages(meta.ImagesOptions{Dir: t.TempDir(), Rate: 1000, AllowPrivate: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return im, func(id int) string { return host.URL + "/kp/" + strconv.Itoa(id) + ".jpg" }
+}
+
+// storedImage — картинка раздачи в базе (без Release: тот открывает раздачу).
+func storedImage(t *testing.T, c *Catalog, id int64) string {
+	t.Helper()
+	rs, err := c.st.rowsByID(ctx, []int64{id})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return rs[id].ImageKey
+}
+
 func entryOf(es []Entry, tracker string) (Entry, bool) {
 	for _, e := range es {
 		if e.Tracker == tracker {
@@ -69,8 +94,9 @@ func TestExtraSearchForeign(t *testing.T) {
 	ratings := meta.NewRatings(meta.RatingsOptions{KP: meta.NewKinopoisk(meta.KinopoiskOptions{}), DB: db})
 	var descAsked []int
 	var descMu sync.Mutex
+	im, kpPoster := kpPosters(t)
 	c, _ := newCatalog(t, db, func(o *Options) {
-		o.Extra, o.Ratings = x, ratings
+		o.Extra, o.Ratings, o.Images, o.KinopoiskPoster = x, ratings, im, kpPoster
 		o.FilmDescription = func(_ context.Context, kp int) (string, error) {
 			descMu.Lock()
 			descAsked = append(descAsked, kp)
@@ -107,7 +133,8 @@ func TestExtraSearchForeign(t *testing.T) {
 		t.Fatal("страницу чужой раздачи догружать нечем")
 	}
 
-	// Очередь рейтингов нашла номер — постер Кинопоиска догружается сразу.
+	// Очередь рейтингов нашла номер — постер Кинопоиска догружается сразу, срочным путём: общий проход
+	// постеров бывает занят мёртвыми хостингами (вживую 2026-10-01 — по 11 с на картинку).
 	key := "kinozal:" + lanternsHash
 	if _, err := db.W.Exec(`INSERT INTO kp_films(kp_id, name_ru, name_orig, year, type, rating) VALUES(501, 'Фонари', 'Lanterns', 2026, 'TV_SERIES', 7.4)`); err != nil {
 		t.Fatal(err)
@@ -115,21 +142,10 @@ func TestExtraSearchForeign(t *testing.T) {
 	if _, err := db.W.Exec(`INSERT INTO kp_releases(release_id, kp_id) VALUES(?, 501)`, key); err != nil {
 		t.Fatal(err)
 	}
-	select {
-	case <-c.postersWake:
-	default:
-	}
-	c.ratingResolved("rutor:1")
-	select {
-	case <-c.postersWake:
-		t.Fatal("постеры разбудила чужая задача")
-	default:
-	}
 	c.ratingResolved(key)
-	select {
-	case <-c.postersWake:
-	default:
-		t.Fatal("номер найден — постеры не разбужены")
+	c.posterWG.Wait()
+	if got := storedImage(t, c, e.ID); got != meta.ImageKey(kpPoster(501)) {
+		t.Fatalf("постер Кинопоиска по найденному номеру: %q", got)
 	}
 
 	// Открыли — описание Кинопоиска: экран ждёт его, как страницу.
@@ -270,5 +286,30 @@ func TestExtraInVariants(t *testing.T) {
 			t.Fatalf("поиск не закончился: %+v", st)
 		}
 		time.Sleep(20 * time.Millisecond)
+	}
+}
+
+// Номер Кинопоиска у чужой раздачи нашёлся сразу (соседняя раздача того же фильма — без запросов, вживую
+// 2026-10-01): постер Кинопоиска — сразу, срочным путём, а не общим проходом постеров.
+func TestExtraKnownNumberPosterSoon(t *testing.T) {
+	db := openDB(t)
+	ratings := meta.NewRatings(meta.RatingsOptions{KP: meta.NewKinopoisk(meta.KinopoiskOptions{}), DB: db})
+	x := &fakeExtra{results: []source.Release{kinozal(lanternsHash, "Фонари / Lanterns / 2026 / ПМ / WEB-DLRip", 12)}}
+	im, kpPoster := kpPosters(t)
+	c, _ := newCatalog(t, db, func(o *Options) { o.Extra, o.Ratings, o.Images, o.KinopoiskPoster = x, ratings, im, kpPoster }, newFake("rutor"))
+	if _, err := db.W.Exec(`INSERT INTO kp_films(kp_id, name_ru, name_orig, year, type, rating) VALUES(501, 'Фонари', 'Lanterns', 2026, 'TV_SERIES', 7.4)`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.W.Exec(`INSERT INTO kp_releases(release_id, kp_id) VALUES(?, 501)`, "kinozal:"+lanternsHash); err != nil {
+		t.Fatal(err)
+	}
+	st := waitSearch(t, c, "Фонари")
+	if e, ok := entryOf(st.Results, "kinozal"); !ok || e.Rating.KinopoiskID != 501 {
+		t.Fatalf("Kinozal: %+v", st.Results)
+	}
+	e, _ := entryOf(st.Results, "kinozal")
+	c.posterWG.Wait()
+	if got := storedImage(t, c, e.ID); got != meta.ImageKey(kpPoster(501)) {
+		t.Fatalf("постер Кинопоиска: %q", got)
 	}
 }
