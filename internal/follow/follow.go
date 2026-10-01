@@ -61,6 +61,7 @@ type Options struct {
 	Rekey    torrents.Rekey                                    // ключи других модулей при переходе
 	Types    func(ctx context.Context, kp int) (string, error) // вид фильма Кинопоиска по номеру; nil — по названию
 	Every    time.Duration                                     // 0 — 6 часов (проверка вживую — короче)
+	NewDir   func(ctx context.Context) string                  // папка новой раздачи (папка «Сериалов», план 14В); nil — общая
 	Log      *slog.Logger
 	Now      func() time.Time
 }

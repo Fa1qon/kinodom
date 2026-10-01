@@ -88,16 +88,17 @@ type App struct {
 	DB       *store.DB
 	Sup      *supervisor.Supervisor
 	API      *api.Server
-	Power    *power.Keeper     // запрет сна, пока идёт поток любого модуля (спека, раздел 9)
-	Torrents *torrents.Service // nil, если движок не запустился (см. проблему torrents.engine)
-	Ratings  *meta.Ratings     // рейтинги Кинопоиска (модуль ratings)
-	Images   *meta.Images      // картинки, которые сервер отдаёт по /img/{key}
-	Catalog  *catalog.Catalog  // каталог и поиск (модуль catalog)
-	Settings *settings.Service // настройки из пульта: меняются без перезапуска (этап 7)
-	IPTV     *iptv.Module      // каналы (модуль iptv, этап 8)
-	History  *history.Service  // история просмотров по устройствам (этап 8c)
-	Library  *library.Library  // медиатека: скачанное и папки заказчика (модуль library, этап 9)
-	Follow   *follow.Module    // подписка на новые серии (модуль follow, этап 11b-В)
+	Power    *power.Keeper         // запрет сна, пока идёт поток любого модуля (спека, раздел 9)
+	Torrents *torrents.Service     // nil, если движок не запустился (см. проблему torrents.engine)
+	Ratings  *meta.Ratings         // рейтинги Кинопоиска (модуль ratings)
+	Images   *meta.Images          // картинки, которые сервер отдаёт по /img/{key}
+	Catalog  *catalog.Catalog      // каталог и поиск (модуль catalog)
+	Settings *settings.Service     // настройки из пульта: меняются без перезапуска (этап 7)
+	IPTV     *iptv.Module          // каналы (модуль iptv, этап 8)
+	History  *history.Service      // история просмотров по устройствам (этап 8c)
+	Library  *library.Library      // медиатека: скачанное и папки заказчика (модуль library, этап 9)
+	Follow   *follow.Module        // подписка на новые серии (модуль follow, этап 11b-В)
+	writable func(dir string) bool // служба может писать в папку медиатеки; nil — Library.Writable (тесты подменяют)
 
 	version   string
 	kp        *meta.Kinopoisk
@@ -531,7 +532,8 @@ func (a *App) handleDownload(w http.ResponseWriter, r *http.Request) {
 		httpx.WriteError(w, http.StatusConflict, "на странице раздачи нет magnet-ссылки — откройте раздачу на трекере")
 		return
 	}
-	ih, err := a.Torrents.Open(r.Context(), torrents.Source{Torrent: rel.Torrent, Magnet: rel.Magnet})
+	dir := a.downloadDir(r.Context(), a.Catalog.IsSeries(r.Context(), rel.Entry))
+	ih, err := a.Torrents.Open(r.Context(), torrents.Source{Torrent: rel.Torrent, Magnet: rel.Magnet, Dir: dir})
 	if err != nil {
 		httpx.WriteError(w, http.StatusBadRequest, err.Error())
 		return
@@ -556,6 +558,32 @@ func (a *App) handleDownload(w http.ResponseWriter, r *http.Request) {
 	default:
 		httpx.WriteJSON(w, http.StatusOK, map[string]string{"hash": ih.HexString()})
 	}
+}
+
+// downloadDir — папка новой раздачи (план 14В): фильм — первая папка «Фильмов» медиатеки, сериал —
+// «Сериалов»; папок нет или служба не может в неё писать — "" (папка загрузок; у папки медиатеки — проблема
+// no_write и «Разрешить доступ», их ставит обход медиатеки). Знакомая раздача остаётся, где качалась.
+func (a *App) downloadDir(ctx context.Context, series bool) string {
+	if a.Library == nil {
+		return ""
+	}
+	kind := "films"
+	if series {
+		kind = "series"
+	}
+	dir, err := a.Library.TargetFolder(ctx, kind)
+	if err != nil || dir == "" {
+		return ""
+	}
+	can := a.Library.Writable
+	if a.writable != nil {
+		can = a.writable
+	}
+	if !can(dir) {
+		a.Log.Info("медиатека: в папку нельзя писать — скачанное идёт в папку загрузок", "dir", dir)
+		return ""
+	}
+	return dir
 }
 
 // cachedCheck — проверка раз в every: «Состояние» пульт спрашивает часто, а реестр меняется редко.

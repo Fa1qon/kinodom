@@ -1,8 +1,10 @@
 package catalog
 
 import (
+	"context"
 	"strings"
 
+	"kinodom/internal/meta"
 	"kinodom/internal/source"
 )
 
@@ -81,4 +83,34 @@ func videoForums(tree []source.Category, id string) []string {
 	}
 	walk(id)
 	return out
+}
+
+// rutorSeries — разделы сериалов Rutor.
+var rutorSeries = map[string]bool{"4": true, "16": true}
+
+// IsSeries — раздача сериала (план 14В: качается в папку «Сериалов» медиатеки): сезон или серии в названии,
+// раздел сериалов Rutor, форум группы Rutracker «Сериалы» на любой глубине.
+func (c *Catalog) IsSeries(ctx context.Context, e Entry) bool {
+	if meta.ParseTitle(e.Title).Season != "" {
+		return true
+	}
+	switch e.Tracker {
+	case "rutor":
+		return rutorSeries[e.CategoryID]
+	case "rutracker":
+		tree, err := c.st.tree(ctx, e.Tracker)
+		if err != nil {
+			return false
+		}
+		parent := map[string]string{}
+		for _, x := range tree {
+			parent[x.ID] = x.ParentID
+		}
+		for id, n := e.CategoryID, 0; id != "" && n < 20; id, n = parent[id], n+1 {
+			if id == "c18" {
+				return true
+			}
+		}
+	}
+	return false
 }
