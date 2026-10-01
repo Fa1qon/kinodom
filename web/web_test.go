@@ -253,6 +253,9 @@ const checks = [
   [sourceMarks({ offered: true, hidden: true, audio: false }, 0).join(), 'скрыт, но других рабочих нет — плеер получит его,без звука'],
   [sourceButtons({ offered: true, hidden: true }, 0, [{ offered: true, hidden: true }]).join(), 'show'],
   [sourceButtons({ offered: true }, 0, [{ offered: true }, { offered: true }]).join(), 'keep,hide,other'],
+  // Последний источник версии, а у канала есть другие рабочие версии (11b-Е): «Скрыть» доступна.
+  [sourceButtons({ offered: true }, 0, [{ offered: true }], true).join(), 'keep,hide,other'],
+  [sourceButtons({ offered: true }, 0, [{ offered: true }]).join(), 'keep,hide-last,other'],
   [sourceButtons({ offered: true }, 1, [{ offered: true }, { offered: true }]).join(), 'main,hide,other'],
   [sourceButtons({ offered: true, pinned: true }, 0, [{ offered: true }, { offered: true }]).join(), 'unpin,hide,other'],
   [sourceButtons({ offered: true }, 0, [{ offered: true }, { offered: false }]).join(), 'keep,hide-last,other'],
@@ -975,10 +978,10 @@ class El extends Node {
 }
 globalThis.document = { createElement: (t) => new El(t), createElementNS: (_, t) => new El(t) };
 const { hideCard } = await import('./views/settings-iptv.js');
-const iv = { hiddenCategories: [], hiddenCountries: [], hiddenLanguages: [], hideOtherZones: false };
+const iv = { hiddenCategories: [], hiddenCountries: [], hiddenLanguages: [] };
 const all = { categories: [], countries: [{ id: 'RU', name: 'Россия', count: 2 }],
   languages: [{ id: 'rus', name: 'русский', count: 2 }, { id: 'eng', name: 'английский', count: 1 }] };
-const draft = { categories: [], countries: [], languages: [], otherZones: false };
+const draft = { categories: [], countries: [], languages: [] };
 let saved = 0;
 const card = hideCard(iv, all, draft, true, () => saved++);
 const find = (key) => card.all().find((e) => e.attrs['data-key'] === key);
@@ -986,6 +989,7 @@ const btn = find('hide-save');
 const eng = find('hide-languages-eng');
 const checks = [];
 checks.push(['без изменений — выключена', btn.disabled === true]);
+checks.push(['«Другие часовые пояса» нет — версии внутри канала (11b-Е)', !find('hide-zones')]);
 eng.checked = true;
 eng.listeners.change({ target: eng });
 checks.push(['отметили язык — включена сразу', btn.disabled === false]);
@@ -1466,5 +1470,54 @@ process.exit();
 	cmd.Dir = "static"
 	if out, err := cmd.CombinedOutput(); err != nil {
 		t.Errorf("%v\n%s", err, out)
+	}
+}
+
+// Версии канала по времени (спека 11b, 13.3): страница — ключ канала, «Смотреть», .m3u8, программа и
+// настройки — ключ выбранной версии; у московской версии ключ совпадает с ключом канала (Review Focus 5).
+func TestPultVersionLinks(t *testing.T) {
+	node := lookNode(t)
+	script := `
+import { versionLinks } from './views/channel.js';
+const pl4 = versionLinks({ key: 'pervy', version: 'pervy-pl4' });
+const msk = versionLinks({ key: 'pervy', version: 'pervy' });
+const shifted = versionLinks({ key: 'sts', version: 'sts~1' });
+const checks = [
+  [pl4.watch, 'pervy-pl4'], [pl4.m3u, '/m3u/channel/pervy-pl4.m3u8'], [pl4.epg, '/channels/pervy-pl4/epg'],
+  [pl4.settings, '#/channel/pervy/settings?v=pervy-pl4'], [pl4.page('pervy-mn1'), '#/channel/pervy?v=pervy-mn1'],
+  [pl4.api('pervy'), '/channels/pervy?version=pervy'], [pl4.api(''), '/channels/pervy'],
+  [msk.watch, 'pervy'], [msk.settings, '#/channel/pervy/settings?v=pervy'],
+  [shifted.m3u, '/m3u/channel/sts~1.m3u8'],
+];
+for (const [got, want] of checks) {
+  if (got !== want) {
+    console.error(got, '≠', want);
+    process.exitCode = 1;
+  }
+}
+`
+	cmd := exec.Command(node, "--input-type=module", "--no-warnings", "-e", script)
+	cmd.Dir = "static"
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Errorf("%v\n%s", err, out)
+	}
+}
+
+// Ряд версий канала на 390 px (вживую 11b-Е: МСК…МСК+7 — пять кнопок, страница прокручивалась вбок):
+// ряд прокручивается сам, страница — нет. Класс — zones: «versions» занят «Есть дубли» медиатеки (столбик).
+func TestPultVersionsRowScrolls(t *testing.T) {
+	css, err := os.ReadFile("static/style.css")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !regexp.MustCompile(`\.seg\.zones\s*\{[^}]*overflow-x:\s*auto`).Match(css) || !regexp.MustCompile(`\.seg\.zones\s*\{[^}]*max-width:\s*100%`).Match(css) {
+		t.Error(".seg.zones без max-width: 100% и overflow-x: auto")
+	}
+	js, err := os.ReadFile("static/views/channel.js")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(js), `class: 'seg zones'`) {
+		t.Error("ряд версий без класса zones")
 	}
 }

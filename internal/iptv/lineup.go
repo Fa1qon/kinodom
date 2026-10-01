@@ -13,12 +13,12 @@ import (
 	"kinodom/internal/iptv/xmltv"
 )
 
-// Hidden — настройки скрытия (спека этапа 8, раздел 5.6).
+// Hidden — настройки скрытия (спека этапа 8, раздел 5.6). Скрытия «других часовых поясов» нет: версии
+// по времени — внутри канала (спека 11b, раздел 13).
 type Hidden struct {
 	Categories []string
 	Countries  []string
 	Languages  []string
-	OtherZones bool
 }
 
 // Причины, по которым канал скрыт.
@@ -27,15 +27,14 @@ const (
 	HiddenCategory = "category"
 	HiddenCountry  = "country"
 	HiddenLanguage = "language"
-	HiddenZone     = "zone"
 )
 
 // Channel — канал в составе.
 type Channel struct {
 	Key     string
 	EPGID   string // канал телепрограммы; у сдвинутого — базовый
-	Shift   int    // сдвиг программы в часах у сдвинутого канала <id>+<N>; 0 — своя программа
-	Zone    int    // часовой пояс версии: N у «-plN» и «+N», 0 — московская
+	Shift   int    // сдвиг программы в часах у сдвинутой версии «id+N» / «id~N» (−N); 0 — своя программа
+	Zone    int    // сдвиг версии от Москвы: N у «-plN» и «+N», −N у «-mnN», «-mN» и «~N»; 0 — московская
 	Name    string
 	Logo    string // адрес логотипа в интернете; "" — нет
 	Labels  labels.Labels
@@ -46,13 +45,89 @@ type Channel struct {
 	// проверкой в фоне не проверяются (лёгкой — да: они запасные). Других предлагаемых нет — живые
 	// скрытые переходят в Sources запасными, чтобы канал не пропал вместе с кнопкой «Вернуть».
 	Rejected []*Stream
-	Grade    string // оценка первого источника: green, yellow, red, unrated; "" — источников нет
-	Hidden   string // почему скрыт (без учёта избранного); "" — на экране
-	Pinned   string // закреплённая ссылка
+	// HiddenOnly — предлагаются только скрытые вручную запасные: такая версия — рабочая, только если у канала
+	// других нет (финальное ревью 11b-Е: иначе неудачную версию не убрать, не скрыв весь канал).
+	HiddenOnly bool
+	Grade      string // оценка первого источника: green, yellow, red, unrated; "" — источников нет
+	Hidden     string // почему скрыт (без учёта избранного); "" — на экране
+	Pinned     string // закреплённая ссылка
 }
 
 // Offered — у канала есть что предложить плееру.
 func (c *Channel) Offered() bool { return len(c.Sources) > 0 }
+
+// Family — канал с версиями по времени (спека 11b, 13.1): «Первый канал» — МСК, МСК+4, МСК−1. Ключ — базовый
+// id телепрограммы; у канала — ★, «Скрыть канал», метки, место в федеральном блоке; у версии — источники.
+type Family struct {
+	Key      string
+	Name     string     // имя канала без сдвига
+	Versions []*Channel // рабочие версии (с предлагаемыми источниками) по сдвигу по возрастанию
+	Default  *Channel   // версия по умолчанию; nil — рабочих нет
+}
+
+// VersionLabel — подпись версии: «МСК», «МСК+4», «МСК−1».
+func VersionLabel(zone int) string {
+	switch {
+	case zone > 0:
+		return "МСК+" + strconv.Itoa(zone)
+	case zone < 0:
+		return "МСК−" + strconv.Itoa(-zone)
+	}
+	return "МСК"
+}
+
+// pickDefault — версия по умолчанию (спека 11b, 13.2): под местный сдвиг; нет — московская; нет и её —
+// с наименьшей разницей часов, при равной — восточнее.
+func pickDefault(vs []*Channel, local int) *Channel {
+	for _, want := range []int{local, 0} {
+		for _, c := range vs {
+			if c.Zone == want {
+				return c
+			}
+		}
+	}
+	var best *Channel
+	dist := func(c *Channel) int { return max(c.Zone-local, local-c.Zone) }
+	for _, c := range vs {
+		if best == nil || dist(c) < dist(best) || (dist(c) == dist(best) && c.Zone > best.Zone) {
+			best = c
+		}
+	}
+	return best
+}
+
+// reNameShift — сдвиг в конце имени версии: «Первый канал +4», «Россия 1 (-1)», «Спас −1».
+var reNameShift = regexp.MustCompile(`(?:\s+|\s*\()[+−-]\s?[1-9]\s*\)?\s*$`) // знак — после пробела или «(»: «Россия-1» — название
+
+// familyName — имя канала: имя базы в телепрограмме, иначе имя версии по умолчанию без сдвига.
+func familyName(f *Family, ix *epgIndex) string {
+	if ix.guide != nil {
+		if ec, ok := ix.guide.Channel(f.Key); ok && len(ec.Names) > 0 {
+			return ec.Names[0]
+		}
+	}
+	if f.Default != nil {
+		return strings.TrimSpace(reNameShift.ReplaceAllString(f.Default.Name, ""))
+	}
+	return ""
+}
+
+// Resolve — канал по ключу из пульта: ключ канала — его версия по умолчанию, ключ версии — она.
+func (l *Lineup) Resolve(key string) *Channel {
+	if f := l.Families[key]; f != nil && f.Default != nil {
+		return f.Default
+	}
+	return l.ByKey[key]
+}
+
+// labelOverride — правка меток версии: правка канала, если в ней есть метки, иначе прежняя правка версии
+// (до 11b-Е метки правились у версии — спека 11b, 13.6).
+func labelOverride(ov map[string]Override, key string) Override {
+	if f := ov[familyOf(key)]; f.Category != nil || f.Country != nil || f.Languages != nil {
+		return f
+	}
+	return ov[key]
+}
 
 // Group — нераспознанное название: потоки, которые ни к какому каналу не привязались.
 type Group struct {
@@ -65,8 +140,10 @@ type Group struct {
 
 // Lineup — состав каналов: снимок, который читает API.
 type Lineup struct {
-	Order         []*Channel          // федеральные по номеру, потом остальные — по категориям; только с источниками
-	ByKey         map[string]*Channel // все каналы, к которым привязан хоть один поток
+	Order         []*Channel          // версии по умолчанию каналов: федеральные по номеру, потом остальные по категориям
+	ByKey         map[string]*Channel // все версии, к которым привязан хоть один поток
+	Families      map[string]*Family  // каналы: ключ канала → версии
+	FamilyOf      map[string]string   // ключ версии → ключ канала
 	Unrecognized  []Group             // по убыванию живых, потом потоков
 	StreamChannel map[int64]string    // источник → ключ канала (только привязанные)
 	LocalShift    int
@@ -118,40 +195,74 @@ func (ix *epgIndex) byName(norm string) (string, bool) {
 	return "", true
 }
 
-var reZone = regexp.MustCompile(`-pl([1-9])$`)
+// reZone — версия со своей программой в телепрограмме iptvx.one: «-plN» — +N, «-mnN» и «-mN» — −N.
+var reZone = regexp.MustCompile(`-(pl|mn|m)([1-9])$`)
 
-// zoneOf — часовой пояс версии по id телепрограммы: «pervy-pl4» — 4.
+// zoneOf — сдвиг версии от Москвы по id телепрограммы: «pervy-pl4» — 4, «pervy-mn1» и «rossia1-m1» — −1.
 func zoneOf(id string) int {
-	if m := reZone.FindStringSubmatch(id); m != nil {
-		return int(m[1][0] - '0')
+	m := reZone.FindStringSubmatch(id)
+	if m == nil {
+		return 0
 	}
-	return 0
+	n := int(m[2][0] - '0')
+	if m[1] != "pl" {
+		n = -n
+	}
+	return n
 }
 
-// parseKey — ключ канала: «spas+4» — базовый id и сдвиг программы; «pervy-pl4» — сам id, 0.
+// parseKey — ключ версии с московской программой со сдвигом: «spas+4» — id и 4, «sts~1» — id и −1; иначе
+// сам ключ и 0 («pervy-pl4» — своя программа).
 func parseKey(key string) (string, int) {
-	if i := strings.LastIndexByte(key, '+'); i > 0 {
+	if i := strings.LastIndexAny(key, "+~"); i > 0 {
 		if n, err := strconv.Atoi(key[i+1:]); err == nil && n >= 1 && n <= 9 {
+			if key[i] == '~' {
+				n = -n
+			}
 			return key[:i], n
 		}
 	}
 	return key, 0
 }
 
-// regional — версия канала id для сдвига n: своя в телепрограмме («-plN») или сдвинутая «id+N».
-func (ix *epgIndex) regional(id string, n int) string {
-	if n <= 0 || zoneOf(id) != 0 {
-		return id
+// familyOf — ключ канала для ключа версии (спека 11b, 13.1): без «+N», «~N», «-plN», «-mnN», «-mN».
+func familyOf(key string) string {
+	id, _ := parseKey(key)
+	if loc := reZone.FindStringIndex(id); loc != nil {
+		return id[:loc[0]]
 	}
-	if own := id + "-pl" + strconv.Itoa(n); ix.has(own) {
-		return own
+	return id
+}
+
+// shiftedKey — ключ версии id с московской программой, сдвинутой на n часов.
+func shiftedKey(id string, n int) string {
+	if n < 0 {
+		return id + "~" + strconv.Itoa(-n)
 	}
 	return id + "+" + strconv.Itoa(n)
 }
 
-// entryShift — сдвиг записи: tvg-shift или «+N» в названии.
+// regional — версия канала id для сдвига n: своя в телепрограмме («-plN»; «-mnN» или «-mN») или московская
+// программа со сдвигом.
+func (ix *epgIndex) regional(id string, n int) string {
+	if n == 0 || zoneOf(id) != 0 {
+		return id
+	}
+	suffixes := []string{"-pl"}
+	if n < 0 {
+		suffixes = []string{"-mn", "-m"}
+	}
+	for _, suf := range suffixes {
+		if own := id + suf + strconv.Itoa(max(n, -n)); ix.has(own) {
+			return own
+		}
+	}
+	return shiftedKey(id, n)
+}
+
+// entryShift — сдвиг записи со знаком: tvg-shift (−9…9) или сдвиг в конце названия.
 func entryShift(e Entry) int {
-	if e.Shift >= 1 && e.Shift <= 9 {
+	if e.Shift != 0 && e.Shift >= -9 && e.Shift <= 9 {
 		return e.Shift
 	}
 	_, n := m3u.SplitShift(m3u.Norm(e.Name))
@@ -177,16 +288,13 @@ func match(s *Stream, p *pool, ix *epgIndex, base *labels.Base) matchResult {
 		}
 	}
 	for _, e := range s.Entries {
-		if e.Shift < 0 { // отрицательный сдвиг (Калининград) не распознаётся — в «Не распознано» (спека, 5.3)
-			continue
-		}
 		if e.TvgID != "" && ix.has(e.TvgID) {
 			return matchResult{key: ix.regional(e.TvgID, entryShift(e)), by: "tvg-id"}
 		}
 	}
 	for _, e := range s.Entries {
 		oc := base.ByID(orgID(e.TvgID))
-		if oc == nil || e.Shift < 0 {
+		if oc == nil {
 			continue
 		}
 		found, ambiguous := "", false
@@ -209,9 +317,6 @@ func match(s *Stream, p *pool, ix *epgIndex, base *labels.Base) matchResult {
 	// Название; последней попыткой — без города в скобках («Россия 24 +0 (Липецк)»).
 	for _, strip := range []bool{false, true} {
 		for _, e := range s.Entries {
-			if e.Shift < 0 {
-				continue
-			}
 			for _, name := range []string{e.Name, e.TvgName} {
 				if strip {
 					if name = m3u.WithoutPlace(name); name == e.Name || name == e.TvgName {
@@ -227,7 +332,7 @@ func match(s *Stream, p *pool, ix *epgIndex, base *labels.Base) matchResult {
 	return matchResult{}
 }
 
-// byNameShift — канал по нормализованному названию; «+N» без своего канала — сдвинутый «id+N».
+// byNameShift — канал по нормализованному названию; «+N» или «-N» без своего канала — версия канала.
 func (ix *epgIndex) byNameShift(n string) string {
 	if n == "" {
 		return ""
@@ -237,7 +342,7 @@ func (ix *epgIndex) byNameShift(n string) string {
 	} else if amb {
 		return ""
 	}
-	if b, shift := m3u.SplitShift(n); shift > 0 {
+	if b, shift := m3u.SplitShift(n); shift != 0 {
 		if id, _ := ix.byName(b); id != "" {
 			return ix.regional(id, shift)
 		}
@@ -329,6 +434,7 @@ func build(in buildInput) *Lineup {
 				}
 				return false
 			})
+			c.HiddenOnly = len(c.Sources) > 0
 		}
 	}
 	for _, g := range groups {
@@ -343,32 +449,53 @@ func build(in buildInput) *Lineup {
 	for k := range l.ByKey {
 		keys = append(keys, k)
 	}
-	slices.SortFunc(keys, func(a, b string) int { return cmp.Or(cmp.Compare(l.ByKey[a].Zone, l.ByKey[b].Zone), cmp.Compare(a, b)) })
+	slices.SortFunc(keys, func(a, b string) int {
+		return cmp.Or(cmp.Compare(max(l.ByKey[a].Zone, -l.ByKey[a].Zone), max(l.ByKey[b].Zone, -l.ByKey[b].Zone)), cmp.Compare(a, b))
+	})
 	resolved := map[string]labels.Labels{}
 	for _, k := range keys {
 		c := l.ByKey[k]
-		o := p.overrides[k]
-		c.Hidden, c.Pinned = "", o.PinnedURL
-		c.Labels = channelLabels(c, o, in, l, resolved)
+		c.Hidden, c.Pinned = "", p.overrides[k].PinnedURL // основной источник — у версии
+		c.Labels = channelLabels(c, labelOverride(p.overrides, k), in, l, resolved)
 		resolved[c.EPGID] = c.Labels
 		sortSources(c, in.goodShare)
 	}
 
-	// Федеральные: версия под местный пояс, если у неё есть источник, иначе московская.
+	// Каналы: версии по времени одного канала вместе (спека 11b, 13.1–13.2).
+	l.Families, l.FamilyOf = map[string]*Family{}, map[string]string{}
+	for _, k := range keys {
+		c, fk := l.ByKey[k], familyOf(k)
+		l.FamilyOf[k] = fk
+		f := l.Families[fk]
+		if f == nil {
+			f = &Family{Key: fk}
+			l.Families[fk] = f
+		}
+		if c.Offered() {
+			f.Versions = append(f.Versions, c)
+		}
+	}
+	for _, f := range l.Families {
+		// Версии только со скрытыми вручную запасными — в ряду и по умолчанию, только если других нет.
+		if real := slices.DeleteFunc(slices.Clone(f.Versions), func(c *Channel) bool { return c.HiddenOnly }); len(real) > 0 {
+			f.Versions = real
+		}
+		slices.SortFunc(f.Versions, func(a, b *Channel) int { return cmp.Or(cmp.Compare(a.Zone, b.Zone), cmp.Compare(a.Key, b.Key)) })
+		f.Default = pickDefault(f.Versions, in.localShift)
+		f.Name = familyName(f, in.epg)
+	}
+	// Федеральные: версия по умолчанию канала из списка, если канал не скрыт.
 	for i, id := range Federal {
-		for _, k := range federalCandidates(id, in.localShift, in.epg) {
-			c := l.ByKey[k]
-			if c != nil && c.Offered() && !p.overrides[k].Hidden {
-				c.Federal = i + 1
-				break
-			}
+		if f := l.Families[id]; f != nil && f.Default != nil && !p.overrides[id].Hidden {
+			f.Default.Federal = i + 1
 		}
 	}
 	var fed, rest []*Channel
 	for _, k := range keys {
 		c := l.ByKey[k]
-		c.Hidden = hiddenBy(c, p.overrides[k], in) // и у каналов без источников: их молчащие источники проверяются
-		if !c.Offered() {
+		// Скрыт — канал целиком (правка ключа канала), и у версий без источников: их молчащие источники проверяются.
+		c.Hidden = hiddenBy(c, p.overrides[l.FamilyOf[k]], in)
+		if l.Families[l.FamilyOf[k]].Default != c {
 			continue
 		}
 		if c.Federal > 0 {
@@ -397,8 +524,12 @@ func newChannel(key string, ix *epgIndex) *Channel {
 			c.Logo = ec.Icon
 		}
 	}
-	if c.Name != "" && shift > 0 {
+	switch {
+	case c.Name == "":
+	case shift > 0:
 		c.Name += " +" + strconv.Itoa(shift)
+	case shift < 0:
+		c.Name += " −" + strconv.Itoa(-shift)
 	}
 	return c
 }
@@ -465,7 +596,7 @@ func channelLabels(c *Channel, o Override, in buildInput, l *Lineup, resolved ma
 	} else {
 		// Региональная версия: сначала своя запись iptv-org (редко есть), потом метки канала без сдвига.
 		sources = append(sources, labels.FromOrg(in.base.Find(nil, names)))
-		baseID := strings.TrimSuffix(c.EPGID, "-pl"+strconv.Itoa(zoneOf(c.EPGID)))
+		baseID := familyOf(c.EPGID)
 		if bl, ok := resolved[baseID]; ok {
 			sources = append(sources, labels.Source{Category: bl.Category, Country: bl.Country, Languages: bl.Languages})
 		} else {
@@ -556,15 +687,6 @@ func b2i(b bool) int {
 	return 0
 }
 
-// federalCandidates — версии федерального канала по порядку: под местный пояс, потом московская.
-func federalCandidates(id string, local int, ix *epgIndex) []string {
-	if local <= 0 {
-		return []string{id}
-	}
-	n := strconv.Itoa(local)
-	return []string{id + "-pl" + n, id + "+" + n, id}
-}
-
 // hiddenBy — почему канал скрыт (без учёта избранного — оно у каждого устройства своё).
 func hiddenBy(c *Channel, o Override, in buildInput) string {
 	switch {
@@ -578,8 +700,6 @@ func hiddenBy(c *Channel, o Override, in buildInput) string {
 		return HiddenCountry
 	case anyHidden(c.Labels.Languages, in.hidden.Languages):
 		return HiddenLanguage
-	case in.hidden.OtherZones && c.Zone != 0 && c.Zone != in.localShift:
-		return HiddenZone
 	}
 	return ""
 }
@@ -626,18 +746,20 @@ func compareChannels(a, b *Channel, local int) int {
 }
 
 // WithFavorites — состав для устройства: сначала избранное (в его порядке), потом федеральные и
-// остальные без повторов. all — со скрытыми.
+// остальные без повторов. Избранное — у канала: ключ версии (до 11b-Е ★ ставилась на версию) ведёт к
+// версии по умолчанию канала. all — со скрытыми.
 func (l *Lineup) WithFavorites(favorites []string, all bool) []*Channel {
 	out := []*Channel{}
 	fav := map[string]bool{}
 	for _, k := range favorites {
-		if c := l.ByKey[k]; c != nil && c.Offered() && !fav[k] {
-			fav[k] = true
-			out = append(out, c)
+		fk := familyOf(k)
+		if f := l.Families[fk]; f != nil && f.Default != nil && !fav[fk] {
+			fav[fk] = true
+			out = append(out, f.Default)
 		}
 	}
 	for _, c := range l.Order {
-		if fav[c.Key] || (!all && c.Hidden != "") {
+		if fav[l.FamilyOf[c.Key]] || (!all && c.Hidden != "") {
 			continue
 		}
 		out = append(out, c)

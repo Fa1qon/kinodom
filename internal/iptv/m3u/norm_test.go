@@ -76,3 +76,60 @@ func TestWithoutPlace(t *testing.T) {
 		}
 	}
 }
+
+// Сдвиг со знаком минус (замечание № 15 этапа 11b): «-1», «(-1)», «−1», «(- 1)» в конце — сдвиг «-1», как
+// «+4»; дефис внутри названия («Россия-1», «ТВ-3», «Муз-ТВ») — не сдвиг.
+func TestNormMinusShift(t *testing.T) {
+	cases := map[string]string{
+		"Первый канал -1":           "первый канал -1",
+		"Первый канал (-1)":         "первый канал -1",
+		"Первый канал −1":           "первый канал -1",
+		"Россия 1 (- 1)":            "россия 1 -1",
+		"Россия 1 (-1) HD":          "россия 1 -1",
+		"Первый (-1) (Калининград)": "первый -1 калининград",
+		"Россия-1":                  "россия 1",
+		"ТВ-3":                      "тв 3",
+		"Муз-ТВ":                    "муз тв",
+		"Канал -12":                 "канал 12",
+	}
+	for in, want := range cases {
+		if got := Norm(in); got != want {
+			t.Errorf("Norm(%q) = %q, нужно %q", in, got, want)
+		}
+	}
+	if got := WithoutPlace("Первый канал (-1)"); got != "Первый канал (-1)" {
+		t.Errorf("WithoutPlace: сдвиг «(-1)» — не место: %q", got)
+	}
+}
+
+func TestSplitShiftSigned(t *testing.T) {
+	cases := []struct {
+		in    string
+		base  string
+		shift int
+	}{
+		{"первый канал -1", "первый канал", -1},
+		{"россия 1 -2", "россия 1", -2},
+		{"первый канал +4", "первый канал", 4},
+		{"-1", "-1", 0},
+	}
+	for _, c := range cases {
+		base, shift := SplitShift(c.in)
+		if base != c.base || shift != c.shift {
+			t.Errorf("SplitShift(%q) = %q, %d; нужно %q, %d", c.in, base, shift, c.base, c.shift)
+		}
+	}
+}
+
+// «-N» в середине названия — не сдвиг (финальное ревью 11b-Е): «ТВС - 9 канал» в телепрограмме — тот же канал,
+// что «ТВС 9 канал» и «ТВС-9 канал» в плейлистах; пробел после знака — только в скобках «(- 1)».
+func TestMinusInMiddleIsNotShift(t *testing.T) {
+	for _, pair := range [][2]string{{"ТВС - 9 канал", "ТВС 9 канал"}, {"ТВС - 9 канал", "ТВС-9 канал"}} {
+		if a, b := Norm(pair[0]), Norm(pair[1]); a != b {
+			t.Errorf("Norm(%q) = %q, Norm(%q) = %q", pair[0], a, pair[1], b)
+		}
+	}
+	if got := Norm("ТНТ - 4"); got != "тнт 4" {
+		t.Errorf("«ТНТ - 4» — без скобок пробел после знака не сдвиг: %q", got)
+	}
+}

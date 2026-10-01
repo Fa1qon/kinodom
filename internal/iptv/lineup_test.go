@@ -15,6 +15,8 @@ const testEPG = `<tv>
 <channel id="pervy"><display-name>Первый канал</display-name><display-name>Первый</display-name><icon src="http://logo/pervy.png"/></channel>
 <channel id="pervy-pl4"><display-name>Первый канал +4</display-name></channel>
 <channel id="pervy-pl2"><display-name>Первый канал +2</display-name></channel>
+<channel id="pervy-mn1"><display-name>Первый канал -1</display-name></channel>
+<channel id="rossia1-m1"><display-name>Россия 1 (-1)</display-name></channel>
 <channel id="rossia1"><display-name>Россия 1</display-name></channel>
 <channel id="match-tv"><display-name>Матч ТВ</display-name><display-name>Матч!</display-name></channel>
 <channel id="spas"><display-name>Спас</display-name></channel>
@@ -108,7 +110,7 @@ func TestMatch(t *testing.T) {
 		{src{name: "Россия 1 (+7) (Владивосток)"}, "rossia1+7"}, // город в скобках — последней попыткой
 		{src{name: "НТВ +0 (Липецк)"}, "ntv"},
 		{src{name: "НТВ (2)"}, "ntv"},
-		{src{name: "Первый", tvgID: "pervy", shift: -1}, ""}, // Калининград: отрицательный сдвиг не распознаётся (спека, 5.3)
+		{src{name: "Первый", tvgID: "pervy", shift: -1}, "pervy-mn1"}, // Калининград — версия МСК−1 (спека 11b, 13.4)
 	}
 	for _, c := range cases {
 		p := testPool(c.s)
@@ -154,10 +156,11 @@ func TestLineupOrder(t *testing.T) {
 		src{name: "Спас +4"}, src{name: "Спас"}, src{name: "ТЕТ"}, src{name: "BBC News"}, src{name: "Al Jazeera"},
 		src{name: "Местные новости", group: "Местные"}, src{name: "Первый канал +2"}, src{name: "Россия 1", state: StateSilent},
 	)
-	l := buildTest(t, p, Hidden{OtherZones: true}, 4)
+	l := buildTest(t, p, Hidden{}, 4)
 	// Федеральные: Первый +4 (1), Матч (3), НТВ (4), Спас +4 (12); Россия 1 молчит — её нет. Дальше по
-	// категориям: новости (Великобритания, Катар), общие, религия, без категории (Россия, Украина).
-	if got := keysOf(l.WithFavorites(nil, false)); got != "pervy-pl4 match-tv ntv spas+4 bbc aljazeera pervy spas local-news tet-ua" {
+	// категориям: новости (Великобритания, Катар), без категории (Россия, Украина). Московские версии
+	// Первого и Спаса и Первый +2 — версии своих каналов, не карточки (спека 11b, 13.2).
+	if got := keysOf(l.WithFavorites(nil, false)); got != "pervy-pl4 match-tv ntv spas+4 bbc aljazeera local-news tet-ua" {
 		t.Errorf("порядок: %s", got)
 	}
 	if c := l.ByKey["pervy-pl4"]; c.Federal != 1 || c.Name != "Первый канал +4" || c.Labels.Category != "general" || c.Labels.Country != "RU" {
@@ -166,14 +169,11 @@ func TestLineupOrder(t *testing.T) {
 	if c := l.ByKey["spas+4"]; c.Federal != 12 || c.Name != "Спас +4" || c.Shift != 4 || c.EPGID != "spas" {
 		t.Errorf("Спас +4: %+v", c)
 	}
-	if c := l.ByKey["pervy-pl2"]; c.Hidden != HiddenZone {
-		t.Errorf("Первый +2 — чужой пояс, а скрыт %q", c.Hidden)
-	}
 	if c := l.ByKey["local-news"]; c.Labels.Country != "RU" || c.Labels.Category != "" {
 		t.Errorf("местный канал: %+v", c.Labels)
 	}
 	// Избранное устройства — сверху, без повторов; федеральный из избранного уходит из блока.
-	if got := keysOf(l.WithFavorites([]string{"bbc", "pervy-pl4", "нет-такого"}, false)); got != "bbc pervy-pl4 match-tv ntv spas+4 aljazeera pervy spas local-news tet-ua" {
+	if got := keysOf(l.WithFavorites([]string{"bbc", "pervy-pl4", "нет-такого"}, false)); got != "bbc pervy-pl4 match-tv ntv spas+4 aljazeera local-news tet-ua" {
 		t.Errorf("с избранным: %s", got)
 	}
 	// Москва в пояс заказчика: федеральные — московские версии.
@@ -186,7 +186,7 @@ func TestLineupOrder(t *testing.T) {
 // Федеральный канал: версия «+4» без источника — в блоке московская.
 func TestFederalFallsBackToMoscow(t *testing.T) {
 	p := testPool(src{name: "Первый канал"}, src{name: "Первый канал +4", state: StateDead})
-	l := buildTest(t, p, Hidden{OtherZones: true}, 4)
+	l := buildTest(t, p, Hidden{}, 4)
 	if c := l.ByKey["pervy"]; c.Federal != 1 {
 		t.Errorf("московский Первый не в блоке: %+v", c)
 	}
@@ -325,5 +325,144 @@ func TestOverrideToEmpty(t *testing.T) {
 	}
 	if c := l.ByKey["bbc"].Labels; len(c.Languages) != 0 || c.Languages == nil {
 		t.Errorf("BBC: языки %v, нужно пусто", c.Languages)
+	}
+}
+
+// Ключи и id версий со знаком (спека 11b, 13.1): «-plN» — +N, «-mnN» и «-mN» — −N, «+N» и «~N» —
+// московская программа со сдвигом; id, похожие на сдвиг («1-2», «rossia-24», «tv3-ru»), — сами себе.
+func TestFamilyOfIDs(t *testing.T) {
+	for _, c := range []struct {
+		key, family string
+		zone        int
+	}{
+		{"pervy", "pervy", 0}, {"pervy-pl4", "pervy", 4}, {"pervy-mn1", "pervy", -1}, {"rossia1-m1", "rossia1", -1},
+		{"spas+4", "spas", 4}, {"sts~1", "sts", -1}, {"1-2", "1-2", 0}, {"rossia-24", "rossia-24", 0},
+		{"tv3-ru", "tv3-ru", 0}, {"5kanal-ru", "5kanal-ru", 0}, {"mir-24", "mir-24", 0},
+	} {
+		id, shift := parseKey(c.key)
+		zone := shift
+		if zone == 0 {
+			zone = zoneOf(id)
+		}
+		if got := familyOf(c.key); got != c.family || zone != c.zone {
+			t.Errorf("%s: семья %q, сдвиг %d; нужно %q, %d", c.key, got, zone, c.family, c.zone)
+		}
+	}
+}
+
+// Записи со сдвигом «−N» (спека 11b, 13.4): в версию со своей программой («-mnN», «-mN»), без неё —
+// московская программа со сдвигом «id~N»; «+0 (Город)» — московская.
+func TestMatchMinusShift(t *testing.T) {
+	ix, base := testIndex(t)
+	for _, c := range []struct {
+		s    src
+		want string
+	}{
+		{src{name: "Первый канал (-1)"}, "pervy-mn1"},
+		{src{name: "Первый канал −1"}, "pervy-mn1"},
+		{src{name: "Первый", tvgID: "pervy", shift: -1}, "pervy-mn1"},
+		{src{name: "Россия 1 (-1)"}, "rossia1-m1"},
+		{src{name: "Россия 1", tvgID: "rossia1", shift: -1}, "rossia1-m1"},
+		{src{name: "Спас -1"}, "spas~1"},
+		{src{name: "Спас", tvgID: "spas", shift: -2}, "spas~2"},
+		{src{name: "Первый канал +0 (Липецк)"}, "pervy"},
+	} {
+		p := testPool(c.s)
+		if got := match(p.streams[1], p, ix, base).key; got != c.want {
+			t.Errorf("%+v: канал %q, нужно %q", c.s, got, c.want)
+		}
+	}
+	l := buildTest(t, testPool(src{name: "Спас -1"}), Hidden{}, 4)
+	if c := l.ByKey["spas~1"]; c == nil || c.Name != "Спас −1" || c.Zone != -1 || c.Shift != -1 || c.EPGID != "spas" {
+		t.Errorf("Спас −1: %+v", c)
+	}
+}
+
+// Канал с разными сдвигами — одна карточка (спека 11b, 13.1–13.2): версии внутри, по умолчанию — под пояс.
+func TestFamilyOneCard(t *testing.T) {
+	p := testPool(src{name: "Первый канал"}, src{name: "Первый канал +4"}, src{name: "Первый канал -1"})
+	l := buildTest(t, p, Hidden{}, 4)
+	f := l.Families["pervy"]
+	if f == nil || f.Default == nil || f.Default.Key != "pervy-pl4" || keysOf(f.Versions) != "pervy-mn1 pervy pervy-pl4" || f.Name != "Первый канал" {
+		t.Fatalf("семья: %+v", f)
+	}
+	if got := keysOf(l.Order); got != "pervy-pl4" {
+		t.Errorf("карточки: %s", got)
+	}
+	if l.Resolve("pervy").Key != "pervy-pl4" || l.Resolve("pervy-mn1").Key != "pervy-mn1" || l.Resolve("нет") != nil {
+		t.Error("Resolve: ключ канала — версия по умолчанию, ключ версии — она")
+	}
+	for z, want := range map[int]string{0: "МСК", 4: "МСК+4", -1: "МСК−1"} {
+		if got := VersionLabel(z); got != want {
+			t.Errorf("подпись %d: %q", z, got)
+		}
+	}
+}
+
+// Версия по умолчанию (спека 11b, 13.2): под пояс; нет — МСК; нет и её — ближайшая рабочая (при равной —
+// восточнее); канал на экране, пока работает хоть одна версия.
+func TestFamilyDefaultFallback(t *testing.T) {
+	for _, c := range []struct {
+		name  string
+		srcs  []src
+		local int
+		want  string
+	}{
+		{"+4 мёртв — МСК", []src{{name: "Первый канал"}, {name: "Первый канал +4", state: StateDead}}, 4, "pervy"},
+		{"+4 нет — МСК, хотя +2 ближе", []src{{name: "Первый канал"}, {name: "Первый канал +2"}}, 4, "pervy"},
+		{"только −1", []src{{name: "Первый канал -1"}, {name: "Первый канал", state: StateDead}, {name: "Первый канал +4", state: StateDead}}, 4, "pervy-mn1"},
+		{"UTC+3 — МСК", []src{{name: "Первый канал"}, {name: "Первый канал +4"}, {name: "Первый канал -1"}}, 0, "pervy"},
+		{"ближайшая", []src{{name: "Первый канал +2"}, {name: "Первый канал -1"}}, 4, "pervy-pl2"},
+		{"равные — восточнее", []src{{name: "Первый канал +2"}, {name: "Первый канал +6"}}, 4, "pervy+6"},
+	} {
+		l := buildTest(t, testPool(c.srcs...), Hidden{}, c.local)
+		f := l.Families["pervy"]
+		if f == nil || f.Default == nil || f.Default.Key != c.want || keysOf(l.Order) != c.want || f.Default.Federal != 1 {
+			t.Errorf("%s: %+v, карточки %s", c.name, f, keysOf(l.Order))
+		}
+	}
+}
+
+// Старые правки на ключах версий (Review Focus 2): ★ на версии — карточка канала; «Скрыть канал» на версии
+// канал не прячет; правка меток версии остаётся, пока у канала своей нет.
+func TestFamilyOldVersionKeys(t *testing.T) {
+	no := func(s string) *string { return &s }
+	p := testPool(src{name: "Первый канал"}, src{name: "Первый канал +4"}, src{name: "Первый канал -1"}, src{name: "Спас +4"})
+	p.overrides["pervy-mn1"] = Override{Hidden: true}
+	p.overrides["spas+4"] = Override{Category: no("news")}
+	l := buildTest(t, p, Hidden{}, 4)
+	if got := keysOf(l.WithFavorites([]string{"pervy-mn1", "pervy"}, false)); got != "pervy-pl4 spas+4" {
+		t.Errorf("избранное по ключу версии: %s", got)
+	}
+	if f := l.Families["pervy"]; keysOf(f.Versions) != "pervy-mn1 pervy pervy-pl4" || f.Default.Hidden != "" {
+		t.Errorf("скрытая когда-то версия: %+v", f)
+	}
+	if c := l.ByKey["spas+4"]; c.Labels.Category != "news" {
+		t.Errorf("правка меток версии: %+v", c.Labels)
+	}
+	// ★ на ключе версии у скрытого канала: избранное сильнее скрытия — карточка канала первой.
+	p.overrides["pervy"] = Override{Hidden: true}
+	l = buildTest(t, p, Hidden{}, 4)
+	if got := keysOf(l.WithFavorites([]string{"pervy-mn1"}, false)); got != "pervy-pl4 spas+4" {
+		t.Errorf("избранное по ключу версии у скрытого канала: %s", got)
+	}
+}
+
+// Свойства канала — на ключе канала (спека 11b, 13.1): «Скрыть канал» прячет все версии, метки — у всех.
+func TestFamilyHiddenOnBase(t *testing.T) {
+	no := func(s string) *string { return &s }
+	p := testPool(src{name: "Первый канал"}, src{name: "Первый канал +4"}, src{name: "НТВ"})
+	p.overrides["pervy"] = Override{Category: no("news")}
+	l := buildTest(t, p, Hidden{}, 4)
+	if c := l.ByKey["pervy-pl4"]; c.Labels.Category != "news" {
+		t.Errorf("метки канала у версии: %+v", c.Labels)
+	}
+	p.overrides["pervy"] = Override{Hidden: true}
+	l = buildTest(t, p, Hidden{}, 4)
+	if c := l.Families["pervy"].Default; c.Hidden != HiddenChannel || c.Federal != 0 {
+		t.Errorf("скрытый канал: %+v", c)
+	}
+	if got := keysOf(l.WithFavorites(nil, false)); got != "ntv" {
+		t.Errorf("карточки: %s", got)
 	}
 }
