@@ -24,7 +24,7 @@ import ru.kinodom.app.net.ServerFinder
 import ru.kinodom.app.net.Status
 
 // StartActivity — первый экран (спека этапа 13, раздел 3.2): запомненный адрес → поиск в сети → выбор или ввод
-// адреса → пульт. EXTRA_ASK — сразу экран адреса («Другой адрес» из пульта).
+// адреса → пульт. EXTRA_SEARCH — сразу поиск («Другой адрес» из «Kinodom не отвечает»: запомненный не отвечает).
 class StartActivity : Activity() {
     private val scope = MainScope()
     private lateinit var prefs: Prefs
@@ -32,7 +32,7 @@ class StartActivity : Activity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         prefs = Prefs(this)
-        go(if (intent.getBooleanExtra(EXTRA_ASK, false)) Step.AskAddress else StartFlow.first(prefs.base))
+        go(if (intent.getBooleanExtra(EXTRA_SEARCH, false)) Step.Search else StartFlow.first(prefs.base))
     }
 
     override fun onDestroy() {
@@ -86,7 +86,7 @@ class StartActivity : Activity() {
             imeOptions = EditorInfo.IME_ACTION_GO
             isSingleLine = true
             setText(typed ?: prefs.base?.removePrefix("http://")?.removeSuffix("/").orEmpty())
-            layoutParams = LinearLayout.LayoutParams(Screens.dp(this@StartActivity, 420), LinearLayout.LayoutParams.WRAP_CONTENT)
+            layoutParams = LinearLayout.LayoutParams(Screens.fieldWidth(this@StartActivity), LinearLayout.LayoutParams.WRAP_CONTENT)
         }
         c.addView(field)
         if (error != null) c.addView(Screens.note(this, error, error = true))
@@ -124,6 +124,6 @@ class StartActivity : Activity() {
     }
 
     companion object {
-        const val EXTRA_ASK = "ask"
+        const val EXTRA_SEARCH = "search"
     }
 }

@@ -105,6 +105,16 @@ func descXML(name, uuid, base string) []byte {
 // и раз в 15 минут, пересматривает интерфейсы раз в минуту; при остановке — «ухожу» (byebye).
 func (m *Module) Run(ctx context.Context) error {
 	supervisor.Ready(ctx) // модуль работает и тогда, когда ждёт домашнюю сеть
+	// Сокет — новый на каждый запуск (сторож перезапускает модуль): подключения к группе прежнего не в счёт
+	// (финальное ревью 13a).
+	m.mu.Lock()
+	clear(m.joined)
+	m.mu.Unlock()
+	defer func() {
+		m.mu.Lock()
+		clear(m.joined)
+		m.mu.Unlock()
+	}()
 	var p *ipv4.PacketConn
 	tick := time.NewTicker(rescanEvery)
 	defer tick.Stop()
