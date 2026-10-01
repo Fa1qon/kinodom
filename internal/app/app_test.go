@@ -12,6 +12,7 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"net/netip"
 	"os"
 	"path/filepath"
 	"slices"
@@ -44,6 +45,15 @@ func startAppRaw(t *testing.T, o Options) *App {
 	if o.Trackers.RutorMirrors == nil && o.Trackers.RutrackerMirrors == nil && !o.Trackers.NoEdge {
 		// Адресов трекеров нет — трекеры выключены и в сеть не ходят (этап 11a); Edge не нужен.
 		o.Trackers = Trackers{NoEdge: true, Rate: 1000}
+	}
+	if !o.DiscoveryGroup.IsValid() {
+		// Обнаружение — на случайном порту группы: тесты не слушают 1900 и не объявляют сервер в сети ПК.
+		c, err := net.ListenPacket("udp4", ":0")
+		if err != nil {
+			t.Fatal(err)
+		}
+		o.DiscoveryGroup = netip.AddrPortFrom(netip.MustParseAddr("239.255.255.250"), uint16(c.LocalAddr().(*net.UDPAddr).Port))
+		c.Close()
 	}
 	if o.KinopoiskAPI == "" {
 		// Трекер могут включить настройкой посреди теста (мастер): номер Кинопоиска из описания раздачи
