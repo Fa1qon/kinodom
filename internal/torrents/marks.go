@@ -1,6 +1,7 @@
 package torrents
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"io/fs"
@@ -99,6 +100,13 @@ func (s *Service) queueVerify(ss *session) {
 // verifyDone — раздача перепроверена: её хранимые файлы снова качаются по очереди (кроме стоящих
 // на паузе). Вызывать под s.mu.
 func (s *Service) verifyDone(ss *session) {
+	if ss.upgradedFrom != (metainfo.Hash{}) {
+		// Переход на обновлённую раздачу доведён: перенесённое проверено (спека 11b, 6.3.4).
+		if err := s.reg.endUpgrade(context.Background(), ss.upgradedFrom); err != nil {
+			s.log.Warn("пометка перехода не снялась — переход доведётся снова при старте", "err", err)
+		}
+		ss.upgradedFrom = metainfo.Hash{}
+	}
 	s.applyLocked(ss)
 }
 
