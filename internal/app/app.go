@@ -29,6 +29,7 @@ import (
 	"kinodom/internal/history"
 	"kinodom/internal/httpx"
 	"kinodom/internal/iptv"
+	"kinodom/internal/kpcat"
 	"kinodom/internal/library"
 	"kinodom/internal/logx"
 	"kinodom/internal/meta"
@@ -98,6 +99,7 @@ type App struct {
 	History  *history.Service  // история просмотров по устройствам (этап 8c)
 	Library  *library.Library  // медиатека: скачанное и папки заказчика (модуль library, этап 9)
 	Follow   *follow.Module    // подписка на новые серии (модуль follow, этап 11b-В)
+	KPCat    *kpcat.Module     // каталог «Кинопоиск» (модуль kpcat, план 14Г)
 
 	version   string
 	kp        *meta.Kinopoisk
@@ -184,6 +186,7 @@ func New(ctx context.Context, o Options) (*App, error) {
 	}
 	a.initLibrary(ctx)
 	a.initFollow(ctx)
+	a.initKPCat(ctx)
 	a.initSetup()
 	a.initDiscovery(ctx, o)
 	a.API.SetStatus(a.statusFields)
@@ -287,7 +290,7 @@ func (a *App) initMeta(ctx context.Context, o Options, v settings.Values) error 
 	a.kp = meta.NewKinopoisk(meta.KinopoiskOptions{Key: v.KinopoiskKey, APIBase: o.KinopoiskAPI, RatingBase: o.KinopoiskAPI, PosterBase: o.KinopoiskAPI})
 	wo := meta.KPWebOptions{Log: a.Log.With("module", "kinopoisk")}
 	if o.KinopoiskAPI != "" {
-		wo.GraphQL, wo.Site = strings.TrimRight(o.KinopoiskAPI, "/")+"/graphql/", o.KinopoiskAPI
+		wo.GraphQL, wo.Site, wo.RatingBase = strings.TrimRight(o.KinopoiskAPI, "/")+"/graphql/", o.KinopoiskAPI, o.KinopoiskAPI
 	}
 	a.kpweb = meta.NewKPWeb(wo)
 	a.Ratings = meta.NewRatings(meta.RatingsOptions{KP: a.kp, Web: a.kpweb, DB: a.DB, Log: a.Log.With("module", "ratings")})
