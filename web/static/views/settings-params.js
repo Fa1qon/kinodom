@@ -1,4 +1,5 @@
-// «Настройки → Параметры»: Rutracker, Rutor (адреса вводит пользователь — этап 11a), прокси, хранение,
+// «Настройки → Параметры»: Rutracker, Rutor (адреса вводит пользователь — этап 11a), прокси, источник поиска
+// Jacred / Jackett (адрес и ключ — 11b-Д), хранение,
 // плеер и формат в приоритете; в «Дополнительно» — служебные адреса трекеров и запасной ключ Кинопоиска
 // (он работает без ключа — спека 11b, 5.7).
 // «Сохранить» отправляет только изменённые поля; ошибка поля — под полем; не из домашней сети — только
@@ -16,6 +17,7 @@ const FIELD = {
   'Адрес Rutor': 'rutorAddress',
   'Адрес .torrent Rutor': 'rutorDownload',
   'Прокси': 'proxyAddress',
+  'Адрес источника поиска': 'searchAddress',
   'Хранить, дней': 'keepDays',
   'Запас места, ГБ': 'minFreeGB',
   'Раздача, МБ/с': 'upload',
@@ -26,13 +28,15 @@ const FIELD = {
 };
 const LOGIN = { none: 'Логин не задан', unknown: 'Вход ещё не проверялся', ok: 'Вход выполнен' };
 
-// kpKeyPatch — ключ Кинопоиска в PUT /settings: «Стереть» — пустой ключ (Х22); введён — он; пусто — не
-// менять (null).
-export function kpKeyPatch(value, erase) {
+// keyPatch — ключ в PUT /settings (Кинопоиска, источника поиска): «Стереть» — пустой ключ (Х22); введён —
+// он; пусто — не менять (null).
+function keyPatch(value, erase) {
   if (erase) return { key: '' };
   const v = String(value || '').trim();
   return v ? { key: v } : null;
 }
+export const kpKeyPatch = keyPatch;
+export const searchKeyPatch = keyPatch;
 
 export function render(root, r, ctx) {
   const saveBtn = h('button', { class: 'btn inv', type: 'submit', form: 'params', 'data-key': 'save' }, icon('save'), 'Сохранить');
@@ -49,6 +53,7 @@ export function render(root, r, ctx) {
   let view = null; // /settings — что сейчас сохранено
   let status = null; // /status — вход Rutracker, квота Кинопоиска, canEdit
   let loginEl = null; // строка состояния входа Rutracker: «Войти» меняет только её
+  let searchResult = null; // итог «Проверить» источника поиска
   const inputs = {};
   const errs = {};
 
@@ -109,7 +114,10 @@ export function render(root, r, ctx) {
     // «Дополнительно» — служебные адреса трекеров (пусто — по адресу сайта) и запасной ключ Кинопоиска.
     // Открыто, если что-то задано.
     const erase = v.kinopoisk.keySet && canEdit
-      ? h('button', { class: 'btn', type: 'button', 'data-key': 'kp-erase', onclick: eraseKey }, icon('delete'), 'Стереть') : null;
+      ? h('button', { class: 'btn', type: 'button', 'data-key': 'kp-erase', onclick: () => eraseKey('kinopoisk') }, icon('delete'), 'Стереть') : null;
+    const searchErase = v.search.keySet && canEdit
+      ? h('button', { class: 'btn', type: 'button', 'data-key': 'search-erase', onclick: () => eraseKey('search') }, icon('delete'), 'Стереть') : null;
+    searchResult = h('div', { class: 'small check-result', role: 'status' });
     const extra = h('div', { class: 'col', hidden: !(v.rutor.downloadAddress || v.rutracker.apiAddress || v.rutracker.feedAddress || v.kinopoisk.keySet) },
       field('Адрес .torrent Rutor', 'rutorDownload', input('rutorDownload', v.rutor.downloadAddress)),
       field('Адрес API Rutracker', 'rtApi', input('rtApi', v.rutracker.apiAddress)),
@@ -141,6 +149,12 @@ export function render(root, r, ctx) {
           h('div', { class: 'card' }, h('div', { class: 'h' }, 'Прокси для трекеров'), proxyType,
             field('Адрес', 'proxyAddress', input('proxyAddress', v.proxy.address, { placeholder: '192.168.1.20:3128' })),
             h('div', { class: 'two' }, field('Логин', 'proxyLogin', input('proxyLogin', v.proxy.login, { autocomplete: 'off' })), field('Пароль', 'proxyPassword', secret('proxyPassword', v.proxy.passwordSet)))),
+          h('div', { class: 'card' }, h('div', { class: 'h' }, 'Источник поиска'),
+            field('Адрес', 'searchAddress', input('searchAddress', v.search.address, { autocomplete: 'off', inputmode: 'url' })),
+            field('Ключ', 'searchKey', h('div', { class: 'row gap10' }, secret('searchKey', v.search.keySet), searchErase)),
+            h('div', { class: 'row gap10' },
+              h('button', { class: 'btn', type: 'button', disabled: !canEdit, 'data-key': 'search-check', onclick: checkSearch }, icon('network_check'), 'Проверить'),
+              searchResult)),
           h('div', { class: 'card' }, extraBtn, extra)),
         h('div', { class: 'col' },
           h('div', { class: 'card' }, h('div', { class: 'h' }, 'Хранение'),
@@ -157,17 +171,52 @@ export function render(root, r, ctx) {
     saveBtn.disabled = !canEdit;
   }
 
-  // eraseKey — «Стереть» ключ Кинопоиска: без него Кинопоиск работает без токена.
-  async function eraseKey() {
+  // eraseKey — «Стереть» ключ: Кинопоиска (без него — без токена) или источника поиска (group).
+  async function eraseKey(group) {
     errs.general.textContent = '';
     try {
-      view = await put('/settings', { kinopoisk: kpKeyPatch('', true) });
+      view = await put('/settings', { [group]: keyPatch('', true) });
       status = await get('/status');
     } catch (e) {
       errs.general.textContent = e.message;
       return;
     }
     if (alive) draw();
+  }
+
+  // checkSearch — «Проверить» источник поиска: изменённые адрес и ключ сначала сохраняются — проверяется
+  // сохранённое (как «Проверить» в мастере).
+  async function checkSearch(e) {
+    const btn = e.currentTarget;
+    const el = searchResult;
+    btn.disabled = true;
+    errs.searchAddress.textContent = errs.general.textContent = '';
+    try {
+      const p = {};
+      const addr = inputs.searchAddress.value.trim();
+      if (addr !== view.search.address) p.address = addr;
+      const key = searchKeyPatch(inputs.searchKey.value, false);
+      if (key) p.key = key.key;
+      if (Object.keys(p).length > 0) {
+        view = await put('/settings', { search: p });
+        inputs.searchAddress.value = view.search.address; // как сохранил сервер: «схема://хост»
+        inputs.searchKey.value = '';
+        inputs.searchKey.placeholder = view.search.keySet ? 'задан' : '';
+      }
+      el.textContent = 'Проверяю…';
+      el.classList.remove('good', 'bad');
+      const res = await post('/setup/check', { source: 'search' });
+      if (!alive) return;
+      el.textContent = res.text;
+      el.classList.toggle('good', res.ok);
+      el.classList.toggle('bad', !res.ok);
+    } catch (x) {
+      const at = x.message.indexOf(':');
+      const k = at > 0 ? FIELD[x.message.slice(0, at)] : null;
+      (k && errs[k] ? errs[k] : errs.general).textContent = x.message;
+      el.textContent = '';
+    }
+    btn.disabled = !status.canEdit;
   }
 
   // markSeg — выбранный тип прокси подсвечен.
@@ -206,6 +255,9 @@ export function render(root, r, ctx) {
     }
     const kpk = kpKeyPatch(val('kpKey'), false);
     if (kpk) p.kinopoisk = kpk;
+    if (val('searchAddress') !== v.search.address) set('search', 'address', val('searchAddress'));
+    const sk = searchKeyPatch(val('searchKey'), false);
+    if (sk) set('search', 'key', sk.key);
     if (val('downloadsDir') !== v.storage.downloadsDir) set('storage', 'downloadsDir', val('downloadsDir'));
     for (const [k, min, text] of [['keepDays', 1, 'Хранить, дней: нужно целое число от 1'], ['minFreeGB', 0, 'Запас места, ГБ: нужно целое число от 0'],
       ['keepBehind', 0, 'Серий позади при нехватке места: нужно целое число от 0']]) {

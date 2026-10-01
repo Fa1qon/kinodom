@@ -5,9 +5,8 @@ import { h, icon, size, speed, rating, minutes, ready, poll, copyText, store, pl
 import { get, post, put, del } from '../api.js';
 import { whereStopped, resumeIndex } from './history.js';
 import { poster } from './catalog.js';
-import { trackerTags } from './search.js';
+import { trackerTags, trackerLabel, backTo } from './search.js';
 
-const TRACKER = { rutor: 'Rutor', rutracker: 'Rutracker' };
 const PENDING_FOR = 120000; // догрузку страницы раздачи ждём не дольше 2 минут (трекер мог лечь)
 const SEARCH_FOR = 30000; // поиск других раздач сервер держит не дольше 30 с
 const FORMATS_FOR = 120000; // формат найденных ждём не дольше 2 минут: их страницы догружаются
@@ -129,9 +128,8 @@ export function render(root, r, ctx) {
 
   function drawHead() {
     const title = rel.name || rel.title || 'Раздача';
-    const saved = store.get('catalog') || '';
-    back.replaceChildren(h('a', { class: 'back', href: saved.startsWith(`#/catalog/${rel.tracker}`) ? saved : `#/catalog/${rel.tracker}` },
-      icon('chevron_left', 18), [TRACKER[rel.tracker], rel.category].filter(Boolean).join(' · ')));
+    const to = backTo(rel, store.get('catalog'), store.get('search'));
+    back.replaceChildren(h('a', { class: 'back', href: to.href }, icon('chevron_left', 18), to.text));
     cover.replaceChildren(poster(rel, title, 'poster big'));
     const desc = rel.description ? h('p', { class: descOpen ? 'desc' : 'desc clamp' }, rel.description) : null;
     info.replaceChildren(
@@ -383,7 +381,7 @@ export function render(root, r, ctx) {
   function variantRow(e) {
     const current = String(e.id) === String(id);
     const what = h('span', { class: 'var-what' },
-      h('span', { class: 'strong ellipsis' }, [TRACKER[e.tracker] || e.tracker, e.quality].filter(Boolean).join(' · ')),
+      h('span', { class: 'strong ellipsis' }, [trackerLabel(e.tracker), e.quality].filter(Boolean).join(' · ')),
       h('span', { class: 'muted small ellipsis', title: e.title }, [current ? 'эта раздача' : null, e.season || null].filter(Boolean).join(' · ') || e.name));
     const cells = [what,
       e.format ? h('span', null, e.format) : h('span', { class: 'muted', 'aria-label': e.detailsPending ? 'формат загружается' : 'формат неизвестен' }, e.detailsPending ? '…' : '—'),
