@@ -208,12 +208,10 @@ func (d followDB) dismiss(ctx context.Context, id int64) error {
 }
 
 // RekeyTx — переход скачанной раздачи на новую версию (спека 11b, 6.3.4), внутри транзакции перехода:
-// известный infohash подписок и оповещений — новый, номера файлов оповещений — по index (старый → новый);
-// файл без пары из оповещения убирается.
+// infohash оповещений — новый, номера файлов оповещений — по index (старый → новый); файл без пары из
+// оповещения убирается. Известную версию подписки модуль сдвигает сам, когда записал оповещение: иначе сбой
+// между переходом и оповещением терял серию — следующая проверка видела «та же версия» (ревью 11b-В).
 func RekeyTx(ctx context.Context, tx *sql.Tx, old, new string, index map[int]int) error {
-	if _, err := tx.ExecContext(ctx, `UPDATE follows SET infohash = ? WHERE infohash = ?`, new, old); err != nil {
-		return err
-	}
 	rows, err := tx.QueryContext(ctx, `SELECT id, files FROM updates WHERE infohash = ?`, old)
 	if err != nil {
 		return err

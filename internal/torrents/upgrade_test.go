@@ -8,6 +8,7 @@ import (
 	"math/rand/v2"
 	"os"
 	"path/filepath"
+	"slices"
 	"testing"
 	"time"
 
@@ -260,6 +261,11 @@ func TestUpgradeResumesAfterCrash(t *testing.T) {
 			}
 			if ups, _ := s2.reg.upgrades(context.Background()); len(ups) != 0 {
 				t.Fatalf("пометка перехода осталась: %+v", ups)
+			}
+			// Новая серия встаёт в очередь и после сбоя (финальное ревью 11b-В).
+			idxs, err := s2.reg.StoredFiles(context.Background(), ih)
+			if err != nil || !slices.Contains(idxs, 3) {
+				t.Fatalf("новая серия после сбоя не в очереди: %v %v", idxs, err)
 			}
 		})
 	}
