@@ -30,7 +30,9 @@ import ru.kinodom.app.BuildConfig
 import ru.kinodom.app.R
 import ru.kinodom.app.core.Action
 import ru.kinodom.app.core.BackDecision
+import ru.kinodom.app.core.Lineup
 import ru.kinodom.app.core.Links
+import ru.kinodom.app.core.PlayerMode
 import ru.kinodom.app.core.Recovery
 import ru.kinodom.app.core.Route
 import ru.kinodom.app.core.ServerApp
@@ -395,10 +397,33 @@ class PultActivity : Activity() {
         }
     }
 
-    // Bridge — объект KinodomApp для пульта (спека этапа 13, раздел 5.2): в 13a — только версия.
+    // Bridge — объект KinodomApp для пульта (спека этапа 13, раздел 5.2): версия, плеер каналов и его настройка.
+    // Методы зовутся не с главного потока.
     private inner class Bridge {
         @JavascriptInterface
         fun version(): String = BuildConfig.VERSION_NAME
+
+        // playChannels — «Смотреть» у канала: список, из которого открыли, и стартовый; не разобрался — false
+        // (пульт откроет канал по-старому). Плеер открывается, только если в WebView — страница своего сервера.
+        @JavascriptInterface
+        fun playChannels(json: String): Boolean {
+            if (Lineup.parse(json) == null) return false
+            handler.post {
+                if (::web.isInitialized && web.url?.startsWith(base) == true) {
+                    startActivity(Intent(this@PultActivity, PlayerActivity::class.java)
+                        .putExtra(PlayerActivity.EXTRA_BASE, base).putExtra(PlayerActivity.EXTRA_LINEUP, json))
+                }
+            }
+            return true
+        }
+
+        @JavascriptInterface
+        fun player(): String = Prefs(this@PultActivity).player.id
+
+        @JavascriptInterface
+        fun setPlayer(mode: String) {
+            PlayerMode.of(mode)?.let { Prefs(this@PultActivity).player = it }
+        }
     }
 
     companion object {

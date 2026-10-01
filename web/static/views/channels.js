@@ -1,10 +1,10 @@
 // «Каналы» (спека этапа 8, разделы 5.5 и 6.2): избранное устройства, федеральные, остальные по
 // категориям; вкладки категорий, переключатели страны и языка; в строке — «сейчас и следом», оценка
 // проверки и «Смотреть» (★ — на странице канала). Время передач — по поясу каналов из настроек. Список
-// опрашивается раз в минуту.
+// опрашивается раз в минуту. В приложении «Смотреть» отдаёт плееру показанный список (спека 13, 4.1).
 import { h, fill, icon, poll, store, keepFocus, plural } from '../ui.js';
 import { get } from '../api.js';
-import { gradeMark, hhmm, progressOf, logo, watchChannel } from './tvkit.js';
+import { gradeMark, hhmm, progressOf, logo, watchChannel, rememberList } from './tvkit.js';
 
 // UNKNOWN — значение переключателя для «страна / язык не указаны».
 export const UNKNOWN = '?';
@@ -56,6 +56,7 @@ export function render(root, r, ctx) {
   let alive = true;
   let data = null;
   let error = '';
+  let shownNow = { list: [], listName: 'Все' }; // показанный список — плееру приложения и странице канала
 
   const head = h('div', { class: 'row wrap' });
   const filters = h('div', { class: 'filters', role: 'tablist', 'aria-label': 'Категории' });
@@ -78,9 +79,9 @@ export function render(root, r, ctx) {
     if (alive) draw();
   }, 60000);
 
-  async function watch(key) {
+  async function watch(c) {
     try {
-      await watchChannel(key, ctx);
+      await watchChannel(c.version || c.key, ctx, { ...shownNow, start: c });
     } catch (e) {
       error = e.message;
       draw();
@@ -108,6 +109,7 @@ export function render(root, r, ctx) {
       const hasFed = data.channels.some((c) => c.number > 0);
       const tabs = [['all', 'Все'], ...(hasFav ? [['fav', 'Избранные']] : []), ...(hasFed ? [['federal', 'Федеральные']] : []),
         ...data.categories.map((c) => [c.id, c.name])];
+      shownNow = { list: shown, listName: (tabs.find(([id]) => id === f.tab) || [, 'Все'])[1] };
       fill(filters, ...tabs.map(([id, t]) => h('a', { class: id === f.tab ? 'fil on' : 'fil', role: 'tab', 'aria-selected': String(id === f.tab),
         href: '#', 'data-key': `tab-${id || 'none'}`, onclick: (e) => {
           e.preventDefault();
@@ -129,7 +131,7 @@ export function render(root, r, ctx) {
     const now = c.now;
     const next = c.next;
     return h('div', { class: 'ch' },
-      h('a', { class: 'ch-main', href: `#/channel/${encodeURIComponent(c.key)}`, 'data-key': `ch-${c.key}` },
+      h('a', { class: 'ch-main', href: `#/channel/${encodeURIComponent(c.key)}`, 'data-key': `ch-${c.key}`, onclick: () => rememberList(shownNow.list, shownNow.listName) },
         logo(c),
         h('span', { class: 'ch-num' }, c.number ? String(c.number) : ''),
         h('span', { class: 'ch-text' },
@@ -139,7 +141,7 @@ export function render(root, r, ctx) {
           next ? h('span', { class: 'ch-next muted small' }, `${hhmm(next.start, data.utcOffset)} ${next.title}`) : null)),
       gradeMark(c.grade),
       h('button', { class: 'btn', type: 'button', 'data-key': `watch-${c.key}`, 'aria-label': `Смотреть ${c.name}`,
-        onclick: () => watch(c.version || c.key) }, icon('play_arrow'), h('span', { class: 'wide-only' }, 'Смотреть')));
+        onclick: () => watch(c) }, icon('play_arrow'), h('span', { class: 'wide-only' }, 'Смотреть')));
   }
 
   return () => {

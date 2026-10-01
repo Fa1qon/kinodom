@@ -16,6 +16,7 @@ import * as settingsLibrary from './views/settings-library.js';
 import * as channel from './views/channel.js';
 import * as settingsIPTV from './views/settings-iptv.js';
 import * as settingsUnrecognized from './views/settings-unrecognized.js';
+import * as settingsApp from './views/settings-app.js';
 import * as setup from './views/setup.js';
 import * as updates from './views/updates.js';
 import { settingsRoute } from './views/settings-layout.js';
@@ -23,7 +24,7 @@ import { settingsRoute } from './views/settings-layout.js';
 // views — экраны по первой части адреса; у «Настроек» — по второй.
 const views = { catalog, release, search, downloads, channels, channel, history, library, setup, updates };
 const settingsViews = { status: settingsStatus, params: settingsParams, sections: settingsSections, iptv: settingsIPTV, unrecognized: settingsUnrecognized,
-  library: settingsLibrary };
+  library: settingsLibrary, app: settingsApp };
 
 // ctx — общее для экранов: последнее «Состояние» и переходы. local — пульт открыт на ПК с Kinodom
 // (плеер по ссылке kinodom://), canEdit — из домашней сети: можно менять настройки и удалять.
