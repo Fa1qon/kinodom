@@ -336,6 +336,30 @@ for (const [got, want] of checks) {
 	}
 }
 
+// «Настройки → Приложение» (план 13b, задача 3; спека 13, 5.2): пункт есть только в приложении, последним.
+func TestPultSettingsApp(t *testing.T) {
+	node := lookNode(t)
+	script := `
+import { settingsItems } from './views/settings-layout.js';
+const ids = (xs) => xs.map((x) => x[0]).join(' ');
+const checks = [
+  [ids(settingsItems(false)), 'status params sections iptv library'],
+  [ids(settingsItems(true)), 'status params sections iptv library app'],
+];
+for (const [got, want] of checks) {
+  if (got !== want) {
+    console.error(JSON.stringify(got), '≠', JSON.stringify(want));
+    process.exitCode = 1;
+  }
+}
+`
+	cmd := exec.Command(node, "--input-type=module", "--no-warnings", "-e", script)
+	cmd.Dir = "static"
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Errorf("%v\n%s", err, out)
+	}
+}
+
 // История (спека этапа 8, раздел 7.5): где остановились — минутами, процентом или «досмотрено»; какой
 // файл продолжать — начатый и недосмотренный, смотренный последним, иначе следующий после последнего
 // просмотренного.
