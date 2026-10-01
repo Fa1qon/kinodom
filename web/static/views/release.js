@@ -276,6 +276,8 @@ export function render(root, r, ctx) {
       const seen = !!(p && p.watched);
       out.push(h('button', { class: 'btn', type: 'button', 'data-key': `seen-${f.index}`, onclick: () => mark(f, !seen) },
         icon(seen ? 'visibility_off' : 'check'), seen ? 'Не просмотрено' : 'Просмотрено'));
+      out.push(h('button', { class: 'btn', type: 'button', 'data-key': 'remove', disabled: busy || !removable(st), onclick: remove },
+        icon('delete'), 'Удалить'));
     }
     if (error) out.push(h('div', { class: 'error' }, error));
     return out;
@@ -357,6 +359,28 @@ export function render(root, r, ctx) {
     if (!alive) return;
     if (torrentPoll) torrentPoll.now();
     else if (rel.hash) watchTorrent();
+    drawLive();
+  }
+
+  // remove — «Удалить» (спека 11b, 15.1; № 19): загрузка прерывается, скачанное удаляется — снова «Скачать»;
+  // серию с открытым потоком сервер оставляет.
+  async function remove() {
+    const fromHere = root.contains(document.activeElement);
+    if (!(await confirmDialog({ title: removeTitle(rel.name || rel.title, st) })) || !alive) return;
+    busy = true;
+    actionError = '';
+    drawLive();
+    try {
+      const res = await del(`/downloads/${rel.hash}`);
+      if (res && res.skipped) actionError = `Сейчас смотрят — ${plural(res.skipped, 'серия осталась', 'серии остались', 'серий осталось')}`;
+      else if (fromHere) focusNext = 'download';
+    } catch (e) {
+      actionError = e.message;
+    }
+    busy = false;
+    if (!alive) return;
+    if (torrentPoll) torrentPoll.now();
+    else watchTorrent();
     drawLive();
   }
 
@@ -500,6 +524,21 @@ export function playerLink(res) {
 }
 
 // finished — всё хранимое скачано: опрашивать больше незачем.
+// removable — «Удалить» на странице раздачи (№ 19): есть хранимые файлы, и хотя бы у одного не открыт
+// поток (серию, которую смотрят, сервер оставит).
+export function removable(st) {
+  return !!(st && st.files && st.files.some((f) => f.stored && !f.watching));
+}
+
+// removeTitle — подтверждение «Удалить»: сколько скачано из хранимого.
+export function removeTitle(name, st) {
+  const fs = ((st && st.files) || []).filter((f) => f.stored);
+  const total = fs.reduce((n, f) => n + f.size, 0);
+  const done = fs.reduce((n, f) => n + Math.min(f.done || 0, f.size), 0);
+  const pct = total ? Math.floor((done * 100) / total) : 0;
+  return pct >= 100 ? `Удалить «${name}»?` : `Удалить «${name}» — скачано ${pct} %?`;
+}
+
 function finished(st) {
   const stored = st.files.filter((f) => f.stored);
   return stored.length > 0 && stored.every((f) => f.readiness === 'done');
