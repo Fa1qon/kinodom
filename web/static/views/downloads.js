@@ -85,7 +85,7 @@ export function render(root, r, ctx) {
             else open.add(g.hash);
             draw();
           } }, icon(isOpen ? 'expand_more' : 'chevron_right')),
-        single ? null : followToggle(g, key),
+        followToggle(g, key), // у сериала — и когда скачана одна серия
         !ctx.canEdit ? null
           : single ? trash(key, d0.canDelete, 'Удалить файл', () => removeFile(d0))
             : trash(key, g.canDelete, 'Удалить раздачу', () => removeRelease(g))))];

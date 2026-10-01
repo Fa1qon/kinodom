@@ -32,6 +32,11 @@ export function render(root, r, ctx) {
     }
     if (alive) draw();
   }, 15000);
+  // «Убрать» — из домашней сети: canEdit приходит с «Состоянием», которое может прийти позже списка.
+  const onStatus = () => {
+    if (alive) draw();
+  };
+  ctx.listeners.add(onStatus);
 
   async function watch(u) {
     busy = u.id;
@@ -86,5 +91,6 @@ export function render(root, r, ctx) {
   return () => {
     alive = false;
     listPoll.stop();
+    ctx.listeners.delete(onStatus);
   };
 }
