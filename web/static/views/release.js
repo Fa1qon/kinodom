@@ -23,6 +23,44 @@ const MISSING_EVERY = 3000; // раздача не открыта (404) — её
 const OTHERS_EVERY = 10000; // «Другие раздачи» перечитываются, пока экран открыт
 const COPIED_FOR = 2000; // «Скопировано» видно 2 с, перерисовка панели его не сбивает (Х25)
 
+// seasonLabel — какой сезон и какие серии в раздаче — крупно у «Скачать» (заказчик 2026-10-01): строка сезона
+// из заголовка («S01», «S02E01-08», «02x13 из 13», «Сезон: 1-3, Серии: 1-24 из 24», «1-5 серий из 5») —
+// «Сезон 2 · серии 1–8», «Сезоны 1–3 · серии 1–24 из 24»; не сериал — "".
+export function seasonLabel(season) {
+  const s = (season || '').trim();
+  if (!s) return '';
+  const range = (a, b) => (b && b !== a ? `${Number(a)}–${Number(b)}` : String(Number(a)));
+  let seasons = null; // [from, to]
+  let eps = null; // [from, to, of]
+  let m;
+  if ((m = s.match(/S(\d{1,2})(?:-S?(\d{1,3}))?(?:E(\d{1,3})(?:-E?(\d{1,3}))?)?/i))) {
+    if (m[3]) {
+      seasons = [m[1]];
+      eps = [m[3], m[4]];
+    } else {
+      seasons = [m[1], m[2]];
+    }
+  } else if ((m = s.match(/(\d{1,2})x(\d{1,3})(?:-(\d{1,3}))?(?:\s+из\s+(\d+))?/i))) {
+    seasons = [m[1]];
+    eps = [m[2], m[3], m[4]];
+  }
+  if (!seasons && (m = s.match(/(?:сезон|season)\s*:?\s*(\d+)(?:\s*-\s*(\d+))?/i) || s.match(/(\d+)(?:\s*-\s*(\d+))?\s+(?:сезон|season)/i))) {
+    seasons = [m[1], m[2]];
+  }
+  if (!eps && (m = s.match(/(?:серии|серия)\s*:?\s*(\d+)(?:\s*-\s*(\d+))?(?:\s+из\s+(\d+))?/i) || s.match(/(\d+)(?:\s*-\s*(\d+))?\s+сери[йияю]\s+из\s+(\d+)/i))) {
+    eps = [m[1], m[2], m[3]];
+  }
+  const parts = [];
+  if (seasons) parts.push((seasons[1] && seasons[1] !== seasons[0] ? 'Сезоны ' : 'Сезон ') + range(seasons[0], seasons[1]));
+  if (eps) {
+    const many = eps[1] && eps[1] !== eps[0];
+    let t = (many ? 'серии ' : 'серия ') + range(eps[0], eps[1]);
+    if (eps[2]) t += ` из ${Number(eps[2])}`;
+    parts.push(parts.length ? t : t[0].toUpperCase() + t.slice(1));
+  }
+  return parts.join(' · ');
+}
+
 // episodeAction — OK на строке серии (замечание № 3 этапа 11b): до «Скачать» — окно «Скачать?»,
 // после — выбрать файл панели; пока идёт действие — ничего.
 export function episodeAction(downloadingNow, busyNow) {
@@ -237,6 +275,8 @@ export function render(root, r, ctx) {
 
   function panel(fs, label) {
     const out = [];
+    const sl = seasonLabel(rel && rel.season);
+    if (sl) out.push(h('div', { class: 'season-big', 'data-key': 'season' }, sl));
     const f = panelFile(fs);
     const failed = st && st.state === 'error';
     const error = actionError || (st && st.error) || '';

@@ -1840,6 +1840,35 @@ for (const [got, want] of checks) {
 	}
 }
 
+// План 14А, задача 3: на странице сериала крупно — какой сезон скачается.
+func TestPultSeasonLabel(t *testing.T) {
+	node := lookNode(t)
+	script := `
+const { seasonLabel } = await import('./views/release.js');
+const checks = [
+  [seasonLabel('S01'), 'Сезон 1'],
+  [seasonLabel('S02E01-08'), 'Сезон 2 · серии 1–8'],
+  [seasonLabel('S03E05'), 'Сезон 3 · серия 5'],
+  [seasonLabel('Сезон: 1, Серии: 1-8 из 10'), 'Сезон 1 · серии 1–8 из 10'],
+  [seasonLabel('Сезон: 1-3, Серии: 1-24 из 24'), 'Сезоны 1–3 · серии 1–24 из 24'],
+  [seasonLabel('Сезон: 4'), 'Сезон 4'],
+  [seasonLabel('S01-S03'), 'Сезоны 1–3'],
+  [seasonLabel(''), ''],
+];
+for (const [got, want] of checks) {
+  if (got !== want) {
+    console.error(JSON.stringify(got), '≠', JSON.stringify(want));
+    process.exitCode = 1;
+  }
+}
+`
+	cmd := exec.Command(node, "--input-type=module", "--no-warnings", "-e", script)
+	cmd.Dir = "static"
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Errorf("%v\n%s", err, out)
+	}
+}
+
 func TestPultAppLine(t *testing.T) {
 	node := lookNode(t)
 	script := `
