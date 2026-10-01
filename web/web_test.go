@@ -1350,3 +1350,66 @@ for (const [name, got, want] of checks) {
 		t.Errorf("%v\n%s", err, out)
 	}
 }
+
+// Подписи трекеров (11b-Д): свои, источник поиска и трекеры раздач из него; незнакомый — с заглавной.
+// Теги поиска: источник — после своих трекеров, число — раздачи чужих трекеров. Чужая раздача — «назад»
+// в поиск, своя — в раздел каталога.
+func TestPultTrackerLabel(t *testing.T) {
+	node := lookNode(t)
+	script := `
+import { trackerLabel, tagStates, backTo } from './views/search.js';
+const checks = [
+  [trackerLabel('t1'), 't1'], [trackerLabel('t2'), 't2'], [trackerLabel('jacred'), 'Jacred'],
+  [trackerLabel('tracker3'), 'tracker3'], [trackerLabel('open2'), 'open2'], [trackerLabel('lostfilm'), 'LostFilm'],
+  [trackerLabel('open3'), 'open3'], [trackerLabel('bitru'), 'Bitru'], [trackerLabel('ultradox'), 'Ultradox'],
+  [trackerLabel('newtracker'), 'Newtracker'], [trackerLabel(''), ''],
+];
+const tags = tagStates({ jacred: 'нужен ключ', t1: 'ok', t2: 'идёт' }, [{ tracker: 't1' }, { tracker: 'tracker3' }, { tracker: 'open2' }]);
+checks.push([JSON.stringify(tags), JSON.stringify([
+  { state: 'ok', text: 't1 · 1' }, { state: 'busy', text: 't2 · ищет…' }, { state: 'warn', text: 'Jacred · нужен ключ' }])]);
+const done = tagStates({ jacred: 'ok' }, [{ tracker: 't1' }, { tracker: 'tracker3' }, { tracker: 'open2' }]);
+checks.push([JSON.stringify(done), JSON.stringify([{ state: 'ok', text: 'Jacred · 2' }])]);
+const b1 = backTo({ tracker: 'tracker3' }, '#/catalog/t1/12', '#/search?q=x');
+const b2 = backTo({ tracker: 't1', category: 'Фильмы' }, '#/catalog/t1/12', '#/search?q=x');
+const b3 = backTo({ tracker: 'tracker3' }, null, null);
+checks.push([JSON.stringify(b1), '{"href":"#/search?q=x","text":"Поиск"}']);
+checks.push([JSON.stringify(b2), '{"href":"#/catalog/t1/12","text":"t1 · Фильмы"}']);
+checks.push([JSON.stringify(b3), '{"href":"#/search","text":"Поиск"}']);
+for (const [got, want] of checks) {
+  if (got !== want) {
+    console.error(got, '≠', want);
+    process.exitCode = 1;
+  }
+}
+`
+	cmd := exec.Command(node, "--input-type=module", "--no-warnings", "-e", script)
+	cmd.Dir = "static"
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Errorf("%v\n%s", err, out)
+	}
+}
+
+// Ключ источника поиска — как ключ Кинопоиска: «Стереть» — пустой ключ; пустое поле — не менять.
+func TestPultSearchKeyPatch(t *testing.T) {
+	node := lookNode(t)
+	script := `
+import { searchKeyPatch } from './views/settings-params.js';
+const s = (v) => JSON.stringify(v);
+const checks = [
+  [s(searchKeyPatch('', true)), '{"key":""}'],
+  [s(searchKeyPatch(' k-1 ', false)), '{"key":"k-1"}'],
+  [s(searchKeyPatch('  ', false)), 'null'],
+];
+for (const [got, want] of checks) {
+  if (got !== want) {
+    console.error(got, '≠', want);
+    process.exitCode = 1;
+  }
+}
+`
+	cmd := exec.Command(node, "--input-type=module", "--no-warnings", "-e", script)
+	cmd.Dir = "static"
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Errorf("%v\n%s", err, out)
+	}
+}
