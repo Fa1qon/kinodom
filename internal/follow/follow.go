@@ -36,6 +36,7 @@ type Catalog interface {
 	CheckRelease(ctx context.Context, id int64) (catalog.Version, error)
 	Release(ctx context.Context, id int64) (catalog.Release, error)
 	ReleaseBrief(ctx context.Context, id int64) (catalog.ReleaseRef, error) // без побочных действий Release
+	Own(tracker string) bool                                                // свой трекер: страницу раздачи Kinodom проверяет сам
 }
 
 // Torrents — торрент-движок (*torrents.Service).
@@ -116,8 +117,12 @@ func (m *Module) Run(ctx context.Context) error {
 var seriesTypes = map[string]bool{"TV_SERIES": true, "MINI_SERIES": true, "TV_SHOW": true}
 
 // series — раздача сериала (спека 11b, 6.1): вид с Кинопоиска, если номер известен; иначе — в названии
-// сезон или серии. Фильм с дополнительными файлами сериалом не считается.
+// сезон или серии. Фильм с дополнительными файлами сериалом не считается. Раздача чужого трекера из
+// источника поиска — нет: её страницу проверить нечем (спека 11b, раздел 8).
 func (m *Module) series(ctx context.Context, rel catalog.Release) bool {
+	if !m.o.Catalog.Own(rel.Tracker) {
+		return false
+	}
 	if kp := rel.Rating.KinopoiskID; kp > 0 && m.o.Types != nil {
 		if typ, err := m.o.Types(ctx, kp); err == nil && typ != "" {
 			return seriesTypes[typ]
