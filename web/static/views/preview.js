@@ -53,11 +53,12 @@ function serverError(details) {
   }
 }
 
+const codec = { what: 'codec', text: 'Браузер не показывает этот поток' };
+const net = (code, msg) => ({ what: 'net', text: msg ? `Источник не открылся: ${msg}` : code ? `Источник не открылся (ответ ${code})` : 'Источник не открылся' });
+
 // playerError — остановка плеера словами (ревью 14Д, п. 4): {what: 'net' | 'codec', text}; не остановка —
 // null. hls — (data) события Hls.Events.ERROR; mpegts — (тип, подробность, сведения) события ERROR.
 export function playerError(lib, a, b, c) {
-  const codec = { what: 'codec', text: 'Браузер не показывает этот поток' };
-  const net = (code, msg) => ({ what: 'net', text: msg ? `Источник не открылся: ${msg}` : code ? `Источник не открылся (ответ ${code})` : 'Источник не открылся' });
   if (lib === 'hls') {
     if (!a || !a.fatal) return null;
     if (a.type === 'mediaError' || a.type === 'muxError') return codec;
@@ -67,6 +68,25 @@ export function playerError(lib, a, b, c) {
   if (a === 'MediaError') return codec;
   if (a === 'NetworkError') return net(c && c.code, '');
   return { what: 'net', text: `Плеер остановился (${b || a})` };
+}
+
+// nativeError — почему остановился свой HLS браузера (Chrome, WebView ТВ): он сам не говорит, поэтому список
+// спрашивается ещё раз — status и body его ответа (0 — запрос не дошёл); code и message — video.error.
+export function nativeError(code, message, status, body) {
+  if (status !== 200) return net(status, serverError({ responseText: body }));
+  if (code === 3 || /DECODE|NO_SUPPORTED_STREAMS|CODEC/i.test(message || '')) return codec;
+  return net(0, '');
+}
+
+// whyNative — nativeError для источника url после ошибки video.
+async function whyNative(video, url) {
+  const e = video.error || {};
+  try {
+    const r = await fetch(url, { cache: 'no-store' });
+    return nativeError(e.code, e.message, r.status, await r.text());
+  } catch {
+    return nativeError(e.code, e.message, 0, '');
+  }
 }
 
 // frameNote — подпись вместо кадра: data URL — кадр есть (null); иначе — почему его нет.
@@ -98,16 +118,26 @@ export function playerSession(pending) {
   };
 }
 
-// attach — источник в <video>: {destroy, latency()}; остановка плеера — onFail(playerError(…)). Библиотека не
+// hlsWay — чем играть HLS: hls.js — везде, где есть MSE (свой HLS Chrome 154 не разбирает часть потоков, которые
+// hls.js играет; вживую 14Д); свой HLS браузера — только без MSE (iPhone); null — нечем.
+export function hlsWay(mse, native) {
+  if (mse) return 'hls.js';
+  return native ? 'native' : null;
+}
+
+// attach — источник в <video>: {destroy, latency()}; остановка плеера — onFail({what, text}). Библиотека не
 // загрузилась или браузер её не тянет — исключение.
 async function attach(video, url, kind, onFail = () => {}) {
   if (kind === 'hls') {
-    if (video.canPlayType('application/vnd.apple.mpegurl')) {
+    const Hls = await loadLib('vendor/hls.light.min.js', 'Hls').catch(() => null);
+    const way = hlsWay(!!Hls && Hls.isSupported(), !!video.canPlayType('application/vnd.apple.mpegurl'));
+    if (!way) throw new Error('браузер не умеет HLS');
+    if (way === 'native') {
+      video.addEventListener('error', () => whyNative(video, url).then(onFail), { once: true });
       video.src = url;
       return { destroy: () => { video.removeAttribute('src'); video.load(); }, latency: () => 0 };
     }
-    const Hls = await loadLib('vendor/hls.light.min.js', 'Hls');
-    if (!Hls.isSupported()) throw new Error('браузер не умеет HLS');
+    video.addEventListener('error', () => onFail(codec), { once: true });
     const hls = new Hls({ enableWorker: true, maxBufferLength: 10 });
     hls.on(Hls.Events.ERROR, (_, data) => {
       const e = playerError('hls', data);
@@ -119,6 +149,7 @@ async function attach(video, url, kind, onFail = () => {}) {
   }
   const mpegts = await loadLib('vendor/mpegts.js', 'mpegts');
   if (!mpegts.isSupported()) throw new Error('браузер не умеет MPEG-TS');
+  video.addEventListener('error', () => onFail(codec), { once: true });
   const p = mpegts.createPlayer({ type: 'mpegts', isLive: true, url }, { enableWorker: false, liveBufferLatencyChasing: true });
   p.on(mpegts.Events.ERROR, (type, detail, info) => onFail(playerError('mpegts', type, detail, info)));
   p.attachMediaElement(video);
@@ -184,9 +215,6 @@ export function openPreview(src, title, now = '') {
   }, (e) => {
     err.textContent = e.message;
   });
-  video.addEventListener('error', () => {
-    err.textContent = 'Источник не открылся';
-  });
   return close;
 }
 
@@ -226,11 +254,6 @@ export async function grabFrame(src, timeoutMs = 8000) {
         }
       };
       video.addEventListener('timeupdate', tick);
-      video.addEventListener('error', () => {
-        failed ||= 'error';
-        clearTimeout(t);
-        resolve(false);
-      }, { once: true });
     });
     if (!ok) return failed || 'none';
     const c = document.createElement('canvas');
