@@ -29,12 +29,22 @@ func (s prepStorage) OpenTorrent(ctx context.Context, info *metainfo.Info, ih me
 		// Файл удалили (почистили папку в Проводнике) или он короче нужного: отметки его
 		// кусков в базе врут. Сбрасываем их до того, как пересоздадим файл, — иначе движок
 		// счёл бы файл скачанным и отдавал бы нули.
-		if st, err := os.Stat(p); fi.Length > 0 && (err != nil || st.Size() < fi.Length) {
+		// Файл длиннее своей длины в раздаче (перезалитая серия, перенесённая при переходе на обновлённую
+		// раздачу): кусок на стыке со следующим файлом не сойдётся по хэшу никогда и будет качаться по кругу
+		// (ловушка 4а, исследование 22.1) — обрезаем до длины в раздаче, отметки его кусков — заново.
+		st, err := os.Stat(p)
+		long := err == nil && st.Size() > fi.Length
+		if fi.Length > 0 && (err != nil || st.Size() < fi.Length) || long {
 			sp := spanFor(info.PieceLength, off, fi.Length)
 			for i := sp.begin; i < sp.end; i++ {
 				if err := s.pc.Set(metainfo.PieceKey{InfoHash: ih, Index: i}, false); err != nil {
 					return storage.TorrentImpl{}, fmt.Errorf("отметки кусков: %w", err)
 				}
+			}
+		}
+		if long {
+			if err := os.Truncate(p, fi.Length); err != nil {
+				return storage.TorrentImpl{}, fmt.Errorf("файл %s длиннее, чем в раздаче, и не обрезается: %w", p, err)
 			}
 		}
 		off += fi.Length

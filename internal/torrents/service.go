@@ -27,6 +27,7 @@ var (
 	ErrNotOpen    = errors.New("раздача не открыта")
 	ErrNoInfo     = errors.New("список файлов раздачи ещё не получен")
 	ErrNoSuchFile = errors.New("такого файла в раздаче нет")
+	ErrNoEngine   = errors.New("загрузки не работают — нет папки загрузок")
 )
 
 // Source — откуда открыть раздачу: magnet-ссылка или содержимое файла .torrent.
@@ -73,6 +74,7 @@ type session struct {
 	focus        int               // файл, который качается сейчас (очередь загрузки, этап 7); −1 — никакой
 	wantAll      bool              // «Скачать» до получения списка файлов: скачать всё, когда он придёт
 	downloadErr  string            // отложенное «Скачать» не удалось (мало места)
+	upgradedFrom metainfo.Hash     // перешла с прежней версии: после проверки перенесённого снять пометку перехода
 }
 
 // prepared — файл, выбранный для просмотра.
@@ -95,6 +97,13 @@ type Service struct {
 	mu       sync.Mutex
 	sessions map[metainfo.Hash]*session
 	policy   Policy
+	fetching map[metainfo.Hash]chan struct{} // идёт FetchInfo: временная раздача без хранилища
+	// upgrading — переход идёт в этом процессе (прежняя и новая версии): уборка его не трогает — ни
+	// доведением, ни восстановлением новой версии, пока файлы переносятся (финальное ревью 11b-В).
+	upgrading map[metainfo.Hash]bool
+	rekey     Rekey // перенос ключей при доведении перехода после сбоя (SetRekey)
+
+	upgradeStop func(phase string, rec upgradeRec) error // тесты: «сбой» посреди перехода
 
 	expiredAt  time.Time     // когда последний раз чистили по сроку хранения (только Run)
 	keeper     *power.Keeper // запрет сна, пока идёт поток; nil — без него
@@ -198,14 +207,18 @@ func (s *Service) restore(ctx context.Context) error {
 	if err := s.reg.PinDirs(ctx, s.eng.DownloadsDir()); err != nil {
 		return err
 	}
+	// Переход на обновлённую раздачу, прерванный сбоем, — довести до восстановления остальных раздач.
+	if err := s.resumeUpgrades(ctx); err != nil {
+		return err
+	}
 	recs, err := s.reg.Restorable(ctx)
 	if err != nil {
 		return err
 	}
 	missing := map[string]int{} // недоступная папка → сколько раздач в ней ждут
 	for _, rec := range recs {
-		if _, ok := s.eng.cl.Torrent(rec.InfoHash); ok {
-			continue
+		if _, ok := s.eng.cl.Torrent(rec.InfoHash); ok || s.isUpgrading(rec.InfoHash) {
+			continue // новую версию идущего перехода добавит сам переход, когда перенесёт файлы
 		}
 		if rec.Dir != "" {
 			if _, err := os.Stat(rec.Dir); err != nil {
@@ -325,6 +338,12 @@ func (s *Service) Open(ctx context.Context, src Source) (metainfo.Hash, error) {
 	// Под s.mu: уборка не должна убрать запись о раздаче между Remember и появлением сессии.
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if s.eng == nil {
+		return metainfo.Hash{}, ErrNoEngine
+	}
+	if err := s.waitFetch(ctx, ih); err != nil {
+		return metainfo.Hash{}, err
+	}
 	// Папку раздачи движок должен знать до добавления: файлы создаются сразу, как придёт метаинфо.
 	dir, err := s.reg.Remember(ctx, ih, source, s.eng.DownloadsDir())
 	if err != nil {

@@ -105,7 +105,12 @@ func (a *App) statusFields(ctx context.Context) (map[string]any, error) {
 		}
 	}
 	down, up := a.Torrents.Speeds()
+	updates, err := a.Follow.Unread(ctx) // колокольчик: строк в «Новых сериях» (спека 11b, 6.1)
+	if err != nil {
+		return nil, err
+	}
 	return map[string]any{
+		"updates":   updates,
 		"version":   a.version,
 		"setupDone": a.Settings.Current().SetupDone, // пульт открывает мастер начальных настроек
 		"trackers":  trackers,
