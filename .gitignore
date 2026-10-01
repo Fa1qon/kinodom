@@ -3,3 +3,10 @@
 spikes/**/data/
 bin/
 dist/
+
+# Сборка Android (спека этапа 13): обёртка Gradle и исходники — в репозитории, сборка — нет
+android/.gradle/
+android/.kotlin/
+android/build/
+android/app/build/
+android/local.properties

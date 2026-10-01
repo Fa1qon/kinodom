@@ -25,6 +25,10 @@ func TestInstallerScript(t *testing.T) {
 		`compiler:Languages\Russian.isl`,
 		`Source: "..\bin\kinodom.exe"`,
 		`Source: "..\bin\kinodomw.exe"`,
+		// Приложение для Android рядом с программой — сервер раздаёт его (спека этапа 13, 5.3); сборка без
+		// Android SDK — без него.
+		`Source: "..\bin\kinodom.apk"; DestDir: "{app}"; Flags: ignoreversion skipifsourcedoesntexist`,
+		`Source: "..\bin\kinodom.apk.json"; DestDir: "{app}"; Flags: ignoreversion skipifsourcedoesntexist`,
 		"function PrepareToInstall",
 		"Exec(Exe, 'stop'",
 		"'install ' + InstallParams(",
