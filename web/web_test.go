@@ -975,10 +975,10 @@ class El extends Node {
 }
 globalThis.document = { createElement: (t) => new El(t), createElementNS: (_, t) => new El(t) };
 const { hideCard } = await import('./views/settings-iptv.js');
-const iv = { hiddenCategories: [], hiddenCountries: [], hiddenLanguages: [], hideOtherZones: false };
+const iv = { hiddenCategories: [], hiddenCountries: [], hiddenLanguages: [] };
 const all = { categories: [], countries: [{ id: 'RU', name: 'Россия', count: 2 }],
   languages: [{ id: 'rus', name: 'русский', count: 2 }, { id: 'eng', name: 'английский', count: 1 }] };
-const draft = { categories: [], countries: [], languages: [], otherZones: false };
+const draft = { categories: [], countries: [], languages: [] };
 let saved = 0;
 const card = hideCard(iv, all, draft, true, () => saved++);
 const find = (key) => card.all().find((e) => e.attrs['data-key'] === key);
@@ -986,6 +986,7 @@ const btn = find('hide-save');
 const eng = find('hide-languages-eng');
 const checks = [];
 checks.push(['без изменений — выключена', btn.disabled === true]);
+checks.push(['«Другие часовые пояса» нет — версии внутри канала (11b-Е)', !find('hide-zones')]);
 eng.checked = true;
 eng.listeners.change({ target: eng });
 checks.push(['отметили язык — включена сразу', btn.disabled === false]);
