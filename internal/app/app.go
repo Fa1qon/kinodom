@@ -364,11 +364,23 @@ func (a *App) initCatalog(ctx context.Context, o Options, v settings.Values) err
 			return d.Description, err
 		},
 		Ratings: a.Ratings, Images: a.Images, KinopoiskPoster: a.kp.PosterURL, TorrentFormat: torrentFormat,
-		KeepImages: func(ctx context.Context) (map[string]bool, error) { // постеры медиатеки (этап 9)
-			if a.Library == nil {
-				return nil, nil
+		KeepImages: func(ctx context.Context) (map[string]bool, error) { // постеры медиатеки (этап 9) и каталога «Кинопоиск» (14Г)
+			keep := map[string]bool{}
+			if a.Library != nil {
+				ks, err := a.Library.ImageKeys(ctx)
+				if err != nil {
+					return nil, err
+				}
+				maps.Copy(keep, ks)
 			}
-			return a.Library.ImageKeys(ctx)
+			if a.KPCat != nil {
+				ks, err := a.KPCat.ImageKeys(ctx)
+				if err != nil {
+					return nil, err
+				}
+				maps.Copy(keep, ks)
+			}
+			return keep, nil
 		},
 		PreferredFormat: v.PreferredFormat, DefaultOrder: v.CatalogOrder, Log: log})
 	a.Catalog.Register(a.API)

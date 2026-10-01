@@ -22,23 +22,29 @@ var ctx = context.Background()
 
 // fakeKP — списки Кинопоиска в памяти: ключ списка (slug|фильтры|жанр|порядок) → фильмы; IMDb по номеру.
 type fakeKP struct {
-	mu     sync.Mutex
-	lists  map[string][]meta.ListFilm
-	failAt map[string]int // ключ списка → смещение, на котором ответ — ошибка
-	imdb   map[int]float64
-	calls  []string
-	asked  []int // номера, у которых спросили IMDb
+	mu      sync.Mutex
+	lists   map[string][]meta.ListFilm
+	failAt  map[string]int // ключ списка → смещение, на котором ответ — ошибка
+	imdb    map[int]float64
+	imdbErr map[int]error // номер → ошибка оценки (сбой одного фильма)
+	classes map[meta.KPClass]int
+	calls   []string
+	asked   []int // номера, у которых спросили IMDb
 }
 
 func listKey(q meta.ListQuery) string {
 	return fmt.Sprintf("%s|%s|%s|%s", q.Slug, strings.Join(q.Bool, ","), q.Genre, q.Order)
 }
 
-func (f *fakeKP) List(_ context.Context, _ meta.KPClass, q meta.ListQuery) ([]meta.ListFilm, int, error) {
+func (f *fakeKP) List(_ context.Context, class meta.KPClass, q meta.ListQuery) ([]meta.ListFilm, int, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	k := listKey(q)
 	f.calls = append(f.calls, fmt.Sprintf("%s@%d", k, q.Offset))
+	if f.classes == nil {
+		f.classes = map[meta.KPClass]int{}
+	}
+	f.classes[class]++
 	if at, ok := f.failAt[k]; ok && q.Offset >= at {
 		return nil, 0, errors.New("Кинопоиск не отвечает")
 	}
@@ -52,6 +58,9 @@ func (f *fakeKP) IMDb(_ context.Context, id int) (float64, int, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.asked = append(f.asked, id)
+	if err := f.imdbErr[id]; err != nil {
+		return 0, 0, err
+	}
 	return f.imdb[id], 100, nil
 }
 
@@ -292,5 +301,132 @@ func TestPosterRoute(t *testing.T) {
 	h.ServeHTTP(rec, httptest.NewRequest("GET", "/api/v1/kpcat/films/9/poster", nil))
 	if rec.Code != http.StatusNotFound {
 		t.Fatalf("нет фильма: %d", rec.Code)
+	}
+}
+
+// Ревью 14Г, Important 1: раздел не обновился — цикл не повторяет все разделы раз за разом (суточный предел
+// общий с медиатекой и правкой); каталог ходит очередью KPList (без резерва).
+func TestRunLoopDoesNotHammer(t *testing.T) {
+	kp := fullKP()
+	kp.failAt = map[string]int{"|released|documentary|VOTES_COUNT_DESC": 0} // документальные всегда сбоят
+	m := newModule(t, kp)
+	m.o.FirstDelay, m.o.Every = 10*time.Millisecond, time.Hour
+	runCtx, cancel := context.WithTimeout(ctx, 2500*time.Millisecond)
+	defer cancel()
+	m.Run(runCtx)
+	kp.mu.Lock()
+	n, classes := len(kp.calls), kp.classes
+	kp.mu.Unlock()
+	if n > 8 { // один проход: 2+3+1+1 страницы и одна неудачная
+		t.Fatalf("запросов списков за 2,5 с: %d", n)
+	}
+	if classes[meta.KPList] != n {
+		t.Fatalf("очереди: %v", classes)
+	}
+}
+
+// Обновляются только просроченные разделы; раздел, где пришло заметно меньше, чем сайт обещал, — не заменяется.
+func TestRefreshDueAndTruncated(t *testing.T) {
+	kp := fullKP()
+	m := newModule(t, kp)
+	if err := m.Refresh(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := m.st.W.Exec(`UPDATE kpcat_state SET refreshed_at = 1 WHERE section = 'films-foreign'`); err != nil {
+		t.Fatal(err)
+	}
+	kp.mu.Lock()
+	kp.calls = nil
+	kp.mu.Unlock()
+	if err := m.refreshDue(ctx); err != nil {
+		t.Fatal(err)
+	}
+	kp.mu.Lock()
+	calls := slices.Clone(kp.calls)
+	kp.mu.Unlock()
+	for _, c := range calls {
+		if !strings.HasPrefix(c, "popular-films|foreign|") {
+			t.Fatalf("обновлён не просроченный раздел: %v", calls)
+		}
+	}
+	// Сайт обещает 120, а отдаёт 40 и пустую страницу — раздел остаётся прежним.
+	kp.mu.Lock()
+	kp.lists["popular-films|foreign||POSITION_ASC"] = films(7000, 40)
+	kp.mu.Unlock()
+	m.o.KP = truncKP{kp, 120}
+	if err := m.Refresh(ctx); err == nil {
+		t.Fatal("обрезанный раздел — нужна ошибка")
+	}
+	if vs, total, _ := m.list(ctx, "films-foreign", "popular", 0, 1); total != 120 || vs[0].ID != 2000 {
+		t.Fatalf("раздел: %d, первый %d", total, vs[0].ID)
+	}
+}
+
+// truncKP — сайт обещает total, а отдаёт меньше.
+type truncKP struct {
+	*fakeKP
+	total int
+}
+
+func (f truncKP) List(c context.Context, class meta.KPClass, q meta.ListQuery) ([]meta.ListFilm, int, error) {
+	rs, _, err := f.fakeKP.List(c, class, q)
+	return rs, f.total, err
+}
+
+// Ревью 14Г, Important 3: сбой оценки одного фильма не останавливает очередь — повтор через сутки.
+func TestIMDbFillSkipsBrokenFilm(t *testing.T) {
+	kp := fullKP()
+	kp.imdbErr = map[int]error{1000: errors.New("оценки IMDb: ответ 404")}
+	m := newModule(t, kp)
+	if err := m.Refresh(ctx); err != nil {
+		t.Fatal(err)
+	}
+	for range 3 {
+		if _, err := m.fillIMDb(ctx, 5); err != nil {
+			t.Fatal(err)
+		}
+	}
+	kp.mu.Lock()
+	asked := slices.Clone(kp.asked)
+	kp.mu.Unlock()
+	n := 0
+	for _, id := range asked {
+		if id == 1000 {
+			n++
+		}
+	}
+	if n != 1 || len(asked) != 15 {
+		t.Fatalf("сбойный спрошен %d раз, всего %d: %v", n, len(asked), asked)
+	}
+}
+
+// Ревью 14Г, Important 4: в «Новых» ещё не вышедшие (премьера впереди) — в конце, как без даты.
+func TestNewSkipsFuturePremieres(t *testing.T) {
+	kp := fullKP()
+	now := time.Now()
+	fs := films(100, 3)
+	fs[0].Premiere = now.AddDate(0, 3, 0) // анонс
+	fs[1].Premiere = now.AddDate(0, 0, -10)
+	fs[2].Premiere = now.AddDate(-1, 0, 0)
+	kp.lists["popular-series|russian||POSITION_ASC"] = fs
+	m := newModule(t, kp)
+	if err := m.Refresh(ctx); err != nil {
+		t.Fatal(err)
+	}
+	vs, _, _ := m.list(ctx, "series-ru", "new", 0, 10)
+	if !slices.Equal(ids(vs), []int{101, 102, 100}) {
+		t.Fatalf("новые: %v", ids(vs))
+	}
+}
+
+// Ревью 14Г, Important 5: ключи постеров каталога — чистка кэша картинок их не удаляет.
+func TestImageKeys(t *testing.T) {
+	m := newModule(t, fullKP())
+	if err := m.Refresh(ctx); err != nil {
+		t.Fatal(err)
+	}
+	keys, err := m.ImageKeys(ctx)
+	if err != nil || len(keys) != 700 || !keys[meta.ImageKey("https://avatars.example/1001/300x450")] {
+		t.Fatalf("ключи: %d, %v", len(keys), err)
 	}
 }

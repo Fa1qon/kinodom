@@ -105,13 +105,22 @@ func (d db) replaceSection(ctx context.Context, sec string, fs []meta.ListFilm, 
 	return tx.Commit()
 }
 
-// refreshDue — какой-то раздел ещё не обновляли или обновляли раньше before.
-func (d db) refreshDue(ctx context.Context, before time.Time) (bool, error) {
-	var n int
-	if err := d.R.QueryRowContext(ctx, `SELECT COUNT(*) FROM kpcat_state WHERE refreshed_at >= ?`, ms(before)).Scan(&n); err != nil {
-		return false, err
+// freshSections — разделы, обновлённые не раньше since.
+func (d db) freshSections(ctx context.Context, since time.Time) (map[string]bool, error) {
+	rows, err := d.R.QueryContext(ctx, `SELECT section FROM kpcat_state WHERE refreshed_at >= ?`, ms(since))
+	if err != nil {
+		return nil, err
 	}
-	return n < len(sections), nil
+	defer rows.Close()
+	out := map[string]bool{}
+	for rows.Next() {
+		var s string
+		if err := rows.Scan(&s); err != nil {
+			return nil, err
+		}
+		out[s] = true
+	}
+	return out, rows.Err()
 }
 
 // orderBy — ORDER BY порядка: IMDb без оценки и новизна без даты — в конце (Review Focus 2, 3); равные — по месту.
@@ -119,17 +128,22 @@ var orderBy = map[string]string{
 	"popular": `e.position`,
 	"kp":      `f.rating DESC, e.position`,
 	"imdb":    `(f.imdb = 0), f.imdb DESC, e.position`,
-	"new":     `(f.premiere = 0), f.premiere DESC, f.year DESC, e.position`,
+	// Новизна: ещё не вышедшие (премьера впереди) — в конце, как без даты (ревью 14Г); ? — сейчас.
+	"new": `(f.premiere = 0 OR f.premiere > ?), f.premiere DESC, f.year DESC, e.position`,
 }
 
-func (d db) list(ctx context.Context, sec, order string, offset, limit int) ([]film, int, error) {
+func (d db) list(ctx context.Context, sec, order string, offset, limit int, now time.Time) ([]film, int, error) {
 	var total int
 	if err := d.R.QueryRowContext(ctx, `SELECT COUNT(*) FROM kpcat_entries WHERE section = ?`, sec).Scan(&total); err != nil {
 		return nil, 0, err
 	}
+	args := []any{sec}
+	if order == "new" {
+		args = append(args, ms(now))
+	}
 	rows, err := d.R.QueryContext(ctx,
 		`SELECT `+filmColumns+` FROM kpcat_entries e JOIN kpcat_films f ON f.kp_id = e.kp_id
-		 WHERE e.section = ? ORDER BY `+orderBy[order]+` LIMIT ? OFFSET ?`, sec, limit, offset)
+		 WHERE e.section = ? ORDER BY `+orderBy[order]+` LIMIT ? OFFSET ?`, append(args, limit, offset)...)
 	if err != nil {
 		return nil, 0, err
 	}
@@ -197,6 +211,31 @@ func (d db) imdbDue(ctx context.Context, before time.Time, n int) ([]int, error)
 			return nil, err
 		}
 		out = append(out, id)
+	}
+	return out, rows.Err()
+}
+
+// saveIMDbRetry — оценка не пришла из-за сбоя: спросить снова, когда at устареет.
+func (d db) saveIMDbRetry(ctx context.Context, id int, at time.Time) error {
+	_, err := d.W.ExecContext(ctx, `UPDATE kpcat_films SET imdb_at = ? WHERE kp_id = ?`, ms(at), id)
+	return err
+}
+
+// posters — адреса постеров фильмов разделов.
+func (d db) posters(ctx context.Context) ([]string, error) {
+	rows, err := d.R.QueryContext(ctx,
+		`SELECT DISTINCT f.poster FROM kpcat_films f JOIN kpcat_entries e ON e.kp_id = f.kp_id WHERE f.poster != ''`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []string
+	for rows.Next() {
+		var p string
+		if err := rows.Scan(&p); err != nil {
+			return nil, err
+		}
+		out = append(out, p)
 	}
 	return out, rows.Err()
 }
