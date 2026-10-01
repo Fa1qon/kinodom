@@ -89,7 +89,7 @@ export function render(root, r, ctx) {
             c.override.hidden ? h('span', { class: 'tag' }, icon('visibility_off', 16), 'скрыт из списка') : null,
             c.now ? h('span', { class: 'tag' }, `Сейчас: ${c.now.title}`) : null))));
       // Версии по времени: одна — ряда нет.
-      fill(versions, (c.versions || []).length > 1 ? h('div', { class: 'seg', role: 'radiogroup', 'aria-label': 'Версия по времени' },
+      fill(versions, (c.versions || []).length > 1 ? h('div', { class: 'seg zones', role: 'radiogroup', 'aria-label': 'Версия по времени' },
         c.versions.map((v) => h('label', { class: v.key === c.version ? 'on' : null }, v.label,
           h('input', { type: 'radio', name: 'version', checked: v.key === c.version, 'data-key': `ver-${v.key}`, onchange: () => {
             version = v.key;
