@@ -256,6 +256,7 @@ func (a *App) initTorrents(ctx context.Context, o Options, v settings.Values) {
 	a.Torrents.SetPolicy(policyOf(v))
 	a.initHistory()
 	a.Torrents.SetWatchTracker(a.History) // место по потоку — в историю устройства
+	a.Torrents.SetRekey(rekeyUpgrade)     // переход на обновлённую раздачу, доведённый после сбоя
 	a.Torrents.UseKeeper(a.Power)
 	a.Torrents.Register(a.API)
 	a.API.Handle("GET /api/v1/downloads", a.Torrents.Name(), http.HandlerFunc(a.handleDownloads))
