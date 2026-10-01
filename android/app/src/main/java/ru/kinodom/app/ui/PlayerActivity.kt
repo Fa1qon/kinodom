@@ -44,6 +44,7 @@ import kotlinx.coroutines.launch
 import ru.kinodom.app.R
 import ru.kinodom.app.core.Epg
 import ru.kinodom.app.core.Failover
+import ru.kinodom.app.core.Foreground
 import ru.kinodom.app.core.Guide
 import ru.kinodom.app.core.Lineup
 import ru.kinodom.app.core.NowTitles
@@ -199,6 +200,7 @@ class PlayerActivity : Activity() {
 
     override fun onStart() {
         super.onStart()
+        Foreground.app.start() // плеер поверх пульта — не вход в приложение
         if (!::tuner.isInitialized) return
         player = ExoPlayer.Builder(this).build().also {
             it.addListener(listener)
@@ -216,6 +218,7 @@ class PlayerActivity : Activity() {
         player?.release()
         player = null
         if (::video.isInitialized) video.player = null
+        Foreground.app.stop()
         super.onStop()
     }
 
