@@ -283,10 +283,14 @@ func TestIPTVFields(t *testing.T) {
 	v := load(t, db, nil)
 	iv := v.View().IPTV
 	if iv.EPGURL != "" || strings.Join(iv.HiddenCategories, ",") != "adult" || len(iv.HiddenCountries) != 0 || iv.HiddenCountries == nil ||
-		!iv.HideOtherZones || iv.UTCOffset != 7 {
+		iv.UTCOffset != 7 {
 		t.Fatalf("по умолчанию: %+v", iv)
 	}
-	n, err := v.With(patch(t, `{"iptv":{"hiddenCategories":["sports",""],"hiddenCountries":["UA"],"hiddenLanguages":["ara",""],"hideOtherZones":false,"utcOffset":3,"epgUrl":"http://epg.example/x.xml"}}`))
+	// «Скрывать другие часовые пояса» нет: версии по времени — внутри канала (спека 11b, 13.2).
+	if b, _ := json.Marshal(v.View()); strings.Contains(string(b), "hideOtherZones") {
+		t.Fatalf("настройка поясов в ответе: %s", b)
+	}
+	n, err := v.With(patch(t, `{"iptv":{"hiddenCategories":["sports",""],"hiddenCountries":["UA"],"hiddenLanguages":["ara",""],"utcOffset":3,"epgUrl":"http://epg.example/x.xml"}}`))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -294,7 +298,7 @@ func TestIPTVFields(t *testing.T) {
 		t.Fatal(err)
 	}
 	got := load(t, db, nil).View().IPTV
-	if strings.Join(got.HiddenCategories, ",") != "sports," || strings.Join(got.HiddenLanguages, ",") != "ara," || got.HideOtherZones ||
+	if strings.Join(got.HiddenCategories, ",") != "sports," || strings.Join(got.HiddenLanguages, ",") != "ara," ||
 		got.UTCOffset != 3 || got.EPGURL != "http://epg.example/x.xml" || strings.Join(got.HiddenCountries, ",") != "UA" {
 		t.Fatalf("после записи: %+v", got)
 	}

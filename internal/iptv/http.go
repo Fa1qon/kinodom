@@ -97,7 +97,9 @@ func (m *Module) Register(r Router, logo func(w http.ResponseWriter, r *http.Req
 
 // ChannelView — канал для пульта и телевизора.
 type ChannelView struct {
-	Key           string           `json:"key"`
+	Key           string           `json:"key"`          // ключ канала: страница, ★
+	Version       string           `json:"version"`      // ключ версии: «Смотреть», .m3u8, программа, настройки
+	VersionLabel  string           `json:"versionLabel"` // «МСК», «МСК+4», «МСК−1»
 	Name          string           `json:"name"`
 	Logo          string           `json:"logo"`   // адрес логотипа на сервере; "" — нет
 	Block         string           `json:"block"`  // favorite, federal, ""
@@ -122,8 +124,23 @@ type Facet struct {
 	Count int    `json:"count"`
 }
 
-func (m *Module) view(c *Channel, g *xmltv.Guide, at time.Time, fav bool) ChannelView {
-	v := ChannelView{Key: c.Key, Name: c.Name, Number: c.Federal, Category: c.Labels.Category,
+// VersionView — версия канала по времени на странице канала (спека 11b, 13.3).
+type VersionView struct {
+	Key   string `json:"key"`
+	Label string `json:"label"`
+}
+
+// view — карточка версии c от имени её канала: ключ и имя — канала, «Смотреть» и программа — версии.
+func (m *Module) view(l *Lineup, c *Channel, g *xmltv.Guide, at time.Time, fav bool) ChannelView {
+	fk := l.FamilyOf[c.Key]
+	if fk == "" {
+		fk = familyOf(c.Key)
+	}
+	name := c.Name
+	if f := l.Families[fk]; f != nil && f.Name != "" {
+		name = f.Name
+	}
+	v := ChannelView{Key: fk, Version: c.Key, VersionLabel: VersionLabel(c.Zone), Name: name, Number: c.Federal, Category: c.Labels.Category,
 		CategoryName: labels.CategoryName(c.Labels.Category), Country: c.Labels.Country,
 		CountryName: labels.CountryName(c.Labels.Country), Languages: c.Labels.Languages, LanguageNames: []string{},
 		Grade: c.Grade, Favorite: fav, Hidden: c.Hidden}
@@ -156,9 +173,9 @@ func (m *Module) handleChannels(w http.ResponseWriter, r *http.Request) {
 		httpx.WriteError(w, http.StatusInternalServerError, "избранное не читается: "+err.Error())
 		return
 	}
-	isFav := map[string]bool{}
+	isFav := map[string]bool{} // ★ — у канала; ключ версии (до 11b-Е) — тоже его канал
 	for _, k := range favs {
-		isFav[k] = true
+		isFav[familyOf(k)] = true
 	}
 	l, g, at := m.Lineup(), m.Guide(), m.now()
 	out := struct {
@@ -170,8 +187,8 @@ func (m *Module) handleChannels(w http.ResponseWriter, r *http.Request) {
 	}{Channels: []ChannelView{}, UTCOffset: m.utcOffset()}
 	cats, countries, langs := map[string]int{}, map[string]int{}, map[string]int{}
 	for _, c := range l.WithFavorites(favs, all) {
-		v := m.view(c, g, at, isFav[c.Key])
-		if isFav[c.Key] {
+		v := m.view(l, c, g, at, isFav[l.FamilyOf[c.Key]])
+		if v.Favorite {
 			v.Hidden = "" // избранное сильнее скрытия
 		}
 		out.Channels = append(out.Channels, v)
@@ -247,27 +264,42 @@ type OverrideView struct {
 	Languages []string `json:"languages"`
 }
 
+// handleChannel — страница канала: ключ канала — версия по умолчанию, ?version= — выбранная версия того же
+// канала (ключ канала совпадает с ключом московской версии — Review Focus 5 плана 11b-Е).
 func (m *Module) handleChannel(w http.ResponseWriter, r *http.Request) {
 	key := r.PathValue("key")
 	l := m.Lineup()
-	c := l.ByKey[key]
+	c := l.Resolve(key)
+	if v := r.URL.Query().Get("version"); v != "" {
+		if c = l.ByKey[v]; c != nil && familyOf(v) != familyOf(key) {
+			c = nil
+		}
+	}
 	if c == nil {
 		httpx.WriteError(w, http.StatusNotFound, ErrNoChannel.Error())
 		return
 	}
+	fk := l.FamilyOf[c.Key]
 	favs, err := m.Favorites(r.Context(), httpx.Device(r))
 	if err != nil {
 		httpx.WriteError(w, http.StatusInternalServerError, "избранное не читается: "+err.Error())
 		return
 	}
 	g, at := m.Guide(), m.now()
+	fav := slices.ContainsFunc(favs, func(k string) bool { return familyOf(k) == fk })
 	out := struct {
 		ChannelView
+		Versions  []VersionView     `json:"versions"` // рабочие версии канала по сдвигу
 		Sources   []SourceView      `json:"sources"`
 		Override  OverrideView      `json:"override"`
 		Programme []xmltv.Programme `json:"programme"`
 		UTCOffset int               `json:"utcOffset"`
-	}{ChannelView: m.view(c, g, at, slices.Contains(favs, key)), Sources: []SourceView{}, Programme: []xmltv.Programme{}, UTCOffset: m.utcOffset()}
+	}{ChannelView: m.view(l, c, g, at, fav), Versions: []VersionView{}, Sources: []SourceView{}, Programme: []xmltv.Programme{}, UTCOffset: m.utcOffset()}
+	if f := l.Families[fk]; f != nil {
+		for _, v := range f.Versions {
+			out.Versions = append(out.Versions, VersionView{Key: v.Key, Label: VersionLabel(v.Zone)})
+		}
+	}
 	all := slices.Concat(c.Sources, c.Others, c.Rejected)
 	ids := make([]int64, len(all))
 	for i, s := range all {
@@ -302,12 +334,14 @@ func (m *Module) handleChannel(w http.ResponseWriter, r *http.Request) {
 		}
 		out.Sources = append(out.Sources, sv)
 	}
-	o := m.pool.overrides[key]
+	o := m.pool.overrides[c.Key]                 // источники — у версии
+	lo := labelOverride(m.pool.overrides, c.Key) // метки — у канала (раньше — у версии)
+	hidden := m.pool.overrides[fk].Hidden        // «Скрыть канал» — у канала
 	m.mu.Unlock()
 	for i := range out.Sources { // скрытый может быть и предлагаемым — запасным, когда других нет
 		out.Sources[i].Hidden = slices.Contains(o.HiddenURLs, out.Sources[i].URL)
 	}
-	out.Override = OverrideView{Hidden: o.Hidden, Category: o.Category, Country: o.Country, Languages: o.Languages}
+	out.Override = OverrideView{Hidden: hidden, Category: lo.Category, Country: lo.Country, Languages: lo.Languages}
 	if g != nil {
 		loc := m.Location()
 		day := at.In(loc)
@@ -321,7 +355,7 @@ func (m *Module) handleChannel(w http.ResponseWriter, r *http.Request) {
 
 // handleEPG — программа на день: ?date=2026-09-29 (день по часовому поясу каналов); без даты — сегодня.
 func (m *Module) handleEPG(w http.ResponseWriter, r *http.Request) {
-	c := m.Lineup().ByKey[r.PathValue("key")]
+	c := m.channelOrVersion(r.PathValue("key"))
 	if c == nil {
 		httpx.WriteError(w, http.StatusNotFound, ErrNoChannel.Error())
 		return
@@ -388,10 +422,20 @@ func (m *Module) playItems(c *Channel) []PlayItem {
 	return out
 }
 
+// channelOrVersion — версия по ключу версии («Смотреть», .m3u8, программа — по ней); ключ канала, который сам
+// не версия, — версия по умолчанию.
+func (m *Module) channelOrVersion(key string) *Channel {
+	l := m.Lineup()
+	if c := l.ByKey[key]; c != nil {
+		return c
+	}
+	return l.Resolve(key)
+}
+
 // handlePlay — «Смотреть» (спека этапа 8, раздел 5.9): источники по порядку, .m3u8 для VLC и ссылка
 // kinodom:// для этого ПК.
 func (m *Module) handlePlay(w http.ResponseWriter, r *http.Request) {
-	c := m.Lineup().ByKey[r.PathValue("key")]
+	c := m.channelOrVersion(r.PathValue("key"))
 	if c == nil {
 		httpx.WriteError(w, http.StatusNotFound, ErrNoChannel.Error())
 		return
@@ -420,7 +464,7 @@ func (m *Module) handlePlay(w http.ResponseWriter, r *http.Request) {
 // handleM3U — /m3u/channel/{ключ}.m3u8: источники канала для VLC.
 func (m *Module) handleM3U(w http.ResponseWriter, r *http.Request) {
 	key, ok := strings.CutSuffix(r.PathValue("file"), ".m3u8")
-	c := m.Lineup().ByKey[key]
+	c := m.channelOrVersion(key)
 	if !ok || c == nil {
 		httpx.WriteError(w, http.StatusNotFound, ErrNoChannel.Error())
 		return
@@ -475,7 +519,20 @@ func (m *Module) handleOverride(w http.ResponseWriter, r *http.Request) {
 	if !httpx.ReadJSON(w, r, &req) {
 		return
 	}
-	o := m.Override(key)
+	// «Скрыть канал» и метки — у канала, источники — у версии (спека 11b, 13.1). У московской версии ключ
+	// тот же, что у канала, — одна правка.
+	fk := familyOf(key)
+	o := m.Override(fk)
+	// Метки правились раньше у версии (до 11b-Е): при первой правке меток на канале они переезжают на канал —
+	// иначе «Как было» не снимало бы их, а правка одного поля теряла бы остальные (финальное ревью 11b-Е).
+	labelsChanged := req.Category.Set || req.Country.Set || req.Languages.Set
+	migrated := false
+	if labelsChanged && fk != key && o.Category == nil && o.Country == nil && o.Languages == nil {
+		if v := m.Override(key); v.Category != nil || v.Country != nil || v.Languages != nil {
+			o.Category, o.Country, o.Languages = v.Category, v.Country, v.Languages
+			migrated = true
+		}
+	}
 	if req.Hidden != nil {
 		o.Hidden = *req.Hidden
 	}
@@ -510,6 +567,14 @@ func (m *Module) handleOverride(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 	}
+	family := o
+	familyChanged := req.Hidden != nil || labelsChanged
+	if fk != key {
+		o = m.Override(key)
+		if migrated {
+			o.Category, o.Country, o.Languages = nil, nil, nil
+		}
+	}
 	if req.PinnedSource.Set {
 		o.PinnedURL = ""
 		if v := req.PinnedSource.Value; v != nil {
@@ -538,9 +603,18 @@ func (m *Module) handleOverride(w http.ResponseWriter, r *http.Request) {
 		u := m.StreamURL(*req.ShowSource)
 		o.HiddenURLs = slices.DeleteFunc(slices.Clone(o.HiddenURLs), func(x string) bool { return x == u })
 	}
-	if err := m.SetOverride(r.Context(), key, o); err != nil {
-		writeEditError(w, err)
-		return
+	versionChanged := req.PinnedSource.Set || req.HideSource != nil || req.ShowSource != nil || migrated
+	if fk != key && familyChanged {
+		if err := m.SetOverride(r.Context(), fk, family); err != nil {
+			writeEditError(w, err)
+			return
+		}
+	}
+	if fk == key || versionChanged {
+		if err := m.SetOverride(r.Context(), key, o); err != nil {
+			writeEditError(w, err)
+			return
+		}
 	}
 	w.WriteHeader(http.StatusNoContent)
 }

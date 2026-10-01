@@ -30,6 +30,9 @@ const (
 	GradeBlack  = "black" // не отвечает
 )
 
+// StubError — причина у заглушки вместо эфира: плейлист потока — запись (замечание № 15 этапа 11b).
+const StubError = "заглушка вместо эфира"
+
 // UserAgent — как у VLC: так источник откроет и плеер (спека, раздел 5.8).
 const UserAgent = "VLC/3.0.20 LibVLC/3.0.20"
 
@@ -269,6 +272,12 @@ func (p *Prober) start(ctx context.Context, t Target, full bool) (Result, *playl
 		r.Grade, r.Error = GradeBlack, "плейлист пуст"
 		return r, nil, nil
 	}
+	if pl.recorded {
+		// Запись, а не эфир: заглушка провайдера («не показывает видео на этой территории» — Ростелеком
+		// вне своей зоны), плеер покажет её по кругу (замечание № 15 этапа 11b).
+		r.Grade, r.Error = GradeBlack, StubError
+		return r, nil, nil
+	}
 	r.Grade = GradeAlive
 	return r, &pl, base
 }
@@ -460,6 +469,8 @@ type playlist struct {
 	audioURI map[string]bool
 	// separateAudio — у плейлиста варианта звук отдельной дорожкой: в его сегментах звука нет.
 	separateAudio bool
+	// recorded — конец записи (#EXT-X-ENDLIST, #EXT-X-PLAYLIST-TYPE:VOD): у эфира его не бывает.
+	recorded bool
 }
 
 func (pl playlist) best() variant {
@@ -522,6 +533,10 @@ func parsePlaylist(s string) playlist {
 		case strings.HasPrefix(line, "#EXTINF:"):
 			d, _, _ := strings.Cut(strings.TrimPrefix(line, "#EXTINF:"), ",")
 			dur, _ = strconv.ParseFloat(strings.TrimSpace(d), 64)
+		case line == "#EXT-X-ENDLIST":
+			pl.recorded = true
+		case strings.HasPrefix(line, "#EXT-X-PLAYLIST-TYPE:"):
+			pl.recorded = pl.recorded || strings.EqualFold(strings.TrimSpace(strings.TrimPrefix(line, "#EXT-X-PLAYLIST-TYPE:")), "VOD")
 		case strings.HasPrefix(line, "#"):
 		case pending != nil:
 			pending.uri = line

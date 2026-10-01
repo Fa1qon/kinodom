@@ -51,9 +51,13 @@ func CheckLanguage(l string) error {
 	return nil
 }
 
-// knownKey — ключ существующего канала: в составе или в телепрограмме (в том числе «id+N»).
+// knownKey — ключ существующего канала или версии: в составе или в телепрограмме (в том числе «id+N»).
 func (m *Module) knownKey(key string) bool {
-	if _, ok := m.Lineup().ByKey[key]; ok {
+	l := m.Lineup()
+	if _, ok := l.ByKey[key]; ok {
+		return true
+	}
+	if _, ok := l.Families[key]; ok {
 		return true
 	}
 	id, _ := parseKey(key)
@@ -112,7 +116,7 @@ func (m *Module) AddFavorite(ctx context.Context, device, key string) error {
 	if !m.knownKey(key) {
 		return ErrNoChannel
 	}
-	return m.d.addFavorite(ctx, device, key)
+	return m.d.addFavorite(ctx, device, familyOf(key)) // ★ — у канала (11b-Е)
 }
 
 func (m *Module) RemoveFavorite(ctx context.Context, device, key string) error {

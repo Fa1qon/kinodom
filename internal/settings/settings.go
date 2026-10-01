@@ -51,7 +51,6 @@ const (
 	KeyHiddenCategories = "iptv.hiddenCategories"
 	KeyHiddenCountries  = "iptv.hiddenCountries"
 	KeyHiddenLanguages  = "iptv.hiddenLanguages"
-	KeyHideOtherZones   = "iptv.hideOtherZones"
 	KeyUTCOffset        = "iptv.utcOffset"
 )
 
@@ -97,7 +96,6 @@ type Values struct {
 	HiddenCategories  []string
 	HiddenCountries   []string
 	HiddenLanguages   []string
-	HideOtherZones    bool
 	UTCOffset         int // часовой пояс каналов, часы от UTC
 }
 
@@ -195,9 +193,6 @@ func Load(ctx context.Context, db *store.DB, def Defaults, overrides map[string]
 	collect(err)
 	v.HiddenLanguages, err = list(KeyHiddenLanguages, []string{})
 	collect(err)
-	zones, err := str(KeyHideOtherZones, "true")
-	collect(err)
-	v.HideOtherZones = zones != "false"
 	v.UTCOffset, err = num(KeyUTCOffset, DefaultUTCOffset, -12)
 	collect(err)
 	if v.UTCOffset > 14 {
@@ -260,7 +255,6 @@ func (v Values) entries() map[string]string {
 		KeyHiddenCategories:  jsonList(v.HiddenCategories),
 		KeyHiddenCountries:   jsonList(v.HiddenCountries),
 		KeyHiddenLanguages:   jsonList(v.HiddenLanguages),
-		KeyHideOtherZones:    strconv.FormatBool(v.HideOtherZones),
 		KeyUTCOffset:         strconv.Itoa(v.UTCOffset),
 	}
 }
@@ -594,9 +588,6 @@ func (i *IPTVPatch) apply(n *Values) error {
 			}
 		}
 		n.HiddenLanguages = clean(*i.HiddenLanguages)
-	}
-	if i.HideOtherZones != nil {
-		n.HideOtherZones = *i.HideOtherZones
 	}
 	if i.UTCOffset != nil {
 		if *i.UTCOffset < -12 || *i.UTCOffset > 14 {
