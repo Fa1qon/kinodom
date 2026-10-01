@@ -78,6 +78,7 @@ var moduleTitles = map[string]string{
 	"multicast": "Каналы провайдера",
 	"library":   "Медиатека",
 	"dlna":      "DLNA",
+	"discovery": "Обнаружение",
 }
 
 func (s *Server) moduleGuard(module string, next http.Handler) http.Handler {

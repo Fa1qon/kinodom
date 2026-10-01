@@ -4,8 +4,9 @@ import { h, size, speed, ago, poll } from '../ui.js';
 import { get } from '../api.js';
 import { layout } from './settings-layout.js';
 
-// MODULES — шесть модулей на экране; нет модуля у сервера — «ещё не сделан» (этапы 8–10).
-const MODULES = [['torrents', 'Торренты'], ['catalog', 'Каталог'], ['ratings', 'Кинопоиск'], ['library', 'Медиатека'], ['iptv', 'IPTV'], ['dlna', 'DLNA']];
+// MODULES — шесть модулей на экране; нет модуля у сервера — «ещё не сделан». DLNA исключён (решение заказчика
+// 2026-09-30) — на его месте обнаружение сервера приложением (спека этапа 13, раздел 5.1).
+const MODULES = [['torrents', 'Торренты'], ['catalog', 'Каталог'], ['ratings', 'Кинопоиск'], ['library', 'Медиатека'], ['iptv', 'IPTV'], ['discovery', 'Обнаружение']];
 const MODULE_STATE = {
   running: ['работает', 'var(--green)'],
   starting: ['запускается', 'var(--yellow)'],
