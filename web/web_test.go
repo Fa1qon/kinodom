@@ -1521,3 +1521,45 @@ func TestPultVersionsRowScrolls(t *testing.T) {
 		t.Error("ряд версий без класса zones")
 	}
 }
+
+// Карточки каталога обновляются на месте (спека 11b, 14.1): спрашиваются только незаконченные (без страницы —
+// всегда, без постера — до POSTER_TRIES раз) и только у экрана (экран вверх, два вниз), ближние первыми, не
+// больше предела; перерисовывается карточка, у которой изменилось видимое.
+func TestPultLiveCards(t *testing.T) {
+	node := lookNode(t)
+	script := `
+import { POSTER_TRIES, waiting, nearest, changed } from './views/catalog.js';
+const checks = [
+  ['без страницы — ждём всегда', waiting({ detailsPending: true, imageKey: 'k' }, 1000), true],
+  ['без постера — ждём', waiting({ detailsPending: false, imageKey: '' }, 0), true],
+  ['без постера, последняя попытка', waiting({ detailsPending: false, imageKey: '' }, POSTER_TRIES - 1), true],
+  ['без постера, попытки кончились', waiting({ detailsPending: false, imageKey: '' }, POSTER_TRIES), false],
+  ['готова', waiting({ detailsPending: false, imageKey: 'k' }, 0), false],
+  ['попыток — около минуты при опросе раз в 3 с', POSTER_TRIES, 20],
+];
+const cards = [
+  { id: 1, top: 100, bottom: 400 }, { id: 2, top: -500, bottom: -100 }, { id: 3, top: 1000, bottom: 1300 },
+  { id: 4, top: 2000, bottom: 2300 }, { id: 5, top: -1200, bottom: -900 }, { id: 6, top: 300, bottom: 600 },
+];
+checks.push(['у экрана, ближние первыми', JSON.stringify(nearest(cards, 800, 10)), '[1,6,2,3]']);
+checks.push(['предел', JSON.stringify(nearest(cards, 800, 3)), '[1,6,2]']);
+checks.push(['пусто', JSON.stringify(nearest([], 800, 10)), '[]']);
+const a = { id: 1, title: '', name: '', year: 0, quality: '', format: '', imageKey: '', kinopoisk: 0, seeders: 5, size: 1, detailsPending: true, variants: 2 };
+checks.push(['пришёл постер', changed(a, { ...a, imageKey: 'k' }), true]);
+checks.push(['пришло название', changed(a, { ...a, title: 'Кино (2020)', name: 'Кино', year: 2020 }), true]);
+checks.push(['пришёл рейтинг', changed(a, { ...a, kinopoisk: 7.1 }), true]);
+checks.push(['страница загружена', changed(a, { ...a, detailsPending: false }), true]);
+checks.push(['ничего', changed(a, { ...a }), false]);
+for (const [name, got, want] of checks) {
+  if (got !== want) {
+    console.error(name, ':', got, '≠', want);
+    process.exitCode = 1;
+  }
+}
+`
+	cmd := exec.Command(node, "--input-type=module", "--no-warnings", "-e", script)
+	cmd.Dir = "static"
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Errorf("%v\n%s", err, out)
+	}
+}
