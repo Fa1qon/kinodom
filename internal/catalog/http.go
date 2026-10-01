@@ -64,16 +64,23 @@ type EntryView struct {
 	PreferredAlt string `json:"preferredAlt,omitempty"`
 	// DetailsPending — страницу раздачи ещё не загружали (найдено поиском): формат и номер Кинопоиска
 	// появятся после догрузки.
-	DetailsPending bool `json:"detailsPending"`
+	DetailsPending bool       `json:"detailsPending"`
+	Downloads      int        `json:"downloads,omitempty"` // сколько раз скачана; 0 — неизвестно (план 14Б)
+	Added          *time.Time `json:"added,omitempty"`     // когда раздачу добавили на трекер; нет — неизвестно
 }
 
 // View — раздача для API.
 func (e Entry) View() EntryView {
 	t := meta.ParseTitle(e.Title)
-	return EntryView{ID: e.ID, Tracker: e.Tracker, Title: e.Title, Name: t.Ru, Original: t.Orig, Year: t.Year,
+	v := EntryView{ID: e.ID, Tracker: e.Tracker, Title: e.Title, Name: t.Ru, Original: t.Orig, Year: t.Year,
 		Quality: e.Quality, Category: e.Category, Seeders: e.Seeders, Leechers: e.Leechers, Size: e.Size,
 		ImageKey: e.ImageKey, Kinopoisk: e.Rating.Kinopoisk, Format: e.Format, Season: t.Season, Variants: e.Variants,
-		DetailsPending: e.DetailsPending, Preferred: e.Preferred, PreferredAlt: e.PreferredAlt}
+		DetailsPending: e.DetailsPending, Preferred: e.Preferred, PreferredAlt: e.PreferredAlt, Downloads: e.Downloads}
+	if !e.Added.IsZero() {
+		at := e.Added
+		v.Added = &at
+	}
+	return v
 }
 
 // ListView — порция каталога трекера: карточки раздела после места after.
