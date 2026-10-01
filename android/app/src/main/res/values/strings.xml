@@ -14,4 +14,10 @@
     <string name="no_answer">Kinodom не отвечает</string>
     <string name="retry">Повторить</string>
     <string name="webview_old">Обновите Android System WebView</string>
+    <string name="update_title">Есть новая версия Kinodom</string>
+    <string name="update_now">Обновить</string>
+    <string name="update_later">Позже</string>
+    <string name="update_loading">Загрузка обновления… %1$d %%</string>
+    <string name="update_failed">Не удалось скачать обновление</string>
+    <string name="close">Закрыть</string>
 </resources>
