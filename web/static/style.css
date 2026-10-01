@@ -300,6 +300,10 @@ a.res-row:hover { background: var(--hover); }
 /* Порядок раздела (план 14Б): ряд под разделами, мельче. */
 .filters.orders { margin-top: -4px; }
 .filters.orders .fil { height: 30px; padding: 0 10px; font-size: 13px; }
+/* Шапка фильма «Кинопоиска» в поиске (план 14Г). */
+.film-head { display: flex; gap: 16px; align-items: flex-start; margin-bottom: 16px; }
+.film-head .poster.small { width: 120px; flex: none; }
+.film-head .col { gap: 4px; }
 /* Сезон сериала у «Скачать» (план 14А): крупно — какой сезон скачается. */
 .season-big { font-size: 20px; font-weight: 700; margin-bottom: 12px; }
 /* Формат в приоритете (план 14А): синий, как «DOM» логотипа. */
