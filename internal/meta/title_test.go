@@ -154,3 +154,55 @@ func TestWorkKey(t *testing.T) {
 		t.Errorf("без названия: %q", got)
 	}
 }
+
+// Названия чужих трекеров через источник поиска (Kinozal, NNM-Club, Bitru, LostFilm; исследование 22.2):
+// «Ru / Orig / 2024 / озвучка / качество» — год отдельной частью, после него — не названия (11b-Д).
+func TestParseTitleSlashYear(t *testing.T) {
+	cases := []struct {
+		in       string
+		ru, orig string
+		year     int
+		quality  string
+		series   bool
+	}{
+		{"Фонари (1 сезон: 1-7 серии из 8) / Lanterns / 2026 / ПМ (HBO) / WEB-DLRip (AVC)", "Фонари", "Lanterns", 2026, "WEB-DLRip", true},
+		{"Джентльмены (2 сезон: 1-8 серии из 8) / The Gentlemen / 2026 / ДБ (Movie Dubbing), СТ / WEB-DL (1080p)", "Джентльмены", "The Gentlemen", 2026, "WEB-DL", true},
+		{"Матрица / The Matrix / 1999 / ДБ, АП (Гаврилов) / BDRip (1080p)", "Матрица", "The Matrix", 1999, "BDRip", false},
+		{"Холод / 2026 / WEB-DL 1080p", "Холод", "", 2026, "WEB-DL", false},
+	}
+	for _, c := range cases {
+		got := ParseTitle(c.in)
+		if got.Ru != c.ru || got.Orig != c.orig || got.Year != c.year || got.Quality != c.quality || got.Series != c.series {
+			t.Errorf("%q: %+v", c.in, got)
+		}
+		for _, n := range got.Names {
+			if n == "2026" || n == "1999" || n == "ПМ" || n == "ДБ, СТ" {
+				t.Errorf("%q: «%s» — не название", c.in, n)
+			}
+		}
+	}
+}
+
+// Bitru (вживую 2026-10-01): «Название N сезон (1-7 из 10) (2026) WEBRip | от Группа» — сезон не часть
+// названия (иначе номер Кинопоиска не находится), качество — до « | » и до « от », что раньше.
+func TestParseTitleSeasonTail(t *testing.T) {
+	cases := []struct {
+		in, ru, orig string
+		year         int
+		quality      string
+	}{
+		{"Трудно быть богом 1 сезон (1-7 из 10) (2026) WEBRip | от ExKinoRay", "Трудно быть богом", "", 2026, "WEBRip"},
+		{"Фонари 1 сезон (1-4 из 8) / Lanterns (2026) WEB-DL | 4К, HDR+, 10-bit | GEKADOL ®", "Фонари", "Lanterns", 2026, "WEB-DL"},
+		{"Холод сезон 1 (2026) WEB-DLRip от Files-х | P", "Холод", "", 2026, "WEB-DLRip"},
+		{"Сезон охоты 2 (2008) BDRip от HQ-ViDEO", "Сезон охоты 2", "", 2008, "BDRip"},
+	}
+	for _, c := range cases {
+		got := ParseTitle(c.in)
+		if got.Ru != c.ru || got.Orig != c.orig || got.Year != c.year || got.Quality != c.quality {
+			t.Errorf("%q: %+v", c.in, got)
+		}
+	}
+	if !ParseTitle(cases[0].in).Series {
+		t.Errorf("%q — сериал", cases[0].in)
+	}
+}

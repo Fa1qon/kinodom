@@ -54,9 +54,18 @@ func FormatCategories(cs []CategoryRef) string {
 	return strings.Join(parts, ",")
 }
 
+// Extra — источник поиска Jacred / Jackett (спека 11b, раздел 8): только поиск, раздачи разных трекеров
+// (у раздачи чужого трекера — magnet и ссылка на тему).
+type Extra interface {
+	Name() string
+	Configured() bool
+	Search(ctx context.Context, q string) ([]source.Release, error)
+}
+
 type Options struct {
 	DB       *store.DB
 	Sources  []source.Source // по одному на трекер
+	Extra    Extra           // источник поиска; nil — только свои трекеры
 	Sections []Section       // выбранные разделы; пусто — DefaultSections
 	Ratings  *meta.Ratings   // nil — без рейтингов
 	Images   *meta.Images    // nil — без картинок
@@ -70,7 +79,10 @@ type Options struct {
 	// KeepImages — картинки других модулей в том же кэше (постеры медиатеки, этап 9): чистка их не
 	// трогает. nil — только картинки каталога.
 	KeepImages func(ctx context.Context) (map[string]bool, error)
-	Log        *slog.Logger // nil — без журнала
+	// FilmDescription — описание фильма Кинопоиска по номеру: раздачам чужих трекеров из источника поиска
+	// (своей страницы у них нет). nil — без описания.
+	FilmDescription func(ctx context.Context, kp int) (string, error)
+	Log             *slog.Logger // nil — без журнала
 }
 
 // Catalog — модуль «catalog».
@@ -78,6 +90,8 @@ type Catalog struct {
 	st         catalogStore
 	db         *store.DB
 	sources    map[string]source.Source
+	extra      Extra                                             // источник поиска; nil — нет
+	filmDesc   func(ctx context.Context, kp int) (string, error) // описание Кинопоиска; nil — нет
 	ratings    *meta.Ratings
 	images     *meta.Images
 	kpPoster   func(id int) string
@@ -114,6 +128,8 @@ type Catalog struct {
 	deepPos     map[CategoryRef]int      // раздел → курсор порций: у Rutor — страница, у Rutracker — место в списке
 	deepEnd     map[CategoryRef]bool     // раздел → список трекера кончился
 	deepEmpty   map[CategoryRef]int      // раздел → порций подряд без новых раздач
+	kpWait      map[string]int64         // «трекер:номер» → раздача без страницы из поиска: ждёт номер Кинопоиска для постера
+	descNow     map[int64]bool           // описание Кинопоиска открытой раздачи без страницы качается сейчас
 }
 
 func New(o Options) *Catalog {
@@ -129,7 +145,10 @@ func New(o Options) *Catalog {
 		postersWake: make(chan struct{}, 1), urgent: map[string][]int64{}, found: map[string][]int64{}, torrentNow: map[int64]bool{}, yield: map[string]func(){}, retries: map[string]retryState{}, forced: map[int64]bool{},
 		posterSem: make(chan struct{}, 2), urgentSem: make(chan struct{}, 2),
 		forumPaused: map[string]time.Time{}, searches: map[string]*searchRun{}, torrentFormat: o.TorrentFormat, deep: map[CategoryRef]deepList{}, deepPos: map[CategoryRef]int{}, deepEnd: map[CategoryRef]bool{}, deepEmpty: map[CategoryRef]int{},
-		preferred: o.PreferredFormat}
+		preferred: o.PreferredFormat, extra: o.Extra, filmDesc: o.FilmDescription, kpWait: map[string]int64{}, descNow: map[int64]bool{}}
+	if o.Ratings != nil {
+		o.Ratings.OnResolved(c.ratingResolved)
+	}
 	// До первого прохода (там дерево и раскрытие «+») — разделы как записаны, без подразделов.
 	for _, s := range o.Sections {
 		if !strings.HasPrefix(s.ID, "c") {
@@ -387,6 +406,46 @@ func (c *Catalog) enqueueRatings(ctx context.Context) error {
 
 func ratingItem(r row) meta.Item {
 	return meta.Item{Release: r.Tracker + ":" + r.TopicID, KinopoiskID: r.KinopoiskID, IMDbID: r.IMDbID, Title: r.Title}
+}
+
+// Own — свой трекер (источник каталога): у его раздач есть страница, подписка, вкладка каталога. Раздачи
+// других трекеров приходят только из источника поиска (спека 11b, раздел 8).
+func (c *Catalog) Own(tracker string) bool {
+	_, ok := c.sources[tracker]
+	return ok
+}
+
+// ownWithAddress — свой трекер с адресом: тема из источника поиска — наша раздача со страницей.
+func (c *Catalog) ownWithAddress(tracker string) bool { return c.Own(tracker) && c.configured(tracker) }
+
+// pageless — раздача из источника поиска без страницы: чужой трекер (или свой без адреса).
+func (c *Catalog) pageless(r row) bool { return r.Link != "" || !c.Own(r.Tracker) }
+
+// kpWaitLimit — сколько раздач без страницы ждут номер Кинопоиска для постера; больше — список заново.
+const kpWaitLimit = 500
+
+// ratingResolved — очередь рейтингов решила задачу: раздача без страницы из поиска ждала номер — постер
+// Кинопоиска качается сразу, срочным путём (общий проход постеров бывает занят мёртвыми хостингами).
+func (c *Catalog) ratingResolved(release string) {
+	c.mu.Lock()
+	id, wait := c.kpWait[release]
+	delete(c.kpWait, release)
+	base := c.runCtx
+	c.mu.Unlock()
+	if !wait {
+		return
+	}
+	if base == nil {
+		base = context.Background()
+	}
+	known, err := c.ratings.For(base, []string{release})
+	if err != nil {
+		c.log.Warn("каталог: рейтинги не читаются", "err", err)
+		return
+	}
+	if kp := known[release].KinopoiskID; kp > 0 {
+		c.posterLater(base, id, "", kp, true)
+	}
 }
 
 // configurable — источник, у которого может не быть адреса (rutor, rutracker — этап 11a).

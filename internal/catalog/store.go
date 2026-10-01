@@ -48,17 +48,18 @@ type row struct {
 	Format      string    // «MKV», «AVI, MKV»; "" — неизвестен или ещё не определяли
 	Section     string    // раздел каталога записи (catalog_entries); у Rutracker — подраздел первого уровня, а CategoryID — форум раздачи
 	Pos         int       // место записи в разделе: первая сотня — по раздающим при обновлении, порции — в конце
+	Link        string    // ссылка на тему у раздачи из источника поиска без страницы; у своих — ""
 }
 
 const rowColumns = `r.id, r.tracker, r.topic_id, r.title, r.category_id, r.seeders, r.leechers, r.size,
-	r.added_at, r.infohash, r.image_key, r.kinopoisk_id, r.imdb_id, r.details_at, r.retry_at, COALESCE(r.format, '')`
+	r.added_at, r.infohash, r.image_key, r.kinopoisk_id, r.imdb_id, r.details_at, r.retry_at, COALESCE(r.format, ''), r.link`
 
 // scanRow читает столбцы rowColumns и, после них, extra.
 func scanRow(sc interface{ Scan(...any) error }, extra ...any) (row, error) {
 	var r row
 	var added, detailsAt, retryAt int64
 	dest := append([]any{&r.ID, &r.Tracker, &r.TopicID, &r.Title, &r.CategoryID, &r.Seeders, &r.Leechers, &r.Size,
-		&added, &r.InfoHash, &r.ImageKey, &r.KinopoiskID, &r.IMDbID, &detailsAt, &retryAt, &r.Format}, extra...)
+		&added, &r.InfoHash, &r.ImageKey, &r.KinopoiskID, &r.IMDbID, &detailsAt, &retryAt, &r.Format, &r.Link}, extra...)
 	err := sc.Scan(dest...)
 	r.Added, r.DetailsAt, r.RetryAt = fromMS(added), fromMS(detailsAt), fromMS(retryAt)
 	return r, err
@@ -85,7 +86,10 @@ func upsertRelease(ctx context.Context, tx *sql.Tx, r source.Release, now time.T
 		   -- заново, иначе «Скачать» открыл бы прежнюю версию (спека 11b, 6.2).
 		   magnet = CASE WHEN `+newVersion+` THEN '' ELSE releases.magnet END,
 		   torrent = CASE WHEN `+newVersion+` THEN NULL ELSE releases.torrent END,
-		   details_at = CASE WHEN `+newVersion+` THEN 0 ELSE releases.details_at END,
+		   details_at = CASE WHEN `+newVersion+` OR releases.link != '' THEN 0 ELSE releases.details_at END,
+		   -- Тема своего трекера, сохранённая из источника поиска без страницы (адреса не было), пришла от
+		   -- самого трекера — снова со страницей (финальное ревью 11b-Д); у чужих saveExtra ставит ссылку заново.
+		   link = '',
 		   removed = 0, updated_at = excluded.updated_at
 		 RETURNING id`,
 		r.Tracker, r.TopicID, r.Title, r.CategoryID, r.Seeders, r.Leechers, r.Size, ms(r.Added), r.InfoHash, ms(now)).Scan(&id)
@@ -181,6 +185,57 @@ func (s catalogStore) saveFound(ctx context.Context, rs []source.Release, now ti
 		}
 	}
 	return ids, tx.Commit()
+}
+
+// saveExtra — раздачи из источника поиска (спека 11b, раздел 8). Наша раздача, что уже есть (свой трекер,
+// со страницей), — только раздающие: база Jacred отстаёт, и её infohash, название или «не снята» испортили
+// бы наши magnet, .torrent и страницу (финальное ревью 11b-Д). Новая тема своего трекера с адресом — наша
+// раздача по номеру темы (страница догрузится). Чужой трекер (и свой без адреса) — раздача без страницы:
+// ссылка на тему, magnet, страница «загружена» сразу — догружать её нечем.
+func (s catalogStore) saveExtra(ctx context.Context, rs []source.Release, own, withAddress func(tracker string) bool, now time.Time) ([]int64, error) {
+	tx, err := s.db.W.BeginTx(ctx, nil)
+	if err != nil {
+		return nil, err
+	}
+	defer tx.Rollback()
+	ids := make([]int64, len(rs))
+	for i, r := range rs {
+		if own(r.Tracker) {
+			var link string
+			switch err := tx.QueryRowContext(ctx, `SELECT id, link FROM releases WHERE tracker = ? AND topic_id = ?`, r.Tracker, r.TopicID).Scan(&ids[i], &link); {
+			case err == nil && link == "":
+				if _, err := tx.ExecContext(ctx, `UPDATE releases SET seeders = ?, leechers = ?, updated_at = ? WHERE id = ?`,
+					r.Seeders, r.Leechers, ms(now), ids[i]); err != nil {
+					return nil, err
+				}
+				continue
+			case err != nil && !errors.Is(err, sql.ErrNoRows):
+				return nil, err
+			}
+			if withAddress(r.Tracker) {
+				if ids[i], err = upsertRelease(ctx, tx, r, now); err != nil {
+					return nil, err
+				}
+				continue
+			}
+		}
+		if ids[i], err = upsertRelease(ctx, tx, r, now); err != nil {
+			return nil, err
+		}
+		if _, err := tx.ExecContext(ctx,
+			`UPDATE releases SET link = ?, magnet = CASE WHEN ? != '' THEN ? ELSE magnet END,
+			   details_at = CASE WHEN details_at = 0 THEN ? ELSE details_at END
+			 WHERE id = ?`, r.Link, r.Magnet, r.Magnet, ms(now), ids[i]); err != nil {
+			return nil, err
+		}
+	}
+	return ids, tx.Commit()
+}
+
+// saveDescription — описание Кинопоиска раздаче без страницы (своего описания у неё нет).
+func (s catalogStore) saveDescription(ctx context.Context, id int64, text string) error {
+	_, err := s.db.W.ExecContext(ctx, `UPDATE releases SET description = ? WHERE id = ? AND description = ''`, text, id)
+	return err
 }
 
 // state — прошлое удачное обновление раздела.

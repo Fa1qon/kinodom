@@ -40,6 +40,8 @@ type Release struct {
 	Size       int64 // байты; у Rutor в списке — округлённые
 	Added      time.Time
 	InfoHash   string // 40 hex-символов в нижнем регистре; "" — неизвестен
+	Magnet     string // magnet из списка (источник поиска Jacred / Jackett); у трекеров — "", он со страницы раздачи
+	Link       string // ссылка на тему на трекере (источник поиска); у трекеров — "", она по номеру темы
 }
 
 // Details — страница раздачи. Поля Release — свежие, со страницы.

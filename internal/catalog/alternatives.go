@@ -44,7 +44,7 @@ func (c *Catalog) SearchVariants(ctx context.Context, id int64, poll bool) ([]En
 		return nil, SearchState{}, err
 	}
 	st.Query = q
-	found = collapse(found)
+	found = c.collapse(found)
 	kp, err := c.kinopoiskIDs(ctx, append([]row{r}, found...))
 	if err != nil {
 		return nil, SearchState{}, err
@@ -67,7 +67,7 @@ func (c *Catalog) SearchVariants(ctx context.Context, id int64, poll bool) ([]En
 		}
 	}
 	pref := c.PreferredFormat()
-	rs = collapse(rs)
+	rs = c.collapse(rs)
 	preferFirst(rs, pref)
 	es, err := c.entries(ctx, withCurrent(rs, r, pref))
 	return es, st, err

@@ -26,17 +26,20 @@ type setupCheckResult struct {
 	Text string `json:"text"`
 }
 
-// handleSetupCheck — «Проверить»: {"tracker": "rutor" | "rutracker"}. Проверяются уже сохранённые
+// handleSetupCheck — «Проверить»: {"tracker": "rutor" | "rutracker"} или {"source": "search"} (источник поиска). Проверяются уже сохранённые
 // настройки: мастер сначала сохраняет поля. Шага «Кинопоиск» нет (спека 11b, 5.7).
 func (a *App) handleSetupCheck(w http.ResponseWriter, r *http.Request) {
 	var in struct {
 		Tracker string `json:"tracker"`
+		Source  string `json:"source"`
 	}
 	if !httpx.ReadJSON(w, r, &in) {
 		return
 	}
 	var res setupCheckResult
 	switch {
+	case in.Source == "search":
+		res.OK, res.Text = a.search.Check(r.Context())
 	case in.Tracker == "rutor":
 		res = trackerCheck("Rutor", a.rutor.Configured(), a.rutor.Check(r.Context()))
 	case in.Tracker == "rutracker":

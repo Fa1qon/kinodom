@@ -1,14 +1,37 @@
 // Поиск: недавние запросы, состояние каждого трекера, таблица найденного (спека этапа 7, разделы
 // 5.4 и 6.3).
-import { h, icon, size, poll, keepFocus, offWarn } from '../ui.js';
+import { h, icon, size, poll, keepFocus, offWarn, store } from '../ui.js';
 import { get, del } from '../api.js';
 import { poster } from './catalog.js';
 
-const TRACKER = { rutor: 'Rutor', rutracker: 'Rutracker' };
+// OWN — свои трекеры: страница раздачи, вкладка каталога; остальные — источник поиска Jacred / Jackett и
+// трекеры его раздач (11b-Д).
+const OWN = ['rutor', 'rutracker'];
+const LABELS = {
+  rutor: 'Rutor', rutracker: 'Rutracker', jacred: 'Jacred', kinozal: 'Kinozal', nnmclub: 'NNM-Club', lostfilm: 'LostFilm',
+  megapeer: 'Megapeer', bitru: 'Bitru', torrentby: 'Torrent.by', ultradox: 'Ultradox', leproduction: 'LE-Production',
+  selezen: 'Селезень', rudub: 'RuDub', mazepa: 'Mazepa', toloka: 'Toloka', anilibria: 'AniLibria', anifilm: 'AniFilm',
+  baibako: 'BaibaKo', animelayer: 'AnimeLayer',
+};
 const SEARCH_FOR = 30000; // поиск сервер держит не дольше 30 с
+
+// trackerLabel — название трекера для человека; незнакомый — как пришёл, с заглавной.
+export function trackerLabel(name) {
+  if (!name) return '';
+  return LABELS[name] || name[0].toUpperCase() + name.slice(1);
+}
+
+// backTo — «назад» с экрана раздачи: своя — в запомненный раздел каталога её трекера, чужая (из источника
+// поиска, каталога у неё нет) — в последний поиск.
+export function backTo(rel, savedCatalog, savedSearch) {
+  if (!OWN.includes(rel.tracker)) return { href: savedSearch || '#/search', text: 'Поиск' };
+  const href = savedCatalog && savedCatalog.startsWith(`#/catalog/${rel.tracker}`) ? savedCatalog : `#/catalog/${rel.tracker}`;
+  return { href, text: [trackerLabel(rel.tracker), rel.category].filter(Boolean).join(' · ') };
+}
 
 export function render(root, r, ctx) {
   const q = (r.query.get('q') || '').trim();
+  if (q) store.set('search', '#/search?q=' + encodeURIComponent(q));
   let alive = true;
   const history = h('div', { class: 'history' });
   const trackers = h('div', { class: 'tags' });
@@ -24,7 +47,7 @@ export function render(root, r, ctx) {
   root.append(h('div', { class: 'screen' }, form, h('h1', null, q ? `Поиск: «${q}»` : 'Поиск'), history, off, trackers, table));
   const onStatus = (status) => {
     const tr = (status && status.trackers) || {};
-    keepFocus(off, () => off.replaceChildren(...Object.keys(TRACKER).filter((t) => tr[t] && tr[t].state === 'off').map((t) => offWarn(tr[t].text))));
+    keepFocus(off, () => off.replaceChildren(...OWN.filter((t) => tr[t] && tr[t].state === 'off').map((t) => offWarn(tr[t].text))));
   };
   ctx.listeners.add(onStatus);
   onStatus(ctx.status);
@@ -93,7 +116,7 @@ export function render(root, r, ctx) {
       ...res.results.map((e) => h('a', { class: 'res-row', href: `#/release/${e.id}`, 'data-key': `res-${e.id}` },
         poster(e, e.name || e.title, 'poster thumb'),
         h('span', { class: 'res-title' }, h('span', { class: 'strong ellipsis' }, e.name || e.title), h('span', { class: 'muted small ellipsis' }, e.title)),
-        h('span', { class: 'muted' }, TRACKER[e.tracker] || e.tracker),
+        h('span', { class: 'muted' }, trackerLabel(e.tracker)),
         h('span', { class: 'muted' }, e.quality || ''),
         h('span', { class: 'muted' }, e.format || ''),
         h('span', null, size(e.size)),
@@ -118,15 +141,29 @@ export function keepPolling(res, startedAt, now) {
   return now - startedAt <= POSTERS_FOR && res.results.some((e) => e.detailsPending);
 }
 
-// trackerTags — состояние каждого трекера в поиске: сколько найдено, ищет, текст ошибки. Им же
-// пользуется «Искать на трекерах» на экране раздачи.
-export function trackerTags(trackers, results) {
+// tagStates — состояние каждого трекера в поиске: сколько найдено, ищет, текст ошибки. Свои — первыми, источник
+// поиска — после; его число — раздачи чужих трекеров (темы Rutor и Rutracker из него — в числе своих).
+export function tagStates(trackers, results) {
   const count = {};
-  for (const e of results) count[e.tracker] = (count[e.tracker] || 0) + 1;
-  return Object.keys(TRACKER).filter((t) => t in trackers).map((t) => {
+  for (const e of results) {
+    const k = OWN.includes(e.tracker) ? e.tracker : '';
+    count[k] = (count[k] || 0) + 1;
+  }
+  const names = [...OWN.filter((t) => t in trackers), ...Object.keys(trackers).filter((t) => !OWN.includes(t)).sort()];
+  return names.map((t) => {
     const s = trackers[t];
-    if (s === 'ok') return h('span', { class: 'tag ok-tag' }, icon('check', 18, 'Готово'), `${TRACKER[t]} · ${count[t] || 0}`);
-    if (s === 'идёт') return h('span', { class: 'tag busy-tag' }, icon('progress_activity', 18), `${TRACKER[t]} · ищет…`);
-    return h('span', { class: 'tag warn-tag' }, icon('warning', 18), s.startsWith(TRACKER[t]) ? s : `${TRACKER[t]} · ${s}`);
+    const label = trackerLabel(t);
+    if (s === 'ok') return { state: 'ok', text: `${label} · ${count[OWN.includes(t) ? t : ''] || 0}` };
+    if (s === 'идёт') return { state: 'busy', text: `${label} · ищет…` };
+    return { state: 'warn', text: s.startsWith(label) ? s : `${label} · ${s}` };
+  });
+}
+
+// trackerTags — теги tagStates. Ими же пользуется «Искать на трекерах» на экране раздачи.
+export function trackerTags(trackers, results) {
+  return tagStates(trackers, results).map(({ state, text }) => {
+    if (state === 'ok') return h('span', { class: 'tag ok-tag' }, icon('check', 18, 'Готово'), text);
+    if (state === 'busy') return h('span', { class: 'tag busy-tag' }, icon('progress_activity', 18), text);
+    return h('span', { class: 'tag warn-tag' }, icon('warning', 18), text);
   });
 }

@@ -1350,3 +1350,121 @@ for (const [name, got, want] of checks) {
 		t.Errorf("%v\n%s", err, out)
 	}
 }
+
+// Подписи трекеров (11b-Д): свои, источник поиска и трекеры раздач из него; незнакомый — с заглавной.
+// Теги поиска: источник — после своих трекеров, число — раздачи чужих трекеров. Чужая раздача — «назад»
+// в поиск, своя — в раздел каталога.
+func TestPultTrackerLabel(t *testing.T) {
+	node := lookNode(t)
+	script := `
+import { trackerLabel, tagStates, backTo } from './views/search.js';
+const checks = [
+  [trackerLabel('rutor'), 'Rutor'], [trackerLabel('rutracker'), 'Rutracker'], [trackerLabel('jacred'), 'Jacred'],
+  [trackerLabel('kinozal'), 'Kinozal'], [trackerLabel('nnmclub'), 'NNM-Club'], [trackerLabel('lostfilm'), 'LostFilm'],
+  [trackerLabel('megapeer'), 'Megapeer'], [trackerLabel('bitru'), 'Bitru'], [trackerLabel('ultradox'), 'Ultradox'],
+  [trackerLabel('newtracker'), 'Newtracker'], [trackerLabel(''), ''],
+];
+const tags = tagStates({ jacred: 'нужен ключ', rutor: 'ok', rutracker: 'идёт' }, [{ tracker: 'rutor' }, { tracker: 'kinozal' }, { tracker: 'nnmclub' }]);
+checks.push([JSON.stringify(tags), JSON.stringify([
+  { state: 'ok', text: 'Rutor · 1' }, { state: 'busy', text: 'Rutracker · ищет…' }, { state: 'warn', text: 'Jacred · нужен ключ' }])]);
+const done = tagStates({ jacred: 'ok' }, [{ tracker: 'rutor' }, { tracker: 'kinozal' }, { tracker: 'nnmclub' }]);
+checks.push([JSON.stringify(done), JSON.stringify([{ state: 'ok', text: 'Jacred · 2' }])]);
+const b1 = backTo({ tracker: 'kinozal' }, '#/catalog/rutor/12', '#/search?q=x');
+const b2 = backTo({ tracker: 'rutor', category: 'Фильмы' }, '#/catalog/rutor/12', '#/search?q=x');
+const b3 = backTo({ tracker: 'kinozal' }, null, null);
+checks.push([JSON.stringify(b1), '{"href":"#/search?q=x","text":"Поиск"}']);
+checks.push([JSON.stringify(b2), '{"href":"#/catalog/rutor/12","text":"Rutor · Фильмы"}']);
+checks.push([JSON.stringify(b3), '{"href":"#/search","text":"Поиск"}']);
+for (const [got, want] of checks) {
+  if (got !== want) {
+    console.error(got, '≠', want);
+    process.exitCode = 1;
+  }
+}
+`
+	cmd := exec.Command(node, "--input-type=module", "--no-warnings", "-e", script)
+	cmd.Dir = "static"
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Errorf("%v\n%s", err, out)
+	}
+}
+
+// Ключ источника поиска — как ключ Кинопоиска: «Стереть» — пустой ключ; пустое поле — не менять.
+func TestPultSearchKeyPatch(t *testing.T) {
+	node := lookNode(t)
+	script := `
+import { searchKeyPatch } from './views/settings-params.js';
+const s = (v) => JSON.stringify(v);
+const checks = [
+  [s(searchKeyPatch('', true)), '{"key":""}'],
+  [s(searchKeyPatch(' k-1 ', false)), '{"key":"k-1"}'],
+  [s(searchKeyPatch('  ', false)), 'null'],
+];
+for (const [got, want] of checks) {
+  if (got !== want) {
+    console.error(got, '≠', want);
+    process.exitCode = 1;
+  }
+}
+`
+	cmd := exec.Command(node, "--input-type=module", "--no-warnings", "-e", script)
+	cmd.Dir = "static"
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Errorf("%v\n%s", err, out)
+	}
+}
+
+// Экран раздачи, которая не сериал и без описания (раздача чужого трекера без номера Кинопоиска): ни в
+// сведениях, ни в панели нет текста «null» — replaceChildren печатал бы null текстом (вживую 11b-Д).
+func TestPultReleaseNoNullText(t *testing.T) {
+	node := lookNode(t)
+	script := `
+class El {
+  constructor(tag) { this.tagName = tag.toUpperCase(); this.children = []; this.attrs = {}; this.listeners = {}; this.style = {}; this.dataset = {}; this.parent = null;
+    this.classList = { add() {}, remove() {}, toggle() {}, contains() { return false; } }; }
+  append(...kids) { for (const k of kids) { const c = k instanceof El ? k : Object.assign(new El('#text'), { text: String(k) }); c.parent = this; this.children.push(c); } }
+  replaceChildren(...kids) { this.children = []; this.append(...kids); }
+  remove() {}
+  setAttribute(k, v) { this.attrs[k] = v; if (k.startsWith('data-')) this.dataset[k.slice(5)] = v; }
+  getAttribute(k) { return this.attrs[k] ?? null; }
+  removeAttribute(k) { delete this.attrs[k]; }
+  addEventListener() {}
+  removeEventListener() {}
+  querySelector() { return null; }
+  querySelectorAll() { return []; }
+  contains() { return false; }
+  focus() {}
+  get textContent() { return this.tagName === '#TEXT' ? this.text : this.children.map((c) => c.textContent).join(''); }
+  set textContent(v) { this.children = []; this.append(String(v)); }
+}
+globalThis.Node = El;
+const body = new El('body');
+globalThis.document = { body, activeElement: body, hidden: false, createElement: (t) => new El(t), createElementNS: (_, t) => new El(t),
+  createTextNode: (t) => Object.assign(new El('#text'), { text: t }), addEventListener() {}, removeEventListener() {}, querySelector: () => null };
+globalThis.requestAnimationFrame = (f) => setTimeout(f, 0);
+globalThis.CSS = { escape: (s) => s };
+const rel = { id: 7, tracker: 'bitru', title: 'Трудно быть богом 1 сезон (1-7 из 10) (2026) WEBRip', name: 'Трудно быть богом', seeders: 69, size: 1,
+  hash: 'eb3968c6ca73e0c2a5e471b9d61bf0cf7393c754', trackerUrl: 'https://bitru.example/details.php?id=1', description: '', detailsPending: false, series: false, follow: '' };
+globalThis.fetch = async (url) => {
+  const body = url.endsWith('/releases/7') ? rel : url.includes('/variants') ? { items: [], search: null } : url.includes('/history/') ? { files: [] } : null;
+  return { ok: body !== null, status: body === null ? 404 : 200, text: async () => JSON.stringify(body ?? { error: 'нет' }) };
+};
+const { render } = await import('./views/release.js');
+const root = new El('main');
+body.append(root);
+const stop = render(root, { parts: ['release', '7'], query: new URLSearchParams() }, { canEdit: true, listeners: new Set(), status: null, go() {}, refreshStatus() {} });
+await new Promise((r) => setTimeout(r, 300));
+const text = root.textContent;
+if (!text.includes('Скачать') || text.includes('null')) {
+  console.error('текст экрана:', text);
+  process.exitCode = 1;
+}
+if (typeof stop === 'function') stop();
+process.exit();
+`
+	cmd := exec.Command(node, "--input-type=module", "--no-warnings", "-e", script)
+	cmd.Dir = "static"
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Errorf("%v\n%s", err, out)
+	}
+}

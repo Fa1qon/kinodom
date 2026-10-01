@@ -61,7 +61,7 @@ func (c *Catalog) List(ctx context.Context, o ListOptions) (entries []Entry, tot
 	// порции глубже — в конце. Иначе порция Rutor (раздающих он считает неточно) двигала бы уже показанные
 	// страницы: карточки повторялись бы и терялись (вживую 11b-Г).
 	inSection := o.Tracker != "" && o.Category != ""
-	filtered = collapse(filtered)
+	filtered = c.collapse(filtered)
 	kp, err := c.kinopoiskIDs(ctx, filtered)
 	if err != nil {
 		return nil, 0, err
@@ -112,7 +112,7 @@ func (c *Catalog) SectionPage(ctx context.Context, tracker, section string, afte
 			filtered = append(filtered, r)
 		}
 	}
-	filtered = collapse(filtered)
+	filtered = c.collapse(filtered)
 	kp, err := c.kinopoiskIDs(ctx, filtered)
 	if err != nil {
 		return nil, after, 0, err
@@ -134,9 +134,10 @@ func (c *Catalog) SectionPage(ctx context.Context, tracker, section string, afte
 	return entries, next, len(out) - from - len(page), err
 }
 
-// collapse — одна карточка на infohash (спека, раздел 7): остаётся запись с большим числом
-// раздающих. Раздачи без infohash не схлопываются. Порядок — по убыванию раздающих.
-func collapse(rs []row) []row {
+// collapse — одна карточка на infohash (спека, раздел 7): остаётся раздача со страницей (своего трекера,
+// не из источника поиска — спека 11b, раздел 8), из равных — с большим числом раздающих. Раздачи без
+// infohash не схлопываются. Порядок — по убыванию раздающих.
+func (c *Catalog) collapse(rs []row) []row {
 	best := map[string]int{} // infohash → индекс в out
 	out := make([]row, 0, len(rs))
 	for _, r := range rs {
@@ -145,6 +146,12 @@ func collapse(rs []row) []row {
 			continue
 		}
 		if i, ok := best[r.InfoHash]; ok {
+			if mine, was := !c.pageless(r), !c.pageless(out[i]); mine != was {
+				if mine {
+					out[i] = r
+				}
+				continue
+			}
 			if r.Seeders > out[i].Seeders {
 				out[i] = r
 			}
@@ -210,7 +217,7 @@ func (c *Catalog) Categories(ctx context.Context) ([]Category, error) {
 	}
 	count := map[CategoryRef]int{}
 	for _, trs := range byTracker {
-		for _, r := range collapse(trs) {
+		for _, r := range c.collapse(trs) {
 			count[CategoryRef{r.Tracker, r.Section}]++
 		}
 	}
