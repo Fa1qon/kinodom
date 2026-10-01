@@ -1851,6 +1851,38 @@ for (const [got, want] of checks) {
 	}
 }
 
+// План 14В: «Удалить» на карточке медиатеки — своё через медиатеку, скачанное — как в «Загрузках»;
+// «Разрешить доступ» и у папки, куда нельзя писать.
+func TestPultLibraryDelete(t *testing.T) {
+	node := lookNode(t)
+	script := `
+globalThis.Node = class {};
+const { deleteRequest } = await import('./views/library-card.js');
+const { grantView } = await import('./views/folders.js');
+const own = deleteRequest({ unit: 7, hash: 'lib-7', path: 'D:\\Films\\Фильм.mkv', source: 'Фильмы' });
+const dl = deleteRequest({ unit: 9, hash: 'abcdef', path: 'D:\\Films\\X [abcdef12]', source: 'Скачано' });
+const g = grantView({ local: true }, { path: 'D:\\Films', problem: 'no_write' }, 8090);
+const checks = [
+  [own.path, '/library/units/7'],
+  [own.text.includes('Фильм.mkv'), true],
+  [dl.path, '/downloads/abcdef'],
+  [!!(g && g.link && g.link.startsWith('kinodom://grant?')), true],
+  [grantView({ local: true }, { path: 'D:\\Films', problem: '' }, 8090), null],
+];
+for (const [got, want] of checks) {
+  if (got !== want) {
+    console.error(JSON.stringify(got), '≠', JSON.stringify(want));
+    process.exitCode = 1;
+  }
+}
+`
+	cmd := exec.Command(node, "--input-type=module", "--no-warnings", "-e", script)
+	cmd.Dir = "static"
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Errorf("%v\n%s", err, out)
+	}
+}
+
 // План 14А, задача 3: на странице сериала крупно — какой сезон скачается.
 func TestPultSeasonLabel(t *testing.T) {
 	node := lookNode(t)
