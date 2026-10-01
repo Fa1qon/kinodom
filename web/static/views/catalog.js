@@ -51,6 +51,12 @@ export function retryDue(state, tailTop, viewportH) {
   return !!state.error && !state.loading && state.page < state.pages && tailTop < viewportH + 600;
 }
 
+// fillDue — порция пришла, а низ сетки всё ещё рядом: следующую — сразу, не дожидаясь наблюдателя
+// (он срабатывает только на вход в зону; вживую 11b-Г низ оставался в зоне, и подгрузка вставала).
+export function fillDue(state, tailTop, viewportH) {
+  return !state.error && !state.loading && state.page < state.pages && tailTop < viewportH + 600;
+}
+
 // groupBar — ряды над сеткой (спека 11b, 7.1): у Rutracker — группы («Кино · Сериалы · Документалистика»,
 // только где что-то выбрано; выбранная — по разделу, ссылка — на первый её подраздел) и подразделы
 // выбранной группы; раздел без группы — в ряду всегда. У Rutor групп нет — один ряд, как раньше.
@@ -137,6 +143,9 @@ export function render(root, r, ctx) {
     grid.append(...state.loaded.slice(was).map(entry));
     drawTail();
     remember();
+    setTimeout(() => {
+      if (alive && fillDue(state, tail.getBoundingClientRect().top, window.innerHeight)) more();
+    }, 0);
   }
 
   function drawTail() {
@@ -164,8 +173,11 @@ export function render(root, r, ctx) {
     if (e.key === 'ArrowDown' && inLastRow(e.target) && retryDue(state, tail.getBoundingClientRect().top, window.innerHeight)) more();
   });
   let scrollTimer = 0;
+  // Прокрутка сама проверяет, близко ли низ: наблюдатель пересечения сообщает только смену «в зоне / вне
+  // зоны» и вживую пропускал уход низа из зоны после порции — подгрузка вставала (11b-Г).
   const onScroll = () => {
-    if (retryDue(state, tail.getBoundingClientRect().top, window.innerHeight)) more();
+    const tailTop = tail.getBoundingClientRect().top;
+    if (retryDue(state, tailTop, window.innerHeight) || fillDue(state, tailTop, window.innerHeight)) more();
     clearTimeout(scrollTimer);
     scrollTimer = setTimeout(remember, 200);
   };
