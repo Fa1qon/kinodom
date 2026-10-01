@@ -4,7 +4,7 @@
 import { h, icon, size, speed, rating, minutes, ready, poll, copyText, store, plural, shortNames, keepFocus, fileFormat, openPlayer, confirmDialog, fill } from '../ui.js';
 import { get, post, put, del } from '../api.js';
 import { whereStopped, resumeIndex } from './history.js';
-import { poster } from './catalog.js';
+import { poster, returnTo } from './catalog.js';
 import { trackerTags, trackerLabel, backTo } from './search.js';
 
 const PENDING_FOR = 120000; // догрузку страницы раздачи ждём не дольше 2 минут (трекер мог лечь)
@@ -129,7 +129,16 @@ export function render(root, r, ctx) {
   function drawHead() {
     const title = rel.name || rel.title || 'Раздача';
     const to = backTo(rel, store.get('catalog'), store.get('search'));
-    back.replaceChildren(h('a', { class: 'back', href: to.href }, icon('chevron_left', 18), to.text));
+    const link = h('a', { class: 'back', href: to.href }, icon('chevron_left', 18), to.text);
+    if (to.href.startsWith('#/catalog/')) {
+      // В раздел каталога — на то же место (спека 11b, 14.3): шаг назад по истории или переход с местом.
+      link.addEventListener('click', (e) => {
+        if (e.button !== 0 || e.ctrlKey || e.metaKey || e.shiftKey || e.altKey) return; // в новой вкладке — как ссылка
+        e.preventDefault();
+        returnTo(to.href, ctx.prev);
+      });
+    }
+    back.replaceChildren(link);
     cover.replaceChildren(poster(rel, title, 'poster big'));
     const desc = rel.description ? h('p', { class: descOpen ? 'desc' : 'desc clamp' }, rel.description) : null;
     fill(info,
