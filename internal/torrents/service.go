@@ -95,6 +95,7 @@ type Service struct {
 	mu       sync.Mutex
 	sessions map[metainfo.Hash]*session
 	policy   Policy
+	fetching map[metainfo.Hash]chan struct{} // идёт FetchInfo: временная раздача без хранилища
 
 	expiredAt  time.Time     // когда последний раз чистили по сроку хранения (только Run)
 	keeper     *power.Keeper // запрет сна, пока идёт поток; nil — без него
@@ -325,6 +326,9 @@ func (s *Service) Open(ctx context.Context, src Source) (metainfo.Hash, error) {
 	// Под s.mu: уборка не должна убрать запись о раздаче между Remember и появлением сессии.
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if err := s.waitFetch(ctx, ih); err != nil {
+		return metainfo.Hash{}, err
+	}
 	// Папку раздачи движок должен знать до добавления: файлы создаются сразу, как придёт метаинфо.
 	dir, err := s.reg.Remember(ctx, ih, source, s.eng.DownloadsDir())
 	if err != nil {
