@@ -18,6 +18,7 @@ type View struct {
 	Setup     SetupView     `json:"setup"`
 	Proxy     ProxyView     `json:"proxy"`
 	Kinopoisk KinopoiskView `json:"kinopoisk"`
+	Search    SearchView    `json:"search"`
 	Storage   StorageView   `json:"storage"`
 	Player    string        `json:"player"`
 	Catalog   CatalogView   `json:"catalog"`
@@ -50,6 +51,12 @@ type ProxyView struct {
 
 type KinopoiskView struct {
 	KeySet bool `json:"keySet"`
+}
+
+// SearchView — источник поиска Jacred / Jackett: ключ — только признак «задан».
+type SearchView struct {
+	Address string `json:"address"` // "" — выключен
+	KeySet  bool   `json:"keySet"`
 }
 
 type StorageView struct {
@@ -85,6 +92,7 @@ func (v Values) View() View {
 		Setup:     SetupView{Done: v.SetupDone},
 		Proxy:     ProxyView{Type: p.Type, Address: p.Address, Login: p.Login, PasswordSet: p.password != ""},
 		Kinopoisk: KinopoiskView{KeySet: v.KinopoiskKey != ""},
+		Search:    SearchView{Address: v.SearchAddress, KeySet: v.SearchKey != ""},
 		Storage:   StorageView{DownloadsDir: v.DownloadsDir, KeepDays: v.KeepDays, KeepBehind: v.KeepBehind, MinFreeGB: v.MinFreeGB, UploadLimitMBps: v.UploadMBps},
 		Player:    v.Player,
 		Catalog:   CatalogView{Sections: splitSections(v.Sections), PreferredFormat: v.PreferredFormat},
@@ -100,6 +108,7 @@ type Patch struct {
 	Setup     *SetupPatch     `json:"setup"`
 	Proxy     *ProxyPatch     `json:"proxy"`
 	Kinopoisk *KinopoiskPatch `json:"kinopoisk"`
+	Search    *SearchPatch    `json:"search"`
 	Storage   *StoragePatch   `json:"storage"`
 	Player    *string         `json:"player"`
 	Catalog   *CatalogPatch   `json:"catalog"`
@@ -132,6 +141,12 @@ type ProxyPatch struct {
 
 type KinopoiskPatch struct {
 	Key *string `json:"key"`
+}
+
+// SearchPatch — адрес ("" — выключить) и ключ ("" — стереть) источника поиска.
+type SearchPatch struct {
+	Address *string `json:"address"`
+	Key     *string `json:"key"`
 }
 
 type StoragePatch struct {

@@ -382,3 +382,51 @@ func TestSetupDone(t *testing.T) {
 		t.Fatal("после записи мастер не пройден")
 	}
 }
+
+// Источник поиска (спека 11b, раздел 8): адрес приводится к «схема://хост» (свой Jackett в домашней
+// сети без схемы — http://), ключ в ответ не отдаётся, без поля — не меняется, "" — стирается.
+func TestSearchSourceSettings(t *testing.T) {
+	db := openDB(t)
+	v := load(t, db, nil)
+	if vw := v.View(); vw.Search.Address != "" || vw.Search.KeySet {
+		t.Fatalf("по умолчанию: %+v", vw.Search)
+	}
+	n, err := v.With(patch(t, `{"search":{"address":" jac.red/api/ ","key":" SECRET-4 "}}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n.SearchAddress != "https://jac.red" || n.SearchKey != "SECRET-4" {
+		t.Fatalf("после правки: %q %q", n.SearchAddress, n.SearchKey)
+	}
+	if b, _ := json.Marshal(n.View()); strings.Contains(string(b), "SECRET") || !n.View().Search.KeySet || n.View().Search.Address != "https://jac.red" {
+		t.Fatalf("вид: %s", b)
+	}
+	if err := save(ctx, db, v, n); err != nil {
+		t.Fatal(err)
+	}
+	if got := load(t, db, nil); got.SearchAddress != "https://jac.red" || got.SearchKey != "SECRET-4" {
+		t.Fatalf("после записи: %q %q", got.SearchAddress, got.SearchKey)
+	}
+	for in, want := range map[string]string{
+		"192.168.1.5:9117":       "http://192.168.1.5:9117",
+		"localhost:9117":         "http://127.0.0.1:9117",
+		"https://192.168.1.5:91": "https://192.168.1.5:91",
+		"http://jacred.my.home":  "http://jacred.my.home",
+	} {
+		m, err := n.With(Patch{Search: &SearchPatch{Address: &in}})
+		if err != nil || m.SearchAddress != want || m.SearchKey != "SECRET-4" {
+			t.Errorf("%s: %q %q, %v", in, m.SearchAddress, m.SearchKey, err)
+		}
+	}
+	if m, err := n.With(patch(t, `{"search":{"key":""}}`)); err != nil || m.SearchKey != "" || m.SearchAddress != "https://jac.red" {
+		t.Errorf("стереть ключ: %+v, %v", m, err)
+	}
+	if m, err := n.With(patch(t, `{"search":{"address":""}}`)); err != nil || m.SearchAddress != "" {
+		t.Errorf("стереть адрес: %q, %v", m.SearchAddress, err)
+	}
+	m, err := n.With(patch(t, `{"search":{"address":"ftp://x.org"}}`))
+	var fe *FieldError
+	if !errors.As(err, &fe) || fe.Field != "Адрес источника поиска" || !reflect.DeepEqual(m, n) {
+		t.Errorf("неверный адрес: %v", err)
+	}
+}

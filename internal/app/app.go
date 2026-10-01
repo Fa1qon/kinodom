@@ -35,6 +35,7 @@ import (
 	"kinodom/internal/power"
 	"kinodom/internal/settings"
 	"kinodom/internal/source"
+	"kinodom/internal/source/jacred"
 	"kinodom/internal/source/rutor"
 	"kinodom/internal/source/rutracker"
 	"kinodom/internal/store"
@@ -99,8 +100,9 @@ type App struct {
 	kpweb     *meta.KPWeb // Кинопоиск без токена (11b-Б)
 	rutor     *rutor.Rutor
 	rutracker *rutracker.Rutracker
-	proxy     *netx.Proxy // прокси для трекеров: один на всех, меняется в пульте на ходу
-	closers   []io.Closer // закрываются в обратном порядке
+	search    *jacred.Client // источник поиска Jacred / Jackett по адресу из настроек (11b-Д)
+	proxy     *netx.Proxy    // прокси для трекеров: один на всех, меняется в пульте на ходу
+	closers   []io.Closer    // закрываются в обратном порядке
 }
 
 func New(ctx context.Context, o Options) (*App, error) {
@@ -312,6 +314,7 @@ func (a *App) initCatalog(ctx context.Context, o Options, v settings.Values) err
 		return err
 	}
 	a.rutor = rutorSrc
+	a.search = jacred.New(jacred.Options{Address: v.SearchAddress, Key: v.SearchKey, Proxy: a.proxy, Log: log})
 	rto := rutracker.Options{Proxy: a.proxy, Mirrors: oneAddress(v.RutrackerAddress), APIBase: v.RutrackerAPI,
 		FeedBase: v.RutrackerFeed, Rate: o.Trackers.Rate, Log: log,
 		Login: v.RutrackerLogin, Password: v.RutrackerPassword, OnLogin: a.rutrackerLogin}
@@ -746,6 +749,9 @@ func (a *App) Apply(ctx context.Context, old, n settings.Values) {
 	}
 	if trackersChanged {
 		a.Catalog.Refresh()
+	}
+	if n.SearchAddress != old.SearchAddress || n.SearchKey != old.SearchKey {
+		a.search.SetAddress(n.SearchAddress, n.SearchKey)
 	}
 	a.Log.Info("настройки изменены в пульте") // без значений: среди них пароли и ключ
 }
