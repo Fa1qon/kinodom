@@ -51,9 +51,13 @@ func CheckLanguage(l string) error {
 	return nil
 }
 
-// knownKey — ключ существующего канала: в составе или в телепрограмме (в том числе «id+N»).
+// knownKey — ключ существующего канала или версии: в составе или в телепрограмме (в том числе «id+N»).
 func (m *Module) knownKey(key string) bool {
-	if _, ok := m.Lineup().ByKey[key]; ok {
+	l := m.Lineup()
+	if _, ok := l.ByKey[key]; ok {
+		return true
+	}
+	if _, ok := l.Families[key]; ok {
 		return true
 	}
 	id, _ := parseKey(key)
