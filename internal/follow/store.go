@@ -27,9 +27,10 @@ const (
 type Follow struct {
 	Release   int64
 	State     string
-	InfoHash  string // версия, которую видели последней
-	Episodes  int    // вышло серий
-	Total     int    // «из N»; 0 — неизвестно
+	InfoHash  string   // версия, которую видели последней
+	Episodes  int      // вышло серий
+	Total     int      // «из N»; 0 — неизвестно
+	Paths     []string // видеофайлы этой версии (пути внутри раздачи); пусто — ещё не знаем
 	CheckedAt time.Time
 }
 
@@ -71,12 +72,23 @@ func fromMS(v int64) time.Time {
 // follow — подписаться; уже подписаны (в том числе закончившаяся или снятая) — снова активна, версия —
 // нынешняя.
 func (d followDB) follow(ctx context.Context, f Follow, now time.Time) error {
-	_, err := d.db.W.ExecContext(ctx,
-		`INSERT INTO follows(release_id, state, infohash, episodes, total, created_at) VALUES(?, 'active', ?, ?, ?, ?)
+	paths, err := json.Marshal(nonNilPaths(f.Paths))
+	if err != nil {
+		return err
+	}
+	_, err = d.db.W.ExecContext(ctx,
+		`INSERT INTO follows(release_id, state, infohash, episodes, total, paths, created_at) VALUES(?, 'active', ?, ?, ?, ?, ?)
 		 ON CONFLICT(release_id) DO UPDATE SET state = 'active', infohash = excluded.infohash,
-		   episodes = excluded.episodes, total = excluded.total`,
-		f.Release, f.InfoHash, f.Episodes, f.Total, ms(now))
+		   episodes = excluded.episodes, total = excluded.total, paths = excluded.paths`,
+		f.Release, f.InfoHash, f.Episodes, f.Total, string(paths), ms(now))
 	return err
+}
+
+func nonNilPaths(ps []string) []string {
+	if ps == nil {
+		return []string{}
+	}
+	return ps
 }
 
 func (d followDB) unfollow(ctx context.Context, release int64) error {
@@ -84,14 +96,17 @@ func (d followDB) unfollow(ctx context.Context, release int64) error {
 	return err
 }
 
-const followColumns = `release_id, state, infohash, episodes, total, checked_at`
+const followColumns = `release_id, state, infohash, episodes, total, paths, checked_at`
 
 func scanFollow(sc interface{ Scan(...any) error }) (Follow, error) {
 	var f Follow
 	var checked int64
-	err := sc.Scan(&f.Release, &f.State, &f.InfoHash, &f.Episodes, &f.Total, &checked)
+	var paths string
+	if err := sc.Scan(&f.Release, &f.State, &f.InfoHash, &f.Episodes, &f.Total, &paths, &checked); err != nil {
+		return f, err
+	}
 	f.CheckedAt = fromMS(checked)
-	return f, err
+	return f, json.Unmarshal([]byte(paths), &f.Paths)
 }
 
 // get — подписка на раздачу; ok = false — не следят.
@@ -126,10 +141,14 @@ func (d followDB) setChecked(ctx context.Context, release int64, at time.Time) e
 	return err
 }
 
-// setVersion — новая версия раздачи учтена: её infohash и сколько в ней серий.
-func (d followDB) setVersion(ctx context.Context, release int64, infohash string, episodes, total int) error {
-	_, err := d.db.W.ExecContext(ctx, `UPDATE follows SET infohash = ?, episodes = ?, total = ? WHERE release_id = ?`,
-		infohash, episodes, total, release)
+// setVersion — версия раздачи учтена: её infohash, сколько в ней серий и её видеофайлы.
+func (d followDB) setVersion(ctx context.Context, release int64, infohash string, episodes, total int, paths []string) error {
+	b, err := json.Marshal(nonNilPaths(paths))
+	if err != nil {
+		return err
+	}
+	_, err = d.db.W.ExecContext(ctx, `UPDATE follows SET infohash = ?, episodes = ?, total = ?, paths = ? WHERE release_id = ?`,
+		infohash, episodes, total, string(b), release)
 	return err
 }
 
