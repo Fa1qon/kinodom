@@ -1691,3 +1691,29 @@ for (const [name, got, want] of checks) {
 		t.Errorf("%v\n%s", err, out)
 	}
 }
+
+// «Состояние» (спека этапа 13, раздел 5.3): строка «Приложение для ТВ и телефона» с адресом ПК в домашней сети;
+// APK на сервере нет или адреса нет — строки нет.
+func TestPultAppLine(t *testing.T) {
+	node := lookNode(t)
+	script := `
+import { appLine } from './views/settings-status.js';
+const app = { version: '0.11.0-abc', versionCode: 5, url: '/app/kinodom.apk', size: 1 };
+const checks = [
+  ['адрес есть', appLine(app, ['http://192.168.0.26:8090', 'http://172.26.96.1:8090']), 'http://192.168.0.26:8090/app'],
+  ['APK нет', appLine(null, ['http://192.168.0.26:8090']), null],
+  ['адреса нет', appLine(app, []), null],
+];
+for (const [name, got, want] of checks) {
+  if (got !== want) {
+    console.error(name, ':', got, '≠', want);
+    process.exitCode = 1;
+  }
+}
+`
+	cmd := exec.Command(node, "--input-type=module", "--no-warnings", "-e", script)
+	cmd.Dir = "static"
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Errorf("%v\n%s", err, out)
+	}
+}
