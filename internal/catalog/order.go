@@ -106,9 +106,102 @@ type orderList struct {
 	empty int
 }
 
-// fromSectionList — порядок берётся из списка раздела API в памяти (Rutracker: качающие, новизна).
-func fromSectionList(k orderKey) bool {
-	return k.cat.Tracker == "rutracker" && (k.ord == source.OrderLeechers || k.ord == source.OrderNew)
+// wholeList — весь список порядка собирается сразу (Rutracker): качающие и новизна — из списка раздела API в
+// памяти, скачивания — из первых страниц поиска форумов раздела.
+func wholeList(k orderKey) bool {
+	return k.cat.Tracker == "rutracker" && k.ord != source.OrderSeeders
+}
+
+// maxOrderForums — сколько форумов раздела спрашивать для «Скачиваний» (запрос к форуму — раз в секунду).
+const maxOrderForums = 8
+
+// orderSource — весь список раздела Rutracker в порядке k: качающие и новизна — список раздела API по полю;
+// скачивания — первые страницы поиска его крупных форумов, слитые по числу скачиваний: форум без поискового
+// запроса сортирует только сам по себе, а со списком форумов отдаёт новые (вживую 2026-10-01).
+func (c *Catalog) orderSource(ctx context.Context, k orderKey, src source.Source) ([]source.Release, error) {
+	c.mu.Lock()
+	d, have := c.deep[k.cat]
+	c.mu.Unlock()
+	if !have {
+		if _, err := c.sectionTop(ctx, k.cat, src); err != nil {
+			return nil, err
+		}
+		c.mu.Lock()
+		d = c.deep[k.cat]
+		c.mu.Unlock()
+	}
+	if k.ord != source.OrderDownloads {
+		return sortedBy(d.rs, k.ord), nil
+	}
+	sp, ok := src.(sortedPager)
+	if !ok {
+		return nil, nil
+	}
+	var all []source.Release
+	var firstErr error
+	for _, f := range mainForums(c.sectionForums(ctx, k.cat), d.rs) {
+		rs, _, err := sp.SortedPage(ctx, []string{f}, k.ord, 0)
+		if err != nil {
+			if ctx.Err() != nil {
+				return nil, err
+			}
+			if firstErr == nil {
+				firstErr = err
+			}
+			c.log.Info("каталог: скачивания форума не пришли", "tracker", k.cat.Tracker, "forum", f, "err", err)
+			continue
+		}
+		all = append(all, rs...)
+	}
+	if len(all) == 0 && firstErr != nil {
+		return nil, firstErr
+	}
+	seen := map[string]bool{}
+	out := make([]source.Release, 0, len(all))
+	for _, r := range withSeeders(all) {
+		if !seen[r.TopicID] {
+			seen[r.TopicID] = true
+			out = append(out, r)
+		}
+	}
+	slices.SortStableFunc(out, func(a, b source.Release) int { return b.Downloads - a.Downloads })
+	return out, nil
+}
+
+// mainForums — форумы раздела, где больше всего его раздач (по списку раздела): покрывающие 90 % раздач, не
+// больше maxOrderForums; форумы без раздач не спрашиваются. Раздел из одного форума — он сам; раздач по
+// форумам не видно — первые maxOrderForums.
+func mainForums(forums []string, rs []source.Release) []string {
+	if len(forums) <= 1 {
+		return forums
+	}
+	in := map[string]bool{}
+	for _, f := range forums {
+		in[f] = true
+	}
+	count := map[string]int{}
+	total := 0
+	for _, r := range rs {
+		if in[r.CategoryID] {
+			count[r.CategoryID]++
+			total++
+		}
+	}
+	ranked := slices.Clone(forums)
+	slices.SortStableFunc(ranked, func(a, b string) int { return count[b] - count[a] })
+	if total == 0 {
+		return ranked[:min(len(ranked), maxOrderForums)]
+	}
+	var out []string
+	sum := 0
+	for _, f := range ranked {
+		if len(out) == maxOrderForums || count[f] == 0 || sum*10 >= total*9 {
+			break
+		}
+		out = append(out, f)
+		sum += count[f]
+	}
+	return out
 }
 
 // sortedBy — список раздела по убыванию поля порядка (стабильно: равные — по раздающим, как пришли).
@@ -145,20 +238,11 @@ func (c *Catalog) ensureOrder(ctx context.Context, k orderKey) (more bool, err e
 	var rs []source.Release
 	last := false
 	switch sp, paged := src.(sortedPager); {
-	case fromSectionList(k):
+	case wholeList(k):
 		if list == nil {
-			c.mu.Lock()
-			d, have := c.deep[k.cat]
-			c.mu.Unlock()
-			if !have {
-				if _, err := c.sectionTop(ctx, k.cat, src); err != nil {
-					return true, err
-				}
-				c.mu.Lock()
-				d = c.deep[k.cat]
-				c.mu.Unlock()
+			if list, err = c.orderSource(ctx, k, src); err != nil {
+				return true, err
 			}
-			list = sortedBy(d.rs, k.ord)
 			c.mu.Lock()
 			ol.src = list
 			c.mu.Unlock()

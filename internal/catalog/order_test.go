@@ -157,10 +157,27 @@ func TestOrderFallbackAndForums(t *testing.T) {
 	rutor.sorted = map[string]map[string][]source.Release{source.OrderNew: {"12": manyDesc("rutor", 30)}}
 	rt := newFake("rutracker")
 	rt.tree = rutrackerTree()
-	rt.top["56"] = manyDesc("rutracker", 10)
-	rt.top["2076"] = manyDesc("rutracker", 5)
+	inForum := func(f string, rs []source.Release, downloads ...int) []source.Release {
+		for i := range rs {
+			rs[i].CategoryID = f
+			if i < len(downloads) {
+				rs[i].Downloads = downloads[i]
+			}
+		}
+		return rs
+	}
+	rt.top["56"] = inForum("56", manyDesc("rutracker", 10))
+	other := manyDesc("rutracker", 5)
+	for i := range other {
+		other[i].TopicID, other[i].InfoHash = fmt.Sprint(2000+i), fmt.Sprintf("o%d", i)
+	}
+	rt.top["2076"] = inForum("2076", other)
 	rt.sortOrders = []string{source.OrderDownloads}
-	rt.sorted = map[string]map[string][]source.Release{source.OrderDownloads: {"46": manyDesc("rutracker", 7)}}
+	// Форум без запроса сортирует только сам по себе (вживую 2026-10-01): «Скачивания» подраздела —
+	// первые страницы его форумов, слитые по числу скачиваний.
+	d56 := inForum("56", []source.Release{rel("rutracker", "701", "Кино Сто", 9, 1, "d1"), rel("rutracker", "702", "Кино Пятьдесят", 9, 1, "d2")}, 100, 50)
+	d2076 := inForum("2076", []source.Release{rel("rutracker", "703", "Кино Восемьдесят", 9, 1, "d3")}, 80)
+	rt.sorted = map[string]map[string][]source.Release{source.OrderDownloads: {"56": d56, "2076": d2076}}
 	c, _ := newCatalog(t, openDB(t), func(o *Options) {
 		o.Sections = []Section{{"rutor", "12", false}, {"rutracker", "46", true}}
 	}, rutor, rt)
@@ -180,11 +197,11 @@ func TestOrderFallbackAndForums(t *testing.T) {
 	if v.Order != source.OrderNew {
 		t.Fatalf("без порядка в адресе — умолчание: %q", v.Order)
 	}
-	if got := walkOrder(t, mux, "rutracker", "46", source.OrderDownloads); len(got) != 7 {
-		t.Fatalf("скачивания: %d", len(got))
+	if got := walkOrder(t, mux, "rutracker", "46", source.OrderDownloads); !slices.Equal(got, []string{"Сто", "Восемьдесят", "Пятьдесят"}) {
+		t.Fatalf("скачивания: %v", got)
 	}
-	if rt.Calls("sortedForums:46,56,2076") == 0 {
-		t.Fatalf("форумы подраздела: %v", rt.calls)
+	if rt.Calls("sortedForums:56") != 1 || rt.Calls("sortedForums:2076") != 1 || rt.Calls("sorted:downloads") != 2 {
+		t.Fatalf("форумы подраздела — по одному (46 без раздач не спрашивается): %v", rt.calls)
 	}
 	if got := c.Orders("rutracker"); !slices.Equal(got, []string{"seeders", "leechers", "new", "downloads"}) {
 		t.Fatalf("порядки Rutracker: %v", got)
