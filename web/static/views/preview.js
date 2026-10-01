@@ -134,18 +134,26 @@ export function openPreview(src, title, now = '') {
 export async function grabFrame(src, timeoutMs = 8000) {
   const kind = playerKind(src);
   if (kind === 'dash') return null;
-  const video = h('video', { muted: true, autoplay: true, playsinline: true, class: 'frame-probe' });
+  // Без autoplay и в пределах окна (невидимым): Chrome ставит на паузу беззвучный автозапуск вне экрана —
+  // кадр не приходил (вживую 14Д); явный play() так не останавливается.
+  const video = h('video', { muted: true, playsinline: true, class: 'frame-probe' });
   video.muted = true;
   document.body.append(video);
   let player = null;
   try {
     player = await attach(video, watchURL(src.id), kind);
+    video.play().catch(() => {});
+    // Кадр — после полутора секунд эфира: первые кадры бывают чёрными (затемнение, ключевой кадр не пришёл).
     const ok = await new Promise((resolve) => {
-      const t = setTimeout(() => resolve(false), timeoutMs);
-      video.addEventListener('playing', () => setTimeout(() => {
-        clearTimeout(t);
-        resolve(video.videoWidth > 0);
-      }, 300), { once: true });
+      const t = setTimeout(() => resolve(video.currentTime > 0 && video.videoWidth > 0), timeoutMs);
+      const tick = () => {
+        if (video.currentTime >= 1.5 && video.videoWidth > 0) {
+          clearTimeout(t);
+          video.removeEventListener('timeupdate', tick);
+          resolve(true);
+        }
+      };
+      video.addEventListener('timeupdate', tick);
       video.addEventListener('error', () => {
         clearTimeout(t);
         resolve(false);
