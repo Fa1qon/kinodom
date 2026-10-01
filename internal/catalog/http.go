@@ -145,7 +145,7 @@ func (c *Catalog) handleList(w http.ResponseWriter, r *http.Request) {
 			out.Entries = append(out.Entries, e.View())
 			ids = append(ids, e.ID)
 		}
-		c.enqueueFound(r.Context(), name, ids) // без страницы раздачи — в догрузку вне очереди по порядку показа
+		c.enqueueFound(r.Context(), name, ids, PageSize) // без страницы раздачи — в догрузку вне очереди по порядку показа, вся порция
 	}
 	at, err := c.UpdatedAt(r.Context(), name)
 	if err != nil {
