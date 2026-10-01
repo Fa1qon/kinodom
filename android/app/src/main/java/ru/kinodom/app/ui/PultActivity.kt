@@ -7,6 +7,8 @@ import android.content.Intent
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
+import android.os.Handler
+import android.os.Looper
 import android.view.View
 import android.view.ViewGroup
 import android.webkit.JavascriptInterface
@@ -17,21 +19,41 @@ import android.webkit.WebView
 import android.webkit.WebViewClient
 import android.widget.FrameLayout
 import android.window.OnBackInvokedDispatcher
+import java.io.File
+import kotlinx.coroutines.MainScope
+import kotlinx.coroutines.cancel
+import kotlinx.coroutines.launch
 import ru.kinodom.app.BuildConfig
 import ru.kinodom.app.R
 import ru.kinodom.app.core.Action
 import ru.kinodom.app.core.BackDecision
 import ru.kinodom.app.core.Links
 import ru.kinodom.app.core.Route
+import ru.kinodom.app.core.ServerApp
+import ru.kinodom.app.core.UpdateDecision
 import ru.kinodom.app.core.WebViewVersion
+import ru.kinodom.app.net.Updater
 
 // PultActivity — пульт Kinodom во весь экран (спека этапа 13, раздел 3.3): WebView со страницей сервера, «Назад» —
 // по истории пульта, на первом экране — свернуть; фильмы и «На трекере» — снаружи (VLC, браузер); сервер не
-// отвечает — «Kinodom не отвечает» с «Повторить» и «Другой адрес».
+// отвечает — «Kinodom не отвечает» с «Повторить» и «Другой адрес»; новая версия на сервере — «Обновить» (раздел 6).
 class PultActivity : Activity() {
     private lateinit var base: String
     private lateinit var web: WebView
+    private lateinit var root: FrameLayout
+    private lateinit var updater: Updater
+    private val scope = MainScope()
+    private val handler = Handler(Looper.getMainLooper())
+    private val daily = object : Runnable {
+        override fun run() {
+            checkUpdate()
+            handler.postDelayed(this, DAY_MS)
+        }
+    }
+
     private var overlay: View? = null
+    private var overlayClosable = false // окно обновления — «Назад» закрывает; «Kinodom не отвечает» — нет
+    private var pendingApk: File? = null // скачанное обновление ждёт разрешения «устанавливать из Kinodom»
 
     @SuppressLint("SetJavaScriptEnabled")
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -41,13 +63,14 @@ class PultActivity : Activity() {
             finish()
             return
         }
-        val root = FrameLayout(this)
         if (!WebViewVersion.ok(WebSettings.getDefaultUserAgent(this))) {
             val c = Screens.column(this)
             c.addView(Screens.title(this, getString(R.string.webview_old)))
             setContentView(c)
             return
         }
+        updater = Updater(this, base)
+        root = FrameLayout(this)
         web = WebView(this).apply {
             setBackgroundColor(getColor(R.color.bg))
             settings.javaScriptEnabled = true
@@ -65,6 +88,8 @@ class PultActivity : Activity() {
         if (Build.VERSION.SDK_INT >= 33) {
             onBackInvokedDispatcher.registerOnBackInvokedCallback(OnBackInvokedDispatcher.PRIORITY_DEFAULT) { back() }
         }
+        checkUpdate()
+        handler.postDelayed(daily, DAY_MS)
     }
 
     override fun onSaveInstanceState(outState: Bundle) {
@@ -78,7 +103,12 @@ class PultActivity : Activity() {
     private fun back() {
         val canGoBack = ::web.isInitialized && web.canGoBack()
         when (BackDecision.onBack(canGoBack, overlay != null)) {
-            Action.CloseOverlay -> moveTaskToBack(true) // «Kinodom не отвечает» поверх мёртвого пульта — назад некуда
+            Action.CloseOverlay -> if (overlayClosable) {
+                postponed = true
+                closeOverlay()
+            } else {
+                moveTaskToBack(true) // «Kinodom не отвечает» поверх мёртвого пульта — назад некуда
+            }
             Action.GoBack -> web.goBack()
             Action.Minimize -> moveTaskToBack(true)
         }
@@ -92,40 +122,121 @@ class PultActivity : Activity() {
     override fun onResume() {
         super.onResume()
         if (::web.isInitialized) web.onResume()
+        // Вернулись из настроек «устанавливать из Kinodom» — поставить скачанное.
+        val apk = pendingApk
+        if (apk != null && ::updater.isInitialized && updater.canInstall()) {
+            pendingApk = null
+            install(apk)
+        }
     }
 
     override fun onDestroy() {
+        handler.removeCallbacks(daily)
+        scope.cancel()
         if (::web.isInitialized) web.destroy()
         super.onDestroy()
     }
 
+    private fun showOverlay(v: View, closable: Boolean, focus: View?) {
+        overlay?.let { root.removeView(it) }
+        v.isClickable = true
+        root.addView(v)
+        overlay = v
+        overlayClosable = closable
+        focus?.requestFocus()
+    }
+
+    private fun closeOverlay() {
+        overlay?.let { root.removeView(it) }
+        overlay = null
+        web.requestFocus()
+    }
+
     // unreachable — «Kinodom не отвечает» поверх пульта.
     private fun unreachable() {
-        if (overlay != null) return
+        if (overlay != null && !overlayClosable) return
         val c = Screens.column(this)
-        c.isClickable = true
         c.addView(Screens.title(this, getString(R.string.no_answer)))
         c.addView(Screens.note(this, base.removePrefix("http://").removeSuffix("/")))
         val retry = Screens.button(this, getString(R.string.retry)) {
-            (web.parent as ViewGroup).removeView(overlay)
-            overlay = null
+            closeOverlay()
             web.loadUrl(base)
-            web.requestFocus()
         }
         c.addView(retry)
         c.addView(Screens.button(this, getString(R.string.other_address)) {
             startActivity(Intent(this, StartActivity::class.java).putExtra(StartActivity.EXTRA_ASK, true))
             finish()
         })
-        (web.parent as ViewGroup).addView(c)
-        overlay = c
-        retry.requestFocus()
+        showOverlay(c, closable = false, focus = retry)
+    }
+
+    // checkUpdate — на сервере новее и «Позже» не нажимали — окно «Есть новая версия Kinodom».
+    private fun checkUpdate() {
+        scope.launch {
+            if (overlay != null || postponed) return@launch
+            val app = updater.check()
+            if (overlay == null && UpdateDecision.offer(BuildConfig.VERSION_CODE, app, postponed)) offerUpdate(app!!)
+        }
+    }
+
+    private fun offerUpdate(app: ServerApp) {
+        val c = Screens.column(this)
+        c.addView(Screens.title(this, getString(R.string.update_title)))
+        c.addView(Screens.note(this, app.version))
+        val now = Screens.button(this, getString(R.string.update_now)) { startUpdate(app) }
+        c.addView(now)
+        c.addView(Screens.button(this, getString(R.string.update_later)) {
+            postponed = true
+            closeOverlay()
+        })
+        showOverlay(c, closable = true, focus = now)
+    }
+
+    private fun startUpdate(app: ServerApp) {
+        val c = Screens.column(this)
+        c.addView(Screens.title(this, getString(R.string.update_title)))
+        val note = Screens.note(this, getString(R.string.update_loading, 0))
+        c.addView(note)
+        showOverlay(c, closable = false, focus = null)
+        scope.launch {
+            val f = updater.download(app) { pct -> note.text = getString(R.string.update_loading, pct) }
+            if (f == null) {
+                val e = Screens.column(this@PultActivity)
+                e.addView(Screens.title(this@PultActivity, getString(R.string.update_failed)))
+                val close = Screens.button(this@PultActivity, getString(R.string.close)) {
+                    postponed = true
+                    closeOverlay()
+                }
+                e.addView(close)
+                showOverlay(e, closable = true, focus = close)
+                return@launch
+            }
+            closeOverlay()
+            if (updater.canInstall()) {
+                install(f)
+            } else {
+                pendingApk = f
+                try {
+                    startActivity(updater.askInstallPermission())
+                } catch (e: ActivityNotFoundException) {
+                    pendingApk = null
+                }
+            }
+        }
+    }
+
+    private fun install(f: File) {
+        try {
+            startActivity(updater.installIntent(f))
+        } catch (e: ActivityNotFoundException) {
+            // установщика нет (не бывает на Android с Play и без) — оставить как есть
+        }
     }
 
     // openOutside — плейлист и поток — в плеер (VLC), остальное — в браузер.
     private fun openOutside(url: String) {
         val uri = Uri.parse(url)
-        val media = Links.route(url, base) == Route.Outside && uri.scheme == "http" && (uri.path ?: "").let {
+        val media = uri.scheme == "http" && (uri.path ?: "").let {
             it.startsWith("/m3u/") || it.startsWith("/stream/") || it.endsWith(".m3u8")
         }
         val i = Intent(Intent.ACTION_VIEW).apply { if (media) setDataAndType(uri, "video/*") else data = uri }
@@ -139,7 +250,11 @@ class PultActivity : Activity() {
     // openIntent — intent:// пульта (VLC с местом); VLC нет — запасной адрес (.m3u8).
     private fun openIntent(url: String) {
         val i = try {
-            Intent.parseUri(url, Intent.URI_INTENT_SCHEME).apply { addCategory(Intent.CATEGORY_BROWSABLE); component = null; selector = null }
+            Intent.parseUri(url, Intent.URI_INTENT_SCHEME).apply {
+                addCategory(Intent.CATEGORY_BROWSABLE)
+                component = null
+                selector = null
+            }
         } catch (e: Exception) {
             return
         }
@@ -179,5 +294,9 @@ class PultActivity : Activity() {
 
     companion object {
         const val EXTRA_BASE = "base"
+        private const val DAY_MS = 24L * 60 * 60 * 1000
+
+        // postponed — «Позже»: до следующего запуска процесса приложения (спека этапа 13, раздел 6).
+        private var postponed = false
     }
 }

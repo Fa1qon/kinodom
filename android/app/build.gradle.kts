@@ -53,5 +53,7 @@ android {
 
 dependencies {
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.10.2")
+    implementation("androidx.core:core:1.13.1") // FileProvider: установщику Android — APK обновления
     testImplementation("junit:junit:4.13.2")
+    testImplementation("org.json:json:20260814") // в тестах на JVM org.json из Android — заглушки
 }
