@@ -1,6 +1,7 @@
 package catalog
 
 import (
+	"errors"
 	"fmt"
 	"net/http"
 	"slices"
@@ -253,5 +254,51 @@ func TestOrderCardShowsReleaseOfItsPlace(t *testing.T) {
 	got := walkOrder(t, mux, "rutor", "12", source.OrderNew)
 	if !slices.Equal(got, []string{"Альфа (2020) WEB-DL", "Бета (2021) WEB-DL"}) {
 		t.Fatalf("новые: %v", got)
+	}
+}
+
+// Ревью 14Б, Important 1: первая порция порядка не пришла (трекер не ответил), а показать нечего — раздел
+// показывается по раздающим (они в базе), с текстом ошибки порядка; переключатель остаётся (порядки в ответе).
+func TestOrderFailureFallsBackToSeeders(t *testing.T) {
+	rutor := newFake("rutor")
+	rutor.top["12"] = manyDesc("rutor", 30)
+	rutor.sortOrders = []string{source.OrderNew} // а списка «Новых» нет — SortedPage падает
+	c, _ := newCatalog(t, openDB(t), func(o *Options) { o.Sections = []Section{{"rutor", "12", false}} }, rutor)
+	refresh(t, c, true)
+	mux := http.NewServeMux()
+	c.Register(muxRouter{mux})
+	rutor.set(func() { rutor.sortedErr = errors.New("Rutor не отвечает") })
+	var v ListView
+	code := getJSONErr(t, mux, "/api/v1/catalog?tracker=rutor&section=12&after=-1&order=new", &v)
+	if code != 200 || v.Order != source.OrderSeeders || len(v.Entries) == 0 || v.OrderError == "" || len(v.Orders) != 2 {
+		t.Fatalf("код %d, порядок %q, карточек %d, ошибка %q, порядки %v", code, v.Order, len(v.Entries), v.OrderError, v.Orders)
+	}
+}
+
+// Ревью 14Б (Minor 1 → Important): выбор в памяти устройства запомнен при прежнем умолчании (since); умолчание
+// сменили в «Параметрах» — действует новое, а не память.
+func TestOrderSinceDefaultChanged(t *testing.T) {
+	rutor := newFake("rutor")
+	rutor.top["12"] = manyDesc("rutor", 30)
+	rutor.sortOrders = []string{source.OrderLeechers, source.OrderNew}
+	rutor.sorted = map[string]map[string][]source.Release{source.OrderNew: {"12": manyDesc("rutor", 30)},
+		source.OrderLeechers: {"12": manyDesc("rutor", 30)}}
+	c, _ := newCatalog(t, openDB(t), func(o *Options) { o.Sections = []Section{{"rutor", "12", false}} }, rutor)
+	refresh(t, c, true)
+	mux := http.NewServeMux()
+	c.Register(muxRouter{mux})
+	var v ListView
+	getJSONErr(t, mux, "/api/v1/catalog?tracker=rutor&section=12&after=-1&order=new&since=seeders", &v)
+	if v.Order != source.OrderNew || v.DefaultOrder != source.OrderSeeders {
+		t.Fatalf("умолчание то же — память: %q, умолчание %q", v.Order, v.DefaultOrder)
+	}
+	c.SetDefaultOrder(source.OrderLeechers)
+	getJSONErr(t, mux, "/api/v1/catalog?tracker=rutor&section=12&after=-1&order=new&since=seeders", &v)
+	if v.Order != source.OrderLeechers || v.DefaultOrder != source.OrderLeechers {
+		t.Fatalf("умолчание сменили — оно: %q, умолчание %q", v.Order, v.DefaultOrder)
+	}
+	getJSONErr(t, mux, "/api/v1/catalog?tracker=rutor&section=12&after=-1&order=new", &v)
+	if v.Order != source.OrderNew {
+		t.Fatalf("порядок из адреса (без since) — он: %q", v.Order)
 	}
 }

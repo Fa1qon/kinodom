@@ -159,8 +159,33 @@ export function dotted(parts) {
   return out;
 }
 
-// ORDER — выбранный порядок разделов в памяти браузера (план 14Б); нет — умолчание из «Параметров».
+// ORDER — выбранный порядок разделов в памяти браузера (план 14Б): {o, d} — порядок и умолчание «Параметров»,
+// при котором его выбрали; умолчание сменили — сервер память не слушает (ревью 14Б). Нет — умолчание.
 export const ORDER = 'catalog.order';
+
+// focusOrderNext — порядок выбрали с пульта ТВ: после перехода фокус — снова на ряд порядков (ревью 14Б).
+let focusOrderNext = false;
+
+// readOrderMemory — память выбора: {o, d}; прежняя память — просто строка порядка.
+export function readOrderMemory(raw) {
+  if (!raw) return { o: '', d: '' };
+  try {
+    const m = JSON.parse(raw);
+    if (m && typeof m.o === 'string') return { o: m.o, d: typeof m.d === 'string' ? m.d : '' };
+  } catch {
+    // прежняя память — строка
+  }
+  return { o: String(raw), d: '' };
+}
+
+// orderParams — порядок в запросе порции: показанный (следующие порции — тем же, что первая), иначе из
+// адреса, иначе из памяти (с умолчанием, при котором выбран), иначе — умолчание сервера.
+export function orderParams(urlOrder, mem, shown) {
+  if (shown) return { order: shown };
+  if (urlOrder) return { order: urlOrder };
+  if (mem && mem.o) return mem.d ? { order: mem.o, since: mem.d } : { order: mem.o };
+  return {};
+}
 
 // orderLinks — переключатель порядка над разделом: ссылки на тот же раздел в каждом порядке.
 export function orderLinks(orders, current, base) {
@@ -191,8 +216,11 @@ export function render(root, r, ctx) {
   const tracker = TRACKERS.some(([id]) => id === r.parts[1]) ? r.parts[1] : 'rutor';
   const section = r.parts[2] || '';
   // Порядок: из адреса, иначе выбранный раньше, иначе — умолчание сервера (план 14Б).
-  const asked = r.query.get('order') || store.get(ORDER) || '';
-  let shownOrder = asked;
+  const urlOrder = r.query.get('order') || '';
+  const mem = readOrderMemory(store.get(ORDER));
+  let shownOrder = urlOrder || mem.o;
+  let firstOrder = ''; // порядок первой пришедшей порции — им просятся следующие
+  let defaultOrder = '';
   let alive = true;
   let state = portions(undefined, { type: 'init' });
   let shownSection = section;
@@ -208,9 +236,10 @@ export function render(root, r, ctx) {
   const warn = h('div');
   const bar = h('nav', { class: 'filters', 'aria-label': 'Разделы' });
   const obar = h('nav', { class: 'filters orders', 'aria-label': 'Порядок' });
+  const owarn = h('div');
   const grid = h('div', { class: 'grid' });
   const tail = h('div', { class: 'grid-tail' });
-  root.append(h('div', { class: 'screen' }, h('div', { class: 'row' }, tabs, h('div', { class: 'grow' }), updated), warn, bar, obar, grid, tail));
+  root.append(h('div', { class: 'screen' }, h('div', { class: 'row' }, tabs, h('div', { class: 'grow' }), updated), warn, bar, obar, owarn, grid, tail));
 
   // Вкладки и предупреждение трекера — из «Состояния»: у вкладки со значком есть проблемы.
   const onStatus = (status) => {
@@ -251,7 +280,7 @@ export function render(root, r, ctx) {
     drawTail();
     const q = new URLSearchParams({ tracker, after: String(state.next) });
     if (shownSection) q.set('section', shownSection);
-    if (asked) q.set('order', asked);
+    for (const [k, v] of Object.entries(orderParams(urlOrder, mem, firstOrder))) q.set(k, v);
     let list;
     try {
       list = await get(`/catalog?${q}`);
@@ -265,7 +294,9 @@ export function render(root, r, ctx) {
     shownSection = list.section;
     if (state.page === 0) {
       updated.textContent = list.updatedAt ? `обновлён ${ago(list.updatedAt)}` : 'ещё не обновлялся';
-      shownOrder = list.order || '';
+      shownOrder = firstOrder = list.order || '';
+      defaultOrder = list.defaultOrder || '';
+      owarn.replaceChildren(list.orderError ? h('div', { class: 'warn' }, icon('warning'), list.orderError) : '');
       drawOrders(list.orders);
     }
     const was = state.loaded.length;
@@ -290,8 +321,15 @@ export function render(root, r, ctx) {
       href: o.href,
       'aria-current': o.on ? 'true' : null,
       'data-key': `ord-${o.id}`,
-      onclick: () => store.set(ORDER, o.id),
+      onclick: () => {
+        store.set(ORDER, JSON.stringify({ o: o.id, d: defaultOrder }));
+        focusOrderNext = true;
+      },
     }, o.name)));
+    const on = obar.querySelector('.on');
+    if (on) on.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+    if (focusOrderNext && on) on.focus({ preventScroll: true });
+    focusOrderNext = false;
   }
 
   // card — карточка порции; незаконченная — под присмотром опроса.
