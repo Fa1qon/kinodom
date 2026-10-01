@@ -1627,3 +1627,67 @@ for (const [name, got, want] of checks) {
 		t.Errorf("%v\n%s", err, out)
 	}
 }
+
+// Замечание № 19 (спека 11b, 15.1): «смотрели» — поток закрыт, «смотрят» — открыт; подтверждение корзины
+// с временем последнего потока; «Удалить» на странице раздачи — есть хранимые файлы без открытого потока,
+// в подтверждении — сколько скачано.
+func TestPultDeleteLabels(t *testing.T) {
+	node := lookNode(t)
+	script := `
+import { stateLabel, confirmText } from './views/downloads.js';
+import { removable, removeTitle } from './views/release.js';
+const at = new Date(2026, 9, 1, 12, 35).toISOString();
+const st = (files) => ({ files });
+const checks = [
+  ['поток открыт', stateLabel({ state: 'watching', streaming: true }), 'смотрят'],
+  ['поток закрыт', stateLabel({ state: 'watching', streaming: false }), 'смотрели'],
+  ['качается', stateLabel({ state: 'downloading' }), 'качается'],
+  ['подтверждение со временем', confirmText({ watchedAt: at }), 'Смотрели в 12:35 — удалить?'],
+  ['подтверждение без потока', confirmText({}), 'Удалить?'],
+  ['нечего удалять', removable(st([{ stored: false }])), false],
+  ['качается, поток закрыт', removable(st([{ stored: true, watching: false }])), true],
+  ['фильм смотрят', removable(st([{ stored: true, watching: true }])), false],
+  ['одну серию смотрят — остальное удалить можно', removable(st([{ stored: true, watching: true }, { stored: true, watching: false }])), true],
+  ['нет состояния', removable(null), false],
+  ['скачано 23 %', removeTitle('Одиссея', st([{ stored: true, size: 1000, done: 230 }, { stored: false, size: 500, done: 0 }])), 'Удалить «Одиссея» — скачано 23 %?'],
+  ['скачано целиком', removeTitle('Одиссея', st([{ stored: true, size: 1000, done: 1000 }])), 'Удалить «Одиссея»?'],
+];
+for (const [name, got, want] of checks) {
+  if (got !== want) {
+    console.error(name, ':', got, '≠', want);
+    process.exitCode = 1;
+  }
+}
+`
+	cmd := exec.Command(node, "--input-type=module", "--no-warnings", "-e", script)
+	cmd.Dir = "static"
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Errorf("%v\n%s", err, out)
+	}
+}
+
+// Финальное ревью 11b-З, Important 1: опрос загрузки на странице раздачи не останавливается, пока у
+// хранимого файла открыт поток — иначе у скачанной раздачи «Удалить» застывала серой, когда плеер закрыли.
+func TestPultTorrentDone(t *testing.T) {
+	node := lookNode(t)
+	script := `
+import { torrentDone } from './views/release.js';
+const checks = [
+  ['качается', torrentDone({ files: [{ stored: true, readiness: 'wait' }] }), false],
+  ['скачано, плеер закрыт', torrentDone({ files: [{ stored: true, readiness: 'done', watching: false }] }), true],
+  ['скачано, поток открыт', torrentDone({ files: [{ stored: true, readiness: 'done', watching: true }] }), false],
+  ['ничего не хранится', torrentDone({ files: [{ stored: false }] }), false],
+];
+for (const [name, got, want] of checks) {
+  if (got !== want) {
+    console.error(name, ':', got, '≠', want);
+    process.exitCode = 1;
+  }
+}
+`
+	cmd := exec.Command(node, "--input-type=module", "--no-warnings", "-e", script)
+	cmd.Dir = "static"
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Errorf("%v\n%s", err, out)
+	}
+}

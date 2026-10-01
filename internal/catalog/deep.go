@@ -3,6 +3,7 @@ package catalog
 import (
 	"context"
 	"errors"
+	"runtime/debug"
 	"slices"
 	"strings"
 	"time"
@@ -156,6 +157,72 @@ func (c *Catalog) ensureOne(ctx context.Context, cat CategoryRef) (more bool, er
 	}
 	c.mu.Unlock()
 	return !last, nil
+}
+
+// deepLock — замок раздела: страница раздела с трекера качается одна за раз — фоновая подкачка и просьба
+// пульта не качают её дважды (спека 11b, 15.2). Канал на одно место: ждать можно с отменой.
+func (c *Catalog) deepLock(cat CategoryRef) chan struct{} {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	l, ok := c.deepBusy[cat]
+	if !ok {
+		l = make(chan struct{}, 1)
+		c.deepBusy[cat] = l
+	}
+	return l
+}
+
+// prefetchDeep — следующая страница раздела с трекера в фоне: запас в базе меньше порции, а пульт не
+// должен её ждать (замечание № 20). Подкачка уже идёт — ничего.
+func (c *Catalog) prefetchDeep(cat CategoryRef) {
+	l := c.deepLock(cat)
+	select {
+	case l <- struct{}{}:
+	default:
+		return
+	}
+	c.mu.Lock()
+	base := c.runCtx
+	c.mu.Unlock()
+	if base == nil {
+		base = context.Background()
+	}
+	c.deepWG.Add(1)
+	go func() {
+		defer c.deepWG.Done()
+		defer func() { <-l }()
+		// Разбор страницы трекера — вне обработчика HTTP и сторожа: паника — строка в журнале, а не падение
+		// всей программы (финальное ревью 11b-З); следующая просьба пульта попробует сама.
+		defer func() {
+			if p := recover(); p != nil {
+				c.log.Error("каталог: паника при подкачке раздела", "tracker", cat.Tracker, "section", cat.ID, "panic", p, "stack", string(debug.Stack()))
+			}
+		}()
+		if _, err := c.ensureOne(base, cat); err != nil && base.Err() == nil {
+			c.log.Info("каталог: порция раздела не подкачалась", "tracker", cat.Tracker, "section", cat.ID, "err", err)
+		}
+	}()
+}
+
+// deepFetch — страница раздела с трекера для просьбы, которой показать нечего: ждёт идущую подкачку (с
+// отменой), потом need — нужна ли ещё страница (подкачка могла уже дать карточки); нужна — качает сама.
+// more — у трекера, возможно, есть ещё.
+func (c *Catalog) deepFetch(ctx context.Context, cat CategoryRef, need func() (bool, error)) (bool, error) {
+	l := c.deepLock(cat)
+	select {
+	case l <- struct{}{}:
+	case <-ctx.Done():
+		return true, ctx.Err()
+	}
+	defer func() { <-l }()
+	ok, err := need()
+	if err != nil {
+		return true, err
+	}
+	if !ok {
+		return !c.deepEnded(cat), nil
+	}
+	return c.ensureOne(ctx, cat)
 }
 
 // deepEnded — у трекера список раздела кончился (порций больше нет).

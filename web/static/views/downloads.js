@@ -17,6 +17,20 @@ const ORDER = ['watching', 'downloading', 'paused', 'queued', 'done'];
 const CONFIRM_FOR = 3000; // «Удалить?» ждёт второго нажатия 3 с
 const NOTE_FOR = 10000; // «Сейчас смотрят — …» после удаления раздачи видно 10 с (хвост Х27)
 
+// stateLabel — подпись метки состояния: «смотрят» — поток открыт, «смотрели» — смотрели за последние 6
+// часов, а плеер закрыт — удалить уже можно (замечание № 19).
+export function stateLabel(d) {
+  if (d.state === 'watching' && !d.streaming) return 'смотрели';
+  return (STATE[d.state] || STATE.queued)[0];
+}
+
+// confirmText — второе нажатие корзины: смотрели недавно — когда (замечание № 19).
+export function confirmText(d) {
+  if (!d || !d.watchedAt) return 'Удалить?';
+  const t = new Date(d.watchedAt);
+  return `Смотрели в ${String(t.getHours()).padStart(2, '0')}:${String(t.getMinutes()).padStart(2, '0')} — удалить?`;
+}
+
 // noteText — надпись под корзиной: {text, until} — until 0 — до следующего действия (ошибка), иначе
 // видна до этого времени.
 export function noteText(entry, now) {
@@ -66,6 +80,8 @@ export function render(root, r, ctx) {
     const full = g.release ? g.release.title : d0.file;
     const title = shortTitle(full);
     const lead = g.items.find((d) => d.state === g.state) || d0;
+    const streaming = g.items.some((d) => d.streaming);
+    const watchedAt = g.items.map((d) => d.watchedAt).filter(Boolean).sort().pop();
     const key = single ? `${g.hash}-${d0.index}` : g.hash;
     const isOpen = open.has(g.hash);
     const thumb = h('div', { class: 'thumb' });
@@ -75,7 +91,7 @@ export function render(root, r, ctx) {
       h('div', { class: 'dl-name' },
         g.release ? h('a', { class: 'strong', href: `#/release/${g.release.id}`, title: full, 'data-key': `open-${g.hash}` }, title) : h('span', { class: 'strong' }, title),
         h('span', { class: 'muted small ellipsis', title: single ? d0.file : null }, groupLine(g))),
-      stateCell(g.state, lead.readiness, g.percent),
+      stateCell(g.state, lead.readiness, g.percent, stateLabel({ state: g.state, streaming })),
       h('div', { class: 'dl-size' }, size(g.size), g.speed ? h('div', { class: 'muted small' }, speed(g.speed)) : null),
       h('div', { class: 'muted small dl-when' }, when(g.items), errorOf(key)),
       h('div', { class: 'dl-actions' },
@@ -87,8 +103,8 @@ export function render(root, r, ctx) {
           } }, icon(isOpen ? 'expand_more' : 'chevron_right')),
         followToggle(g, key), // у сериала — и когда скачана одна серия
         !ctx.canEdit ? null
-          : single ? trash(key, d0.canDelete, 'Удалить файл', () => removeFile(d0))
-            : trash(key, g.canDelete, 'Удалить раздачу', () => removeRelease(g))))];
+          : single ? trash(key, d0.canDelete, 'Удалить файл', () => removeFile(d0), confirmText(d0))
+            : trash(key, g.canDelete, 'Удалить раздачу', () => removeRelease(g), confirmText({ watchedAt }))))];
     if (!single && isOpen) {
       const names = shortNames(g.items.map((d) => d.file));
       g.items.forEach((d, k) => rows.push(episode(d, names[k])));
@@ -101,14 +117,14 @@ export function render(root, r, ctx) {
     const key = `${d.hash}-${d.index}`;
     return h('div', { class: 'dl child' },
       h('div', { class: 'dl-name' }, h('span', { class: 'ellipsis', title: d.file }, name)),
-      stateCell(d.state, d.readiness, d.percent),
+      stateCell(d.state, d.readiness, d.percent, stateLabel(d)),
       h('div', { class: 'dl-size' }, size(d.size), d.speed ? h('div', { class: 'muted small' }, speed(d.speed)) : null),
       h('div', { class: 'muted small dl-when' }, when([d]), errorOf(key)),
-      h('div', { class: 'dl-actions' }, ctx.canEdit ? trash(key, d.canDelete, 'Удалить файл', () => removeFile(d)) : null));
+      h('div', { class: 'dl-actions' }, ctx.canEdit ? trash(key, d.canDelete, 'Удалить файл', () => removeFile(d), confirmText(d)) : null));
   }
 
-  function stateCell(state, readiness, percent) {
-    const [label, ic, color] = STATE[state] || STATE.queued;
+  function stateCell(state, readiness, percent, label) {
+    const [, ic, color] = STATE[state] || STATE.queued;
     const rd = ready[readiness] || ready.none;
     const c = color || rd.color || 'var(--muted)';
     return h('div', { class: 'dl-state' },
@@ -130,14 +146,14 @@ export function render(root, r, ctx) {
     return text ? h('div', { class: 'error' }, text) : null;
   }
 
-  // trash — корзина: первое нажатие — «Удалить?» на 3 с, второе — удалить. То, что смотрят, удалить
-  // нельзя: у раздачи — если смотрят все её серии.
-  function trash(key, canDelete, label, remove) {
+  // trash — корзина: первое нажатие — «Удалить?» (ask) на 3 с, второе — удалить. Файл с открытым потоком
+  // удалить нельзя: у раздачи — если поток открыт у всех её серий (№ 19: смотрели недавно — можно).
+  function trash(key, canDelete, label, remove, ask = 'Удалить?') {
     if (!canDelete) {
       return h('button', { class: 'sq', type: 'button', disabled: true, 'aria-label': 'Сейчас смотрят — удалить нельзя' }, icon('delete'));
     }
     if (confirming === key) {
-      return h('button', { class: 'btn danger', type: 'button', 'data-key': `del-${key}`, onclick: () => run(key, remove) }, 'Удалить?');
+      return h('button', { class: 'btn danger', type: 'button', 'data-key': `del-${key}`, onclick: () => run(key, remove) }, ask);
     }
     return h('button', { class: 'sq', type: 'button', 'data-key': `del-${key}`, 'aria-label': label, onclick: () => {
       confirming = key;
