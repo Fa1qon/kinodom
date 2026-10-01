@@ -162,14 +162,16 @@ func (c *Catalog) enqueueFound(ctx context.Context, name string, ids []int64) {
 		c.log.Warn("поиск: найденное не читается", "err", err)
 		return
 	}
-	n := 0
+	var batch []int64
 	for _, id := range ids {
 		if r, ok := byID[id]; ok && r.DetailsAt.IsZero() {
-			c.findSoon(name, id)
-			if n++; n == searchToEnrich {
-				return
+			if batch = append(batch, id); len(batch) == searchToEnrich {
+				break
 			}
 		}
+	}
+	if len(batch) > 0 {
+		c.findSoon(name, batch)
 	}
 }
 

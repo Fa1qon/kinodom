@@ -1,14 +1,15 @@
 package catalog
 
 import (
+	"fmt"
 	"net/http"
 	"testing"
 
 	"kinodom/internal/source"
 )
 
-// Каталог трекера — страницами по 24 раздачи раздела, по раздающим; без раздела — первый раздел
-// трекера с раздачами; страница вне диапазона — пусто (спека этапа 7, раздел 5.4).
+// Каталог трекера — порциями по 24 карточки раздела по месту, курсор — место последней карточки; без
+// раздела — первый раздел трекера с раздачами; за последней — пусто (спека этапа 7, раздел 5.4; 11b-Г).
 func TestListRoutePagesBySection(t *testing.T) {
 	rutor, rt := newFake("rutor"), newFake("rutracker")
 	rutor.top["12"] = many("rutor", 30)
@@ -21,20 +22,20 @@ func TestListRoutePagesBySection(t *testing.T) {
 	mux := http.NewServeMux()
 	c.Register(muxRouter{mux})
 	var v ListView
-	if code := getJSON(t, mux, "/api/v1/catalog?tracker=rutor", &v); code != 200 || v.Section != "12" || v.Page != 1 ||
-		v.Pages != 2 || len(v.Entries) != 24 || v.Entries[0].Seeders != 100 || v.UpdatedAt == nil || !v.UpdatedAt.Equal(clk.now()) {
-		t.Fatalf("первая страница: %d %+v", code, v)
+	if code := getJSON(t, mux, "/api/v1/catalog?tracker=rutor", &v); code != 200 || v.Section != "12" || !v.More ||
+		len(v.Entries) != 24 || v.Entries[0].Seeders != 100 || v.UpdatedAt == nil || !v.UpdatedAt.Equal(clk.now()) {
+		t.Fatalf("первая порция: %d %+v", code, v)
 	}
 	if e := v.Entries[0]; e.Name != "Фильм 0" || e.Year != 2020 || e.Quality != "WEB-DL" || e.Tracker != "rutor" {
 		t.Fatalf("карточка: %+v", e)
 	}
-	getJSON(t, mux, "/api/v1/catalog?tracker=rutor&section=12&page=2", &v)
-	if len(v.Entries) != 6 || v.Entries[0].Seeders != 76 {
-		t.Fatalf("вторая страница: %+v", v)
+	getJSON(t, mux, fmt.Sprintf("/api/v1/catalog?tracker=rutor&section=12&after=%d", v.Next), &v)
+	if len(v.Entries) != 6 || v.Entries[0].Seeders != 76 || v.More {
+		t.Fatalf("вторая порция: %+v", v)
 	}
-	getJSON(t, mux, "/api/v1/catalog?tracker=rutor&section=12&page=9", &v)
-	if len(v.Entries) != 0 || v.Pages != 2 {
-		t.Fatalf("за последней страницей: %+v", v)
+	getJSON(t, mux, fmt.Sprintf("/api/v1/catalog?tracker=rutor&section=12&after=%d", v.Next), &v)
+	if len(v.Entries) != 0 || v.More {
+		t.Fatalf("за последней: %+v", v)
 	}
 	getJSON(t, mux, "/api/v1/catalog?tracker=rutracker", &v)
 	if v.Section != "2110" || len(v.Entries) != 3 || v.Entries[0].Tracker != "rutracker" {

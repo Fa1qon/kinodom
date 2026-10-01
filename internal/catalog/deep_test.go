@@ -41,166 +41,45 @@ func manyDesc(tracker string, n int) []source.Release {
 	return rs
 }
 
-// listPage — страница каталога через маршрут, как у пульта.
-func listPage(t *testing.T, h http.Handler, tracker, section string, page int) (ListView, int) {
+// listAfter — порция раздела через маршрут, как у пульта: карточки после места after (-1 — с начала).
+func listAfter(t *testing.T, h http.Handler, tracker, section string, after int) (ListView, int) {
 	t.Helper()
 	var v ListView
-	code := getJSONErr(t, h, fmt.Sprintf("/api/v1/catalog?tracker=%s&section=%s&page=%d", tracker, section, page), &v)
+	code := getJSONErr(t, h, fmt.Sprintf("/api/v1/catalog?tracker=%s&section=%s&after=%d", tracker, section, after), &v)
 	return v, code
 }
 
-// Раздел Rutor прокручивается дальше первой сотни: следующая страница трекера — по запросу, одна на сотню
-// (спека 11b, 7.2).
-func TestDeepPortionsRutor(t *testing.T) {
-	rutor := newFake("rutor")
-	rutor.top["12"] = manyDesc("rutor", 250)
-	c, _ := newCatalog(t, openDB(t), func(o *Options) { o.Sections = []Section{{"rutor", "12", false}} }, rutor)
-	refresh(t, c, true)
-	mux := http.NewServeMux()
-	c.Register(muxRouter{mux})
-	seen := map[int64]bool{}
-	var pages []int
-	for p := 1; p <= 12; p++ {
-		v, code := listPage(t, mux, "rutor", "12", p)
+// walkSection — раздел, как его листает пульт: порция за порцией по курсору, пока есть ещё (не больше
+// limit порций). seen — сколько раз показана каждая карточка; after — курсор после последней порции.
+func walkSection(t *testing.T, h http.Handler, tracker, section string, after, limit int) (seen map[int64]int, next int, more bool) {
+	t.Helper()
+	seen = map[int64]int{}
+	next, more = after, true
+	for i := 0; i < limit && more; i++ {
+		v, code := listAfter(t, h, tracker, section, next)
 		if code != 200 {
-			t.Fatalf("страница %d: %d", p, code)
-		}
-		pages = append(pages, v.Pages)
-		for _, e := range v.Entries {
-			seen[e.ID] = true
-		}
-		if p >= v.Pages {
-			break
-		}
-	}
-	if len(seen) != 250 {
-		t.Fatalf("карточек %d, нужно 250 (страницы %v)", len(seen), pages)
-	}
-	if n := rutor.Calls("toppage"); n > 3 {
-		t.Fatalf("страниц трекера запрошено %d — по одной на сотню", n)
-	}
-}
-
-// Список кончился — pages не растёт; порция не пришла — ошибка, пульт повторит (Review Focus 2).
-func TestDeepPortionsEnd(t *testing.T) {
-	rutor := newFake("rutor")
-	rutor.top["12"] = manyDesc("rutor", 130)
-	c, _ := newCatalog(t, openDB(t), func(o *Options) { o.Sections = []Section{{"rutor", "12", false}} }, rutor)
-	refresh(t, c, true)
-	mux := http.NewServeMux()
-	c.Register(muxRouter{mux})
-	rutor.set(func() { rutor.pageErr = errors.New("Rutor не отвечает") })
-	if _, code := listPage(t, mux, "rutor", "12", 5); code == 200 {
-		t.Fatal("порция не пришла — нужна ошибка, чтобы пульт повторил")
-	}
-	rutor.set(func() { rutor.pageErr = nil })
-	last := 0
-	for p := 1; p <= 10; p++ {
-		v, code := listPage(t, mux, "rutor", "12", p)
-		if code != 200 {
-			t.Fatalf("страница %d: %d", p, code)
-		}
-		last = v.Pages
-		if p >= v.Pages {
-			break
-		}
-	}
-	if last != 6 { // 130 карточек по 24
-		t.Fatalf("страниц %d, нужно 6", last)
-	}
-	calls := rutor.Calls("toppage")
-	if v, _ := listPage(t, mux, "rutor", "12", 6); v.Pages != 6 || rutor.Calls("toppage") != calls {
-		t.Fatalf("после конца списка трекер не спрашивается: страниц %d, запросов %d → %d", v.Pages, calls, rutor.Calls("toppage"))
-	}
-}
-
-// Rutracker: глубже сотни — из списка в памяти; после перезапуска — список раздела из API один раз
-// (Review Focus 5).
-func TestDeepRutrackerAfterRestart(t *testing.T) {
-	rt := newFake("rutracker")
-	rt.tree = rutrackerTree()
-	rt.top["56"] = manyDesc("rutracker", 150)
-	db := openDB(t)
-	c, _ := newCatalog(t, db, func(o *Options) { o.Sections = []Section{{"rutracker", "46", true}} }, rt)
-	refresh(t, c, false)
-	refresh(t, c, true)
-	tops := rt.Calls("top")
-	mux := http.NewServeMux()
-	c.Register(muxRouter{mux})
-	if v, _ := listPage(t, mux, "rutracker", "46", 5); len(v.Entries) == 0 || rt.Calls("top") != tops {
-		t.Fatalf("глубже сотни — из памяти: карточек %d, запросов API %d → %d", len(v.Entries), tops, rt.Calls("top"))
-	}
-	c2, _ := newCatalog(t, db, func(o *Options) { o.Sections = []Section{{"rutracker", "46", true}} }, rt)
-	c2.reexpand(ctx)
-	mux2 := http.NewServeMux()
-	c2.Register(muxRouter{mux2})
-	before := rt.Calls("top")
-	listPage(t, mux2, "rutracker", "46", 6)
-	listPage(t, mux2, "rutracker", "46", 7)
-	if n := rt.Calls("top") - before; n != 3 { // 46, 56, 2076 — один раз
-		t.Fatalf("после перезапуска — список раздела один раз: запросов %d", n)
-	}
-}
-
-// Обновление раздела заменяет и глубокие порции (Review Focus 3).
-func TestRefreshDropsDeepPortions(t *testing.T) {
-	rutor := newFake("rutor")
-	rutor.top["12"] = manyDesc("rutor", 250)
-	c, _ := newCatalog(t, openDB(t), func(o *Options) { o.Sections = []Section{{"rutor", "12", false}} }, rutor)
-	refresh(t, c, true)
-	mux := http.NewServeMux()
-	c.Register(muxRouter{mux})
-	listPage(t, mux, "rutor", "12", 9) // глубже сотни
-	rutor.set(func() { rutor.top["12"] = manyDesc("rutor", 120) })
-	refresh(t, c, true)
-	if es := list(t, c, ListOptions{Tracker: "rutor", Category: "12", Limit: 1000}); len(es) != 100 {
-		t.Fatalf("после обновления — первая сотня: %d", len(es))
-	}
-	listPage(t, mux, "rutor", "12", 5)
-	if es := list(t, c, ListOptions{Tracker: "rutor", Category: "12", Limit: 1000}); len(es) != 120 {
-		t.Fatalf("вторая сотня нового списка: всего %d", len(es))
-	}
-}
-
-// Карточки порции без страницы раздачи — в догрузку вне очереди по порядку показа (как у поиска).
-func TestDeepPortionEnqueuedInOrder(t *testing.T) {
-	rutor := newFake("rutor")
-	rutor.top["12"] = manyDesc("rutor", 150)
-	c, _ := newCatalog(t, openDB(t), func(o *Options) { o.Sections = []Section{{"rutor", "12", false}} }, rutor)
-	refresh(t, c, true)
-	mux := http.NewServeMux()
-	c.Register(muxRouter{mux})
-	v, _ := listPage(t, mux, "rutor", "12", 5)
-	c.mu.Lock()
-	found := slices.Clone(c.found["rutor"])
-	c.mu.Unlock()
-	if len(found) == 0 || len(v.Entries) == 0 || found[0] != v.Entries[0].ID {
-		t.Fatalf("в догрузке %v, на странице первая %v", found, v.Entries[0].ID)
-	}
-}
-
-// Вживую 11b-Г: Rutor считает раздающих неточно — на следующей странице трекера бывает раздача «выше»
-// хвоста первой сотни. Порция не сдвигает уже показанные страницы: карточки не повторяются и не теряются.
-func TestDeepPortionKeepsShownPages(t *testing.T) {
-	rutor := newFake("rutor")
-	rs := manyDesc("rutor", 250)
-	rs[150].Seeders = 950 // вторая страница трекера, а раздающих больше, чем у половины первой сотни
-	rutor.top["12"] = rs
-	c, _ := newCatalog(t, openDB(t), func(o *Options) { o.Sections = []Section{{"rutor", "12", false}} }, rutor)
-	refresh(t, c, true)
-	mux := http.NewServeMux()
-	c.Register(muxRouter{mux})
-	seen := map[int64]int{}
-	for p := 1; p <= 20; p++ {
-		v, code := listPage(t, mux, "rutor", "12", p)
-		if code != 200 {
-			t.Fatalf("страница %d: %d", p, code)
+			t.Fatalf("порция %d (после %d): код %d", i+1, next, code)
 		}
 		for _, e := range v.Entries {
 			seen[e.ID]++
 		}
-		if p >= v.Pages {
-			break
+		if len(v.Entries) > 0 && v.Next <= next {
+			t.Fatalf("курсор не двигается: %d → %d", next, v.Next)
+		}
+		next, more = v.Next, v.More
+	}
+	return seen, next, more
+}
+
+// shownOnce — каждая карточка раздела показана ровно один раз (склеенная по ходу может пропасть — её
+// раздача уже в показанной карточке).
+func shownOnce(t *testing.T, c *Catalog, tracker, section string, seen map[int64]int) {
+	t.Helper()
+	all := list(t, c, ListOptions{Tracker: tracker, Category: section, Limit: 100000})
+	missing := 0
+	for _, e := range all {
+		if seen[e.ID] == 0 {
+			missing++
 		}
 	}
 	var dups []int64
@@ -209,9 +88,259 @@ func TestDeepPortionKeepsShownPages(t *testing.T) {
 			dups = append(dups, id)
 		}
 	}
-	if len(dups) > 0 || len(seen) != 250 {
-		t.Fatalf("карточек %d из 250, повторы %v", len(seen), dups)
+	if missing > 0 || len(dups) > 0 {
+		t.Fatalf("карточек в разделе %d: не показано %d, показано дважды %v", len(all), missing, dups)
 	}
+}
+
+// dupDesc — n раздач, по perWork раздач на произведение (разные качества), раздающие убывают.
+func dupDesc(tracker string, n, perWork int) []source.Release {
+	q := []string{"WEB-DL 1080p", "BDRip 720p", "HDRip", "WEB-DLRip"}
+	var rs []source.Release
+	for i := range n {
+		rs = append(rs, rel(tracker, fmt.Sprint(i+1), fmt.Sprintf("Кино %d (2020) %s", i/perWork, q[i%perWork]), 1000-i, 1<<30, fmt.Sprintf("h%d", i)))
+	}
+	return rs
+}
+
+func rutorSection(t *testing.T, rs []source.Release) (*Catalog, *fakeSource, *http.ServeMux) {
+	t.Helper()
+	rutor := newFake("rutor")
+	rutor.top["12"] = rs
+	c, _ := newCatalog(t, openDB(t), func(o *Options) { o.Sections = []Section{{"rutor", "12", false}} }, rutor)
+	refresh(t, c, true)
+	mux := http.NewServeMux()
+	c.Register(muxRouter{mux})
+	return c, rutor, mux
+}
+
+// Раздел Rutor прокручивается дальше первой сотни: следующая страница трекера — по запросу, одна на сотню
+// (спека 11b, 7.2).
+func TestDeepPortionsRutor(t *testing.T) {
+	c, rutor, mux := rutorSection(t, manyDesc("rutor", 250))
+	seen, _, more := walkSection(t, mux, "rutor", "12", -1, 30)
+	if more || len(seen) != 250 {
+		t.Fatalf("карточек %d, нужно 250 (ещё %v)", len(seen), more)
+	}
+	shownOnce(t, c, "rutor", "12", seen)
+	if n := rutor.Calls("toppage"); n > 3 {
+		t.Fatalf("страниц трекера запрошено %d — по одной на сотню", n)
+	}
+}
+
+// Ревью 11b-Г, Critical 1: раздачи одного фильма склеиваются в карточку — порции по раздачам, а курсор по
+// карточкам: ни одна не теряется, пустых порций и выкачивания трекера нет.
+func TestDeepWithDuplicatesNoLoss(t *testing.T) {
+	for _, per := range []int{2, 3} {
+		t.Run(fmt.Sprint(per), func(t *testing.T) {
+			c, rutor, mux := rutorSection(t, dupDesc("rutor", 600, per))
+			seen, _, more := walkSection(t, mux, "rutor", "12", -1, 60)
+			if more || len(seen) != 600/per {
+				t.Fatalf("показано %d карточек из %d (ещё %v)", len(seen), 600/per, more)
+			}
+			shownOnce(t, c, "rutor", "12", seen)
+			if n := rutor.Calls("toppage"); n > 6 {
+				t.Fatalf("страниц трекера %d — у него их 6", n)
+			}
+		})
+	}
+}
+
+// Ревью 11b-Г, Important 1: у Rutor список по раздающим кончается страницами без раздающих — это конец,
+// дальше трекер не спрашивается.
+func TestDeepZeroSeederTail(t *testing.T) {
+	rs := manyDesc("rutor", 1500)
+	for i := 250; i < len(rs); i++ {
+		rs[i].Seeders = 0
+	}
+	_, rutor, mux := rutorSection(t, rs)
+	seen, _, more := walkSection(t, mux, "rutor", "12", -1, 40)
+	if more || len(seen) != 250 {
+		t.Fatalf("карточек %d, нужно 250 (ещё %v)", len(seen), more)
+	}
+	if n := rutor.Calls("toppage"); n > 3 {
+		t.Fatalf("после раздач с раздающими трекер спрошен %d раз", n)
+	}
+}
+
+// Ревью 11b-Г, Important 1: страница за концом списка повторяет прежние раздачи — порции без новых раздач
+// дважды подряд — конец, бесконечного цикла нет.
+func TestDeepRepeatedPagesEnd(t *testing.T) {
+	_, rutor, mux := rutorSection(t, manyDesc("rutor", 300))
+	rutor.set(func() { rutor.repeatAfter = 2 }) // страницы с четвёртой — снова третья (полная)
+	walkSection(t, mux, "rutor", "12", -1, 40)
+	if n := rutor.Calls("toppage"); n > 4 {
+		t.Fatalf("страниц трекера %d — повторы должны кончить подгрузку", n)
+	}
+}
+
+// Список кончился — больше не просим; порция не пришла — ошибка, если показать нечего, пульт повторит по
+// тому же курсору (Review Focus 2).
+func TestDeepPortionsEnd(t *testing.T) {
+	c, rutor, mux := rutorSection(t, manyDesc("rutor", 130))
+	rutor.set(func() { rutor.pageErr = errors.New("Rutor не отвечает") })
+	seen, next, more := walkSection(t, mux, "rutor", "12", -1, 4) // первая сотня — из базы
+	if len(seen) != 96 || !more {
+		t.Fatalf("первая сотня без трекера: %d, ещё %v", len(seen), more)
+	}
+	v, code := listAfter(t, mux, "rutor", "12", next)
+	if code == 200 && len(v.Entries) == 0 {
+		t.Fatal("порция не пришла и показать нечего — нужна ошибка, чтобы пульт повторил")
+	}
+	rutor.set(func() { rutor.pageErr = nil })
+	rest, _, more := walkSection(t, mux, "rutor", "12", next, 10)
+	for id, n := range rest {
+		seen[id] += n
+	}
+	if more || len(seen) != 130 {
+		t.Fatalf("после ошибки — дальше по курсору: %d, ещё %v", len(seen), more)
+	}
+	shownOnce(t, c, "rutor", "12", seen)
+	calls := rutor.Calls("toppage")
+	if v, _ := listAfter(t, mux, "rutor", "12", -1); v.More && len(v.Entries) == 0 || rutor.Calls("toppage") != calls {
+		t.Fatalf("после конца списка трекер не спрашивается: запросов %d → %d", calls, rutor.Calls("toppage"))
+	}
+}
+
+// Rutracker: глубже сотни — из списка в памяти; после перезапуска — список раздела из API один раз
+// (Review Focus 5).
+func TestDeepRutrackerAfterRestart(t *testing.T) {
+	rt := newFake("rutracker")
+	rt.tree = rutrackerTree()
+	rt.top["56"] = manyDesc("rutracker", 250)
+	db := openDB(t)
+	c, _ := newCatalog(t, db, func(o *Options) { o.Sections = []Section{{"rutracker", "46", true}} }, rt)
+	refresh(t, c, false)
+	refresh(t, c, true)
+	tops := rt.Calls("top")
+	mux := http.NewServeMux()
+	c.Register(muxRouter{mux})
+	seen, next, _ := walkSection(t, mux, "rutracker", "46", -1, 6)
+	if len(seen) <= 100 || rt.Calls("top") != tops {
+		t.Fatalf("глубже сотни — из памяти: карточек %d, запросов API %d → %d", len(seen), tops, rt.Calls("top"))
+	}
+	c2, _ := newCatalog(t, db, func(o *Options) { o.Sections = []Section{{"rutracker", "46", true}} }, rt)
+	c2.reexpand(ctx)
+	mux2 := http.NewServeMux()
+	c2.Register(muxRouter{mux2})
+	before := rt.Calls("top")
+	rest, _, more := walkSection(t, mux2, "rutracker", "46", next, 10)
+	for id, n := range rest {
+		seen[id] += n
+	}
+	if n := rt.Calls("top") - before; n != 3 { // 46, 56, 2076 — один раз
+		t.Fatalf("после перезапуска — список раздела один раз: запросов %d", n)
+	}
+	if more || len(seen) != 250 {
+		t.Fatalf("после перезапуска — дальше по курсору: %d, ещё %v", len(seen), more)
+	}
+	shownOnce(t, c2, "rutracker", "46", seen)
+}
+
+// Обновление раздела заменяет и глубокие порции (Review Focus 3).
+func TestRefreshDropsDeepPortions(t *testing.T) {
+	c, rutor, mux := rutorSection(t, manyDesc("rutor", 250))
+	walkSection(t, mux, "rutor", "12", -1, 9) // глубже сотни
+	rutor.set(func() { rutor.top["12"] = manyDesc("rutor", 120) })
+	refresh(t, c, true)
+	if es := list(t, c, ListOptions{Tracker: "rutor", Category: "12", Limit: 1000}); len(es) != 100 {
+		t.Fatalf("после обновления — первая сотня: %d", len(es))
+	}
+	seen, _, more := walkSection(t, mux, "rutor", "12", -1, 10)
+	if more || len(seen) != 120 {
+		t.Fatalf("новый список: %d, ещё %v", len(seen), more)
+	}
+}
+
+// Ревью 11b-Г, Important 2: показанная порция — в начало догрузки вне очереди (видимое — первым), по
+// порядку показа; прежние просьбы — за ней.
+func TestDeepPortionEnqueuedFirst(t *testing.T) {
+	cat, _, mux := rutorSection(t, manyDesc("rutor", 250))
+	_, next, _ := walkSection(t, mux, "rutor", "12", -1, 5)
+	v, _ := listAfter(t, mux, "rutor", "12", next)
+	cat.mu.Lock()
+	found := slices.Clone(cat.found["rutor"])
+	cat.mu.Unlock()
+	if len(found) == 0 || len(v.Entries) == 0 || found[0] != v.Entries[0].ID {
+		t.Fatalf("в догрузке первой %v, на экране первая %v", found[:min(3, len(found))], v.Entries[0].ID)
+	}
+	if len(found) > foundLimit {
+		t.Fatalf("очередь догрузки растёт без предела: %d", len(found))
+	}
+}
+
+// Вживую 11b-Г: Rutor считает раздающих неточно — на следующей странице трекера бывает раздача «выше»
+// хвоста первой сотни. Порция не сдвигает уже показанные карточки: не повторяются и не теряются.
+func TestDeepPortionKeepsShownPages(t *testing.T) {
+	rs := manyDesc("rutor", 250)
+	rs[150].Seeders = 950 // вторая страница трекера, а раздающих больше, чем у половины первой сотни
+	c, _, mux := rutorSection(t, rs)
+	seen, _, _ := walkSection(t, mux, "rutor", "12", -1, 30)
+	if len(seen) != 250 {
+		t.Fatalf("карточек %d из 250", len(seen))
+	}
+	shownOnce(t, c, "rutor", "12", seen)
+}
+
+// Ревью 11b-Г, Important 3а: порция приносит раздачу уже показанного фильма с большим числом раздающих —
+// карточка остаётся на своём месте (место карточки — наименьшее место её раздач).
+func TestDeepBetterRipKeepsPlace(t *testing.T) {
+	rs := manyDesc("rutor", 250)
+	rs[150].Title = "Кино 5 (2020) BDRip" // тот же фильм, что на 6-м месте, другая раздача
+	rs[150].Seeders = 999
+	_, _, mux := rutorSection(t, rs)
+	// Лучшая раздача становится лицом карточки (номер карточки меняется) — сверка по фильмам.
+	films := map[string]int{}
+	after := -1
+	for i := 0; i < 30; i++ {
+		v, code := listAfter(t, mux, "rutor", "12", after)
+		if code != 200 {
+			t.Fatalf("код %d", code)
+		}
+		for _, e := range v.Entries {
+			films[e.Name]++
+		}
+		if after = v.Next; !v.More {
+			break
+		}
+	}
+	var dups []string
+	for name, n := range films {
+		if n > 1 {
+			dups = append(dups, name)
+		}
+	}
+	if len(films) != 249 || len(dups) > 0 {
+		t.Fatalf("фильмов показано %d из 249, дважды %v", len(films), dups)
+	}
+}
+
+// Ревью 11b-Г, Important 3б: раздачи Rutracker приходят без названий; пока листают, догрузка даёт названия,
+// и раздачи одного фильма склеиваются в уже показанной части — следующие порции ничего не перескакивают.
+func TestDeepMergeDuringScroll(t *testing.T) {
+	rt := newFake("rutracker")
+	rt.tree = rutrackerTree()
+	var rs []source.Release
+	for i := range 200 {
+		rs = append(rs, rel("rutracker", fmt.Sprint(i+1), "", 1000-i, 1<<30, fmt.Sprintf("h%d", i)))
+	}
+	rt.top["56"] = rs
+	c, _ := newCatalog(t, openDB(t), func(o *Options) { o.Sections = []Section{{"rutracker", "46", true}} }, rt)
+	refresh(t, c, false)
+	refresh(t, c, true)
+	mux := http.NewServeMux()
+	c.Register(muxRouter{mux})
+	seen, next, _ := walkSection(t, mux, "rutracker", "46", -1, 3)
+	for i := range 72 { // догрузка дала названия первым 72 раздачам: по две раздачи на фильм
+		if err := c.st.setTitleIfEmpty(ctx, "rutracker", fmt.Sprint(i+1), fmt.Sprintf("Фильм %d (2025) WEB-DL %d", i/2, i%2)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	rest, _, _ := walkSection(t, mux, "rutracker", "46", next, 20)
+	for id, n := range rest {
+		seen[id] += n
+	}
+	shownOnce(t, c, "rutracker", "46", seen)
 }
 
 // Вживую 11b-Г: форум без раздач API отдаёт 404 — подраздел обновляется без него, а не встаёт целиком.
