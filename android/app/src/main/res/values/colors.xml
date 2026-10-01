@@ -3,5 +3,8 @@
     <color name="bg">#FF0F1113</color>
     <color name="text">#FFECE8E1</color>
     <color name="muted">#FFA39E95</color>
+    <color name="raised">#FF14171A</color>
+    <color name="line">#FF2C3136</color>
+    <color name="error">#FFF0C040</color>
     <color name="accent">#FF3F8EF0</color>
 </resources>
