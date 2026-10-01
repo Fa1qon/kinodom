@@ -172,11 +172,8 @@ func (c *Client) Search(ctx context.Context, query string) ([]source.Release, er
 	if err != nil {
 		return nil, err
 	}
-	if len(resp.Results) == 0 && resp.Jacred && key == "" {
-		// jac.red с 2026-10 без ключа отдаёт пустой список: это не «ничего не нашлось».
-		if conf, err := c.conf(ctx, addr); err == nil && conf.APIKey {
-			return nil, ErrNeedKey
-		}
+	if len(resp.Results) == 0 && resp.Jacred && key == "" && c.keyRequired(ctx, addr) {
+		return nil, ErrNeedKey // Jacred с обязательным ключом без ключа отдаёт пустой список: это не «ничего не нашлось»
 	}
 	out := make([]source.Release, 0, len(resp.Results))
 	for _, r := range resp.Results {
@@ -199,15 +196,17 @@ func (c *Client) Check(ctx context.Context) (ok bool, text string) {
 	case errors.Is(err, ErrDown):
 		return false, checkText(err)
 	case err == nil && conf.Jacred:
-		if conf.APIKey && key == "" {
-			return false, "Нужен ключ"
-		}
 		resp, err := c.search(ctx, addr, key, trial)
 		if err != nil {
 			return false, checkText(err)
 		}
+		// Jacred с обязательным ключом без ключа и с чужим ключом отвечает пустым списком, не 401. «apikey» в
+		// conf — только «ключ на сервере задан»: jac.red с ним ищет и без ключа (вживую 2026-10-01).
 		if len(resp.Results) == 0 && conf.APIKey {
-			return false, "Ключ не подошёл" // Jacred с ключом на чужой ключ отвечает пустым списком
+			if key == "" {
+				return false, "Нужен ключ"
+			}
+			return false, "Ключ не подошёл"
 		}
 		return true, "Jacred отвечает"
 	}
@@ -215,6 +214,17 @@ func (c *Client) Check(ctx context.Context) (ok bool, text string) {
 		return false, checkText(err)
 	}
 	return true, "Jackett отвечает"
+}
+
+// keyRequired — Jacred без ключа ничего не находит: на сервере задан ключ (conf) и пробный поиск «Матрица 1999»
+// без ключа пуст.
+func (c *Client) keyRequired(ctx context.Context, addr string) bool {
+	conf, err := c.conf(ctx, addr)
+	if err != nil || !conf.APIKey {
+		return false
+	}
+	resp, err := c.search(ctx, addr, "", Query{Title: "Матрица", Year: 1999})
+	return err == nil && len(resp.Results) == 0
 }
 
 func checkText(err error) string {

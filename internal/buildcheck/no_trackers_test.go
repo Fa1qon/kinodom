@@ -14,9 +14,9 @@ import (
 	"testing"
 )
 
-// reTracker — домен трекера: rutor.info, rutracker.org, d.rutor.is, api.rutracker.cc… Зона — из
-// списка: «rutracker.login» и «rutor.address» — ключи настроек, не адреса.
-var reTracker = regexp.MustCompile(`(?i)\brut(or|racker)\.(info|is|org|net|cc|ru|su|me|to|in|co|com|biz|lol|nl|tv|pw|io|xyz|online|site|top|club)\b`)
+// reTracker — домен трекера: rutor.info, rutracker.org, d.rutor.is, api.rutracker.cc… и публичного Jacred:
+// jac.red, jacred.xyz (11b-Д). Зона — из списка: «rutracker.login» и «rutor.address» — ключи настроек, не адреса.
+var reTracker = regexp.MustCompile(`(?i)\b(rut(or|racker)|jacred)\.(info|is|org|net|cc|ru|su|me|to|in|co|com|biz|lol|nl|tv|pw|io|xyz|online|site|top|club|pro|red)\b|\bjac\.red\b`)
 
 // root — корень модуля (тест запускается из своей папки).
 const root = "../.."
@@ -92,12 +92,14 @@ func rel(path string) string {
 
 // Сама проверка ловит домены — иначе она прошла бы и на пустом месте.
 func TestTrackerPatternMatches(t *testing.T) {
-	for _, s := range []string{"https://rutor.info", "d.rutor.is/download", "api.rutracker.cc", "RUTRACKER.ORG"} {
+	for _, s := range []string{"https://rutor.info", "d.rutor.is/download", "api.rutracker.cc", "RUTRACKER.ORG",
+		"jac.red", "https://jacred.xyz/api/v1.0/conf", "JACRED.SU", "jacred.pro"} {
 		if !reTracker.MatchString(s) {
 			t.Errorf("не пойман: %s", s)
 		}
 	}
-	for _, s := range []string{"rutor", "rutracker", "rutracker.login", "rutor.address", "rutracker.passwordSet", "rutor.isOff", "Rutor: ошибка"} {
+	for _, s := range []string{"rutor", "rutracker", "rutracker.login", "rutor.address", "rutracker.passwordSet", "rutor.isOff", "Rutor: ошибка",
+		"jacred", "search.address", "kinodom/internal/source/jacred", "jacred.New", "Jacred: нужен ключ"} {
 		if reTracker.MatchString(s) {
 			t.Errorf("пойман лишний: %s", s)
 		}

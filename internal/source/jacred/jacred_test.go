@@ -262,6 +262,26 @@ func TestJacredCheck(t *testing.T) {
 		}
 	}
 
+	// jac.red вживую (2026-10-01): conf — apikey:true, а поиск отвечает и без ключа. Ключ не нужен —
+	// «Jacred отвечает»; запрос, по которому ничего нет, — пустой список, а не «нужен ключ».
+	lax := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.URL.Path == "/api/v1.0/conf":
+			w.Write([]byte(`{"jacred":true,"configured":false,"apikey":true,"version":"3.15.0"}`))
+		case r.URL.Query().Get("title") == "Матрица":
+			w.Write(results)
+		default:
+			w.Write([]byte(`{"Results":[],"jacred":true}`))
+		}
+	}))
+	t.Cleanup(lax.Close)
+	if ok, text := New(Options{Address: lax.URL}).Check(ctx); !ok || text != "Jacred отвечает" {
+		t.Errorf("ключ не обязателен: %v %q", ok, text)
+	}
+	if rs, err := New(Options{Address: lax.URL}).Search(ctx, "Абвгдейка 1975"); err != nil || len(rs) != 0 {
+		t.Errorf("ничего не нашлось: %d, %v", len(rs), err)
+	}
+
 	// Поиск у Jacred, который просит ключ, без ключа — не «ничего не найдено», а причина.
 	if _, err := New(Options{Address: jacredKey.URL}).Search(ctx, "Джентльмены"); !errors.Is(err, ErrNeedKey) {
 		t.Errorf("поиск без ключа: %v", err)
