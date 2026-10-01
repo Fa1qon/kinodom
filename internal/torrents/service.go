@@ -34,6 +34,7 @@ var (
 type Source struct {
 	Magnet  string
 	Torrent []byte
+	Dir     string // папка загрузок новой раздачи (папка медиатеки, план 14В); "" — общая. Знакомая раздача остаётся, где была
 }
 
 // TorrentStatus — состояние открытой раздачи для клиента.
@@ -306,6 +307,34 @@ func (s *Service) restore(ctx context.Context) error {
 	return nil
 }
 
+// Folders — папки всех раздач на диске (у каждой своя «Название [хэш]»): обход медиатеки их пропускает —
+// скачанное приходит в неё отдельной единицей (план 14В).
+func (s *Service) Folders(ctx context.Context) ([]string, error) {
+	if s.eng == nil {
+		return nil, ErrNoEngine
+	}
+	out, err := s.reg.Folders(ctx, s.eng.DownloadsDir())
+	if err != nil {
+		return nil, err
+	}
+	seen := map[string]bool{}
+	for _, p := range out {
+		seen[p] = true
+	}
+	// Метаинфо в реестр пишет цикл службы, позже открытия: у открытой раздачи папка — по движку.
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for ih, ss := range s.sessions {
+		if info := ss.t.Info(); info != nil {
+			if p := torrentDir(s.eng.TorrentDir(ih), info, ih); !seen[p] {
+				seen[p] = true
+				out = append(out, p)
+			}
+		}
+	}
+	return out, nil
+}
+
 // Open добавляет раздачу в движок. Повторный вызов для той же раздачи (второй телевизор)
 // возвращает её же; после ошибки «нет раздающих» — начинает заново.
 func (s *Service) Open(ctx context.Context, src Source) (metainfo.Hash, error) {
@@ -345,7 +374,7 @@ func (s *Service) Open(ctx context.Context, src Source) (metainfo.Hash, error) {
 		return metainfo.Hash{}, err
 	}
 	// Папку раздачи движок должен знать до добавления: файлы создаются сразу, как придёт метаинфо.
-	dir, err := s.reg.Remember(ctx, ih, source, s.eng.DownloadsDir())
+	dir, err := s.reg.Remember(ctx, ih, source, cmp.Or(src.Dir, s.eng.DownloadsDir()))
 	if err != nil {
 		return ih, err
 	}
