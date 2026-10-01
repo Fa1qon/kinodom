@@ -1,7 +1,8 @@
 // Раскладка «Настроек»: слева — подразделы «Состояние», «Параметры», «Разделы каталога» (спека этапа 7,
 // раздел 6.3), «Каналы» с вкладкой «Не распознано» (спека этапа 8, раздел 6; этап 11b, замечание № 5),
-// «Медиатека» (спека этапа 9, раздел 6.3).
+// «Медиатека» (спека этапа 9, раздел 6.3); в приложении для Android — «Приложение» (спека этапа 13, 5.2).
 import { h, icon } from '../ui.js';
+import { appBridge } from './tvkit.js';
 
 const ITEMS = [
   ['status', 'Состояние', 'dashboard'],
@@ -10,6 +11,11 @@ const ITEMS = [
   ['iptv', 'Каналы', 'live_tv'],
   ['library', 'Медиатека', 'video_library'],
 ];
+
+// settingsItems — пункты меню настроек; «Приложение» — только в пульте, открытом в приложении.
+export function settingsItems(inApp) {
+  return inApp ? [...ITEMS, ['app', 'Приложение', 'tv']] : ITEMS;
+}
 
 // settingsRoute — экран настроек по адресу после «settings»: {view} или {redirect} — старый адрес
 // «Не распознано» (до этапа 11b) ведёт на вкладку «Каналов».
@@ -32,7 +38,7 @@ export function layout(root, active, title, ...actions) {
   const content = h('div', { class: 'set-content' });
   root.append(h('div', { class: 'screen' }, h('div', { class: 'set-grid' },
     h('nav', { class: 'side', 'aria-label': 'Разделы настроек' },
-      ITEMS.map(([id, t, ic]) => h('a', { href: `#/settings/${id}`, class: id === active ? 'on' : null, 'aria-current': id === active ? 'page' : null, 'data-key': `set-${id}` }, icon(ic), t))),
+      settingsItems(!!appBridge()).map(([id, t, ic]) => h('a', { href: `#/settings/${id}`, class: id === active ? 'on' : null, 'aria-current': id === active ? 'page' : null, 'data-key': `set-${id}` }, icon(ic), t))),
     h('div', { class: 'set-main' }, h('div', { class: 'row' }, h('h1', { class: 'grow' }, title), ...actions), content))));
   return content;
 }
