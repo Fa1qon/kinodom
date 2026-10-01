@@ -2,7 +2,8 @@
 # сеть не нужна. kinodomw.exe — то же приложение без консоли: ссылки kinodom:// из браузера
 # открываются без мелькания окна, ошибки — окном Windows (спека этапа 11a, раздел 4.6).
 # -Installer — ещё установщик dist\Kinodom-<версия>-setup.exe (Inno Setup 6:
-# winget install JRSoftware.InnoSetup).
+# winget install JRSoftware.InnoSetup). Есть JDK 17 и Android SDK (JAVA_HOME, ANDROID_HOME) — ещё приложение для
+# Android: bin\kinodom.apk и bin\kinodom.apk.json (версия и номер сборки — спека этапа 13, раздел 6).
 param([switch]$Installer)
 $ErrorActionPreference = 'Stop'
 Set-Location $PSScriptRoot
@@ -20,6 +21,31 @@ if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 go build -trimpath -ldflags "-H windowsgui -X main.version=$version -X main.gui=1" -o bin\kinodomw.exe .\cmd\kinodom
 if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 Write-Host "bin\kinodom.exe, bin\kinodomw.exe ($version)"
+
+# Приложение для Android: версия — как у сервера, номер сборки — число коммитов; подпись — ключ из
+# %USERPROFILE%\.kinodom (make-key.ps1 создаёт его при первой сборке). Нет JDK или SDK — без APK.
+foreach ($f in 'bin\kinodom.apk', 'bin\kinodom.apk.json') { if (Test-Path $f) { Remove-Item $f } }
+$jdk = if ($env:JAVA_HOME) { $env:JAVA_HOME } else { [Environment]::GetEnvironmentVariable('JAVA_HOME', 'User') }
+$sdk = if ($env:ANDROID_HOME) { $env:ANDROID_HOME } else { [Environment]::GetEnvironmentVariable('ANDROID_HOME', 'User') }
+if ($jdk -and $sdk -and (Test-Path "$jdk\bin\java.exe") -and (Test-Path "$sdk\platforms")) {
+    $env:JAVA_HOME, $env:ANDROID_HOME = $jdk, $sdk
+    & .\android\make-key.ps1
+    $code = [int](git rev-list --count HEAD)
+    Push-Location android
+    # Свойства — в кавычках: PowerShell режет «-PversionName=0.11.0-…» на два аргумента. Gradle пишет
+    # предупреждения в поток ошибок — судим по коду выхода.
+    $ErrorActionPreference = 'Continue'
+    & .\gradlew.bat assembleRelease "`"-PversionName=$version`"" "`"-PversionCode=$code`"" --console=plain -q
+    $rc = $LASTEXITCODE
+    $ErrorActionPreference = 'Stop'
+    Pop-Location
+    if ($rc -ne 0) { exit $rc }
+    Copy-Item android\app\build\outputs\apk\release\app-release.apk bin\kinodom.apk
+    [ordered]@{ version = $version; versionCode = $code } | ConvertTo-Json -Compress | Set-Content -Encoding ascii bin\kinodom.apk.json
+    Write-Host "bin\kinodom.apk ($version, $code)"
+} else {
+    Write-Host 'JDK 17 or Android SDK not found (JAVA_HOME, ANDROID_HOME) - no kinodom.apk'
+}
 
 if ($Installer) {
     $iscc = @("${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe", "$env:ProgramFiles\Inno Setup 6\ISCC.exe",

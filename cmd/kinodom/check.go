@@ -52,7 +52,7 @@ func cmdCheck(args []string, stdout, stderr io.Writer) int {
 		}
 	}
 
-	for _, name := range []string{setup.RuleAPI, setup.RuleTorrents} {
+	for _, name := range []string{setup.RuleAPI, setup.RuleTorrents, setup.RuleDiscovery} {
 		switch has, err := sys.Firewall.Exists(name); {
 		case err != nil:
 			bad("Брандмауэр, «%s»: %v", name, err)

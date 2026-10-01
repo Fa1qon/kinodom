@@ -105,6 +105,7 @@ func TestInstallFirstTime(t *testing.T) {
 		"acl.grant " + dl + " NT SERVICE\\Kinodom write",
 		fmt.Sprintf("fw.set Kinodom — пульт TCP %d LocalSubnet %s", o.APIPort, exe),
 		"fw.set Kinodom — раздачи TCP,UDP 42000 Any " + exe,
+		"fw.set Kinodom — обнаружение UDP 1900 LocalSubnet " + exe, // приложение находит сервер (спека этапа 13, 5.1)
 		`reg.set kinodom "` + filepath.Join(prog, "kinodomw.exe") + `" open "%1"`,
 		`reg.autorun Kinodom "` + filepath.Join(prog, "kinodomw.exe") + `" tray`,
 		"scm.start Kinodom",
@@ -219,7 +220,7 @@ func TestUninstallKeepsData(t *testing.T) {
 		t.Fatal(err)
 	}
 	want := []string{"procs.close " + filepath.Join(prog, "kinodomw.exe"), "scm.stop Kinodom", "scm.delete Kinodom",
-		"fw.delete Kinodom — пульт", "fw.delete Kinodom — раздачи", "reg.delete kinodom", "reg.noautorun Kinodom"}
+		"fw.delete Kinodom — пульт", "fw.delete Kinodom — раздачи", "fw.delete Kinodom — обнаружение", "reg.delete kinodom", "reg.noautorun Kinodom"}
 	if acts := f.Actions(); !slices.Equal(acts, want) {
 		t.Fatalf("действия %v", acts)
 	}
@@ -340,7 +341,7 @@ func TestInstallFirstFailureRollsBack(t *testing.T) {
 	if err := Install(ctx, f.System(), o, nolog); err == nil {
 		t.Fatal("починка без ответа службы прошла")
 	}
-	if _, ok := f.Services[ServiceName]; !ok || len(f.Rules) != 2 {
+	if _, ok := f.Services[ServiceName]; !ok || len(f.Rules) != 3 {
 		t.Fatalf("починка откатила установку: службы %v, правила %v", f.Services, f.Rules)
 	}
 }

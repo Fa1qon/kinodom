@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">Kinodom</string>
+    <string name="searching">Ищу Kinodom в домашней сети…</string>
+    <string name="connecting">Подключаюсь к Kinodom…</string>
+    <string name="choose_server">Найдено несколько Kinodom</string>
+    <string name="other_address">Другой адрес</string>
+    <string name="address_title">Адрес Kinodom</string>
+    <string name="address_hint">192.168.0.10 или 192.168.0.10:8090</string>
+    <string name="connect">Подключиться</string>
+    <string name="search_again">Искать снова</string>
+    <string name="bad_address">Неверный адрес</string>
+    <string name="no_answer_at">Kinodom по адресу %1$s не отвечает</string>
+    <string name="no_answer">Kinodom не отвечает</string>
+    <string name="retry">Повторить</string>
+    <string name="webview_old">Обновите Android System WebView</string>
+    <string name="update_title">Есть новая версия Kinodom</string>
+    <string name="update_now">Обновить</string>
+    <string name="update_later">Позже</string>
+    <string name="update_loading">Загрузка обновления… %1$d %%</string>
+    <string name="update_failed">Не удалось скачать обновление</string>
+    <string name="close">Закрыть</string>
+</resources>

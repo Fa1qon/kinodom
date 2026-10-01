@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Сервер Kinodom — в домашней сети, по HTTP; адрес — любой, его вводит человек или даёт SSDP. -->
+<network-security-config>
+    <base-config cleartextTrafficPermitted="true" />
+</network-security-config>

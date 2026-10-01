@@ -10,6 +10,7 @@ import (
 	"log/slog"
 	"maps"
 	"net/http"
+	"net/netip"
 	"reflect"
 	"strconv"
 	"strings"
@@ -49,13 +50,16 @@ import (
 const DefaultDownloadsDir = `C:\Kinodom`
 
 type Options struct {
-	Home         string // корневая папка; пусто — config.DefaultHome()
-	Version      string // версия сборки — в «Состоянии» (kinodom check)
-	Console      bool   // дублировать журнал в консоль
-	ListenAddr   string // адрес API; пусто — ":<apiPort>" из kinodom.json
-	Offline      bool   // торрент-движок без сети, на случайном порту (тесты)
-	DownloadsDir string // папка загрузок; пусто — настройка downloads.dir
-	KinopoiskAPI string // адрес API, рейтингов и сайта Кинопоиска (GraphQL — <адрес>/graphql/) вместо настоящих (тесты)
+	Home       string // корневая папка; пусто — config.DefaultHome()
+	Version    string // версия сборки — в «Состоянии» (kinodom check)
+	Console    bool   // дублировать журнал в консоль
+	ListenAddr string // адрес API; пусто — ":<apiPort>" из kinodom.json
+	// DiscoveryGroup — группа SSDP модуля обнаружения; нуль — 239.255.255.250:1900. Тесты — свой порт: не
+	// слушать 1900 и не объявлять сервер в сети ПК.
+	DiscoveryGroup netip.AddrPort
+	Offline        bool   // торрент-движок без сети, на случайном порту (тесты)
+	DownloadsDir   string // папка загрузок; пусто — настройка downloads.dir
+	KinopoiskAPI   string // адрес API, рейтингов и сайта Кинопоиска (GraphQL — <адрес>/graphql/) вместо настоящих (тесты)
 	// Settings — поверх настроек из базы и не сохраняются: тесты и kinodom catalog (логин, пароль
 	// Rutracker и ключ Кинопоиска — из переменных окружения, не в базу).
 	Settings map[string]string
@@ -181,6 +185,7 @@ func New(ctx context.Context, o Options) (*App, error) {
 	a.initLibrary(ctx)
 	a.initFollow(ctx)
 	a.initSetup()
+	a.initDiscovery(ctx, o)
 	a.API.SetStatus(a.statusFields)
 	a.API.SetProtocolCheck(cachedCheck(winsvc.KinodomProtocol, time.Minute))
 	// Следующие этапы добавляют сюда свои модули так же: a.Sup.Add(m, a.ModuleEnabled(ctx, m.Name())).
