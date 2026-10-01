@@ -1,10 +1,18 @@
 // Карточка медиатеки (спека этапа 9, раздел 6.2): постер, описание, рейтинги; «Смотреть» /
 // «Продолжить»; у сериала — сезоны и серии с отметками этого устройства; версии («Есть дубли»);
 // правки из домашней сети — «Это другой фильм», «Разметить вручную», «Перенести в категорию».
-import { h, fill, icon, keepFocus, rating, size, openPlayer, poll, ready } from '../ui.js';
-import { get, put } from '../api.js';
+import { h, fill, icon, keepFocus, rating, size, openPlayer, poll, ready, confirmDialog } from '../ui.js';
+import { get, put, del } from '../api.js';
 import { whereStopped, resumeIndex } from './history.js';
 import { libPoster, continueLabel } from './library.js';
+
+// deleteRequest — «Удалить» версии карточки (план 14В): скачанное — как в «Загрузках» (вся раздача), своё —
+// файл или папка с диска через медиатеку. {path, text} — запрос и вопрос подтверждения.
+export function deleteRequest(v) {
+  const name = (v.path || '').split(/[\\/]/).filter(Boolean).pop() || '';
+  if (v.hash && !v.hash.startsWith('lib-')) return { path: `/downloads/${v.hash}`, text: `Удалить скачанное «${name}» с диска?` };
+  return { path: `/library/units/${v.unit}`, text: `Удалить «${name}» с диска навсегда?`, safe: true };
+}
 
 // seasonsOf — серии по сезонам и разделам: без сезона — первыми (вступление курса), потом сезоны по
 // номеру, потом разделы (главы) в порядке сервера.
@@ -246,6 +254,14 @@ export function render(root, r, ctx) {
         });
       } }, title, year, h('button', { class: 'btn', type: 'submit', 'data-key': 'manual-save' }, 'Сохранить')));
     }
+    out.push(h('button', { class: 'btn', type: 'button', 'data-key': 'delete', onclick: async () => {
+      const req = deleteRequest(v);
+      if (!(await confirmDialog({ title: req.text, yes: 'Удалить', safe: !!req.safe }))) return;
+      act(async () => {
+        await del(req.path);
+        ctx.go('#/library');
+      });
+    } }, icon('delete'), 'Удалить'));
     out.push(toggle('move', 'Перенести в категорию', 'folder'));
     if (editing === 'move' && cats) {
       if (!move.options.length) for (const x of cats) move.append(h('option', { value: String(x.id), selected: x.id === c.category }, x.name));

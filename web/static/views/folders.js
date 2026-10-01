@@ -18,10 +18,10 @@ export function crumbs(path) {
   return out;
 }
 
-// grantView — «Разрешить доступ» у папки, которую служба не читает: на ПК с Kinodom — ссылка
+// grantView — «Разрешить доступ» у папки, которую служба не читает или куда не может писать (план 14В): на ПК с Kinodom — ссылка
 // kinodom://grant (окно Windows «Да/Нет»), с другого устройства — строка; остальным папкам — ничего.
 export function grantView(ctx, folder, port = Number(globalThis.location && globalThis.location.port) || 80) {
-  if (!folder || folder.problem !== 'no_access') return null;
+  if (!folder || (folder.problem !== 'no_access' && folder.problem !== 'no_write')) return null;
   if (!ctx.local) return { hint: 'Откройте пульт на ПК с Kinodom, чтобы разрешить доступ' };
   return { link: 'kinodom://grant?' + new URLSearchParams({ path: folder.path, port: String(port) }).toString() };
 }
