@@ -70,6 +70,15 @@ func (s *Service) DeleteRelease(ctx context.Context, ih metainfo.Hash) (deleted,
 	return deleted, skipped, nil
 }
 
+// deleteOld — удаление уборкой по сроку и по месту: правило 6 часов перепроверяется под замком по свежей
+// записи — предварительная выборка уборки сделана до цикла удалений, а поток мог открыться и закрыться,
+// пока она шла по списку (финальное ревью 11b-З; спека 11b, 15.1).
+func (s *Service) deleteOld(ctx context.Context, ih metainfo.Hash, index int) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.deleteLocked(ctx, ih, index, true)
+}
+
 // deleteBehind — удаление просмотренной серии позади, когда места не хватает: правила 6 часов нет,
 // не удаляется только файл с открытым потоком (решение заказчика, этап 7a).
 func (s *Service) deleteBehind(ctx context.Context, ih metainfo.Hash, index int) error {
@@ -78,8 +87,9 @@ func (s *Service) deleteBehind(ctx context.Context, ih metainfo.Hash, index int)
 	return s.deleteLocked(ctx, ih, index, false)
 }
 
-// deleteLocked — удаление файла. recent — «сейчас смотрят» и поток за последние 6 часов, иначе
-// только открытый поток. Вызывать под s.mu.
+// deleteLocked — удаление файла. recent — мешает и поток за последние 6 часов (уборка, deleteOld), иначе
+// только открытый поток (человек — DeleteFile и DeleteRelease, № 19; место позади — deleteBehind).
+// Вызывать под s.mu.
 func (s *Service) deleteLocked(ctx context.Context, ih metainfo.Hash, index int, recent bool) error {
 	sf, ok, err := s.reg.StoredFile(ctx, ih, index)
 	if err != nil {

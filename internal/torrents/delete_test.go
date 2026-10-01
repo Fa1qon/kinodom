@@ -296,3 +296,19 @@ func TestDeleteRecentButNotStreaming(t *testing.T) {
 		t.Fatalf("осталось %v", got)
 	}
 }
+
+// Финальное ревью 11b-З: уборка по сроку и по месту удаляет через deleteOld — правило 6 часов перепроверяется
+// под замком по свежей записи, а не только предварительной выборкой (поток мог открыться и закрыться,
+// пока уборка шла по списку). Человек (DeleteFile) — только открытый поток (№ 19).
+func TestCleanupDeleteKeepsRecent(t *testing.T) {
+	ctx := context.Background()
+	s := newTestService(t)
+	ih, ep := archive(t, s)
+	must(t, s.Download(ctx, ih, []int{ep[0], ep[1]}))
+	must(t, s.reg.TouchStream(ctx, ih, ep[0], s.now().Add(-10*time.Minute)))
+	if err := s.deleteOld(ctx, ih, ep[0]); !errors.Is(err, ErrWatching) {
+		t.Fatalf("уборка, смотрели 10 минут назад: %v", err)
+	}
+	must(t, s.deleteOld(ctx, ih, ep[1]))
+	must(t, s.DeleteFile(ctx, ih, ep[0]))
+}

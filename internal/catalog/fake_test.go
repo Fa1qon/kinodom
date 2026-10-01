@@ -40,6 +40,7 @@ type fakeSource struct {
 	detailsBlock chan struct{}   // если задан — страница раздачи ждёт его закрытия (или отмены)
 	detailsPanic map[string]bool // номер → разбор страницы падает паникой
 	pageBlock    chan struct{}   // если задан — страница раздела (TopPage) ждёт его закрытия (или отмены)
+	pagePanic    bool            // разбор страницы раздела падает паникой
 	inDetails    int             // страниц качается сейчас
 	maxDetails   int             // больше всего одновременно
 }
@@ -95,7 +96,11 @@ func (f *fakeSource) TopPage(ctx context.Context, cat string, page int) ([]sourc
 	f.mu.Lock()
 	f.calls["toppage"]++
 	block := f.pageBlock
+	boom := f.pagePanic
 	f.mu.Unlock()
+	if boom {
+		panic("разбор страницы раздела")
+	}
 	if block != nil {
 		select {
 		case <-block:

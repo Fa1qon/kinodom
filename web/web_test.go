@@ -1665,3 +1665,29 @@ for (const [name, got, want] of checks) {
 		t.Errorf("%v\n%s", err, out)
 	}
 }
+
+// Финальное ревью 11b-З, Important 1: опрос загрузки на странице раздачи не останавливается, пока у
+// хранимого файла открыт поток — иначе у скачанной раздачи «Удалить» застывала серой, когда плеер закрыли.
+func TestPultTorrentDone(t *testing.T) {
+	node := lookNode(t)
+	script := `
+import { torrentDone } from './views/release.js';
+const checks = [
+  ['качается', torrentDone({ files: [{ stored: true, readiness: 'wait' }] }), false],
+  ['скачано, плеер закрыт', torrentDone({ files: [{ stored: true, readiness: 'done', watching: false }] }), true],
+  ['скачано, поток открыт', torrentDone({ files: [{ stored: true, readiness: 'done', watching: true }] }), false],
+  ['ничего не хранится', torrentDone({ files: [{ stored: false }] }), false],
+];
+for (const [name, got, want] of checks) {
+  if (got !== want) {
+    console.error(name, ':', got, '≠', want);
+    process.exitCode = 1;
+  }
+}
+`
+	cmd := exec.Command(node, "--input-type=module", "--no-warnings", "-e", script)
+	cmd.Dir = "static"
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Errorf("%v\n%s", err, out)
+	}
+}
