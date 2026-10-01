@@ -2,6 +2,7 @@ package iptv
 
 import (
 	"context"
+	"fmt"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -60,7 +61,7 @@ func (m *Module) CreateCustom(ctx context.Context, in CustomInput) (string, erro
 			return "", &FieldError{"логотип больше 1 МБ"}
 		}
 		if !strings.HasPrefix(http.DetectContentType(in.LogoData), "image/") {
-			return "", &FieldError{"логотип — не картинка"}
+			return "", &FieldError{"логотип — картинка PNG, JPEG, GIF или WebP"}
 		}
 	}
 	if in.Category != "" && !slices.Contains(labels.CategoryOrder, in.Category) {
@@ -73,6 +74,17 @@ func (m *Module) CreateCustom(ctx context.Context, in CustomInput) (string, erro
 	group := m3u.Norm(in.Group)
 	m.plMu.Lock()
 	defer m.plMu.Unlock()
+	m.mu.Lock()
+	taken := m.pool.nameRules[group].Channel
+	m.mu.Unlock()
+	if group != "" && taken != "" {
+		// Второй «Создать канал» по той же группе (двойное OK на пульте) — потоки уже у первого.
+		name := taken
+		if c := m.Lineup().ByKey[taken]; c != nil {
+			name = c.Name
+		}
+		return "", &FieldError{fmt.Sprintf("эти потоки уже у канала «%s»", name)}
+	}
 	n, err := m.d.nextCustom(ctx)
 	if err != nil {
 		return "", err
@@ -121,6 +133,39 @@ func (m *Module) CreateCustom(ctx context.Context, in CustomInput) (string, erro
 	return key, nil
 }
 
+// DeleteCustom — «Удалить канал» (ревью 14Д, п. 5): своего канала больше нет, правила его потоков и правки
+// сняты — потоки снова в «Не распознано»; загруженный логотип стёрт. Номер не освобождается: избранное и
+// история со старым ключом не достанутся новому каналу.
+func (m *Module) DeleteCustom(ctx context.Context, key string) error {
+	m.plMu.Lock()
+	defer m.plMu.Unlock()
+	m.mu.Lock()
+	_, ok := m.pool.custom[key]
+	m.mu.Unlock()
+	if !ok {
+		return ErrNoChannel
+	}
+	if err := m.d.deleteCustom(ctx, key, m.now()); err != nil {
+		return err
+	}
+	if err := os.Remove(m.customLogoPath(key)); err != nil && !os.IsNotExist(err) {
+		m.log.Warn("логотип своего канала не стёрся", "channel", key, "err", err)
+	}
+	m.mu.Lock()
+	delete(m.pool.custom, key)
+	delete(m.pool.overrides, key)
+	for _, rules := range []map[string]Rule{m.pool.nameRules, m.pool.streamRules} {
+		for k, r := range rules {
+			if r.Channel == key {
+				delete(rules, k)
+			}
+		}
+	}
+	m.mu.Unlock()
+	m.rebuild(ctx)
+	return nil
+}
+
 // customKeys — ключи своих каналов.
 func (m *Module) customKeys() []string {
 	m.mu.Lock()
@@ -154,25 +199,50 @@ func (d db) nextCustom(ctx context.Context) (int, error) {
 	return n, err
 }
 
+func (d db) deleteCustom(ctx context.Context, key string, now time.Time) error {
+	tx, err := d.W.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	for _, q := range []struct {
+		sql  string
+		args []any
+	}{
+		{`UPDATE iptv_custom SET deleted_at = ? WHERE key = ?`, []any{now.UnixMilli(), key}},
+		{`DELETE FROM iptv_name_rules WHERE channel = ?`, []any{key}},
+		{`DELETE FROM iptv_stream_rules WHERE channel = ?`, []any{key}},
+		{`DELETE FROM iptv_channel_overrides WHERE channel = ?`, []any{key}},
+	} {
+		if _, err := tx.ExecContext(ctx, q.sql, q.args...); err != nil {
+			return err
+		}
+	}
+	return tx.Commit()
+}
+
 func (d db) insertCustom(ctx context.Context, n int, c Custom, now time.Time) error {
 	_, err := d.W.ExecContext(ctx, `INSERT INTO iptv_custom (key, n, name, logo, created_at) VALUES (?, ?, ?, ?, ?)`,
 		c.Key, n, c.Name, c.Logo, now.UnixMilli())
 	return err
 }
 
-// serveUploadedLogo — загруженный логотип своего канала; false — у канала не загруженный.
-func (m *Module) serveUploadedLogo(w http.ResponseWriter, r *http.Request, src string) bool {
-	key, ok := strings.CutPrefix(src, "upload:")
-	if !ok {
-		return false
+// serveUploadedLogo — загруженный логотип своего канала key. Путь к файлу — только из ключа своего канала,
+// которому логотип загрузили: «upload:…» в tvg-logo плейлиста или значке телепрограммы — 404 (ревью 14Д, п. 1).
+func (m *Module) serveUploadedLogo(w http.ResponseWriter, r *http.Request, key, src string) {
+	m.mu.Lock()
+	c, ok := m.pool.custom[key]
+	m.mu.Unlock()
+	if !ok || src != "upload:"+key || c.Logo != src {
+		http.NotFound(w, r)
+		return
 	}
 	b, err := os.ReadFile(m.customLogoPath(key))
 	if err != nil {
 		http.NotFound(w, r)
-		return true
+		return
 	}
 	w.Header().Set("Content-Type", http.DetectContentType(b))
 	w.Header().Set("Cache-Control", "max-age=3600")
 	w.Write(b)
-	return true
 }

@@ -2,10 +2,10 @@
 // «Проверить»; источники по порядку с проверками «днём / вечером», пометками «основной» и «без звука»,
 // кнопками «Сделать основным», «Скрыть» / «Вернуть», «Это другой канал»; правка категории, страны и
 // языка. Правки — из домашней сети.
-import { h, fill, icon, poll, keepFocus, ago } from '../ui.js';
-import { get, put, post } from '../api.js';
+import { h, fill, icon, poll, keepFocus, ago, confirmDialog } from '../ui.js';
+import { get, put, post, del } from '../api.js';
 import { gradeMark } from './tvkit.js';
-import { openPreview, grabFrame } from './preview.js';
+import { openPreview, grabFrame, frameNote } from './preview.js';
 
 // CATEGORIES — постоянный набор категорий (спека этапа 8, раздел 5.4), как у сервера.
 export const CATEGORIES = [
@@ -71,7 +71,7 @@ export function render(root, r, ctx) {
   let error = '';
   let facets = null; // страны и языки для правки меток — из /channels?all=1
   let framing = false; // «Кадры» снимаются
-  let shots = {}; // источник → кадр (data URL) или 'none'
+  let shots = {}; // источник → кадр (data URL) или почему его нет (frameNote)
   let draft = null; // черновик меток: {category, country, langs}; null — как у канала
   let reassign = 0; // источник, для которого открыт поиск «Это другой канал»
   let found = [];
@@ -135,10 +135,24 @@ export function render(root, r, ctx) {
         }) }, icon('network_check'), probing ? 'Проверяется…' : 'Проверить источники'),
         ctx.canEdit ? h('button', { class: 'btn', type: 'button', disabled: framing, 'data-key': 'frames', onclick: frames },
           icon('live_tv'), framing ? 'Кадры…' : 'Кадры') : null,
+        ctx.canEdit && key.startsWith('my-') ? h('button', { class: 'btn', type: 'button', 'data-key': 'delete-custom', onclick: removeCustom },
+          icon('delete'), 'Удалить канал') : null,
         error ? h('span', { class: 'error' }, error) : null);
       drawSources();
       drawEdit();
     });
+  }
+
+  // removeCustom — «Удалить канал» у своего канала (ревью 14Д, п. 5): его потоки вернутся в «Не распознано».
+  async function removeCustom() {
+    if (!(await confirmDialog({ title: `Удалить канал «${card.name}»?`, yes: 'Удалить', safe: true })) || !alive) return;
+    try {
+      await del(`/iptv/custom/${enc}`);
+      ctx.go('#/settings/iptv/unrecognized');
+    } catch (e) {
+      error = e.message;
+      if (alive) draw();
+    }
   }
 
   // nowTitle — передача канала сейчас: с ней сверяют картинку источника («Смотреть», план 14Д).
@@ -157,7 +171,7 @@ export function render(root, r, ctx) {
     draw();
     for (const s of card.sources) {
       if (!alive) return;
-      shots[s.id] = (await grabFrame(s)) || 'none';
+      shots[s.id] = await grabFrame(s);
       if (alive) drawSources();
     }
     framing = false;
@@ -211,7 +225,7 @@ export function render(root, r, ctx) {
       const row = h('div', { class: s.offered ? 'src' : 'src off' },
         h('div', { class: 'row' }, h('span', { class: 'num' }, String(n + 1)), gradeMark(sourceGrade(s)),
           h('span', { class: 'grow strong ellipsis', title: s.name }, s.name || s.playlists.join(', '))),
-        shot ? (shot === 'none' ? h('div', { class: 'muted small frame-none' }, 'нет картинки') : h('img', { class: 'src-frame', src: shot, alt: '' })) : null,
+        shot ? (frameNote(shot) ? h('div', { class: 'muted small frame-none' }, frameNote(shot)) : h('img', { class: 'src-frame', src: shot, alt: '' })) : null,
         marks.length ? h('div', { class: 'tags' }, marks) : null,
         h('div', { class: 'muted small' }, [s.playlists.join(', '), info, STATE[s.state] + (s.checkedAt ? `, проверен ${ago(s.checkedAt)}` : '')].filter(Boolean).join(' · ')),
         h('div', { class: 'muted small' }, 'Неделя: ' + week(s.week)),

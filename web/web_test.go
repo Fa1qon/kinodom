@@ -1971,15 +1971,53 @@ for (const [got, want] of checks) {
 // План 14Д: «Смотреть» источника — вид плеера по источнику, строка статистики; библиотеки плеера и их
 // лицензии — в пульте.
 func TestPultPreview(t *testing.T) {
-	for _, f := range []string{"vendor/hls.light.min.js", "vendor/hls.js-LICENSE", "vendor/mpegts.js", "vendor/mpegts.js-LICENSE"} {
+	// mpegts.js.LICENSE.txt — уведомления MIT вшитого в сборку кода, на него ссылается первая строка mpegts.js (ревью 14Д, п. 19).
+	for _, f := range []string{"vendor/hls.light.min.js", "vendor/hls.js-LICENSE", "vendor/mpegts.js", "vendor/mpegts.js-LICENSE", "vendor/mpegts.js.LICENSE.txt"} {
 		if _, err := fs.Stat(Static, f); err != nil {
 			t.Errorf("нет %s", f)
 		}
 	}
 	node := lookNode(t)
 	script := `
-const { playerKind, previewStats } = await import('./views/preview.js');
+const { playerKind, previewStats, playerError, frameNote, playerSession } = await import('./views/preview.js');
+const { logoFileError } = await import('./views/settings-unrecognized.js');
+const text = (e) => (e ? e.what + ': ' + e.text : null);
+const binary = { get responseText() { throw new Error('responseType arraybuffer'); } };
+// Ревью 14Д, п. 3: окно закрыли, пока грузилась библиотека, — плеер разбирается, как только подключится.
+let destroyed = 0;
+let resolve;
+const early = playerSession(new Promise((r) => (resolve = r)));
+early.close();
+resolve({ destroy: () => destroyed++ });
+const earlyReady = await early.ready;
+let destroyed2 = 0;
+const late = playerSession(Promise.resolve({ destroy: () => destroyed2++ }));
+const lateReady = await late.ready;
+late.close();
+late.close();
 const checks = [
+  [destroyed, 1],
+  [earlyReady, null],
+  [lateReady !== null && destroyed2, 1],
+  // Ревью 14Д, п. 4: ошибки плеера — словами; «браузер не умеет» — не «нет картинки».
+  [playerError('hls', { fatal: false, type: 'networkError' }), null],
+  [text(playerError('hls', { fatal: true, type: 'networkError', response: { code: 502 }, networkDetails: { responseText: '{"error":"источник ответил 404"}' } })),
+    'net: Источник не открылся: источник ответил 404'],
+  [text(playerError('hls', { fatal: true, type: 'networkError', response: { code: 502 }, networkDetails: binary })), 'net: Источник не открылся (ответ 502)'],
+  [text(playerError('hls', { fatal: true, type: 'networkError' })), 'net: Источник не открылся'],
+  [text(playerError('hls', { fatal: true, type: 'mediaError', details: 'manifestIncompatibleCodecsError' })), 'codec: Браузер не показывает этот поток'],
+  [text(playerError('hls', { fatal: true, type: 'muxError', details: 'fragParsingError' })), 'codec: Браузер не показывает этот поток'],
+  [text(playerError('mpegts', 'NetworkError', 'HttpStatusCodeInvalid', { code: 504, msg: 'Gateway Timeout' })), 'net: Источник не открылся (ответ 504)'],
+  [text(playerError('mpegts', 'MediaError', 'MediaMSEError', {})), 'codec: Браузер не показывает этот поток'],
+  [frameNote('data:image/jpeg;base64,AAAA'), null],
+  [frameNote('none'), 'нет картинки'],
+  [frameNote('codec'), 'браузер не показывает этот поток'],
+  [frameNote('dash'), 'DASH в браузере не показывается'],
+  [frameNote('error'), 'источник не открылся'],
+  // Ревью 14Д, п. 10: фото с телефона — отказ до отправки.
+  [logoFileError({ size: 3 << 20 }), 'логотип больше 1 МБ'],
+  [logoFileError({ size: 50000 }), ''],
+  [logoFileError(undefined), ''],
   [playerKind({ kind: 'hls', url: 'http://x/a' }), 'hls'],
   [playerKind({ kind: 'live', url: 'http://x/a' }), 'ts'],
   [playerKind({ kind: 'dash', url: 'http://x/a' }), 'dash'],

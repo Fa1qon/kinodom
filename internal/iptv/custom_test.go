@@ -11,6 +11,7 @@ import (
 	"image/png"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"slices"
 	"strings"
 	"testing"
@@ -97,6 +98,11 @@ func TestCustomLogoUpload(t *testing.T) {
 			t.Fatalf("%s: %v", name, err)
 		}
 	}
+	// SVG браузер выберет по accept="image/*": отказ должен называть, какие картинки подходят (ревью 14Д, п. 11).
+	svg := []byte(`<?xml version="1.0"?><svg xmlns="http://www.w3.org/2000/svg"/>`)
+	if _, err := m.CreateCustom(context.Background(), CustomInput{Name: "SVG", LogoData: svg}); err == nil || !strings.Contains(err.Error(), "PNG") {
+		t.Fatalf("SVG: %v", err)
+	}
 	if len(m.customKeys()) != 0 {
 		t.Fatalf("после отказов каналы: %v", m.customKeys())
 	}
@@ -141,6 +147,12 @@ func TestCustomRoute(t *testing.T) {
 	if rec := post(map[string]any{"name": "Большой", "logoData": base64.StdEncoding.EncodeToString(big)}); rec.Code != 200 {
 		t.Fatalf("логотип 900 КБ: %d %s", rec.Code, rec.Body)
 	}
+	// Фото с телефона (1,5 МБ): запрос больше предела — отказ словами пульта (ревью 14Д, п. 10).
+	huge := append(pngBytes(t), make([]byte, 1536<<10)...)
+	if rec := post(map[string]any{"name": "Фото", "logoData": base64.StdEncoding.EncodeToString(huge)}); rec.Code != http.StatusBadRequest ||
+		!strings.Contains(rec.Body.String(), "больше 1 МБ") {
+		t.Fatalf("логотип 1,5 МБ: %d %s", rec.Code, rec.Body)
+	}
 }
 
 // План 14Д: у нераспознанного названия — поток для «Смотреть» (живой, если есть) и его вид.
@@ -171,4 +183,113 @@ func TestUnrecognizedWatch(t *testing.T) {
 		}
 	}
 	t.Fatalf("группы нет: %s", rec.Body)
+}
+
+// Ревью 14Д, п. 1: «upload:» в tvg-logo чужого плейлиста не открывает файлы сервера — загруженный логотип
+// отдаётся только своему каналу, которому его загрузили.
+func TestLogoUploadPrefixFromPlaylist(t *testing.T) {
+	f := newFakeNet(t)
+	m, _ := startModule(t, f)
+	waitFor(t, "телепрограмма скачалась", func() bool { return m.Guide() != nil })
+	ok := f.srv.URL + "/s/ok.m3u8"
+	f.setPlaylist(fmt.Sprintf("#EXTM3U\n#EXTINF:-1 tvg-logo=\"upload:../k.db\",Чужой канал\n%s?a\n#EXTINF:-1 tvg-logo=\"upload:../k.db\",НТВ HD\n%s\n", ok, ok))
+	if _, err := m.AddPlaylist(context.Background(), PlaylistInput{URL: f.srv.URL + "/pl.m3u"}); err != nil {
+		t.Fatal(err)
+	}
+	m.rebuild(context.Background())
+	group := ""
+	for _, g := range m.Lineup().Unrecognized {
+		if g.Sample == "Чужой канал" {
+			group = g.Name
+		}
+	}
+	if group == "" {
+		t.Fatalf("нераспознанные: %+v", m.Lineup().Unrecognized)
+	}
+	key, err := m.CreateCustom(context.Background(), CustomInput{Name: "Свой", Group: group})
+	if err != nil {
+		t.Fatal(err)
+	}
+	mux := http.NewServeMux()
+	m.Register(testRouter{mux}, func(w http.ResponseWriter, r *http.Request, src string) { http.Error(w, "из сети: "+src, 500) })
+	// Значок телепрограммы или запись, прошедшие мимо проверки адреса, — отдача файла всё равно только по ключу
+	// своего канала, которому его загрузили.
+	for _, k := range []string{key, "ntv"} {
+		rec := httptest.NewRecorder()
+		mux.ServeHTTP(rec, httptest.NewRequest("GET", "/logo/"+k, nil))
+		if rec.Code == 200 || strings.Contains(rec.Body.String(), "SQLite") {
+			t.Errorf("/logo/%s: %d, %.40q", k, rec.Code, rec.Body.String())
+		}
+	}
+	m.mu.Lock()
+	m.pool.custom[key] = Custom{Key: key, Name: "Свой", Logo: "upload:../k.db"}
+	m.mu.Unlock()
+	m.rebuild(context.Background())
+	for _, k := range []string{key} {
+		rec := httptest.NewRecorder()
+		mux.ServeHTTP(rec, httptest.NewRequest("GET", "/logo/"+k, nil))
+		if rec.Code == 200 || strings.Contains(rec.Body.String(), "SQLite") {
+			t.Errorf("/logo/%s: %d, %.40q", k, rec.Code, rec.Body.String())
+		}
+	}
+}
+
+// Ревью 14Д, п. 5: второй «Создать канал» по той же группе (двойное OK на пульте) — отказ, пустого канала нет.
+func TestCreateCustomTwice(t *testing.T) {
+	m, group := customModule(t)
+	if _, err := m.CreateCustom(context.Background(), CustomInput{Name: "Мой канал", Group: group}); err != nil {
+		t.Fatal(err)
+	}
+	var fe *FieldError
+	if _, err := m.CreateCustom(context.Background(), CustomInput{Name: "Мой канал", Group: group}); !errors.As(err, &fe) {
+		t.Fatalf("второй раз: %v", err)
+	}
+	if keys := m.customKeys(); len(keys) != 1 {
+		t.Fatalf("каналы: %v", keys)
+	}
+}
+
+// Ревью 14Д, п. 5: «Удалить канал» — своего канала нет ни сейчас, ни после перезапуска; его потоки снова в
+// «Не распознано», загруженный логотип стёрт; номер не достаётся новому каналу.
+func TestDeleteCustomChannel(t *testing.T) {
+	m, group := customModule(t)
+	key, err := m.CreateCustom(context.Background(), CustomInput{Name: "Мой канал", LogoData: pngBytes(t), Category: "news", Group: group})
+	if err != nil {
+		t.Fatal(err)
+	}
+	mux := http.NewServeMux()
+	m.Register(testRouter{mux}, nil)
+	del := func(k string) int {
+		req := httptest.NewRequest("DELETE", "/api/v1/iptv/custom/"+k, nil)
+		req.RemoteAddr = fromPhone
+		rec := httptest.NewRecorder()
+		mux.ServeHTTP(rec, req)
+		return rec.Code
+	}
+	if code := del(key); code != http.StatusNoContent {
+		t.Fatalf("удаление: %d", code)
+	}
+	l := m.Lineup()
+	if l.ByKey[key] != nil {
+		t.Fatal("канал остался")
+	}
+	if !slices.ContainsFunc(l.Unrecognized, func(g Group) bool { return g.Name == group }) {
+		t.Fatalf("потоки не вернулись в «Не распознано»: %+v", l.Unrecognized)
+	}
+	if _, err := os.Stat(m.customLogoPath(key)); !os.IsNotExist(err) {
+		t.Fatalf("логотип: %v", err)
+	}
+	p, err := m.d.load(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := p.custom[key]; ok || p.nameRules[group].Channel == key || p.overrides[key].Category != nil {
+		t.Fatalf("после перезапуска: свой %v, правило %+v, метки %+v", ok, p.nameRules[group], p.overrides[key])
+	}
+	if k2, err := m.CreateCustom(context.Background(), CustomInput{Name: "Новый"}); err != nil || k2 == key {
+		t.Fatalf("новый канал: %q %v", k2, err)
+	}
+	if code := del("my-99"); code != http.StatusNotFound {
+		t.Fatalf("неизвестный: %d", code)
+	}
 }

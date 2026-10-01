@@ -4,5 +4,6 @@ CREATE TABLE iptv_custom (
     n          INTEGER NOT NULL UNIQUE,
     name       TEXT NOT NULL,
     logo       TEXT NOT NULL DEFAULT '', -- адрес картинки; upload:<ключ> — загруженный файл
-    created_at INTEGER NOT NULL
+    created_at INTEGER NOT NULL,
+    deleted_at INTEGER -- «Удалить канал»: строка остаётся, чтобы номер не достался новому каналу
 );

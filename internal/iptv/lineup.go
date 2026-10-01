@@ -576,8 +576,8 @@ func channelLabels(c *Channel, o Override, in buildInput, l *Lineup, resolved ma
 			if c.Name == "" && e.Name != "" {
 				c.Name = e.Name
 			}
-			if c.Logo == "" && e.Logo != "" {
-				c.Logo = e.Logo
+			if c.Logo == "" && (strings.HasPrefix(e.Logo, "https://") || strings.HasPrefix(e.Logo, "http://")) {
+				c.Logo = e.Logo // только адрес картинки: «upload:…» — загруженный логотип своего канала (ревью 14Д, п. 1)
 			}
 		}
 	}

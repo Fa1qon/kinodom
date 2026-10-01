@@ -7,6 +7,11 @@ import { layout, remoteNote, channelTabs } from './settings-layout.js';
 import { openPreview } from './preview.js';
 import { CATEGORIES } from './channel-settings.js';
 
+// logoFileError — файл логотипа больше 1 МБ: отказ до отправки (фото с телефона; ревью 14Д, п. 10).
+export function logoFileError(f) {
+  return f && f.size > 1 << 20 ? 'логотип больше 1 МБ' : '';
+}
+
 export function render(root, r, ctx) {
   const q = r.query.get('q') || '';
   const page = Math.max(1, Number(r.query.get('page')) || 1);
@@ -19,6 +24,8 @@ export function render(root, r, ctx) {
   let open = ''; // название, для которого открыт поиск канала
   let found = [];
   let making = ''; // название, для которого открыта форма «Новый канал» (план 14Д)
+  let saving = false; // «Создать канал» отправлен — второе нажатие не создаст второй канал
+  let formError = ''; // ошибка формы «Новый канал» — у формы, а не над списком
   const nName = h('input', { class: 'input', name: 'name', placeholder: 'Название', 'aria-label': 'Название', 'data-key': 'new-name' });
   const nLogo = h('input', { class: 'input', name: 'logo', placeholder: 'Адрес логотипа', 'aria-label': 'Адрес логотипа', inputmode: 'url', 'data-key': 'new-logo' });
   const nFile = h('input', { type: 'file', accept: 'image/*', 'aria-label': 'Файл логотипа', 'data-key': 'new-file' });
@@ -89,6 +96,7 @@ export function render(root, r, ctx) {
             ctx.canEdit ? h('button', { class: 'btn', type: 'button', 'data-key': `new-${u.name}`, onclick: () => {
               making = making === u.name ? '' : u.name;
               open = '';
+              formError = '';
               nName.value = u.sample;
               nLogo.value = '';
               nFile.value = '';
@@ -122,17 +130,30 @@ export function render(root, r, ctx) {
             onclick: () => act(() => put('/iptv/names', { name: u.name, channel: c.key })) }, c.name))));
         }
         if (making === u.name) {
-          row.append(h('form', { class: 'new-channel col gap10', onsubmit: (e) => {
+          row.append(h('form', { class: 'new-channel col gap10', onsubmit: async (e) => {
             e.preventDefault();
-            act(async () => {
+            if (saving) return;
+            formError = logoFileError(nFile.files && nFile.files[0]);
+            if (formError) return draw();
+            saving = true;
+            draw();
+            try {
               const logoData = await fileBase64();
-              await post('/iptv/custom', { name: nName.value, logo: logoData ? '' : nLogo.value.trim(), logoData: logoData || null,
+              const { key } = await post('/iptv/custom', { name: nName.value, logo: logoData ? '' : nLogo.value.trim(), logoData: logoData || null,
                 category: nCat.value, country: nCountry.value.trim().toUpperCase(), group: u.name });
               making = '';
-            });
+              ctx.go(`#/channel/${encodeURIComponent(key)}/settings`); // сразу видно, что вышло; там же «Удалить канал»
+            } catch (err) {
+              formError = err.message;
+            } finally {
+              saving = false;
+              if (alive) draw();
+            }
           } }, h('div', { class: 'row gap10 wrap' }, h('div', { class: 'grow' }, nName), nCat, nCountry),
           h('div', { class: 'row gap10 wrap' }, h('div', { class: 'grow' }, nLogo), nFile),
-          h('div', { class: 'row gap10' }, h('button', { class: 'btn inv', type: 'submit', 'data-key': 'new-save' }, icon('save'), 'Создать канал'))));
+          formError ? h('p', { class: 'error' }, formError) : null,
+          h('div', { class: 'row gap10' }, h('button', { class: 'btn inv', type: 'submit', disabled: saving, 'data-key': 'new-save' },
+            icon('save'), saving ? 'Создаётся…' : 'Создать канал'))));
         }
         return row;
       });
