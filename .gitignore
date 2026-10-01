@@ -10,3 +10,7 @@ android/.kotlin/
 android/build/
 android/app/build/
 android/local.properties
+
+# Документы и опыты — в отдельном локальном репозитории (kinodom-docs), в этот не попадают
+/docs/
+/spikes/
