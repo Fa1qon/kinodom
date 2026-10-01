@@ -123,6 +123,7 @@ func TestPatchRejectsBadFields(t *testing.T) {
 		`{"catalog":{"sections":{"rutracker":[]}}}`:                  "хотя бы один",
 		`{"catalog":{"sections":{"rutor":["1,2"]}}}`:                 "не понят",
 		`{"catalog":{"preferredFormat":"FLAC"}}`:                     "Формат в приоритете",
+		`{"catalog":{"order":"rating"}}`:                             "Порядок по умолчанию",
 	}
 	for js, want := range cases {
 		n, err := v.With(patch(t, js))
@@ -273,6 +274,30 @@ func TestPreferredFormatField(t *testing.T) {
 	db.SetSetting(ctx, KeyPreferredFormat, "FLAC")
 	if v = load(t, db, nil); v.PreferredFormat != "" {
 		t.Fatalf("неизвестный формат в базе: %q", v.PreferredFormat)
+	}
+}
+
+// Порядок разделов каталога по умолчанию (план 14Б): раздающие; качающие, новые, скачивания; чужое — отказ;
+// неизвестное в базе — раздающие.
+func TestCatalogOrderField(t *testing.T) {
+	db := openDB(t)
+	v := load(t, db, nil)
+	if v.CatalogOrder != "seeders" || v.View().Catalog.Order != "seeders" {
+		t.Fatalf("по умолчанию: %q", v.CatalogOrder)
+	}
+	n, err := v.With(patch(t, `{"catalog":{"order":"new"}}`))
+	if b, _ := json.Marshal(n.View()); err != nil || !strings.Contains(string(b), `"order":"new"`) {
+		t.Fatalf("новые: %s, %v", b, err)
+	}
+	if err := save(ctx, db, v, n); err != nil {
+		t.Fatal(err)
+	}
+	if v = load(t, db, nil); v.CatalogOrder != "new" {
+		t.Fatalf("после записи: %q", v.CatalogOrder)
+	}
+	db.SetSetting(ctx, KeyCatalogOrder, "rating")
+	if v = load(t, db, nil); v.CatalogOrder != "seeders" {
+		t.Fatalf("неизвестный порядок в базе: %q", v.CatalogOrder)
 	}
 }
 
