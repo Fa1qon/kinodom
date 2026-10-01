@@ -100,6 +100,7 @@ type ChannelView struct {
 	Key           string           `json:"key"`          // ключ канала: страница, ★
 	Version       string           `json:"version"`      // ключ версии: «Смотреть», .m3u8, программа, настройки
 	VersionLabel  string           `json:"versionLabel"` // «МСК», «МСК+4», «МСК−1»
+	VersionCount  int              `json:"versionCount"` // рабочих версий у канала: плеер приложения подписывает версию, если их несколько
 	Name          string           `json:"name"`
 	Logo          string           `json:"logo"`   // адрес логотипа на сервере; "" — нет
 	Block         string           `json:"block"`  // favorite, federal, ""
@@ -143,7 +144,10 @@ func (m *Module) view(l *Lineup, c *Channel, g *xmltv.Guide, at time.Time, fav b
 	v := ChannelView{Key: fk, Version: c.Key, VersionLabel: VersionLabel(c.Zone), Name: name, Number: c.Federal, Category: c.Labels.Category,
 		CategoryName: labels.CategoryName(c.Labels.Category), Country: c.Labels.Country,
 		CountryName: labels.CountryName(c.Labels.Country), Languages: c.Labels.Languages, LanguageNames: []string{},
-		Grade: c.Grade, Favorite: fav, Hidden: c.Hidden}
+		Grade: c.Grade, Favorite: fav, Hidden: c.Hidden, VersionCount: 1}
+	if f := l.Families[fk]; f != nil && len(f.Versions) > 1 {
+		v.VersionCount = len(f.Versions)
+	}
 	if v.Languages == nil {
 		v.Languages = []string{}
 	}

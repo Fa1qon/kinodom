@@ -119,3 +119,24 @@ func TestOverrideFamilyFields(t *testing.T) {
 		t.Errorf("избранное: %s", keys(resp.Channels))
 	}
 }
+
+// Число версий канала (план 13b, задача 1): плеер приложения подписывает версию («МСК+4») только у канала,
+// у которого их несколько.
+func TestChannelVersionCount(t *testing.T) {
+	_, c, _ := startVersions(t)
+	var resp channelsResp
+	if code := c.json("GET", "/api/v1/channels", fromPhone, nil, &resp); code != 200 {
+		t.Fatalf("каналы: %d", code)
+	}
+	counts := map[string]int{}
+	for _, ch := range resp.Channels {
+		counts[ch.Key] = ch.VersionCount
+	}
+	if counts["pervy"] != 3 || counts["ntv"] != 1 {
+		t.Fatalf("versionCount в списке: %v", counts)
+	}
+	var card versionCard
+	if code := c.json("GET", "/api/v1/channels/pervy?version=pervy-mn1", fromPhone, nil, &card); code != 200 || card.VersionCount != 3 {
+		t.Fatalf("versionCount на странице: %d %d", code, card.VersionCount)
+	}
+}
