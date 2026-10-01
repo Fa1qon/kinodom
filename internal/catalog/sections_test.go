@@ -235,3 +235,29 @@ func TestSectionsRouteGroups(t *testing.T) {
 		t.Fatalf("разделы: %v", got)
 	}
 }
+
+// Экран «Разделы каталога» (спека 11b, 7.1): ?level=1 — три группы Rutracker и их подразделы первого
+// уровня без служебных, в порядке групп и дерева; Rutor — как есть.
+func TestTreeLevelOne(t *testing.T) {
+	rt := newFake("rutracker")
+	rt.tree = groupsTree()
+	c, _ := newCatalog(t, openDB(t), nil, rt)
+	refresh(t, c, false)
+	mux := http.NewServeMux()
+	c.Register(muxRouter{mux})
+	var nodes []TreeNode
+	if code := getJSON(t, mux, "/api/v1/sources/rutracker/categories?level=1", &nodes); code != 200 {
+		t.Fatalf("код %d", code)
+	}
+	var got []string
+	for _, n := range nodes {
+		got = append(got, n.ID+"<"+n.ParentID)
+	}
+	want := "c2< 22<c2 7<c2 2198<c2 c18< 9<c18 189<c18 c20< 19<c20 46<c20 314<c20"
+	if strings.Join(got, " ") != want {
+		t.Fatalf("узлы %q\nнужно %q", strings.Join(got, " "), want)
+	}
+	if nodes[0].Name != "Кино" || nodes[7].Name != "Документалистика" {
+		t.Fatalf("группы — названиями пульта: %q, %q", nodes[0].Name, nodes[7].Name)
+	}
+}

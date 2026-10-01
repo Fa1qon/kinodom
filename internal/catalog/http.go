@@ -182,6 +182,18 @@ func (c *Catalog) handleTree(w http.ResponseWriter, r *http.Request) {
 	for i, n := range tree {
 		out[i] = TreeNode{ID: n.ID, Name: n.Name, ParentID: n.ParentID}
 	}
+	if name == "rutracker" && r.URL.Query().Get("level") == "1" {
+		// Экран «Разделы каталога» (спека 11b, 7.1): группы названиями пульта и их подразделы первого
+		// уровня без служебных.
+		out = out[:0]
+		fl := firstLevel(tree)
+		for _, g := range RutrackerGroups {
+			out = append(out, TreeNode{ID: g.ID, Name: g.Name})
+			for _, s := range fl[g.ID] {
+				out = append(out, TreeNode{ID: s.ID, Name: s.Name, ParentID: g.ID})
+			}
+		}
+	}
 	httpx.WriteJSON(w, http.StatusOK, out)
 }
 

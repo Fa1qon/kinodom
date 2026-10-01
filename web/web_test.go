@@ -764,45 +764,6 @@ for (const [name, ok] of checks) {
 	}
 }
 
-// Разделы каталога деревом: строка настройки читается и пишется без потерь; категория целиком —
-// «cN+», раздел со всеми подразделами — «раздел+», только собственные раздачи раздела — «раздел».
-func TestPultSectionsEncoding(t *testing.T) {
-	node := lookNode(t)
-	script := `
-import { buildTree, decodeSections, encodeSections, units } from './views/settings-sections.js';
-// c2: 46 (подразделы 2110, 2111), 47; c9: 90.
-const tree = buildTree([
-  { id: 'c2', name: 'Кино', parentId: '' }, { id: 'c9', name: 'Программы', parentId: '' },
-  { id: '46', name: 'Документальные', parentId: 'c2' }, { id: '47', name: 'Спорт', parentId: 'c2' },
-  { id: '2110', name: 'HD', parentId: '46' }, { id: '2111', name: 'SD', parentId: '46' },
-  { id: '90', name: 'Windows', parentId: 'c9' },
-]);
-const enc = (entries) => encodeSections(tree, decodeSections(tree, entries).selected).join(',');
-const checks = [
-  [enc(['46+']), '46+'],
-  [enc(['46', '2110']), '46,2110'],
-  [enc(['46', '2110', '2111']), '46+'],
-  [enc(['2110', '2111']), '2110,2111'],
-  [enc(['c2+']), 'c2+'],
-  [enc(['46+', '47']), 'c2+'],
-  [enc(['47', '90', '999']), '47,c9+'], // 90 — единственный раздел c9: категория отмечена целиком (спека, 6.3)
-  [units(tree.byId.get('c2')).join(','), '46,2110,2111,47'],
-  [[...decodeSections(tree, ['2110']).expanded].sort().join(','), '46,c2'],
-];
-for (const [got, want] of checks) {
-  if (got !== want) {
-    console.error(JSON.stringify(got), '≠', JSON.stringify(want));
-    process.exitCode = 1;
-  }
-}
-`
-	cmd := exec.Command(node, "--input-type=module", "--no-warnings", "-e", script)
-	cmd.Dir = "static"
-	if out, err := cmd.CombinedOutput(); err != nil {
-		t.Errorf("%v\n%s", err, out)
-	}
-}
-
 // Пульт ТВ: кнопка, которую нажали, на время действия отключается («Скачать», «Смотреть», «Искать на
 // трекерах») — фокусу некуда встать, но когда она снова доступна, фокус возвращается на неё, а не
 // теряется до первого элемента экрана. Если человек сам ушёл фокусом в другое место — его не перебивать
@@ -1244,6 +1205,47 @@ r = groupBar(secs, '');
 checks.push(['без раздела — первая группа', s(r.sections.map((x) => x.id)), '["7","22"]']);
 r = groupBar([{ id: '12', name: 'Зарубежные фильмы', group: '' }, { id: '4', name: 'Сериалы', group: '' }], '4');
 checks.push(['Rutor — без групп', s([r.groups.length, r.sections.length]), '[0,2]']);
+for (const [name, got, want] of checks) {
+  if (got !== want) {
+    console.error(name, ':', got, '≠', want);
+    process.exitCode = 1;
+  }
+}
+`
+	cmd := exec.Command(node, "--input-type=module", "--no-warnings", "-e", script)
+	cmd.Dir = "static"
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Errorf("%v\n%s", err, out)
+	}
+}
+
+// «Разделы каталога» Rutracker: три группы и подразделы первого уровня (спека 11b, 7.1). Прежний выбор —
+// подфорумы, «раздел+», «cN+» — отмечает свои подразделы первого уровня; сохраняется «подраздел+».
+func TestPultSectionsGroups(t *testing.T) {
+	node := lookNode(t)
+	script := `
+import { buildTree, decodeGroups, encodeGroups } from './views/settings-sections.js';
+const full = buildTree([
+  { id: 'c2', name: 'Кино, Видео и ТВ', parentId: '' }, { id: 'c20', name: 'Документалистика и юмор', parentId: '' },
+  { id: '7', name: 'Зарубежное кино', parentId: 'c2' }, { id: '252', name: 'Фильмы 2026', parentId: '7' },
+  { id: '22', name: 'Наше кино', parentId: 'c2' },
+  { id: '1629', name: 'Предложения', parentId: 'c20' }, { id: '19', name: 'СМИ', parentId: 'c20' },
+  { id: '46', name: 'Документальные', parentId: 'c20' }, { id: '2076', name: '[Док] Космос', parentId: '46' },
+  { id: '314', name: 'Документальные (HD Video)', parentId: 'c20' }, { id: '2110', name: '[HD] Природа', parentId: '314' },
+]);
+const groups = buildTree([
+  { id: 'c2', name: 'Кино', parentId: '' }, { id: '7', name: 'Зарубежное кино', parentId: 'c2' }, { id: '22', name: 'Наше кино', parentId: 'c2' },
+  { id: 'c20', name: 'Документалистика', parentId: '' }, { id: '19', name: 'СМИ', parentId: 'c20' },
+  { id: '46', name: 'Документальные', parentId: 'c20' }, { id: '314', name: 'Документальные (HD Video)', parentId: 'c20' },
+]);
+const dec = (entries) => [...decodeGroups(full, groups, entries)].sort().join(',');
+const checks = [
+  ['подфорумы — свои подразделы', dec(['2110', '2076']), '314,46'],
+  ['группа целиком — без служебных', dec(['c20+']), '19,314,46'],
+  ['подраздел+ и подраздел', dec(['46+', '7']), '46,7'],
+  ['чего нет в дереве — пропуск', dec(['999', '252']), '7'],
+  ['сохранение — подраздел+, по порядку групп', encodeGroups(groups, new Set(['46', '22'])).join(','), '22+,46+'],
+];
 for (const [name, got, want] of checks) {
   if (got !== want) {
     console.error(name, ':', got, '≠', want);
