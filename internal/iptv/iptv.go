@@ -118,6 +118,8 @@ type Module struct {
 	wake     chan struct{} // проверить, не пора ли что-то скачать
 	lightNew chan struct{} // проверить новые источники
 
+	relayKey []byte // подпись ссылок пересылки источника (план 14Д)
+
 	mu       sync.Mutex
 	loc      *time.Location
 	runCtx   context.Context
@@ -155,7 +157,7 @@ func New(o Options) *Module {
 	if o.OrgBase == "" {
 		o.OrgBase = DefaultOrgBase
 	}
-	m := &Module{o: o, d: db{o.DB}, log: o.Log, now: o.Now, loc: o.Location, client: o.Client, prober: o.Prober,
+	m := &Module{o: o, d: db{o.DB}, log: o.Log, now: o.Now, loc: o.Location, client: o.Client, prober: o.Prober, relayKey: newRelayKey(),
 		dirty: make(chan struct{}, 1), wake: make(chan struct{}, 1), lightNew: make(chan struct{}, 1),
 		lightSem: make(chan struct{}, lightParallel), fullSem: make(chan struct{}, fullParallel),
 		pool: newPool(), epg: newEPGIndex(nil), hidden: o.Hidden, epgURL: o.EPGURL,

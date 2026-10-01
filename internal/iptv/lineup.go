@@ -456,6 +456,9 @@ func build(in buildInput) *Lineup {
 	for _, k := range keys {
 		c := l.ByKey[k]
 		c.Hidden, c.Pinned = "", p.overrides[k].PinnedURL // основной источник — у версии
+		if cu, ok := p.custom[k]; ok {                    // свой канал (план 14Д): название и логотип — свои, не из записей
+			c.Name, c.Logo = cu.Name, cu.Logo
+		}
 		c.Labels = channelLabels(c, labelOverride(p.overrides, k), in, l, resolved)
 		resolved[c.EPGID] = c.Labels
 		sortSources(c, in.goodShare)
@@ -573,8 +576,8 @@ func channelLabels(c *Channel, o Override, in buildInput, l *Lineup, resolved ma
 			if c.Name == "" && e.Name != "" {
 				c.Name = e.Name
 			}
-			if c.Logo == "" && e.Logo != "" {
-				c.Logo = e.Logo
+			if c.Logo == "" && (strings.HasPrefix(e.Logo, "https://") || strings.HasPrefix(e.Logo, "http://")) {
+				c.Logo = e.Logo // только адрес картинки: «upload:…» — загруженный логотип своего канала (ревью 14Д, п. 1)
 			}
 		}
 	}
