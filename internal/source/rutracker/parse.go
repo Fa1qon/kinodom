@@ -36,6 +36,8 @@ var (
 	reForumHref   = regexp.MustCompile(`viewforum\.php\?f=(\d+)`)
 	reTrackerHref = regexp.MustCompile(`tracker\.php\?f=(\d+)`)
 	reIMDb        = regexp.MustCompile(`imdb\.com/title/(tt\d+)`)
+	// «Скачан: 839 раз» на странице раздачи (план 14Б); разряды бывают через пробел.
+	reDownloads = regexp.MustCompile(`Скачан:\s*(?:&nbsp;)?([\d\s\x{a0}]+?)\s*(?:&nbsp;)?раз`)
 )
 
 func parseErr(block string) error { return &source.ParseError{Tracker: title, Block: block} }
@@ -71,6 +73,7 @@ func parseSearch(body []byte) ([]source.Release, error) {
 		// Нет раздающих — вместо b.seedmed «2 дн.» и отрицательный data-ts_text: остаётся 0.
 		r.Seeders = htmltext.FirstInt(tr.Find("b.seedmed").Text())
 		r.Leechers = htmltext.FirstInt(tr.Find("td.leechmed").Text())
+		r.Downloads = digits(tr.Find("td.number-format").First().Text())
 		// Последняя ячейка с data-ts_text — время добавления (unix).
 		if v, ok := tr.Find("td[data-ts_text]").Last().Attr("data-ts_text"); ok {
 			if ts, err := strconv.ParseInt(v, 10, 64); err == nil && ts > 0 {
@@ -126,6 +129,9 @@ func parseTopic(body []byte) (source.Details, error) {
 	}
 	d.Seeders = htmltext.FirstInt(doc.Find(".seed b").First().Text())
 	d.Leechers = htmltext.FirstInt(doc.Find(".leech b").First().Text())
+	if m := reDownloads.FindSubmatch(body); m != nil {
+		d.Downloads = digits(string(m[1]))
+	}
 	return d, nil
 }
 
@@ -175,6 +181,17 @@ func topicHash(doc *goquery.Document, body []byte) string {
 		hashes[strings.ToLower(string(m[1]))] = true
 	}
 	return single(hashes)
+}
+
+// digits — число из цифр строки («23 992» → 23992); цифр нет — 0.
+func digits(s string) int {
+	n := 0
+	for _, r := range s {
+		if r >= '0' && r <= '9' && n < 1e9 {
+			n = n*10 + int(r-'0')
+		}
+	}
+	return n
 }
 
 // single — единственный хэш набора; нет или их несколько — "".

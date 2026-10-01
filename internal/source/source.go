@@ -22,6 +22,14 @@ type Source interface {
 	Details(ctx context.Context, topicID string) (Details, error)             // страница раздачи
 }
 
+// Порядки раздела каталога (план 14Б): раздающие (как всегда), качающие, новые, число скачиваний.
+const (
+	OrderSeeders   = "seeders"
+	OrderLeechers  = "leechers"
+	OrderNew       = "new"
+	OrderDownloads = "downloads"
+)
+
 // Category — раздел трекера.
 type Category struct {
 	ID       string
@@ -42,6 +50,7 @@ type Release struct {
 	InfoHash   string // 40 hex-символов в нижнем регистре; "" — неизвестен
 	Magnet     string // magnet из списка (источник поиска Jacred / Jackett); у трекеров — "", он со страницы раздачи
 	Link       string // ссылка на тему на трекере (источник поиска); у трекеров — "", она по номеру темы
+	Downloads  int    // сколько раз скачана (Rutracker: поиск и страница раздачи); 0 — неизвестно
 }
 
 // Details — страница раздачи. Поля Release — свежие, со страницы.
