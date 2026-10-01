@@ -1259,3 +1259,39 @@ for (const [name, got, want] of checks) {
 		t.Errorf("%v\n%s", err, out)
 	}
 }
+
+// Вживую 11b-Г: браузер держит прокрутку за низом сетки (якорь прокрутки) — порция пришла, а низ остался
+// в зоне наблюдателя, нового события нет, подгрузка вставала и перескакивала пришедшую порцию. Низ сетки
+// не якорь; пришла порция, а низ всё ещё рядом — следующая сразу.
+func TestPultFillDue(t *testing.T) {
+	node := lookNode(t)
+	script := `
+import { fillDue } from './views/catalog.js';
+const st = { error: '', loading: false, page: 6, pages: 18 };
+const checks = [
+  ['низ рядом — следующая', fillDue(st, 852, 900), true],
+  ['низ далеко — наблюдатель сам', fillDue(st, 2700, 900), false],
+  ['ошибка — не сама (повтор — прокруткой)', fillDue({ ...st, error: 'нет сети' }, 852, 900), false],
+  ['идёт загрузка — нет', fillDue({ ...st, loading: true }, 852, 900), false],
+  ['список кончился — нет', fillDue({ ...st, page: 18 }, 852, 900), false],
+];
+for (const [name, got, want] of checks) {
+  if (got !== want) {
+    console.error(name, ': получили', got, 'ждали', want);
+    process.exitCode = 1;
+  }
+}
+`
+	cmd := exec.Command(node, "--input-type=module", "--no-warnings", "-e", script)
+	cmd.Dir = "static"
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Errorf("%v\n%s", err, out)
+	}
+	css, err := os.ReadFile("static/style.css")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !regexp.MustCompile(`\.grid-tail\s*\{[^}]*overflow-anchor:\s*none`).Match(css) {
+		t.Error("низ сетки — якорь прокрутки: .grid-tail без overflow-anchor: none")
+	}
+}
