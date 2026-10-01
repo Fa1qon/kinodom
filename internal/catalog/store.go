@@ -86,7 +86,10 @@ func upsertRelease(ctx context.Context, tx *sql.Tx, r source.Release, now time.T
 		   -- заново, иначе «Скачать» открыл бы прежнюю версию (спека 11b, 6.2).
 		   magnet = CASE WHEN `+newVersion+` THEN '' ELSE releases.magnet END,
 		   torrent = CASE WHEN `+newVersion+` THEN NULL ELSE releases.torrent END,
-		   details_at = CASE WHEN `+newVersion+` THEN 0 ELSE releases.details_at END,
+		   details_at = CASE WHEN `+newVersion+` OR releases.link != '' THEN 0 ELSE releases.details_at END,
+		   -- Тема своего трекера, сохранённая из источника поиска без страницы (адреса не было), пришла от
+		   -- самого трекера — снова со страницей (финальное ревью 11b-Д); у чужих saveExtra ставит ссылку заново.
+		   link = '',
 		   removed = 0, updated_at = excluded.updated_at
 		 RETURNING id`,
 		r.Tracker, r.TopicID, r.Title, r.CategoryID, r.Seeders, r.Leechers, r.Size, ms(r.Added), r.InfoHash, ms(now)).Scan(&id)
@@ -184,11 +187,12 @@ func (s catalogStore) saveFound(ctx context.Context, rs []source.Release, now ti
 	return ids, tx.Commit()
 }
 
-// saveExtra — раздачи из источника поиска (спека 11b, раздел 8). Тема своего трекера (own) — наша раздача
-// по номеру темы, а infohash источника пишется только новой теме: база Jacred отстаёт, и устаревший
-// infohash сбросил бы наши magnet, .torrent и страницу (newVersion). Чужой трекер (и свой без адреса) —
-// раздача без страницы: ссылка на тему, magnet, страница «загружена» сразу — догружать её нечем.
-func (s catalogStore) saveExtra(ctx context.Context, rs []source.Release, own func(tracker string) bool, now time.Time) ([]int64, error) {
+// saveExtra — раздачи из источника поиска (спека 11b, раздел 8). Наша раздача, что уже есть (свой трекер,
+// со страницей), — только раздающие: база Jacred отстаёт, и её infohash, название или «не снята» испортили
+// бы наши magnet, .torrent и страницу (финальное ревью 11b-Д). Новая тема своего трекера с адресом — наша
+// раздача по номеру темы (страница догрузится). Чужой трекер (и свой без адреса) — раздача без страницы:
+// ссылка на тему, magnet, страница «загружена» сразу — догружать её нечем.
+func (s catalogStore) saveExtra(ctx context.Context, rs []source.Release, own, withAddress func(tracker string) bool, now time.Time) ([]int64, error) {
 	tx, err := s.db.W.BeginTx(ctx, nil)
 	if err != nil {
 		return nil, err
@@ -197,17 +201,23 @@ func (s catalogStore) saveExtra(ctx context.Context, rs []source.Release, own fu
 	ids := make([]int64, len(rs))
 	for i, r := range rs {
 		if own(r.Tracker) {
-			var ih string
-			switch err := tx.QueryRowContext(ctx, `SELECT infohash FROM releases WHERE tracker = ? AND topic_id = ?`, r.Tracker, r.TopicID).Scan(&ih); {
-			case err == nil && ih != "":
-				r.InfoHash = ""
+			var link string
+			switch err := tx.QueryRowContext(ctx, `SELECT id, link FROM releases WHERE tracker = ? AND topic_id = ?`, r.Tracker, r.TopicID).Scan(&ids[i], &link); {
+			case err == nil && link == "":
+				if _, err := tx.ExecContext(ctx, `UPDATE releases SET seeders = ?, leechers = ?, updated_at = ? WHERE id = ?`,
+					r.Seeders, r.Leechers, ms(now), ids[i]); err != nil {
+					return nil, err
+				}
+				continue
 			case err != nil && !errors.Is(err, sql.ErrNoRows):
 				return nil, err
 			}
-			if ids[i], err = upsertRelease(ctx, tx, r, now); err != nil {
-				return nil, err
+			if withAddress(r.Tracker) {
+				if ids[i], err = upsertRelease(ctx, tx, r, now); err != nil {
+					return nil, err
+				}
+				continue
 			}
-			continue
 		}
 		if ids[i], err = upsertRelease(ctx, tx, r, now); err != nil {
 			return nil, err
