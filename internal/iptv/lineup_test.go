@@ -15,6 +15,8 @@ const testEPG = `<tv>
 <channel id="pervy"><display-name>Первый канал</display-name><display-name>Первый</display-name><icon src="http://logo/pervy.png"/></channel>
 <channel id="pervy-pl4"><display-name>Первый канал +4</display-name></channel>
 <channel id="pervy-pl2"><display-name>Первый канал +2</display-name></channel>
+<channel id="pervy-mn1"><display-name>Первый канал -1</display-name></channel>
+<channel id="rossia1-m1"><display-name>Россия 1 (-1)</display-name></channel>
 <channel id="rossia1"><display-name>Россия 1</display-name></channel>
 <channel id="match-tv"><display-name>Матч ТВ</display-name><display-name>Матч!</display-name></channel>
 <channel id="spas"><display-name>Спас</display-name></channel>
@@ -108,7 +110,7 @@ func TestMatch(t *testing.T) {
 		{src{name: "Россия 1 (+7) (Владивосток)"}, "rossia1+7"}, // город в скобках — последней попыткой
 		{src{name: "НТВ +0 (Липецк)"}, "ntv"},
 		{src{name: "НТВ (2)"}, "ntv"},
-		{src{name: "Первый", tvgID: "pervy", shift: -1}, ""}, // Калининград: отрицательный сдвиг не распознаётся (спека, 5.3)
+		{src{name: "Первый", tvgID: "pervy", shift: -1}, "pervy-mn1"}, // Калининград — версия МСК−1 (спека 11b, 13.4)
 	}
 	for _, c := range cases {
 		p := testPool(c.s)
@@ -325,5 +327,55 @@ func TestOverrideToEmpty(t *testing.T) {
 	}
 	if c := l.ByKey["bbc"].Labels; len(c.Languages) != 0 || c.Languages == nil {
 		t.Errorf("BBC: языки %v, нужно пусто", c.Languages)
+	}
+}
+
+// Ключи и id версий со знаком (спека 11b, 13.1): «-plN» — +N, «-mnN» и «-mN» — −N, «+N» и «~N» —
+// московская программа со сдвигом; id, похожие на сдвиг («1-2», «rossia-24», «tv3-ru»), — сами себе.
+func TestFamilyOfIDs(t *testing.T) {
+	for _, c := range []struct {
+		key, family string
+		zone        int
+	}{
+		{"pervy", "pervy", 0}, {"pervy-pl4", "pervy", 4}, {"pervy-mn1", "pervy", -1}, {"rossia1-m1", "rossia1", -1},
+		{"spas+4", "spas", 4}, {"sts~1", "sts", -1}, {"1-2", "1-2", 0}, {"rossia-24", "rossia-24", 0},
+		{"tv3-ru", "tv3-ru", 0}, {"5kanal-ru", "5kanal-ru", 0}, {"mir-24", "mir-24", 0},
+	} {
+		id, shift := parseKey(c.key)
+		zone := shift
+		if zone == 0 {
+			zone = zoneOf(id)
+		}
+		if got := familyOf(c.key); got != c.family || zone != c.zone {
+			t.Errorf("%s: семья %q, сдвиг %d; нужно %q, %d", c.key, got, zone, c.family, c.zone)
+		}
+	}
+}
+
+// Записи со сдвигом «−N» (спека 11b, 13.4): в версию со своей программой («-mnN», «-mN»), без неё —
+// московская программа со сдвигом «id~N»; «+0 (Город)» — московская.
+func TestMatchMinusShift(t *testing.T) {
+	ix, base := testIndex(t)
+	for _, c := range []struct {
+		s    src
+		want string
+	}{
+		{src{name: "Первый канал (-1)"}, "pervy-mn1"},
+		{src{name: "Первый канал −1"}, "pervy-mn1"},
+		{src{name: "Первый", tvgID: "pervy", shift: -1}, "pervy-mn1"},
+		{src{name: "Россия 1 (-1)"}, "rossia1-m1"},
+		{src{name: "Россия 1", tvgID: "rossia1", shift: -1}, "rossia1-m1"},
+		{src{name: "Спас -1"}, "spas~1"},
+		{src{name: "Спас", tvgID: "spas", shift: -2}, "spas~2"},
+		{src{name: "Первый канал +0 (Липецк)"}, "pervy"},
+	} {
+		p := testPool(c.s)
+		if got := match(p.streams[1], p, ix, base).key; got != c.want {
+			t.Errorf("%+v: канал %q, нужно %q", c.s, got, c.want)
+		}
+	}
+	l := buildTest(t, testPool(src{name: "Спас -1"}), Hidden{}, 4)
+	if c := l.ByKey["spas~1"]; c == nil || c.Name != "Спас −1" || c.Zone != -1 || c.Shift != -1 || c.EPGID != "spas" {
+		t.Errorf("Спас −1: %+v", c)
 	}
 }

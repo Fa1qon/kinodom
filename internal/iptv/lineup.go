@@ -34,8 +34,8 @@ const (
 type Channel struct {
 	Key     string
 	EPGID   string // канал телепрограммы; у сдвинутого — базовый
-	Shift   int    // сдвиг программы в часах у сдвинутого канала <id>+<N>; 0 — своя программа
-	Zone    int    // часовой пояс версии: N у «-plN» и «+N», 0 — московская
+	Shift   int    // сдвиг программы в часах у сдвинутой версии «id+N» / «id~N» (−N); 0 — своя программа
+	Zone    int    // сдвиг версии от Москвы: N у «-plN» и «+N», −N у «-mnN», «-mN» и «~N»; 0 — московская
 	Name    string
 	Logo    string // адрес логотипа в интернете; "" — нет
 	Labels  labels.Labels
@@ -118,40 +118,74 @@ func (ix *epgIndex) byName(norm string) (string, bool) {
 	return "", true
 }
 
-var reZone = regexp.MustCompile(`-pl([1-9])$`)
+// reZone — версия со своей программой в телепрограмме iptvx.one: «-plN» — +N, «-mnN» и «-mN» — −N.
+var reZone = regexp.MustCompile(`-(pl|mn|m)([1-9])$`)
 
-// zoneOf — часовой пояс версии по id телепрограммы: «pervy-pl4» — 4.
+// zoneOf — сдвиг версии от Москвы по id телепрограммы: «pervy-pl4» — 4, «pervy-mn1» и «rossia1-m1» — −1.
 func zoneOf(id string) int {
-	if m := reZone.FindStringSubmatch(id); m != nil {
-		return int(m[1][0] - '0')
+	m := reZone.FindStringSubmatch(id)
+	if m == nil {
+		return 0
 	}
-	return 0
+	n := int(m[2][0] - '0')
+	if m[1] != "pl" {
+		n = -n
+	}
+	return n
 }
 
-// parseKey — ключ канала: «spas+4» — базовый id и сдвиг программы; «pervy-pl4» — сам id, 0.
+// parseKey — ключ версии с московской программой со сдвигом: «spas+4» — id и 4, «sts~1» — id и −1; иначе
+// сам ключ и 0 («pervy-pl4» — своя программа).
 func parseKey(key string) (string, int) {
-	if i := strings.LastIndexByte(key, '+'); i > 0 {
+	if i := strings.LastIndexAny(key, "+~"); i > 0 {
 		if n, err := strconv.Atoi(key[i+1:]); err == nil && n >= 1 && n <= 9 {
+			if key[i] == '~' {
+				n = -n
+			}
 			return key[:i], n
 		}
 	}
 	return key, 0
 }
 
-// regional — версия канала id для сдвига n: своя в телепрограмме («-plN») или сдвинутая «id+N».
-func (ix *epgIndex) regional(id string, n int) string {
-	if n <= 0 || zoneOf(id) != 0 {
-		return id
+// familyOf — ключ канала для ключа версии (спека 11b, 13.1): без «+N», «~N», «-plN», «-mnN», «-mN».
+func familyOf(key string) string {
+	id, _ := parseKey(key)
+	if loc := reZone.FindStringIndex(id); loc != nil {
+		return id[:loc[0]]
 	}
-	if own := id + "-pl" + strconv.Itoa(n); ix.has(own) {
-		return own
+	return id
+}
+
+// shiftedKey — ключ версии id с московской программой, сдвинутой на n часов.
+func shiftedKey(id string, n int) string {
+	if n < 0 {
+		return id + "~" + strconv.Itoa(-n)
 	}
 	return id + "+" + strconv.Itoa(n)
 }
 
-// entryShift — сдвиг записи: tvg-shift или «+N» в названии.
+// regional — версия канала id для сдвига n: своя в телепрограмме («-plN»; «-mnN» или «-mN») или московская
+// программа со сдвигом.
+func (ix *epgIndex) regional(id string, n int) string {
+	if n == 0 || zoneOf(id) != 0 {
+		return id
+	}
+	suffixes := []string{"-pl"}
+	if n < 0 {
+		suffixes = []string{"-mn", "-m"}
+	}
+	for _, suf := range suffixes {
+		if own := id + suf + strconv.Itoa(max(n, -n)); ix.has(own) {
+			return own
+		}
+	}
+	return shiftedKey(id, n)
+}
+
+// entryShift — сдвиг записи со знаком: tvg-shift (−9…9) или сдвиг в конце названия.
 func entryShift(e Entry) int {
-	if e.Shift >= 1 && e.Shift <= 9 {
+	if e.Shift != 0 && e.Shift >= -9 && e.Shift <= 9 {
 		return e.Shift
 	}
 	_, n := m3u.SplitShift(m3u.Norm(e.Name))
@@ -177,16 +211,13 @@ func match(s *Stream, p *pool, ix *epgIndex, base *labels.Base) matchResult {
 		}
 	}
 	for _, e := range s.Entries {
-		if e.Shift < 0 { // отрицательный сдвиг (Калининград) не распознаётся — в «Не распознано» (спека, 5.3)
-			continue
-		}
 		if e.TvgID != "" && ix.has(e.TvgID) {
 			return matchResult{key: ix.regional(e.TvgID, entryShift(e)), by: "tvg-id"}
 		}
 	}
 	for _, e := range s.Entries {
 		oc := base.ByID(orgID(e.TvgID))
-		if oc == nil || e.Shift < 0 {
+		if oc == nil {
 			continue
 		}
 		found, ambiguous := "", false
@@ -209,9 +240,6 @@ func match(s *Stream, p *pool, ix *epgIndex, base *labels.Base) matchResult {
 	// Название; последней попыткой — без города в скобках («Россия 24 +0 (Липецк)»).
 	for _, strip := range []bool{false, true} {
 		for _, e := range s.Entries {
-			if e.Shift < 0 {
-				continue
-			}
 			for _, name := range []string{e.Name, e.TvgName} {
 				if strip {
 					if name = m3u.WithoutPlace(name); name == e.Name || name == e.TvgName {
@@ -227,7 +255,7 @@ func match(s *Stream, p *pool, ix *epgIndex, base *labels.Base) matchResult {
 	return matchResult{}
 }
 
-// byNameShift — канал по нормализованному названию; «+N» без своего канала — сдвинутый «id+N».
+// byNameShift — канал по нормализованному названию; «+N» или «-N» без своего канала — версия канала.
 func (ix *epgIndex) byNameShift(n string) string {
 	if n == "" {
 		return ""
@@ -237,7 +265,7 @@ func (ix *epgIndex) byNameShift(n string) string {
 	} else if amb {
 		return ""
 	}
-	if b, shift := m3u.SplitShift(n); shift > 0 {
+	if b, shift := m3u.SplitShift(n); shift != 0 {
 		if id, _ := ix.byName(b); id != "" {
 			return ix.regional(id, shift)
 		}
@@ -343,7 +371,9 @@ func build(in buildInput) *Lineup {
 	for k := range l.ByKey {
 		keys = append(keys, k)
 	}
-	slices.SortFunc(keys, func(a, b string) int { return cmp.Or(cmp.Compare(l.ByKey[a].Zone, l.ByKey[b].Zone), cmp.Compare(a, b)) })
+	slices.SortFunc(keys, func(a, b string) int {
+		return cmp.Or(cmp.Compare(max(l.ByKey[a].Zone, -l.ByKey[a].Zone), max(l.ByKey[b].Zone, -l.ByKey[b].Zone)), cmp.Compare(a, b))
+	})
 	resolved := map[string]labels.Labels{}
 	for _, k := range keys {
 		c := l.ByKey[k]
@@ -397,8 +427,12 @@ func newChannel(key string, ix *epgIndex) *Channel {
 			c.Logo = ec.Icon
 		}
 	}
-	if c.Name != "" && shift > 0 {
+	switch {
+	case c.Name == "":
+	case shift > 0:
 		c.Name += " +" + strconv.Itoa(shift)
+	case shift < 0:
+		c.Name += " −" + strconv.Itoa(-shift)
 	}
 	return c
 }
@@ -465,7 +499,7 @@ func channelLabels(c *Channel, o Override, in buildInput, l *Lineup, resolved ma
 	} else {
 		// Региональная версия: сначала своя запись iptv-org (редко есть), потом метки канала без сдвига.
 		sources = append(sources, labels.FromOrg(in.base.Find(nil, names)))
-		baseID := strings.TrimSuffix(c.EPGID, "-pl"+strconv.Itoa(zoneOf(c.EPGID)))
+		baseID := familyOf(c.EPGID)
 		if bl, ok := resolved[baseID]; ok {
 			sources = append(sources, labels.Source{Category: bl.Category, Country: bl.Country, Languages: bl.Languages})
 		} else {
