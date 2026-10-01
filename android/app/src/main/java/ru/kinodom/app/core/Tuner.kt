@@ -39,11 +39,11 @@ class Tuner(private val items: List<Ch>, current: Int) {
         return digits
     }
 
-    // commitNumber — канал с набранным номером; нет (или ничего не набрано) — null.
+    // commitNumber — канал с набранным номером; нет (или ничего не набрано, или «0») — null.
     fun commitNumber(): Int? {
         val number = digits.toIntOrNull()
         digits = ""
-        val i = if (number == null) -1 else items.indexOfFirst { it.number == number }
+        val i = if (number == null || number <= 0) -1 else items.indexOfFirst { it.number == number }
         if (i < 0) return null
         current = i
         return i
@@ -52,5 +52,9 @@ class Tuner(private val items: List<Ch>, current: Int) {
     companion object {
         const val ZAP_MS = 700L
         const val NUMBER_MS = 1500L
+
+        // restart — включать ли канал i: другой — да; тот же — только если он «не показывает» (финальное ревью 13b:
+        // повторный выбор канала после сбоя сети — новая попытка, а не тишина).
+        fun restart(i: Int, playing: Int, noSignal: Boolean): Boolean = i != playing || noSignal
     }
 }

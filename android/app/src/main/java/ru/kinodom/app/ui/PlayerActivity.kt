@@ -121,10 +121,13 @@ class PlayerActivity : Activity() {
             isFocusable = false
         }
         root.addView(video, FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT))
+        // message — «Канал сейчас не показывает» на чёрном: поверх застывшего последнего кадра надпись не читалась
+        // и казалось, что канал идёт (вживую, исправление после ревью 13b).
         message = TextView(this).apply {
             setTextColor(getColor(R.color.text))
             setTextSize(TypedValue.COMPLEX_UNIT_SP, 22f)
             gravity = Gravity.CENTER
+            setBackgroundColor(Color.BLACK)
             visibility = View.GONE
         }
         root.addView(message, FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT))
@@ -298,6 +301,9 @@ class PlayerActivity : Activity() {
         handler.postDelayed(zap, Tuner.ZAP_MS)
     }
 
+    @Deprecated("До Android 13 «Назад» приходит сюда")
+    override fun onBackPressed() = back()
+
     private fun back() {
         if (!::tuner.isInitialized) {
             finish()
@@ -328,9 +334,10 @@ class PlayerActivity : Activity() {
         handler.postDelayed(hidePlate, PLATE_MS)
     }
 
-    // switchTo — включить канал i (если не он уже играет) и показать плашку с его передачей.
+    // switchTo — включить канал i (если не он уже играет; тот же после «не показывает» — заново) и показать
+    // плашку с его передачей.
     private fun switchTo(i: Int) {
-        if (i != playing) {
+        if (Tuner.restart(i, playing, noSignal = message.visibility == View.VISIBLE)) {
             playing = i
             epg = null
             play(i)
