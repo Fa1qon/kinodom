@@ -36,6 +36,8 @@ const (
 	KeySetupDone        = "setup.done" // мастер начальных настроек пройден
 	KeyProxy            = "proxy.trackers"
 	KeyKinopoisk        = "kinopoisk.key"
+	KeySearchAddress    = "search.address" // источник поиска Jacred / Jackett (спека 11b, раздел 8)
+	KeySearchKey        = "search.key"
 	KeyDownloadsDir     = "downloads.dir"
 	KeyKeepDays         = "torrents.keepDays"
 	KeyKeepBehind       = "torrents.keepBehind"
@@ -81,6 +83,8 @@ type Values struct {
 	SetupDone         bool
 	Proxy             string // адрес целиком: http:// или socks5://, с логином и паролем; "" — нет
 	KinopoiskKey      string
+	SearchAddress     string // источник поиска: «схема://хост»; "" — выключен
+	SearchKey         string
 	DownloadsDir      string
 	KeepDays          int
 	KeepBehind        int // серий позади просмотренной оставлять, когда места не хватает
@@ -150,6 +154,10 @@ func Load(ctx context.Context, db *store.DB, def Defaults, overrides map[string]
 	v.Proxy, err = str(KeyProxy, "")
 	collect(err)
 	v.KinopoiskKey, err = str(KeyKinopoisk, "")
+	collect(err)
+	v.SearchAddress, err = str(KeySearchAddress, "")
+	collect(err)
+	v.SearchKey, err = str(KeySearchKey, "")
 	collect(err)
 	v.DownloadsDir, err = str(KeyDownloadsDir, def.DownloadsDir)
 	collect(err)
@@ -238,6 +246,8 @@ func (v Values) entries() map[string]string {
 		KeySetupDone:         strconv.FormatBool(v.SetupDone),
 		KeyProxy:             v.Proxy,
 		KeyKinopoisk:         v.KinopoiskKey,
+		KeySearchAddress:     v.SearchAddress,
+		KeySearchKey:         v.SearchKey,
 		KeyDownloadsDir:      v.DownloadsDir,
 		KeyKeepDays:          strconv.Itoa(v.KeepDays),
 		KeyKeepBehind:        strconv.Itoa(v.KeepBehind),
@@ -330,6 +340,18 @@ func (v Values) With(p Patch) (Values, error) {
 	if k := p.Kinopoisk; k != nil && k.Key != nil {
 		n.KinopoiskKey = strings.TrimSpace(*k.Key)
 	}
+	if sp := p.Search; sp != nil {
+		if sp.Address != nil {
+			a, err := searchAddress(*sp.Address)
+			if err != nil {
+				return v, fieldErr("Адрес источника поиска", "%v", err)
+			}
+			n.SearchAddress = a
+		}
+		if sp.Key != nil {
+			n.SearchKey = strings.TrimSpace(*sp.Key)
+		}
+	}
 	if s := p.Storage; s != nil {
 		if s.DownloadsDir != nil {
 			dir := strings.TrimSpace(*s.DownloadsDir)
@@ -406,6 +428,29 @@ func setAddress(in, dst *string, field string) error {
 	}
 	*dst = a
 	return nil
+}
+
+// searchAddress — адрес источника поиска: пусто — выключен; свой Jackett или Jacred в домашней сети без
+// схемы — http:// (у них обычно нет HTTPS), «localhost» — 127.0.0.1; дальше — как адрес сайта.
+func searchAddress(raw string) (string, error) {
+	s := strings.TrimSpace(raw)
+	if s == "" {
+		return "", nil
+	}
+	if !strings.Contains(s, "://") {
+		host, _, _ := strings.Cut(s, "/")
+		if h, _, err := net.SplitHostPort(host); err == nil {
+			host = h
+		}
+		if netx.PrivateHost(host) {
+			s = "http://" + s
+		}
+	}
+	if u, err := url.Parse(s); err == nil && strings.EqualFold(u.Hostname(), "localhost") {
+		u.Host = strings.Replace(strings.ToLower(u.Host), "localhost", "127.0.0.1", 1)
+		s = u.String()
+	}
+	return source.SiteAddress(s)
 }
 
 // composeProxy — адрес прокси из полей пульта. Поля, которых нет в запросе, берутся из прежнего
