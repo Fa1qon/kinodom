@@ -73,7 +73,7 @@ func (c *Catalog) List(ctx context.Context, o ListOptions) (entries []Entry, tot
 	if err != nil {
 		return nil, 0, err
 	}
-	filtered, size, _ := films(filtered, kp, c.PreferredFormat(), !inSection)
+	filtered, size, _ := films(filtered, kp, c.PreferredFormat(), !inSection, false)
 	total = len(filtered)
 	if o.Offset >= total {
 		return []Entry{}, total, nil
@@ -125,18 +125,18 @@ func (c *Catalog) SectionPage(ctx context.Context, tracker, section string, afte
 			filtered = append(filtered, r)
 		}
 	}
-	return c.pageOf(ctx, filtered, after, limit)
+	return c.pageOf(ctx, filtered, after, limit, false)
 }
 
 // pageOf — карточки строк раздела (или списка порядка) после места after: склейка дублей и фильмов, место
-// карточки — наименьшее место её раздач.
-func (c *Catalog) pageOf(ctx context.Context, rs []row, after, limit int) (entries []Entry, next, rest int, err error) {
+// карточки — наименьшее место её раздач; byPlace — карточка показывает раздачу этого места (порядки).
+func (c *Catalog) pageOf(ctx context.Context, rs []row, after, limit int, byPlace bool) (entries []Entry, next, rest int, err error) {
 	rs = c.collapse(rs)
 	kp, err := c.kinopoiskIDs(ctx, rs)
 	if err != nil {
 		return nil, after, 0, err
 	}
-	out, size, place := films(rs, kp, c.PreferredFormat(), false)
+	out, size, place := films(rs, kp, c.PreferredFormat(), false, byPlace)
 	from := len(out)
 	for i, r := range out {
 		if place[r.ID] > after {

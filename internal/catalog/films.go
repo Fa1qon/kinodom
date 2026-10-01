@@ -59,9 +59,13 @@ func workKey(r row) string {
 // наибольшим числом раздающих. Порядок — по раздающим оставшихся (bySeeders), иначе — по месту карточки
 // в разделе: наименьшему месту её раздач (первая сотня стоит по раздающим с обновления, порции — за ней;
 // раздача из порции, лучше показанной, карточку не двигает — ревью 11b-Г). size — раздач в группе
-// оставшейся, place — место карточки (по оставшейся).
-func films(rs []row, kp map[int64]int, pref string, bySeeders bool) (out []row, size, place map[int64]int) {
+// оставшейся, place — место карточки (по оставшейся). byPlace — в порядке раздела (план 14Б) остаётся
+// раздача, которая дала карточке место: в «Новых» — самая новая, а не с наибольшим числом раздающих.
+func films(rs []row, kp map[int64]int, pref string, bySeeders, byPlace bool) (out []row, size, place map[int64]int) {
 	better := func(a, b row) bool { // a лучше b
+		if byPlace {
+			return a.Pos < b.Pos
+		}
 		if pa, pb := prefers(a.Format, pref), prefers(b.Format, pref); pa != pb {
 			return pa
 		}

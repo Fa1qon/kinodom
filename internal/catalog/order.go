@@ -228,7 +228,7 @@ func (c *Catalog) orderPage(ctx context.Context, k orderKey, after, limit int) (
 		}
 		rows = append(rows, r)
 	}
-	return c.pageOf(ctx, rows, after, limit)
+	return c.pageOf(ctx, rows, after, limit, true)
 }
 
 // orderEnded — список порядка у трекера кончился.

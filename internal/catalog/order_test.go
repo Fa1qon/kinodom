@@ -214,3 +214,27 @@ func TestRefreshDropsOrderLists(t *testing.T) {
 		t.Fatalf("после обновления: %d", len(got))
 	}
 }
+
+// Вживую 14Б: в порядке карточка показывает раздачу, которая дала ей место (в «Новых» — самую новую), а не
+// раздачу с наибольшим числом раздающих: иначе первой в «Новых» стоит карточка со старой датой.
+func TestOrderCardShowsReleaseOfItsPlace(t *testing.T) {
+	t1 := newFake("t1")
+	t1.top["12"] = manyDesc("t1", 10)
+	t1.sortOrders = []string{source.OrderNew}
+	day := time.Date(2026, 9, 1, 0, 0, 0, 0, time.UTC)
+	fresh := rel("t1", "501", "Кино Альфа (2020) WEB-DL", 1, 1<<30, "a1")
+	fresh.Added = day.Add(48 * time.Hour)
+	other := rel("t1", "502", "Кино Бета (2021) WEB-DL", 5, 1<<30, "b1")
+	other.Added = day.Add(24 * time.Hour)
+	old := rel("t1", "503", "Кино Альфа (2020) BDRip", 50, 1<<30, "a2")
+	old.Added = day
+	t1.sorted = map[string]map[string][]source.Release{source.OrderNew: {"12": {fresh, other, old}}}
+	c, _ := newCatalog(t, openDB(t), func(o *Options) { o.Sections = []Section{{"t1", "12", false}} }, t1)
+	refresh(t, c, true)
+	mux := http.NewServeMux()
+	c.Register(muxRouter{mux})
+	got := walkOrder(t, mux, "t1", "12", source.OrderNew)
+	if !slices.Equal(got, []string{"Альфа (2020) WEB-DL", "Бета (2021) WEB-DL"}) {
+		t.Fatalf("новые: %v", got)
+	}
+}
