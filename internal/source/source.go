@@ -5,6 +5,7 @@ package source
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"regexp"
 	"time"
@@ -54,6 +55,10 @@ type Details struct {
 
 // ErrRemoved — раздачу удалили с трекера (проверять errors.Is). Та же ошибка, что у netx.
 var ErrRemoved = netx.ErrRemoved
+
+// ErrNoSection — раздела (форума) на трекере нет или в нём нет раздач: у Rutracker API — 404 (форум
+// подборок ссылок, вживую 11b-Г). Каталог такой форум подраздела пропускает (проверять errors.Is).
+var ErrNoSection = errors.New("раздела нет на трекере")
 
 // KinopoiskLink — ссылка на фильм или сериал Кинопоиска, в том числе старого вида
 // kinopoisk.ru/level/1/film/{id}/; подгруппа 1 — номер. С ним каталогу не нужен поиск по

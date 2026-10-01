@@ -56,8 +56,10 @@ func workKey(r row) string {
 // без номера, чей ключ произведения совпал с ключом раздачи с номером, — в карточку этого номера;
 // остальные без номера — по ключу произведения (дубли уходят, ещё до того как номер найден). Из группы
 // остаётся раздача в формате в приоритете с наибольшим числом раздающих, а если такой нет — с
-// наибольшим числом раздающих. Порядок — по раздающим оставшихся. size — раздач в группе оставшейся.
-func films(rs []row, kp map[int64]int, pref string) (out []row, size map[int64]int) {
+// наибольшим числом раздающих. Порядок — по раздающим оставшихся (bySeeders), иначе — по месту оставшейся
+// в разделе (первая сотня стоит по раздающим с обновления — тот же порядок, а порции не двигают
+// показанное). size — раздач в группе оставшейся.
+func films(rs []row, kp map[int64]int, pref string, bySeeders bool) (out []row, size map[int64]int) {
 	better := func(a, b row) bool { // a лучше b
 		if pa, pb := prefers(a.Format, pref), prefers(b.Format, pref); pa != pb {
 			return pa
@@ -103,7 +105,11 @@ func films(rs []row, kp map[int64]int, pref string) (out []row, size map[int64]i
 	for g, j := range best {
 		size[out[j].ID] = count[g]
 	}
-	slices.SortStableFunc(out, func(a, b row) int { return b.Seeders - a.Seeders })
+	if bySeeders {
+		slices.SortStableFunc(out, func(a, b row) int { return b.Seeders - a.Seeders })
+	} else {
+		slices.SortStableFunc(out, func(a, b row) int { return a.Pos - b.Pos })
+	}
 	return out, size
 }
 

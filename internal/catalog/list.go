@@ -57,12 +57,19 @@ func (c *Catalog) List(ctx context.Context, o ListOptions) (entries []Entry, tot
 			filtered = append(filtered, r)
 		}
 	}
+	// Один раздел (так смотрит пульт) — по месту в разделе: первая сотня стоит по раздающим с обновления,
+	// порции глубже — в конце. Иначе порция Rutor (раздающих он считает неточно) двигала бы уже показанные
+	// страницы: карточки повторялись бы и терялись (вживую 11b-Г).
+	inSection := o.Tracker != "" && o.Category != ""
 	filtered = collapse(filtered)
+	if inSection {
+		slices.SortStableFunc(filtered, func(a, b row) int { return a.Pos - b.Pos })
+	}
 	kp, err := c.kinopoiskIDs(ctx, filtered)
 	if err != nil {
 		return nil, 0, err
 	}
-	filtered, size := films(filtered, kp, c.PreferredFormat())
+	filtered, size := films(filtered, kp, c.PreferredFormat(), !inSection)
 	total = len(filtered)
 	if o.Offset >= total {
 		return []Entry{}, total, nil

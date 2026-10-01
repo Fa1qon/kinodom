@@ -47,6 +47,7 @@ type row struct {
 	RetryAt     time.Time // страница раздачи не загрузилась — не раньше
 	Format      string    // «MKV», «AVI, MKV»; "" — неизвестен или ещё не определяли
 	Section     string    // раздел каталога записи (catalog_entries); у Rutracker — подраздел первого уровня, а CategoryID — форум раздачи
+	Pos         int       // место записи в разделе: первая сотня — по раздающим при обновлении, порции — в конце
 }
 
 const rowColumns = `r.id, r.tracker, r.topic_id, r.title, r.category_id, r.seeders, r.leechers, r.size,
@@ -192,7 +193,7 @@ func (s catalogStore) catalogRows(ctx context.Context, cats []CategoryRef) ([]ro
 		enabled[c] = true
 	}
 	rows, err := s.db.R.QueryContext(ctx,
-		`SELECT `+rowColumns+`, e.tracker, e.category_id
+		`SELECT `+rowColumns+`, e.tracker, e.category_id, e.position
 		 FROM catalog_entries e JOIN releases r ON r.id = e.release_id
 		 WHERE r.removed = 0
 		 ORDER BY r.seeders DESC, r.id`)
@@ -204,7 +205,8 @@ func (s catalogStore) catalogRows(ctx context.Context, cats []CategoryRef) ([]ro
 	seen := map[int64]bool{}
 	for rows.Next() {
 		var ref CategoryRef
-		r, err := scanRow(rows, &ref.Tracker, &ref.ID)
+		var pos int
+		r, err := scanRow(rows, &ref.Tracker, &ref.ID, &pos)
 		if err != nil {
 			return nil, err
 		}
@@ -212,7 +214,7 @@ func (s catalogStore) catalogRows(ctx context.Context, cats []CategoryRef) ([]ro
 			continue
 		}
 		seen[r.ID] = true
-		r.Section = ref.ID
+		r.Section, r.Pos = ref.ID, pos
 		if r.CategoryID == "" {
 			r.CategoryID = ref.ID
 		}

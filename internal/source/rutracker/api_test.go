@@ -1,6 +1,7 @@
 package rutracker
 
 import (
+	"errors"
 	"slices"
 	"testing"
 	"time"
@@ -54,6 +55,16 @@ func TestTopWholeList(t *testing.T) {
 		if rs[i].Seeders > rs[i-1].Seeders {
 			t.Fatal("не по раздающим")
 		}
+	}
+}
+
+// Форум без раздач (подборки ссылок) API отдаёт 404 — ошибка source.ErrNoSection: каталог такой форум
+// пропускает (вживую 11b-Г).
+func TestTopMissingForum(t *testing.T) {
+	s := rutrackertest.NewServer(t)
+	_, err := newRutracker(t, s, nil).Top(ctx, "1640", 0)
+	if !errors.Is(err, source.ErrNoSection) {
+		t.Fatalf("404: %v", err)
 	}
 }
 

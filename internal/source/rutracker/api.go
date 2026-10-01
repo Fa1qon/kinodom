@@ -252,6 +252,9 @@ func (r *Rutracker) apiBody(ctx context.Context, path string) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
+	if p.Status == http.StatusNotFound {
+		return nil, fmt.Errorf("Rutracker API: %s — ответ 404 (%w)", path, source.ErrNoSection)
+	}
 	if p.Status != http.StatusOK {
 		return nil, fmt.Errorf("Rutracker API: %s — ответ %d", path, p.Status)
 	}
