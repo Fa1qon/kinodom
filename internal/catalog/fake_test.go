@@ -47,6 +47,7 @@ type fakeSource struct {
 	maxDetails   int                                    // больше всего одновременно
 	sortOrders   []string                               // порядки раздела, которые отдаёт сам трекер (план 14Б)
 	sorted       map[string]map[string][]source.Release // порядок → раздел (первый форум) → список
+	sortedErr    error                                  // ошибка страницы порядка (трекер не ответил)
 }
 
 func (f *fakeSource) SortOrders() []string {
@@ -61,6 +62,9 @@ func (f *fakeSource) SortedPage(_ context.Context, forums []string, order string
 	defer f.mu.Unlock()
 	f.calls["sorted:"+order]++
 	f.calls["sortedForums:"+strings.Join(forums, ",")]++
+	if f.sortedErr != nil {
+		return nil, false, f.sortedErr
+	}
 	if !slices.Contains(f.sortOrders, order) || len(forums) == 0 {
 		return nil, false, fmt.Errorf("порядок %s не поддерживается", order)
 	}

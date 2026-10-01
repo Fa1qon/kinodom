@@ -1,6 +1,7 @@
 package catalog
 
 import (
+	"errors"
 	"fmt"
 	"net/http"
 	"slices"
@@ -253,5 +254,51 @@ func TestOrderCardShowsReleaseOfItsPlace(t *testing.T) {
 	got := walkOrder(t, mux, "t1", "12", source.OrderNew)
 	if !slices.Equal(got, []string{"Альфа (2020) WEB-DL", "Бета (2021) WEB-DL"}) {
 		t.Fatalf("новые: %v", got)
+	}
+}
+
+// Ревью 14Б, Important 1: первая порция порядка не пришла (трекер не ответил), а показать нечего — раздел
+// показывается по раздающим (они в базе), с текстом ошибки порядка; переключатель остаётся (порядки в ответе).
+func TestOrderFailureFallsBackToSeeders(t *testing.T) {
+	t1 := newFake("t1")
+	t1.top["12"] = manyDesc("t1", 30)
+	t1.sortOrders = []string{source.OrderNew} // а списка «Новых» нет — SortedPage падает
+	c, _ := newCatalog(t, openDB(t), func(o *Options) { o.Sections = []Section{{"t1", "12", false}} }, t1)
+	refresh(t, c, true)
+	mux := http.NewServeMux()
+	c.Register(muxRouter{mux})
+	t1.set(func() { t1.sortedErr = errors.New("t1 не отвечает") })
+	var v ListView
+	code := getJSONErr(t, mux, "/api/v1/catalog?tracker=t1&section=12&after=-1&order=new", &v)
+	if code != 200 || v.Order != source.OrderSeeders || len(v.Entries) == 0 || v.OrderError == "" || len(v.Orders) != 2 {
+		t.Fatalf("код %d, порядок %q, карточек %d, ошибка %q, порядки %v", code, v.Order, len(v.Entries), v.OrderError, v.Orders)
+	}
+}
+
+// Ревью 14Б (Minor 1 → Important): выбор в памяти устройства запомнен при прежнем умолчании (since); умолчание
+// сменили в «Параметрах» — действует новое, а не память.
+func TestOrderSinceDefaultChanged(t *testing.T) {
+	t1 := newFake("t1")
+	t1.top["12"] = manyDesc("t1", 30)
+	t1.sortOrders = []string{source.OrderLeechers, source.OrderNew}
+	t1.sorted = map[string]map[string][]source.Release{source.OrderNew: {"12": manyDesc("t1", 30)},
+		source.OrderLeechers: {"12": manyDesc("t1", 30)}}
+	c, _ := newCatalog(t, openDB(t), func(o *Options) { o.Sections = []Section{{"t1", "12", false}} }, t1)
+	refresh(t, c, true)
+	mux := http.NewServeMux()
+	c.Register(muxRouter{mux})
+	var v ListView
+	getJSONErr(t, mux, "/api/v1/catalog?tracker=t1&section=12&after=-1&order=new&since=seeders", &v)
+	if v.Order != source.OrderNew || v.DefaultOrder != source.OrderSeeders {
+		t.Fatalf("умолчание то же — память: %q, умолчание %q", v.Order, v.DefaultOrder)
+	}
+	c.SetDefaultOrder(source.OrderLeechers)
+	getJSONErr(t, mux, "/api/v1/catalog?tracker=t1&section=12&after=-1&order=new&since=seeders", &v)
+	if v.Order != source.OrderLeechers || v.DefaultOrder != source.OrderLeechers {
+		t.Fatalf("умолчание сменили — оно: %q, умолчание %q", v.Order, v.DefaultOrder)
+	}
+	getJSONErr(t, mux, "/api/v1/catalog?tracker=t1&section=12&after=-1&order=new", &v)
+	if v.Order != source.OrderNew {
+		t.Fatalf("порядок из адреса (без since) — он: %q", v.Order)
 	}
 }

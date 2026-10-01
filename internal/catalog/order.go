@@ -64,6 +64,16 @@ func (c *Catalog) SetDefaultOrder(o string) {
 	c.mu.Unlock()
 }
 
+// defaultOrderSetting — порядок по умолчанию из настроек; не задан — раздающие.
+func (c *Catalog) defaultOrderSetting() string {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.defaultOrder == "" {
+		return source.OrderSeeders
+	}
+	return c.defaultOrder
+}
+
 // order — порядок раздела трекера: asked, если трекер его отдаёт; иначе — умолчание из настроек, если
 // отдаёт; иначе раздающие.
 func (c *Catalog) order(tracker, asked string) string {
