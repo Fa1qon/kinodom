@@ -43,7 +43,7 @@ func Uninstall(ctx context.Context, sys winsvc.System, o UninstallOptions, log f
 			return fmt.Errorf("служба Kinodom не удалилась: %w", err)
 		}
 	}
-	for _, name := range []string{RuleAPI, RuleTorrents} {
+	for _, name := range []string{RuleAPI, RuleTorrents, RuleDiscovery} {
 		if err := sys.Firewall.Delete(name); err != nil {
 			return fmt.Errorf("брандмауэр, правило «%s»: %w", name, err)
 		}

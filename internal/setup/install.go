@@ -31,6 +31,7 @@ const (
 	ServiceDescription = "Каталог раздач, просмотр, каналы и медиатека для телевизоров и телефонов домашней сети."
 	RuleAPI            = "Kinodom — пульт"
 	RuleTorrents       = "Kinodom — раздачи"
+	RuleDiscovery      = "Kinodom — обнаружение" // SSDP: приложение для ТВ и телефона находит сервер (спека этапа 13, 5.1)
 	Scheme             = "kinodom"
 	AutorunName        = "Kinodom" // значок в трее при входе любого пользователя
 )
@@ -143,6 +144,7 @@ func Install(ctx context.Context, sys winsvc.System, o InstallOptions, log func(
 	rules := []winsvc.FirewallRule{
 		{Name: RuleAPI, Program: exe, Protocols: []string{"TCP"}, Port: o.APIPort, Remote: "LocalSubnet"},
 		{Name: RuleTorrents, Program: exe, Protocols: []string{"TCP", "UDP"}, Port: o.TorrentPort, Remote: "Any"},
+		{Name: RuleDiscovery, Program: exe, Protocols: []string{"UDP"}, Port: 1900, Remote: "LocalSubnet"},
 	}
 	for _, r := range rules {
 		if err := sys.Firewall.Set(r); err != nil {
@@ -182,6 +184,7 @@ func rollback(sys winsvc.System) {
 	sys.SCM.Delete(ServiceName)
 	sys.Firewall.Delete(RuleAPI)
 	sys.Firewall.Delete(RuleTorrents)
+	sys.Firewall.Delete(RuleDiscovery)
 	sys.Registry.DeleteProtocol(Scheme)
 	sys.Registry.DeleteAutorun(AutorunName)
 }
