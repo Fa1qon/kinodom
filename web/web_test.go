@@ -1521,3 +1521,109 @@ func TestPultVersionsRowScrolls(t *testing.T) {
 		t.Error("ряд версий без класса zones")
 	}
 }
+
+// Карточки каталога обновляются на месте (спека 11b, 14.1): спрашиваются только незаконченные (без страницы —
+// всегда, без постера — до POSTER_TRIES раз) и только у экрана (экран вверх, два вниз), ближние первыми, не
+// больше предела; перерисовывается карточка, у которой изменилось видимое.
+func TestPultLiveCards(t *testing.T) {
+	node := lookNode(t)
+	script := `
+import { POSTER_TRIES, waiting, nearest, changed } from './views/catalog.js';
+const checks = [
+  ['без страницы — ждём всегда', waiting({ detailsPending: true, imageKey: 'k' }, 1000), true],
+  ['без постера — ждём', waiting({ detailsPending: false, imageKey: '' }, 0), true],
+  ['без постера, последняя попытка', waiting({ detailsPending: false, imageKey: '' }, POSTER_TRIES - 1), true],
+  ['без постера, попытки кончились', waiting({ detailsPending: false, imageKey: '' }, POSTER_TRIES), false],
+  ['готова', waiting({ detailsPending: false, imageKey: 'k' }, 0), false],
+  ['попыток — около минуты при опросе раз в 3 с', POSTER_TRIES, 20],
+];
+const cards = [
+  { id: 1, top: 100, bottom: 400 }, { id: 2, top: -500, bottom: -100 }, { id: 3, top: 1000, bottom: 1300 },
+  { id: 4, top: 2000, bottom: 2300 }, { id: 5, top: -1200, bottom: -900 }, { id: 6, top: 300, bottom: 600 },
+];
+checks.push(['у экрана, ближние первыми', JSON.stringify(nearest(cards, 800, 10)), '[1,6,2,3]']);
+checks.push(['предел', JSON.stringify(nearest(cards, 800, 3)), '[1,6,2]']);
+checks.push(['пусто', JSON.stringify(nearest([], 800, 10)), '[]']);
+const a = { id: 1, title: '', name: '', year: 0, quality: '', format: '', imageKey: '', kinopoisk: 0, seeders: 5, size: 1, detailsPending: true, variants: 2 };
+checks.push(['пришёл постер', changed(a, { ...a, imageKey: 'k' }), true]);
+checks.push(['пришло название', changed(a, { ...a, title: 'Кино (2020)', name: 'Кино', year: 2020 }), true]);
+checks.push(['пришёл рейтинг', changed(a, { ...a, kinopoisk: 7.1 }), true]);
+checks.push(['страница загружена', changed(a, { ...a, detailsPending: false }), true]);
+checks.push(['ничего', changed(a, { ...a }), false]);
+for (const [name, got, want] of checks) {
+  if (got !== want) {
+    console.error(name, ':', got, '≠', want);
+    process.exitCode = 1;
+  }
+}
+`
+	cmd := exec.Command(node, "--input-type=module", "--no-warnings", "-e", script)
+	cmd.Dir = "static"
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Errorf("%v\n%s", err, out)
+	}
+}
+
+// «Назад» ссылкой со страницы раздачи (спека 11b, 14.3): пришли прямо из этого раздела — шаг назад по
+// истории (место — в её записи); иначе — переход, а место — запомненное во вкладке, если оно этого раздела.
+func TestPultBackStep(t *testing.T) {
+	node := lookNode(t)
+	script := `
+import { backStep } from './views/catalog.js';
+const href = '#/catalog/rutor/4';
+const place = { at: '#/catalog/rutor/4', key: '#/catalog/rutor/4', pages: 3, scrollY: 1800, focusKey: 'e-5' };
+const bare = { ...place, at: '#/catalog/rutor' };
+const other = { ...place, at: '#/catalog/rutor/12', key: '#/catalog/rutor/12' };
+const checks = [
+  ['пришли из раздела', backStep(href, href, place), { back: true, place: null }],
+  ['пришли из раздела по адресу без раздела', backStep(href, '#/catalog/rutor', bare), { back: true, place: null }],
+  ['из другой раздачи — переход с местом', backStep(href, '#/release/77', place), { back: false, place }],
+  ['адрес без раздела — место по адресу ссылки', backStep(href, '#/release/77', bare), { back: false, place: { ...bare, at: href } }],
+  ['место другого раздела', backStep(href, '#/release/77', other), { back: false, place: null }],
+  ['первый экран', backStep(href, '', place), { back: false, place }],
+  ['места нет', backStep(href, '#/release/77', null), { back: false, place: null }],
+  ['пришли из другого раздела', backStep(href, '#/catalog/rutor/12', other), { back: false, place: null }],
+];
+for (const [name, got, want] of checks) {
+  if (JSON.stringify(got) !== JSON.stringify(want)) {
+    console.error(name, ':', JSON.stringify(got), '≠', JSON.stringify(want));
+    process.exitCode = 1;
+  }
+}
+`
+	cmd := exec.Command(node, "--input-type=module", "--no-warnings", "-e", script)
+	cmd.Dir = "static"
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Errorf("%v\n%s", err, out)
+	}
+}
+
+// Финальное ревью 11b-Ж, Important 2: экран раздачи спрашивает её, пока не пришла страница (не дольше 2 минут),
+// а после страницы — пока не пришёл постер, не дольше минуты (сервер пробует постер открытой раздачи раз в
+// минуту; спека 11b, 14.2). Раньше опрос вставал на странице, и постер, начатый при открытии, не появлялся.
+func TestPultReleaseDone(t *testing.T) {
+	node := lookNode(t)
+	script := `
+import { releaseDone } from './views/release.js';
+const s = 1000000;
+const checks = [
+  ['страницы нет, 10 с', releaseDone({ detailsPending: true }, s, 0, s + 10000), false],
+  ['страницы нет, больше 2 минут', releaseDone({ detailsPending: true }, s, 0, s + 121000), true],
+  ['страница и постер', releaseDone({ detailsPending: false, imageKey: 'k' }, s, s + 5000, s + 5000), true],
+  ['страница без постера, 30 с', releaseDone({ detailsPending: false, imageKey: '' }, s, s + 5000, s + 35000), false],
+  ['страница без постера, больше минуты', releaseDone({ detailsPending: false, imageKey: '' }, s, s + 5000, s + 66000), true],
+  ['страница пришла поздно — минута на постер от неё', releaseDone({ detailsPending: false, imageKey: '' }, s, s + 110000, s + 150000), false],
+];
+for (const [name, got, want] of checks) {
+  if (got !== want) {
+    console.error(name, ':', got, '≠', want);
+    process.exitCode = 1;
+  }
+}
+`
+	cmd := exec.Command(node, "--input-type=module", "--no-warnings", "-e", script)
+	cmd.Dir = "static"
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Errorf("%v\n%s", err, out)
+	}
+}

@@ -3,7 +3,10 @@ package catalog
 import (
 	"context"
 	"errors"
+	"fmt"
+	"runtime/debug"
 	"strconv"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -54,6 +57,76 @@ func (c *Catalog) enrichLoop(ctx context.Context, tracker string) error {
 	}
 }
 
+// parallelDetails — источник выдерживает столько страниц раздач сразу (Rutor: страница идёт секунды, а
+// новый запрос — всё так же не чаще ограничителя источника). Без признака — по одной.
+type parallelDetails interface{ DetailsAtOnce() int }
+
+// soonLoop — раздатчик догрузки вне очереди (открытые, найденные, показанные) у источника, который
+// выдерживает несколько страниц сразу (спека 11b, 14.4): сверх основного цикла — DetailsAtOnce()−1 мест.
+// Фон остаётся основному циклу — по одной. Ошибка — только у базы.
+func (c *Catalog) soonLoop(ctx context.Context, tracker string) error {
+	slots := 0
+	if p, ok := c.sources[tracker].(parallelDetails); ok {
+		slots = p.DetailsAtOnce() - 1
+	}
+	if slots <= 0 {
+		<-ctx.Done()
+		return nil
+	}
+	sem := make(chan struct{}, slots)
+	errs := make(chan error, 1)
+	var wg sync.WaitGroup
+	defer wg.Wait()
+	for {
+	launch:
+		for c.configured(tracker) && !c.forumPausedUntil(tracker).After(c.now()) {
+			select {
+			case sem <- struct{}{}:
+			default:
+				break launch // места заняты: освободится — разбудит
+			}
+			r, opened, ok, err := c.nextUrgent(ctx, tracker)
+			if err != nil || !ok {
+				<-sem
+				if err != nil {
+					return err
+				}
+				break
+			}
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				defer func() { <-sem; c.wakeSoon(tracker) }()
+				defer c.unclaim(r.ID)
+				fail := func(err error) {
+					select {
+					case errs <- err:
+					default:
+					}
+				}
+				// Разбор страницы трекера — вне горутины сторожа: паника — ошибка модуля каталога (сторож
+				// перезапустит его), а не падение всей программы (финальное ревью 11b-Ж).
+				defer func() {
+					if p := recover(); p != nil {
+						fail(fmt.Errorf("паника: догрузка раздачи %s %s: %v\n%s", tracker, r.TopicID, p, debug.Stack()))
+					}
+				}()
+				if _, err := c.enrichRow(ctx, tracker, r, opened, true); err != nil {
+					fail(err)
+				}
+			}()
+		}
+		select {
+		case <-ctx.Done():
+			return nil
+		case err := <-errs:
+			return err
+		case <-c.soonWake[tracker]:
+		case <-time.After(enrichIdle):
+		}
+	}
+}
+
 // enrichStep — одна раздача: страница, постер, .torrent, очередь рейтингов. did = false — делать
 // сейчас нечего. Ошибки трекера раздачу откладывают; ошибка — только у базы.
 func (c *Catalog) enrichStep(ctx context.Context, tracker string) (bool, error) {
@@ -66,13 +139,23 @@ func (c *Catalog) enrichStep(ctx context.Context, tracker string) (bool, error) 
 	if err != nil {
 		return false, err
 	}
-	ok := urgent
-	if !ok {
-		r, ok, err = c.st.nextToEnrich(ctx, tracker, c.enabled(), now)
+	if !urgent {
+		var ok bool
+		r, ok, err = c.st.nextToEnrich(ctx, tracker, c.enabled(), now, c.busy())
+		if err != nil || !ok {
+			return false, err
+		}
+		if !c.claim(r.ID) {
+			return true, nil // раздатчик видимых взял её только что
+		}
 	}
-	if err != nil || !ok {
-		return false, err
-	}
+	defer c.unclaim(r.ID)
+	return c.enrichRow(ctx, tracker, r, opened, urgent)
+}
+
+// enrichRow — догрузка выбранной раздачи r (занята — claim): страница, постер, .torrent, очередь рейтингов.
+func (c *Catalog) enrichRow(ctx context.Context, tracker string, r row, opened, urgent bool) (bool, error) {
+	now := c.now()
 	src := c.sources[tracker]
 	d, err := src.Details(ctx, r.TopicID)
 	switch {
@@ -137,7 +220,15 @@ func (c *Catalog) enrichStep(ctx context.Context, tracker string) (bool, error) 
 	if err := c.st.saveDetails(ctx, r.ID, d, kpID, "", c.formatOf(d.Description, torrent), now); err != nil {
 		return false, err
 	}
-	c.posterLater(ctx, r.ID, d.PosterURL, kpID, urgent)
+	tier := posterBackground
+	switch {
+	case opened:
+		tier = posterOpened
+		c.openPosterDue(r.ID) // экран раздачи, спросивший её до постера, второй попытки не начинает
+	case urgent:
+		tier = posterSoon
+	}
+	c.posterLater(ctx, r.ID, d.PosterURL, kpID, tier)
 	if c.ratings != nil {
 		r.Title, r.KinopoiskID, r.IMDbID = firstNonEmpty(d.Title, r.Title), kpID, d.IMDbID
 		pos := 0 // открытую раздачу — в рейтинги первой

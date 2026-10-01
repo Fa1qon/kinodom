@@ -317,6 +317,38 @@ func (s catalogStore) rowsByID(ctx context.Context, ids []int64) (map[int64]row,
 	return out, nil
 }
 
+// posterURL — адрес постера со страницы раздачи; "" — нет.
+func (s catalogStore) posterURL(ctx context.Context, id int64) (string, error) {
+	var u string
+	err := s.db.R.QueryRowContext(ctx, `SELECT poster_url FROM releases WHERE id = ?`, id).Scan(&u)
+	return u, err
+}
+
+// liveRowsByID — раздачи по номерам без ушедших с трекера (карточки пульта: догружать их нечего).
+func (s catalogStore) liveRowsByID(ctx context.Context, ids []int64) (map[int64]row, error) {
+	out := map[int64]row{}
+	if len(ids) == 0 {
+		return out, nil
+	}
+	args := make([]any, len(ids))
+	for i, id := range ids {
+		args[i] = id
+	}
+	rows, err := s.db.R.QueryContext(ctx, `SELECT `+rowColumns+` FROM releases r WHERE r.removed = 0 AND r.id IN (?`+strings.Repeat(", ?", len(ids)-1)+`)`, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		r, err := scanRow(rows)
+		if err != nil {
+			return nil, err
+		}
+		out[r.ID] = r
+	}
+	return out, rows.Err()
+}
+
 // rowsWhere — живые раздачи по условию (часть после WHERE), по убыванию раздающих.
 func (s catalogStore) rowsWhere(ctx context.Context, where string, args ...any) ([]row, error) {
 	rows, err := s.db.R.QueryContext(ctx,
@@ -487,17 +519,21 @@ func (s catalogStore) saveImageKey(ctx context.Context, id int64, key string) er
 }
 
 // nextToEnrich — первая в порядке каталога раздача трекера без страницы раздачи.
-func (s catalogStore) nextToEnrich(ctx context.Context, tracker string, cats []CategoryRef, now time.Time) (row, bool, error) {
+func (s catalogStore) nextToEnrich(ctx context.Context, tracker string, cats []CategoryRef, now time.Time, busy map[int64]bool) (row, bool, error) {
 	rs, err := s.catalogRows(ctx, cats)
 	if err != nil {
 		return row{}, false, err
 	}
+	// По месту в разделе: первые карточки всех разделов, потом вторые (спека 11b, 14.4) — первый экран
+	// любого раздела готов раньше глубины популярных; при равном месте — по порядку каталога.
+	var next row
+	ok := false
 	for _, r := range rs {
-		if r.Tracker == tracker && r.DetailsAt.IsZero() && !r.RetryAt.After(now) {
-			return r, true, nil
+		if r.Tracker == tracker && r.DetailsAt.IsZero() && !r.RetryAt.After(now) && !busy[r.ID] && (!ok || r.Pos < next.Pos) {
+			next, ok = r, true
 		}
 	}
-	return row{}, false, nil
+	return next, ok, nil
 }
 
 // saveDetails — страница раздачи. Цифры — только ненулевые: гостю Rutracker не видны раздающие

@@ -1,6 +1,6 @@
 // Каталог трекера: вкладки Rutracker и Rutor, раздел, сетка постеров по раздающим, страницы
 // (спека этапа 7, разделы 5.4 и 6.3).
-import { h, icon, ago, size, rating, store, plural, keepFocus, offWarn } from '../ui.js';
+import { h, icon, ago, size, rating, store, plural, keepFocus, offWarn, poll } from '../ui.js';
 import { get } from '../api.js';
 
 export const TRACKERS = [['rutracker', 'Rutracker'], ['rutor', 'Rutor']];
@@ -59,6 +59,82 @@ export function fillDue(state, tailTop, viewportH) {
   return !state.error && !state.loading && state.more && tailTop < viewportH + 600;
 }
 
+// POSTER_TRIES — сколько раз ещё спросить карточку, у которой страница уже есть, а постера нет (опрос раз
+// в 3 с — около минуты): постер приходит через секунды после страницы, не пришёл — хостинг мёртв.
+export const POSTER_TRIES = 20;
+
+// waiting — карточку стоит спрашивать (спека 11b, 14.1): страницы раздачи ещё нет или постера нет, а
+// попытки (tries — опросов со страницей) не кончились.
+export function waiting(e, tries) {
+  return !!e.detailsPending || (!e.imageKey && tries < POSTER_TRIES);
+}
+
+// nearest — номера карточек, которые спросить сейчас: на экране и рядом (экран вверх, два вниз), ближние
+// к экрану первыми, не больше limit. cards — [{id, top, bottom}] по getBoundingClientRect.
+export function nearest(cards, viewportH, limit) {
+  const dist = (c) => (c.bottom < 0 ? -c.bottom : c.top > viewportH ? c.top - viewportH : 0);
+  return cards.filter((c) => c.bottom > -viewportH && c.top < 2 * viewportH)
+    .sort((a, b) => dist(a) - dist(b) || a.top - b.top)
+    .slice(0, limit)
+    .map((c) => c.id);
+}
+
+// SHOWN — поля карточки, которые видно: изменилось одно — карточка перерисовывается.
+const SHOWN = ['title', 'name', 'original', 'year', 'quality', 'format', 'season', 'imageKey', 'kinopoisk', 'seeders', 'size', 'detailsPending'];
+
+// changed — у карточки изменилось видимое.
+export function changed(a, b) {
+  return SHOWN.some((k) => a[k] !== b[k]);
+}
+
+// ASK_AT_ONCE — сколько карточек у экрана спрашивать за раз.
+const ASK_AT_ONCE = 48;
+
+// PLACE — место раздела (порции, прокрутка, карточка в фокусе) во вкладке браузера: ссылка «назад» со
+// страницы раздачи, открытой не прямо из каталога, возвращает на него (спека 11b, 14.3).
+const PLACE = 'kinodom.catalogPlace';
+
+function keepPlace(place) {
+  try {
+    sessionStorage.setItem(PLACE, JSON.stringify(place));
+  } catch {
+    // вкладка не дала записать — ссылка «назад» откроет раздел сверху
+  }
+}
+
+function lastPlace() {
+  try {
+    return JSON.parse(sessionStorage.getItem(PLACE) || 'null');
+  } catch {
+    return null;
+  }
+}
+
+// backStep — «назад» ссылкой со страницы раздачи в раздел href (prev — адрес до раздачи, place — место во
+// вкладке). Пришли прямо из этого раздела — шаг назад по истории: место — в её записи, как у кнопки «назад»
+// браузера и Esc пульта ТВ. Иначе — переход, а место — запомненное, если оно этого раздела.
+export function backStep(href, prev, place) {
+  const mine = place && place.key === href ? place : null;
+  if (prev && (prev === href || (mine && prev === mine.at))) return { back: true, place: null };
+  return { back: false, place: mine ? { ...mine, at: href } : null };
+}
+
+// returnTo — «назад» в раздел каталога href со страницы раздачи.
+export function returnTo(href, prev) {
+  const step = backStep(href, prev, lastPlace());
+  if (step.back) {
+    history.back();
+    return;
+  }
+  location.hash = href;
+  if (!step.place) return;
+  try {
+    history.replaceState({ ...(history.state || {}), catalog: step.place }, ''); // новая запись — с местом раздела
+  } catch {
+    // браузер не дал записать — раздел откроется сверху
+  }
+}
+
 // groupBar — ряды над сеткой (спека 11b, 7.1): у Rutracker — группы («Кино · Сериалы · Документалистика»,
 // только где что-то выбрано; выбранная — по разделу, ссылка — на первый её подраздел) и подразделы
 // выбранной группы; раздел без группы — в ряду всегда. У Rutor групп нет — один ряд, как раньше.
@@ -83,6 +159,8 @@ export function render(root, r, ctx) {
   // записи; пишется постоянно, пока каталог открыт (к моменту перехода на раздачу запись уже чужая).
   const here = location.hash.split('?')[0];
   const saved = history.state && history.state.catalog && history.state.catalog.at === here ? history.state.catalog : null;
+  // Незаконченные карточки (без страницы или постера; спека 11b, 14.1): номер → {el, e, tries}.
+  const live = new Map();
 
   const tabs = h('nav', { class: 'tabs', 'aria-label': 'Трекер' });
   const updated = h('div', { class: 'muted small' });
@@ -111,12 +189,15 @@ export function render(root, r, ctx) {
     if (!alive) return;
     const a = document.activeElement;
     const focusKey = a && grid.contains(a) && a.dataset ? a.dataset.key || '' : '';
-    const st = { ...(history.state || {}), catalog: { at: here, pages: state.page, scrollY: window.scrollY, focusKey } };
+    // key — адрес показанного раздела, как у ссылки «назад» со страницы раздачи (раздел мог прийти по умолчанию).
+    const key = shownSection ? `#/catalog/${tracker}/${encodeURIComponent(shownSection)}` : here;
+    const place = { at: here, key, pages: state.page, scrollY: window.scrollY, focusKey };
     try {
-      history.replaceState(st, '');
+      history.replaceState({ ...(history.state || {}), catalog: place }, '');
     } catch {
       // браузер не дал записать — место просто не запомнится
     }
+    keepPlace(place);
   }
 
   // more — следующая порция, если её можно просить.
@@ -142,13 +223,54 @@ export function render(root, r, ctx) {
     if (state.page === 0) updated.textContent = list.updatedAt ? `обновлён ${ago(list.updatedAt)}` : 'ещё не обновлялся';
     const was = state.loaded.length;
     state = portions(state, { type: 'loaded', list });
-    grid.append(...state.loaded.slice(was).map(entry));
+    grid.append(...state.loaded.slice(was).map(card));
     drawTail();
     remember();
     setTimeout(() => {
       if (alive && fillDue(state, tail.getBoundingClientRect().top, window.innerHeight)) more();
     }, 0);
   }
+
+  // card — карточка порции; незаконченная — под присмотром опроса.
+  function card(e) {
+    const el = entry(e);
+    if (waiting(e, 0)) live.set(e.id, { el, e, tries: 0 });
+    return el;
+  }
+
+  // Раз в 3 с — незаконченные карточки у экрана: сервер догрузил название, постер, рейтинг — карточка
+  // перерисовывается на месте, фокус пульта ТВ и метка «N раздач» остаются.
+  const refresh = poll(async () => {
+    if (!alive || live.size === 0) return;
+    const ids = nearest([...live.values()].map((c) => {
+      const b = c.el.getBoundingClientRect();
+      return { id: c.e.id, top: b.top, bottom: b.bottom };
+    }), window.innerHeight, ASK_AT_ONCE);
+    if (ids.length === 0) return;
+    const res = await get('/catalog/cards?ids=' + ids.join(','));
+    if (!alive) return;
+    const fresh = new Map(res.entries.map((e) => [e.id, e]));
+    keepFocus(grid, () => {
+      for (const id of ids) {
+        const c = live.get(id);
+        const f = fresh.get(id);
+        if (!c) continue;
+        if (!f) {
+          live.delete(id); // раздача ушла с трекера — спрашивать нечего
+          continue;
+        }
+        const e = { ...f, variants: c.e.variants };
+        if (changed(c.e, e)) {
+          const el = entry(e);
+          c.el.replaceWith(el);
+          c.el = el;
+        }
+        c.e = e;
+        if (!e.detailsPending) c.tries++;
+        if (!waiting(e, c.tries)) live.delete(id);
+      }
+    });
+  }, 3000);
 
   function drawTail() {
     tail.replaceChildren(
@@ -232,6 +354,7 @@ export function render(root, r, ctx) {
 
   return () => {
     alive = false;
+    refresh.stop();
     ctx.listeners.delete(onStatus);
     if (watcher) watcher.disconnect();
     window.removeEventListener('scroll', onScroll);

@@ -71,7 +71,7 @@ func TestFoundEnrichedWithoutTorrentUntilOpened(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	c.enqueueFound(ctx, "rutor", ids)
+	c.enqueueFound(ctx, "rutor", ids, searchToEnrich)
 	if did, err := c.enrichStep(ctx, "rutor"); !did || err != nil {
 		t.Fatal(did, err)
 	}
@@ -120,7 +120,7 @@ func TestUrgentWorkInterruptsBackgroundTorrent(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	c.enqueueFound(ctx, "rutor", ids)
+	c.enqueueFound(ctx, "rutor", ids, searchToEnrich)
 	select {
 	case err := <-done:
 		if err != nil {
@@ -173,9 +173,9 @@ func TestUrgentPosterNotBehindBackground(t *testing.T) {
 	bctx, cancel := context.WithCancel(ctx)
 	t.Cleanup(cancel)
 	for i, id := range ids[:6] {
-		c.posterLater(bctx, id, fmt.Sprintf("%s/slow/%d.jpg", host.URL, i), 0, false)
+		c.posterLater(bctx, id, fmt.Sprintf("%s/slow/%d.jpg", host.URL, i), 0, posterBackground)
 	}
-	c.posterLater(ctx, ids[6], host.URL+"/fast.jpg", 0, true)
+	c.posterLater(ctx, ids[6], host.URL+"/fast.jpg", 0, posterSoon)
 	deadline := time.Now().Add(3 * time.Second)
 	for {
 		r, err := c.Release(ctx, ids[6])
@@ -202,7 +202,7 @@ func TestOpenedTorrentFailedStopsWaiting(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	c.enqueueFound(ctx, "rutor", ids)
+	c.enqueueFound(ctx, "rutor", ids, searchToEnrich)
 	if did, err := c.enrichStep(ctx, "rutor"); !did || err != nil {
 		t.Fatal(did, err)
 	}

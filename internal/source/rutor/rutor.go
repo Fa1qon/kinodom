@@ -263,6 +263,10 @@ func searchQuery(q string) string {
 	return q
 }
 
+// DetailsAtOnce — сколько страниц раздач каталог качает сразу (спека 11b, 14.4): Rutor отдаёт страницу
+// 4–77 с (вживую 2026-10-01), по одной — 2–7 раздач в минуту; новый запрос — всё так же не чаще ограничителя.
+func (r *Rutor) DetailsAtOnce() int { return 4 }
+
 // Details — страница раздачи: название, описание, постер, id Кинопоиска, magnet, цифры.
 func (r *Rutor) Details(ctx context.Context, topicID string) (source.Details, error) {
 	if !isNumber(topicID) {
