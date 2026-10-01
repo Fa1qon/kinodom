@@ -115,20 +115,48 @@ func parseTopic(body []byte) (source.Details, error) {
 	d.IMDbID = htmltext.FirstMatch(reIMDb, links, "href")
 	// Ссылки /go/… — служебные ссылки и баннеры сайта («Набор в группу «Хранители»»), не текст раздачи.
 	d.Description = htmltext.Text(post, `div.sp-wrap, script, style, var, a[href^="/go/"]`)
-	href, _ := doc.Find("a.magnet-link[href]").First().Attr("href")
-	if m := reBtih.FindStringSubmatch(href); m != nil {
-		d.InfoHash = strings.ToLower(m[1])
+	// Хэш раздачи — со ссылки magnet, а сменилась разметка — из запасных мест (у заказчика 2026-10-01
+	// «не найден блок magnet-ссылка»). Нет хэша — не ошибка: остальное со страницы сохраняется, magnet
+	// каталог соберёт из хэша списка раздела (план 14А).
+	if d.InfoHash = topicHash(doc, body); d.InfoHash != "" {
+		d.Magnet = buildMagnet(d.InfoHash)
 	}
-	if d.InfoHash == "" {
-		return d, parseErr("magnet-ссылка (a.magnet-link)")
-	}
-	d.Magnet = buildMagnet(d.InfoHash)
 	if v, ok := doc.Find("#tor-size-humn[title]").Attr("title"); ok {
 		d.Size, _ = strconv.ParseInt(v, 10, 64)
 	}
 	d.Seeders = htmltext.FirstInt(doc.Find(".seed b").First().Text())
 	d.Leechers = htmltext.FirstInt(doc.Find(".leech b").First().Text())
 	return d, nil
+}
+
+var reHex40 = regexp.MustCompile(`^[0-9a-fA-F]{40}$`)
+
+// topicHash — хэш раздачи со страницы темы: ссылка a.magnet-link, любая ссылка magnet, 40 знаков в title у
+// элемента с data-topic_id, текст #tor-hash, «btih:» в любом месте страницы; не нашёлся — "".
+func topicHash(doc *goquery.Document, body []byte) string {
+	for _, sel := range []string{"a.magnet-link[href]", `a[href^="magnet:"]`} {
+		href, _ := doc.Find(sel).First().Attr("href")
+		if m := reBtih.FindStringSubmatch(href); m != nil {
+			return strings.ToLower(m[1])
+		}
+	}
+	var h string
+	doc.Find("[data-topic_id][title]").EachWithBreak(func(_ int, e *goquery.Selection) bool {
+		if t, _ := e.Attr("title"); reHex40.MatchString(strings.TrimSpace(t)) {
+			h = strings.ToLower(strings.TrimSpace(t))
+		}
+		return h == ""
+	})
+	if h != "" {
+		return h
+	}
+	if t := strings.TrimSpace(doc.Find("#tor-hash").First().Text()); reHex40.MatchString(t) {
+		return strings.ToLower(t)
+	}
+	if m := reBtih.FindSubmatch(body); m != nil {
+		return strings.ToLower(string(m[1]))
+	}
+	return ""
 }
 
 // parseLogin — итог входа по странице ответа: вошли — в шапке a#logged-in-username; неверный

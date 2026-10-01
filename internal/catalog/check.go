@@ -52,6 +52,10 @@ func (c *Catalog) CheckRelease(ctx context.Context, id int64) (Version, error) {
 	}
 	v := Version{InfoHash: d.InfoHash, Title: d.Title, Magnet: d.Magnet}
 	if v.InfoHash == "" {
+		// Хэша на странице нет (Rutracker сменил разметку, план 14А) — хэш из списка раздела: он свежий.
+		v.InfoHash = r.InfoHash
+	}
+	if v.InfoHash == "" {
 		return Version{}, fmt.Errorf("%s: на странице раздачи %s нет infohash", title(r.Tracker), r.TopicID)
 	}
 	if mb, ok := src.(magnetBuilder); ok {
