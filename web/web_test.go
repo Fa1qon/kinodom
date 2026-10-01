@@ -1934,6 +1934,40 @@ for (const [got, want] of checks) {
 	}
 }
 
+// План 14Г: карточка «Кинопоиска» ведёт в поиск по названию и году (кодирование — Review Focus 4); строка
+// карточки — год и оценки, пустые части пропускаются.
+func TestPultKPCatalog(t *testing.T) {
+	node := lookNode(t)
+	script := `
+const { filmSearchHref, filmLine, kpRestoreCount } = await import('./views/kpcat.js');
+const here = '#/catalog/kinopoisk/films-ru?order=kp';
+const checks = [
+  // Ревью 14Г: сериал — без года (идущий сезон новее первого, а трекерам нужны все слова запроса).
+  [filmSearchHref({ id: 7, title: 'Гангстерленд', year: 2025, type: 'TV_SERIES' }), '#/search?q=' + encodeURIComponent('Гангстерленд') + '&kp=7'],
+  [filmSearchHref({ id: 8, title: 'Сериал', year: 2024, type: 'MINI_SERIES' }), '#/search?q=' + encodeURIComponent('Сериал') + '&kp=8'],
+  // Ревью 14Г: возврат на место — столько карточек, сколько было на этой странице.
+  [kpRestoreCount({ at: here, count: 72 }, here), 72],
+  [kpRestoreCount({ at: '#/catalog/kinopoisk/docs', count: 72 }, here), 0],
+  [kpRestoreCount(null, here), 0],
+  [filmSearchHref({ id: 5, title: 'Мастер и Маргарита: «Тест»', year: 2024 }), '#/search?q=' + encodeURIComponent('Мастер и Маргарита: «Тест» 2024') + '&kp=5'],
+  [filmSearchHref({ id: 6, title: 'Без года', year: 0 }), '#/search?q=' + encodeURIComponent('Без года') + '&kp=6'],
+  [filmLine({ year: 2024, kinopoisk: 8.1, imdb: 0 }), '2024 · КП 8,1'],
+  [filmLine({ year: 0, kinopoisk: 0, imdb: 7.25 }), 'IMDb 7,3'],
+];
+for (const [got, want] of checks) {
+  if (got !== want) {
+    console.error(JSON.stringify(got), '≠', JSON.stringify(want));
+    process.exitCode = 1;
+  }
+}
+`
+	cmd := exec.Command(node, "--input-type=module", "--no-warnings", "-e", script)
+	cmd.Dir = "static"
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Errorf("%v\n%s", err, out)
+	}
+}
+
 // План 14А, задача 3: на странице сериала крупно — какой сезон скачается.
 func TestPultSeasonLabel(t *testing.T) {
 	node := lookNode(t)
