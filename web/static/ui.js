@@ -317,8 +317,9 @@ export function openModal(box, onCancel) {
   };
 }
 
-// confirmDialog — «Да» / «Нет» (спека 11b, 4.1): Promise<boolean>; фокус сразу на «Да».
-export function confirmDialog({ title, yes = 'Да', no = 'Нет' }) {
+// confirmDialog — «Да» / «Нет» (спека 11b, 4.1): Promise<boolean>; фокус сразу на «Да», у безвозвратного (safe) —
+// на «Нет»: второе OK на пульте ТВ не должно удалить своё с диска (ревью 14В).
+export function confirmDialog({ title, yes = 'Да', no = 'Нет', safe = false }) {
   return new Promise((resolve) => {
     let modal = null;
     const done = (v) => {
@@ -330,7 +331,7 @@ export function confirmDialog({ title, yes = 'Да', no = 'Нет' }) {
     const box = h('div', { class: 'dlg card', role: 'dialog', 'aria-modal': 'true', 'aria-label': title },
       h('div', { class: 'h' }, title), h('div', { class: 'row gap10' }, yesBtn, noBtn));
     modal = openModal(box, () => done(false));
-    yesBtn.focus({ preventScroll: true });
+    (safe ? noBtn : yesBtn).focus({ preventScroll: true });
   });
 }
 

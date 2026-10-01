@@ -193,3 +193,152 @@ func TestDeleteUnitRoute(t *testing.T) {
 		}
 	}
 }
+
+// Ревью 14В, Important 2: папки раздач не прочитались (движок ещё не поднялся) — папки стандартных «Фильмов» и
+// «Сериалов» (туда качает Kinodom) в этом обходе не синхронизируются: скачанное не появляется своим файлом,
+// а единица «папка = сериал» не пересоздаётся (история и отметки целы).
+func TestScanKeepsTargetFoldersWithoutTorrentFolders(t *testing.T) {
+	e := newEnv(t)
+	show := e.folder(t, catSeries, "Сериал (2020)", "Сериал.S01E01.mkv", "Сериал.S01E02.mkv")
+	e.scan(t)
+	before := unitsOf(t, e, catSeries)
+	if before[show] == 0 {
+		t.Fatalf("сериал «папка = сериал»: %v", before)
+	}
+	mkdir(t, show, "Другой (2021) [abcdef12]")
+	os.WriteFile(filepath.Join(show, "Другой (2021) [abcdef12]", "Другой.S01E01.mkv"), []byte("x"), 0o644)
+	e.l.o.TorrentFolders = func(context.Context) ([]string, error) {
+		return nil, errors.New("загрузки не работают")
+	}
+	e.scan(t)
+	after := unitsOf(t, e, catSeries)
+	if len(after) != 1 || after[show] != before[show] {
+		t.Fatalf("до %v, после %v", before, after)
+	}
+}
+
+// Ревью 14В, Important 4: «Удалить» в своей категории без права изменения — у папки проблема no_write и
+// «Разрешить доступ», а не тупик; удаление прошло — проблемы нет.
+func TestDeleteNoWriteMarksFolder(t *testing.T) {
+	e := newEnv(t)
+	own, err := e.d.addCategory(ctx, CategoryInput{Name: "Концерты", Layout: LayoutFilms})
+	if err != nil {
+		t.Fatal(err)
+	}
+	dir := e.folder(t, own, "Concerts", "Концерт (2020).mkv")
+	e.scan(t)
+	id := unitsOf(t, e, own)[filepath.Join(dir, "Концерт (2020).mkv")]
+	e.l.o.Remove = func(string) error { return &os.PathError{Op: "remove", Path: dir, Err: os.ErrPermission} }
+	if err := e.l.DeleteUnit(ctx, id); !errors.Is(err, ErrNoWrite) {
+		t.Fatalf("без права: %v", err)
+	}
+	problem := func() string {
+		cs, _ := e.l.Categories(ctx, "")
+		for _, c := range cs {
+			for _, f := range c.Folders {
+				if f.Path == dir {
+					return f.Problem
+				}
+			}
+		}
+		return "?"
+	}
+	if p := problem(); p != "no_write" {
+		t.Fatalf("проблема папки %q", p)
+	}
+	e.scan(t) // обход проблему от удаления не снимает
+	if p := problem(); p != "no_write" {
+		t.Fatalf("после обхода: %q", p)
+	}
+	ps, _ := e.d.Problems(ctx)
+	if len(ps) != 1 || !strings.Contains(ps[0].Text, "Нет права изменять") || strings.Contains(ps[0].Text, "скачанное") {
+		t.Fatalf("проблемы: %+v", ps)
+	}
+	e.l.o.Remove = nil
+	if err := e.l.DeleteUnit(ctx, id); err != nil {
+		t.Fatal(err)
+	}
+	if p := problem(); p != "" {
+		t.Fatalf("удалилось — проблема %q", p)
+	}
+}
+
+// Ревью 14В, п. 6: «нет записи — скачанное идёт в папку загрузок» — только у первой папки «Фильмов» (туда
+// качает Kinodom), не у остальных.
+func TestNoWriteOnlyTargetFolder(t *testing.T) {
+	e := newEnv(t)
+	first := e.folder(t, catFilms, "A")
+	second := e.folder(t, catFilms, "B")
+	e.l.o.Writable = func(string) bool { return false }
+	e.scan(t)
+	cs, _ := e.l.Categories(ctx, "")
+	for _, c := range cs {
+		for _, f := range c.Folders {
+			want := map[string]string{first: "no_write", second: ""}[f.Path]
+			if f.Problem != want {
+				t.Errorf("%s: %q, нужно %q", f.Path, f.Problem, want)
+			}
+		}
+	}
+}
+
+// Ревью 14В, Important 5: в папке-единице лежит папка другой категории (или раздача Kinodom) — «Удалить»
+// удаляет только файлы единицы, вложенная папка цела.
+func TestDeleteUnitKeepsNestedFolders(t *testing.T) {
+	e := newEnv(t)
+	own, err := e.d.addCategory(ctx, CategoryInput{Name: "Видео", Layout: LayoutFilms})
+	if err != nil {
+		t.Fatal(err)
+	}
+	root := e.folder(t, own, "Video", "Кино/a.mkv")
+	nested := filepath.Join(root, "Кино", "Новое")
+	mkdir(t, nested)
+	os.WriteFile(filepath.Join(nested, "b.mkv"), []byte("x"), 0o644)
+	cs, _ := e.d.categories(ctx)
+	for _, c := range cs {
+		if c.ID == catFilms {
+			if err := e.d.updateCategory(ctx, c.ID, CategoryInput{Name: c.Name, Layout: c.Layout, Folders: []string{nested}}); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	e.scan(t)
+	id := unitsOf(t, e, own)[filepath.Join(root, "Кино")]
+	if id == 0 {
+		t.Fatalf("единица «Кино»: %v", unitsOf(t, e, own))
+	}
+	if err := e.l.DeleteUnit(ctx, id); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(root, "Кино", "a.mkv")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("файл единицы: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(nested, "b.mkv")); err != nil {
+		t.Fatalf("папка «Фильмов» внутри: %v", err)
+	}
+}
+
+// Ревью 14В, п. 12: несколько папок одним сохранением (мастер) — в порядке ввода: в первую качает Kinodom.
+func TestFoldersKeepInputOrder(t *testing.T) {
+	e := newEnv(t)
+	var dirs []string
+	for _, n := range []string{"Zeta", "Alpha", "Mid", "Beta", "Omega"} {
+		dirs = append(dirs, mkdir(t, e.root, n))
+	}
+	for i := 0; i < 5; i++ { // порядок обхода map случаен — несколько попыток
+		cs, _ := e.d.categories(ctx)
+		for _, c := range cs {
+			if c.ID == catFilms {
+				if err := e.d.updateCategory(ctx, c.ID, CategoryInput{Name: c.Name, Layout: c.Layout}); err != nil {
+					t.Fatal(err)
+				}
+				if err := e.d.updateCategory(ctx, c.ID, CategoryInput{Name: c.Name, Layout: c.Layout, Folders: dirs}); err != nil {
+					t.Fatal(err)
+				}
+			}
+		}
+		if got, _ := e.l.TargetFolder(ctx, "films"); got != dirs[0] {
+			t.Fatalf("первая папка %q, нужно %q", got, dirs[0])
+		}
+	}
+}

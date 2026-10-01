@@ -209,6 +209,7 @@ func (d db) updateCategory(ctx context.Context, id int64, in CategoryInput) erro
 // setFolders — папки категории целиком: лишние уходят (с их единицами), новые добавляются.
 func setFolders(ctx context.Context, tx *sql.Tx, category int64, paths []string) error {
 	want := map[string]string{}
+	var order []string // ключи в порядке ввода: в первую папку «Фильмов» и «Сериалов» качает Kinodom (ревью 14В)
 	for _, p := range paths {
 		p = strings.TrimSpace(p)
 		if p == "" {
@@ -216,6 +217,9 @@ func setFolders(ctx context.Context, tx *sql.Tx, category int64, paths []string)
 		}
 		if len(p) > 3 { // «D:\» оставить как есть
 			p = strings.TrimRight(p, `\/`)
+		}
+		if _, dup := want[pathKey(p)]; !dup {
+			order = append(order, pathKey(p))
 		}
 		want[pathKey(p)] = p
 	}
@@ -241,7 +245,8 @@ func setFolders(ctx context.Context, tx *sql.Tx, category int64, paths []string)
 			}
 		}
 	}
-	for k, p := range want {
+	for _, k := range order {
+		p := want[k]
 		if _, ok := have[k]; ok {
 			continue
 		}
