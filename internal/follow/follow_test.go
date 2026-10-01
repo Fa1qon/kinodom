@@ -47,10 +47,21 @@ func eps(n int) []string {
 }
 
 type fakeCatalog struct {
-	mu       sync.Mutex
-	releases map[int64]catalog.Release
-	versions map[int64]catalog.Version
-	errs     map[int64]error
+	mu           sync.Mutex
+	releases     map[int64]catalog.Release
+	versions     map[int64]catalog.Version
+	errs         map[int64]error
+	releaseCalls int // Release — «человек открыл раздачу» (догрузка, постер без паузы)
+}
+
+func (f *fakeCatalog) ReleaseBrief(_ context.Context, id int64) (catalog.ReleaseRef, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	r, ok := f.releases[id]
+	if !ok {
+		return catalog.ReleaseRef{}, catalog.ErrNoRelease
+	}
+	return catalog.ReleaseRef{ID: id, Title: r.Title, ImageKey: r.ImageKey}, nil
 }
 
 func (f *fakeCatalog) CheckRelease(_ context.Context, id int64) (catalog.Version, error) {
@@ -73,6 +84,7 @@ func (f *fakeCatalog) CheckRelease(_ context.Context, id int64) (catalog.Version
 func (f *fakeCatalog) Release(_ context.Context, id int64) (catalog.Release, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	f.releaseCalls++
 	r, ok := f.releases[id]
 	if !ok {
 		return catalog.Release{}, catalog.ErrNoRelease

@@ -172,3 +172,31 @@ func TestReleaseMagnetBeforeDetails(t *testing.T) {
 		}
 	}
 }
+
+// ReleaseBrief — название и картинка без побочных действий Release: строку «Новых серий» опрашивает
+// колокольчик раз в 15 с, догрузку и постер без паузы это не запускает (финальное ревью 11b-В).
+func TestReleaseBriefHasNoSideEffects(t *testing.T) {
+	rutor := newFake("rutor")
+	rutor.top["12"] = []source.Release{rel("rutor", "5", "Холод [01x01-06 из 08] (2026) WEB-DL 1080p", 9, 1, "aa05")}
+	c, _ := newCatalog(t, openDB(t), nil, rutor)
+	refresh(t, c, false)
+	es := list(t, c, ListOptions{})
+	r, err := c.ReleaseBrief(ctx, es[0].ID)
+	if err != nil || r.ID != es[0].ID || r.Title != "Холод [01x01-06 из 08] (2026) WEB-DL 1080p" || r.Quality != "WEB-DL 1080p" {
+		t.Fatalf("кратко: %+v, %v", r, err)
+	}
+	c.mu.Lock()
+	urgent, forced := len(c.urgent["rutor"]), len(c.forced)
+	c.mu.Unlock()
+	if urgent != 0 || forced != 0 {
+		t.Fatalf("побочные действия: срочная догрузка %d, постер без паузы %d", urgent, forced)
+	}
+	select {
+	case <-c.postersWake:
+		t.Fatal("разбужены постеры")
+	default:
+	}
+	if _, err := c.ReleaseBrief(ctx, 999); !errors.Is(err, ErrNoRelease) {
+		t.Fatalf("нет раздачи: %v", err)
+	}
+}

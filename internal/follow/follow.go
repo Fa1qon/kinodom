@@ -35,6 +35,7 @@ var ErrNotSeries = errors.New("это не сериал — следить не 
 type Catalog interface {
 	CheckRelease(ctx context.Context, id int64) (catalog.Version, error)
 	Release(ctx context.Context, id int64) (catalog.Release, error)
+	ReleaseBrief(ctx context.Context, id int64) (catalog.ReleaseRef, error) // без побочных действий Release
 }
 
 // Torrents — торрент-движок (*torrents.Service).
@@ -147,9 +148,9 @@ func (m *Module) Follow(ctx context.Context, release int64) error {
 			}
 		}
 	}
-	_, to, total := meta.Episodes(rel.Title)
+	episodes, total := episodesOut(rel.Title, len(paths))
 	now := m.now()
-	if err := m.st.follow(ctx, Follow{Release: release, InfoHash: rel.InfoHash, Episodes: max(len(paths), to), Total: total, Paths: paths}, now); err != nil {
+	if err := m.st.follow(ctx, Follow{Release: release, InfoHash: rel.InfoHash, Episodes: episodes, Total: total, Paths: paths}, now); err != nil {
 		return err
 	}
 	if err := m.st.setChecked(ctx, release, now); err != nil {
@@ -221,7 +222,7 @@ func (m *Module) Updates(ctx context.Context) ([]UpdateView, error) {
 			}
 		}
 		v := UpdateView{ID: u.ID, Release: u.Release, Kind: u.Kind, Label: u.Label, Hash: u.InfoHash, Files: nonNil(u.Files), At: u.At}
-		if rel, err := m.o.Catalog.Release(ctx, u.Release); err == nil {
+		if rel, err := m.o.Catalog.ReleaseBrief(ctx, u.Release); err == nil {
 			v.Title, v.ImageKey = rel.Title, rel.ImageKey
 			v.Name = meta.ParseTitle(rel.Title).Ru
 		}
