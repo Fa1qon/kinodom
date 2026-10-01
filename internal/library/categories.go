@@ -39,7 +39,7 @@ type Folder struct {
 	ID       int64  `json:"id"`
 	Category int64  `json:"category"`
 	Path     string `json:"path"`
-	Problem  string `json:"problem"` // "", not_found, no_access — заполняет обход
+	Problem  string `json:"problem"` // "", not_found, no_access, no_write (папка для скачанного) — заполняет обход
 }
 
 // CategoryInput — категория из пульта. У стандартной берутся только папки.
