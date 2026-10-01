@@ -584,8 +584,8 @@ for (const [got, want] of checks) {
 	}
 }
 
-// Каталог подгружается при прокрутке (замечание № 9 этапа 11b): следующая порция — одна за раз; конец
-// списка — больше не просим; ошибка порции — можно попросить снова.
+// Каталог подгружается при прокрутке (замечание № 9 этапа 11b): следующая порция — одна за раз, по
+// курсору (место последней карточки, ревью 11b-Г); конец списка — больше не просим; ошибка — снова.
 func TestPultCatalogPortions(t *testing.T) {
 	node := lookNode(t)
 	script := `
@@ -593,18 +593,19 @@ import { portions } from './views/catalog.js';
 const e = (id) => ({ id });
 let s = portions(undefined, { type: 'init' });
 const checks = [];
+checks.push(['с начала', s.next === -1 && s.more === true]);
 s = portions(s, { type: 'more' });
 checks.push(['первая порция просится', s.loading === true && s.page === 0]);
 checks.push(['вторая просьба во время загрузки — без изменений', portions(s, { type: 'more' }) === s]);
-s = portions(s, { type: 'loaded', list: { entries: [e(1), e(2)], page: 1, pages: 2 } });
-checks.push(['порция 1', s.loaded.length === 2 && !s.loading && s.page === 1]);
+s = portions(s, { type: 'loaded', list: { entries: [e(1), e(2)], next: 7, more: true } });
+checks.push(['порция 1', s.loaded.length === 2 && !s.loading && s.page === 1 && s.next === 7]);
 s = portions(s, { type: 'more' });
 s = portions(s, { type: 'failed', error: 'нет сети' });
 checks.push(['ошибка — не загружается, текст есть', !s.loading && s.error === 'нет сети' && s.loaded.length === 2]);
 s = portions(s, { type: 'more' });
 checks.push(['после ошибки можно снова', s.loading === true && s.error === '']);
-s = portions(s, { type: 'loaded', list: { entries: [e(3)], page: 2, pages: 2 } });
-checks.push(['порция 2', s.loaded.map((x) => x.id).join() === '1,2,3' && s.page === 2]);
+s = portions(s, { type: 'loaded', list: { entries: [e(3)], next: 9, more: false } });
+checks.push(['порция 2', s.loaded.map((x) => x.id).join() === '1,2,3' && s.page === 2 && s.next === 9]);
 checks.push(['конец списка — больше не просим', portions(s, { type: 'more' }) === s]);
 for (const [name, ok] of checks) {
   if (!ok) {
@@ -1028,16 +1029,16 @@ const run = async (name, start, serverPages, saved, pageOnMore) => {
   clearTimeout(t);
   return { state, calls };
 };
-const grow = (pages) => (s) => (s.page < pages ? { ...s, page: s.page + 1, pages } : s);
-let r = await run('каталог стал короче', { page: 4, pages: 4, error: '' }, 4, 5, grow(4));
+const grow = (pages) => (s) => (s.page < pages ? { ...s, page: s.page + 1, more: s.page + 1 < pages } : s);
+let r = await run('каталог стал короче', { page: 4, more: false, error: '' }, 4, 5, grow(4));
 checks.push(['короче — сразу выход', r.calls === 0]);
-r = await run('догрузка до сохранённой', { page: 1, pages: 9, error: '' }, 9, 3, grow(9));
+r = await run('догрузка до сохранённой', { page: 1, more: true, error: '' }, 9, 3, grow(9));
 checks.push(['до сохранённой глубины', r.state.page === 3 && r.calls === 2]);
-r = await run('сервер отдаёт меньше', { page: 1, pages: 2, error: '' }, 2, 5, grow(2));
+r = await run('сервер отдаёт меньше', { page: 1, more: true, error: '' }, 2, 5, grow(2));
 checks.push(['не глубже сервера', r.state.page === 2 && r.calls === 1]);
-r = await run('порция не пришла', { page: 1, pages: 5, error: '' }, 5, 4, (s) => s);
+r = await run('порция не пришла', { page: 1, more: true, error: '' }, 5, 4, (s) => s);
 checks.push(['без изменений — выход после одной просьбы', r.calls === 1]);
-r = await run('ошибка', { page: 1, pages: 5, error: 'нет сети' }, 5, 4, grow(5));
+r = await run('ошибка', { page: 1, more: true, error: 'нет сети' }, 5, 4, grow(5));
 checks.push(['ошибка — выход', r.calls === 0]);
 for (const [name, ok] of checks) {
   if (!ok) {
@@ -1059,14 +1060,14 @@ func TestPultRetryDue(t *testing.T) {
 	node := lookNode(t)
 	script := `
 import { retryDue } from './views/catalog.js';
-const failed = { error: 'нет сети', loading: false, page: 2, pages: 5 };
+const failed = { error: 'нет сети', loading: false, page: 2, more: true };
 const checks = [
   ['ошибка, низ рядом — повтор', retryDue(failed, 900, 800), true],
   ['ошибка, низ далеко — нет', retryDue(failed, 2000, 800), false],
   ['без ошибки — наблюдатель сам', retryDue({ ...failed, error: '' }, 900, 800), false],
   ['идёт загрузка — нет', retryDue({ ...failed, loading: true }, 900, 800), false],
-  ['список кончился — нет', retryDue({ ...failed, page: 5 }, 900, 800), false],
-  ['первая порция не пришла — повтор', retryDue({ error: 'нет сети', loading: false, page: 0, pages: 1 }, 100, 800), true],
+  ['список кончился — нет', retryDue({ ...failed, more: false }, 900, 800), false],
+  ['первая порция не пришла — повтор', retryDue({ error: 'нет сети', loading: false, page: 0, more: true }, 100, 800), true],
 ];
 for (const [name, got, want] of checks) {
   if (got !== want) {
@@ -1267,13 +1268,13 @@ func TestPultFillDue(t *testing.T) {
 	node := lookNode(t)
 	script := `
 import { fillDue } from './views/catalog.js';
-const st = { error: '', loading: false, page: 6, pages: 18 };
+const st = { error: '', loading: false, page: 6, more: true };
 const checks = [
   ['низ рядом — следующая', fillDue(st, 852, 900), true],
   ['низ далеко — наблюдатель сам', fillDue(st, 2700, 900), false],
   ['ошибка — не сама (повтор — прокруткой)', fillDue({ ...st, error: 'нет сети' }, 852, 900), false],
   ['идёт загрузка — нет', fillDue({ ...st, loading: true }, 852, 900), false],
-  ['список кончился — нет', fillDue({ ...st, page: 18 }, 852, 900), false],
+  ['список кончился — нет', fillDue({ ...st, more: false }, 852, 900), false],
 ];
 for (const [name, got, want] of checks) {
   if (got !== want) {

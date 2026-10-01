@@ -62,21 +62,24 @@ func (c *Catalog) List(ctx context.Context, o ListOptions) (entries []Entry, tot
 	// страницы: карточки повторялись бы и терялись (вживую 11b-Г).
 	inSection := o.Tracker != "" && o.Category != ""
 	filtered = collapse(filtered)
-	if inSection {
-		slices.SortStableFunc(filtered, func(a, b row) int { return a.Pos - b.Pos })
-	}
 	kp, err := c.kinopoiskIDs(ctx, filtered)
 	if err != nil {
 		return nil, 0, err
 	}
-	filtered, size := films(filtered, kp, c.PreferredFormat(), !inSection)
+	filtered, size, _ := films(filtered, kp, c.PreferredFormat(), !inSection)
 	total = len(filtered)
 	if o.Offset >= total {
 		return []Entry{}, total, nil
 	}
-	page := filtered[o.Offset:min(total, o.Offset+o.Limit)]
-	if entries, err = c.entries(ctx, page); err != nil {
-		return nil, 0, err
+	entries, err = c.cards(ctx, filtered[o.Offset:min(total, o.Offset+o.Limit)], kp, size)
+	return entries, total, err
+}
+
+// cards — карточки строк: название раздела, рейтинг, раздач фильма на обоих трекерах.
+func (c *Catalog) cards(ctx context.Context, page []row, kp map[int64]int, size map[int64]int) ([]Entry, error) {
+	entries, err := c.entries(ctx, page)
+	if err != nil {
+		return nil, err
 	}
 	var ids []int
 	for _, r := range page {
@@ -86,12 +89,49 @@ func (c *Catalog) List(ctx context.Context, o ListOptions) (entries []Entry, tot
 	}
 	vs, err := c.variantRows(ctx, ids)
 	if err != nil {
-		return nil, 0, err
+		return nil, err
 	}
 	for i, r := range page {
 		entries[i].Variants = max(1, len(vs[kp[r.ID]]), size[r.ID])
 	}
-	return entries, total, nil
+	return entries, nil
+}
+
+// SectionPage — карточки раздела после места after (-1 — с начала), не больше limit, по месту в
+// разделе. Курсор, а не смещение: порция с трекера и склейка раздач во время прокрутки не сдвигают
+// показанное (ревью 11b-Г). next — место последней карточки (after, если карточек нет); rest — сколько
+// карточек раздела дальше неё.
+func (c *Catalog) SectionPage(ctx context.Context, tracker, section string, after, limit int) (entries []Entry, next, rest int, err error) {
+	rs, err := c.st.catalogRows(ctx, c.enabled())
+	if err != nil {
+		return nil, after, 0, err
+	}
+	var filtered []row
+	for _, r := range rs {
+		if r.Tracker == tracker && r.Section == section {
+			filtered = append(filtered, r)
+		}
+	}
+	filtered = collapse(filtered)
+	kp, err := c.kinopoiskIDs(ctx, filtered)
+	if err != nil {
+		return nil, after, 0, err
+	}
+	out, size, place := films(filtered, kp, c.PreferredFormat(), false)
+	from := len(out)
+	for i, r := range out {
+		if place[r.ID] > after {
+			from = i
+			break
+		}
+	}
+	page := out[from:min(len(out), from+limit)]
+	next = after
+	if len(page) > 0 {
+		next = place[page[len(page)-1].ID]
+	}
+	entries, err = c.cards(ctx, page, kp, size)
+	return entries, next, len(out) - from - len(page), err
 }
 
 // collapse — одна карточка на infohash (спека, раздел 7): остаётся запись с большим числом

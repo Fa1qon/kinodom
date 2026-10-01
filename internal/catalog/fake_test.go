@@ -24,6 +24,7 @@ type fakeSource struct {
 	topErr       error
 	pageErr      error                     // ошибка страницы топа (порции глубже первой сотни)
 	topErrs      map[string]error          // ошибка топа одного форума
+	repeatAfter  int                       // > 0 — страницы топа дальше этой повторяют её
 	details      map[string]source.Details // номер → страница
 	detailsErr   map[string]error
 	torrents     map[string][]byte
@@ -88,6 +89,9 @@ func (f *fakeSource) TopPage(_ context.Context, cat string, page int) ([]source.
 		return nil, false, f.pageErr
 	}
 	all := f.top[cat]
+	if f.repeatAfter > 0 && page > f.repeatAfter {
+		page = f.repeatAfter // за концом списка — снова последняя страница (как может ответить сайт)
+	}
 	from := min(page*100, len(all))
 	to := min(from+100, len(all))
 	return append([]source.Release(nil), all[from:to]...), to-from == 100, nil
