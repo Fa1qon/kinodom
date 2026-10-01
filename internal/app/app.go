@@ -623,7 +623,8 @@ func uploadBytes(v settings.Values) float64 {
 // downloadItem — строка «Загрузок»: файл — от торрентов, название и постер раздачи — от каталога.
 type downloadItem struct {
 	torrents.DownloadItem
-	Release *downloadRelease `json:"release"` // null — раздача не из каталога
+	Release   *downloadRelease `json:"release"`   // null — раздача не из каталога
+	Preferred bool             `json:"preferred"` // формат файла — формат в приоритете (план 14А)
 }
 
 // downloadRelease — раздача каталога у загрузки: «Следить» у сериала в «Загрузках» (спека 11b, 6.1).
@@ -651,8 +652,10 @@ func (a *App) handleDownloads(w http.ResponseWriter, r *http.Request) {
 	}
 	items := make([]downloadItem, len(v.Items))
 	follows := map[int64]string{}
+	pref := a.Catalog.PreferredFormat()
 	for i, it := range v.Items {
 		items[i].DownloadItem = it
+		items[i].Preferred = catalog.FilePreferred(it.File, pref)
 		ref, ok := refs[it.Hash]
 		if !ok {
 			continue

@@ -1,7 +1,7 @@
 // Раздача: постер, название, теги, описание; до «Скачать» — одна светлая кнопка, после — у каждого
 // файла прогресс и «Смотреть» цвета готовности, справа — панель файла в фокусе; ниже — «Другие раздачи»
 // фильма и «Искать на трекерах» (спека этапа 7, разделы 5.4, 5.5, 6.3 и 10.7).
-import { h, icon, size, speed, rating, minutes, ready, poll, copyText, store, plural, shortNames, keepFocus, fileFormat, openPlayer, confirmDialog, fill } from '../ui.js';
+import { h, icon, size, speed, rating, minutes, ready, poll, copyText, store, plural, shortNames, keepFocus, fileFormat, formatTag, openPlayer, confirmDialog, fill } from '../ui.js';
 import { get, post, put, del } from '../api.js';
 import { whereStopped, resumeIndex } from './history.js';
 import { poster, returnTo } from './catalog.js';
@@ -160,7 +160,7 @@ export function render(root, r, ctx) {
         rel.kinopoisk > 0 ? h('span', { class: 'tag strong' }, 'КП ' + rating(rel.kinopoisk)) : null,
         h('span', { class: 'tag', title: 'Раздающих' }, icon('arrow_upward', 16), String(rel.seeders)),
         rel.quality ? h('span', { class: 'tag' }, rel.quality) : null,
-        rel.format ? h('span', { class: 'tag', title: 'Формат файлов' }, rel.format) : null,
+        rel.format ? h('span', { class: rel.preferred ? 'tag pref' : 'tag', title: rel.preferred ? 'Формат в приоритете' : 'Формат файлов' }, rel.format) : null,
         rel.size ? h('span', { class: 'tag' }, size(rel.size)) : null,
         rel.trackerUrl ? h('a', { class: 'tag', href: rel.trackerUrl, target: '_blank', rel: 'noopener' }, 'На трекере', icon('open_in_new', 16)) : null),
       desc || (rel.detailsPending ? h('div', { class: 'lines', 'aria-label': 'Описание загружается' }, h('div', { class: 'skel', style: { width: '80%' } }), h('div', { class: 'skel', style: { width: '55%' } })) : null),
@@ -429,7 +429,7 @@ export function render(root, r, ctx) {
       h('span', { class: 'strong ellipsis' }, [trackerLabel(e.tracker), e.quality].filter(Boolean).join(' · ')),
       h('span', { class: 'muted small ellipsis', title: e.title }, [current ? 'эта раздача' : null, e.season || null].filter(Boolean).join(' · ') || e.name));
     const cells = [what,
-      e.format ? h('span', null, e.format) : h('span', { class: 'muted', 'aria-label': e.detailsPending ? 'формат загружается' : 'формат неизвестен' }, e.detailsPending ? '…' : '—'),
+      e.format ? formatTag(e.format, e.preferred) : h('span', { class: 'muted', 'aria-label': e.detailsPending ? 'формат загружается' : 'формат неизвестен' }, e.detailsPending ? '…' : '—'),
       h('span', null, size(e.size)),
       h('span', { class: 'seeders' }, icon('arrow_upward', 16), String(e.seeders))];
     return current

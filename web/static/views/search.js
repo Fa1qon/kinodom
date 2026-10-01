@@ -1,6 +1,6 @@
 // Поиск: недавние запросы, состояние каждого трекера, таблица найденного (спека этапа 7, разделы
 // 5.4 и 6.3).
-import { h, icon, size, poll, keepFocus, offWarn, store } from '../ui.js';
+import { h, icon, size, poll, keepFocus, offWarn, store, formatTag } from '../ui.js';
 import { get, del } from '../api.js';
 import { poster } from './catalog.js';
 
@@ -118,7 +118,7 @@ export function render(root, r, ctx) {
         h('span', { class: 'res-title' }, h('span', { class: 'strong ellipsis' }, e.name || e.title), h('span', { class: 'muted small ellipsis' }, e.title)),
         h('span', { class: 'muted' }, trackerLabel(e.tracker)),
         h('span', { class: 'muted' }, e.quality || ''),
-        h('span', { class: 'muted' }, e.format || ''),
+        h('span', { class: 'muted' }, formatTag(e.format, e.preferred) || ''),
         h('span', null, size(e.size)),
         h('span', { class: 'seeders' }, icon('arrow_upward', 16), String(e.seeders)))));
   }

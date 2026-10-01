@@ -1,6 +1,6 @@
 // Загрузки — по раздачам: скачанное и то, что качается, серии внутри раздачи, место в папке; удаление —
 // из домашней сети (спека этапа 7, разделы 5.5, 6.3 и 10.7).
-import { h, icon, size, speed, day, ready, poll, keepFocus, plural, shortNames } from '../ui.js';
+import { h, icon, size, speed, day, ready, poll, keepFocus, plural, shortNames, formatTag, fileFormat } from '../ui.js';
 import { get, put, del } from '../api.js';
 import { followButton } from './release.js';
 
@@ -116,7 +116,7 @@ export function render(root, r, ctx) {
   function episode(d, name) {
     const key = `${d.hash}-${d.index}`;
     return h('div', { class: 'dl child' },
-      h('div', { class: 'dl-name' }, h('span', { class: 'ellipsis', title: d.file }, name)),
+      h('div', { class: 'dl-name' }, h('span', { class: 'ellipsis', title: d.file }, name), formatTag(fileFormat(d.file), d.preferred)),
       stateCell(d.state, d.readiness, d.percent, stateLabel(d)),
       h('div', { class: 'dl-size' }, size(d.size), d.speed ? h('div', { class: 'muted small' }, speed(d.speed)) : null),
       h('div', { class: 'muted small dl-when' }, when([d]), errorOf(key)),
