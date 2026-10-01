@@ -1563,3 +1563,37 @@ for (const [name, got, want] of checks) {
 		t.Errorf("%v\n%s", err, out)
 	}
 }
+
+// «Назад» ссылкой со страницы раздачи (спека 11b, 14.3): пришли прямо из этого раздела — шаг назад по
+// истории (место — в её записи); иначе — переход, а место — запомненное во вкладке, если оно этого раздела.
+func TestPultBackStep(t *testing.T) {
+	node := lookNode(t)
+	script := `
+import { backStep } from './views/catalog.js';
+const href = '#/catalog/rutor/4';
+const place = { at: '#/catalog/rutor/4', key: '#/catalog/rutor/4', pages: 3, scrollY: 1800, focusKey: 'e-5' };
+const bare = { ...place, at: '#/catalog/rutor' };
+const other = { ...place, at: '#/catalog/rutor/12', key: '#/catalog/rutor/12' };
+const checks = [
+  ['пришли из раздела', backStep(href, href, place), { back: true, place: null }],
+  ['пришли из раздела по адресу без раздела', backStep(href, '#/catalog/rutor', bare), { back: true, place: null }],
+  ['из другой раздачи — переход с местом', backStep(href, '#/release/77', place), { back: false, place }],
+  ['адрес без раздела — место по адресу ссылки', backStep(href, '#/release/77', bare), { back: false, place: { ...bare, at: href } }],
+  ['место другого раздела', backStep(href, '#/release/77', other), { back: false, place: null }],
+  ['первый экран', backStep(href, '', place), { back: false, place }],
+  ['места нет', backStep(href, '#/release/77', null), { back: false, place: null }],
+  ['пришли из другого раздела', backStep(href, '#/catalog/rutor/12', other), { back: false, place: null }],
+];
+for (const [name, got, want] of checks) {
+  if (JSON.stringify(got) !== JSON.stringify(want)) {
+    console.error(name, ':', JSON.stringify(got), '≠', JSON.stringify(want));
+    process.exitCode = 1;
+  }
+}
+`
+	cmd := exec.Command(node, "--input-type=module", "--no-warnings", "-e", script)
+	cmd.Dir = "static"
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Errorf("%v\n%s", err, out)
+	}
+}

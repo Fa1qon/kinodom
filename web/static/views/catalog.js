@@ -90,6 +90,51 @@ export function changed(a, b) {
 // ASK_AT_ONCE — сколько карточек у экрана спрашивать за раз.
 const ASK_AT_ONCE = 48;
 
+// PLACE — место раздела (порции, прокрутка, карточка в фокусе) во вкладке браузера: ссылка «назад» со
+// страницы раздачи, открытой не прямо из каталога, возвращает на него (спека 11b, 14.3).
+const PLACE = 'kinodom.catalogPlace';
+
+function keepPlace(place) {
+  try {
+    sessionStorage.setItem(PLACE, JSON.stringify(place));
+  } catch {
+    // вкладка не дала записать — ссылка «назад» откроет раздел сверху
+  }
+}
+
+function lastPlace() {
+  try {
+    return JSON.parse(sessionStorage.getItem(PLACE) || 'null');
+  } catch {
+    return null;
+  }
+}
+
+// backStep — «назад» ссылкой со страницы раздачи в раздел href (prev — адрес до раздачи, place — место во
+// вкладке). Пришли прямо из этого раздела — шаг назад по истории: место — в её записи, как у кнопки «назад»
+// браузера и Esc пульта ТВ. Иначе — переход, а место — запомненное, если оно этого раздела.
+export function backStep(href, prev, place) {
+  const mine = place && place.key === href ? place : null;
+  if (prev && (prev === href || (mine && prev === mine.at))) return { back: true, place: null };
+  return { back: false, place: mine ? { ...mine, at: href } : null };
+}
+
+// returnTo — «назад» в раздел каталога href со страницы раздачи.
+export function returnTo(href, prev) {
+  const step = backStep(href, prev, lastPlace());
+  if (step.back) {
+    history.back();
+    return;
+  }
+  location.hash = href;
+  if (!step.place) return;
+  try {
+    history.replaceState({ ...(history.state || {}), catalog: step.place }, ''); // новая запись — с местом раздела
+  } catch {
+    // браузер не дал записать — раздел откроется сверху
+  }
+}
+
 // groupBar — ряды над сеткой (спека 11b, 7.1): у Rutracker — группы («Кино · Сериалы · Документалистика»,
 // только где что-то выбрано; выбранная — по разделу, ссылка — на первый её подраздел) и подразделы
 // выбранной группы; раздел без группы — в ряду всегда. У Rutor групп нет — один ряд, как раньше.
@@ -144,12 +189,15 @@ export function render(root, r, ctx) {
     if (!alive) return;
     const a = document.activeElement;
     const focusKey = a && grid.contains(a) && a.dataset ? a.dataset.key || '' : '';
-    const st = { ...(history.state || {}), catalog: { at: here, pages: state.page, scrollY: window.scrollY, focusKey } };
+    // key — адрес показанного раздела, как у ссылки «назад» со страницы раздачи (раздел мог прийти по умолчанию).
+    const key = shownSection ? `#/catalog/${tracker}/${encodeURIComponent(shownSection)}` : here;
+    const place = { at: here, key, pages: state.page, scrollY: window.scrollY, focusKey };
     try {
-      history.replaceState(st, '');
+      history.replaceState({ ...(history.state || {}), catalog: place }, '');
     } catch {
       // браузер не дал записать — место просто не запомнится
     }
+    keepPlace(place);
   }
 
   // more — следующая порция, если её можно просить.
