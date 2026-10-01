@@ -24,6 +24,7 @@ import (
 	"kinodom/internal/catalog"
 	"kinodom/internal/config"
 	"kinodom/internal/edge"
+	"kinodom/internal/follow"
 	"kinodom/internal/history"
 	"kinodom/internal/httpx"
 	"kinodom/internal/iptv"
@@ -91,6 +92,7 @@ type App struct {
 	IPTV     *iptv.Module      // каналы (модуль iptv, этап 8)
 	History  *history.Service  // история просмотров по устройствам (этап 8c)
 	Library  *library.Library  // медиатека: скачанное и папки заказчика (модуль library, этап 9)
+	Follow   *follow.Module    // подписка на новые серии (модуль follow, этап 11b-В)
 
 	version   string
 	kp        *meta.Kinopoisk
@@ -175,6 +177,7 @@ func New(ctx context.Context, o Options) (*App, error) {
 		return fail(err)
 	}
 	a.initLibrary(ctx)
+	a.initFollow(ctx)
 	a.initSetup()
 	a.API.SetStatus(a.statusFields)
 	a.API.SetProtocolCheck(cachedCheck(winsvc.KinodomProtocol, time.Minute))

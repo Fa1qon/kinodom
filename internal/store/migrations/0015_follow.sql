@@ -7,6 +7,7 @@ CREATE TABLE follows (
     infohash   TEXT NOT NULL,                  -- версия, которую видели последней
     episodes   INTEGER NOT NULL DEFAULT 0,     -- вышло серий
     total      INTEGER NOT NULL DEFAULT 0,     -- «из N»; 0 — неизвестно
+    paths      TEXT NOT NULL DEFAULT '[]',     -- JSON: видеофайлы этой версии (пути внутри раздачи); [] — ещё не знаем
     checked_at INTEGER NOT NULL DEFAULT 0,     -- последняя проверка страницы раздачи
     created_at INTEGER NOT NULL
 );
