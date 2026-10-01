@@ -136,4 +136,39 @@ func TestCustomRoute(t *testing.T) {
 	if rec := post(map[string]any{"name": " "}); rec.Code != http.StatusBadRequest {
 		t.Fatalf("пустое название: %d", rec.Code)
 	}
+	// Логотип почти в 1 МБ: в base64 запрос больше 1 МБ — всё равно принят.
+	big := append(pngBytes(t), make([]byte, 900<<10)...)
+	if rec := post(map[string]any{"name": "Большой", "logoData": base64.StdEncoding.EncodeToString(big)}); rec.Code != 200 {
+		t.Fatalf("логотип 900 КБ: %d %s", rec.Code, rec.Body)
+	}
+}
+
+// План 14Д: у нераспознанного названия — поток для «Смотреть» (живой, если есть) и его вид.
+func TestUnrecognizedWatch(t *testing.T) {
+	m, group := customModule(t)
+	mux := http.NewServeMux()
+	m.Register(testRouter{mux}, nil)
+	req := httptest.NewRequest("GET", "/api/v1/iptv/unrecognized", nil)
+	req.RemoteAddr = fromPhone
+	rec := httptest.NewRecorder()
+	mux.ServeHTTP(rec, req)
+	var out struct {
+		Items []struct {
+			Name  string `json:"name"`
+			Watch int64  `json:"watch"`
+			URL   string `json:"watchUrl"`
+		} `json:"items"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &out); err != nil {
+		t.Fatal(err)
+	}
+	for _, it := range out.Items {
+		if it.Name == group {
+			if it.Watch == 0 || !strings.Contains(it.URL, "/s/ok.m3u8") {
+				t.Fatalf("поток для «Смотреть»: %+v", it)
+			}
+			return
+		}
+	}
+	t.Fatalf("группы нет: %s", rec.Body)
 }
