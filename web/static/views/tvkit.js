@@ -53,11 +53,73 @@ export function logo(c, cls = 'ch-logo') {
   return box;
 }
 
-// watchChannel — «Смотреть»: на этом ПК — плеер ссылкой kinodom://, на Android — VLC ссылкой intent:
-// на .m3u8 канала, на других устройствах — .m3u8 (спека этапа 8, раздел 6.2).
-export async function watchChannel(key, ctx) {
+// appBridge — объект приложения Kinodom для Android (спека этапа 13, 5.2); в браузере — null.
+export function appBridge() {
+  return (typeof window !== 'undefined' && window.KinodomApp) || null;
+}
+
+// watchRoute — куда «Смотреть»: 'app' — плеер приложения (есть playChannels и не выбран системный плеер);
+// 'external' — как раньше: браузер, приложение 13a без playChannels, системный плеер в настройках приложения.
+export function watchRoute(bridge) {
+  if (!bridge || typeof bridge.playChannels !== 'function') return 'external';
+  const mode = typeof bridge.player === 'function' ? bridge.player() : 'builtin';
+  return mode === 'system' ? 'external' : 'app';
+}
+
+// channelPayload — список для плеера приложения (спека 13, 5.2): каналы экрана по порядку, start — индекс
+// стартового по ключу версии; выбранная на странице версия встаёт на место канала; канала нет в списке — он
+// первым. Подпись версии («МСК+4») — только у канала с несколькими версиями.
+export function channelPayload(list, start, listName) {
+  const item = (c) => ({ key: c.key, version: c.version || c.key, name: c.name || '', number: c.number || 0, logo: c.logo || '',
+    label: c.versionCount > 1 ? c.versionLabel || '' : '' });
+  const items = list.map(item);
+  const first = item(start);
+  let i = items.findIndex((x) => x.version === first.version);
+  if (i < 0) {
+    i = items.findIndex((x) => x.key === first.key);
+    if (i >= 0) items[i] = first;
+  }
+  if (i < 0) {
+    items.unshift(first);
+    i = 0;
+  }
+  return { list: items, start: i, listName };
+}
+
+const LIST_KEY = 'kinodom.channelList';
+
+// rememberList — список экрана «Каналы» для страницы канала, открытой из него (спека 13, 4.1): на время вкладки.
+export function rememberList(list, listName) {
+  const slim = list.map(({ key, version, name, number, logo, versionLabel, versionCount }) => ({ key, version, name, number, logo, versionLabel, versionCount }));
+  try {
+    sessionStorage.setItem(LIST_KEY, JSON.stringify({ listName, list: slim }));
+  } catch {
+    // без sessionStorage страница канала возьмёт «Все»
+  }
+}
+
+function storedList() {
+  try {
+    return JSON.parse(sessionStorage.getItem(LIST_KEY) || 'null');
+  } catch {
+    return null;
+  }
+}
+
+// listFor — запомненный список {list, listName}, если в нём есть канал key; иначе null («Все»).
+export function listFor(key, stored = storedList()) {
+  if (!stored || !Array.isArray(stored.list) || !stored.list.some((c) => c.key === key)) return null;
+  return stored;
+}
+
+// watchChannel — «Смотреть»: в приложении — его плеер со списком from {list, start, listName} (спека 13,
+// 4.1); иначе на этом ПК — плеер ссылкой kinodom://, на Android — VLC ссылкой intent: на .m3u8 канала, на
+// других устройствах — .m3u8 (спека этапа 8, раздел 6.2). В приложении kinodom:// не нужен — сразу VLC.
+export async function watchChannel(key, ctx, from) {
+  const bridge = appBridge();
+  if (from && watchRoute(bridge) === 'app' && bridge.playChannels(JSON.stringify(channelPayload(from.list, from.start, from.listName)))) return;
   const res = await get(`/channels/${encodeURIComponent(key)}/play`);
-  if (ctx.local && res.launchUrl) {
+  if (!bridge && ctx.local && res.launchUrl) {
     openPlayer(res.launchUrl, res.m3uUrl, ctx.status && ctx.status.protocol); // обработчика kinodom:// нет — скачается .m3u8
     return;
   }
