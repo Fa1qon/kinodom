@@ -76,6 +76,7 @@ type Options struct {
 	// meta.Format). nil — формат только по описанию.
 	TorrentFormat   func(torrent []byte) string
 	PreferredFormat string // формат в приоритете (catalog.preferredFormat); "" — нет
+	DefaultOrder    string // порядок разделов по умолчанию (catalog.order); "" — раздающие (план 14Б)
 	// KeepImages — картинки других модулей в том же кэше (постеры медиатеки, этап 9): чистка их не
 	// трогает. nil — только картинки каталога.
 	KeepImages func(ctx context.Context) (map[string]bool, error)
@@ -106,34 +107,37 @@ type Catalog struct {
 	enrichWake      map[string]chan struct{}
 	soonWake        map[string]chan struct{} // раздатчик видимых: есть работа или освободилось место
 
-	mu          sync.Mutex
-	sections    []Section             // разделы из настроек
-	cats        []CategoryRef         // они же после раскрытия «+» по дереву (enabled)
-	urgent      map[string][]int64    // трекер → раздачи, которые открыли в пульте: догрузить первыми
-	found       map[string][]int64    // трекер → найденное поиском: после открытых, без .torrent
-	torrentNow  map[int64]bool        // .torrent открытой раздачи качается сейчас
-	yield       map[string]func()     // трекер → прервать фоновое ожидание .torrent: пришла срочная работа
-	retries     map[string]retryState // «poster:<id>», «torrent:<id>» → повтор после сбоя (хвост Х7)
-	openPoster  map[int64]time.Time   // открытая раздача без картинки → когда пробовали её постер (не чаще openPosterEvery)
-	posterWG    sync.WaitGroup        // постеры и .torrent, которые качаются вне шага догрузки (тесты ждут их)
-	posterSem   chan struct{}         // фоновые постеры: не больше двух одновременно
-	urgentSem   chan struct{}         // постеры найденных и показанных в сетке: свои два места, не за фоновыми
-	openSem     chan struct{}         // постеры открытых в пульте: свои два места, не за сеткой (спека 11b, 14.2)
-	bgWaiting   int                   // фоновых постеров ждут места
-	failures    int                   // неудачных проходов подряд
-	forumPaused map[string]time.Time  // трекер → до какого времени не ходить за страницами раздач
-	runCtx      context.Context       // для фонового поиска: живёт, пока работает модуль
-	searches    map[string]*searchRun
-	preferred   string                        // формат в приоритете
-	deep        map[CategoryRef]deepList      // раздел → весь список после обновления (порции глубже первой сотни)
-	deepPos     map[CategoryRef]int           // раздел → курсор порций: у Rutor — страница, у Rutracker — место в списке
-	deepEnd     map[CategoryRef]bool          // раздел → список трекера кончился
-	deepEmpty   map[CategoryRef]int           // раздел → порций подряд без новых раздач
-	kpWait      map[string]int64              // «трекер:номер» → раздача без страницы из поиска: ждёт номер Кинопоиска для постера
-	descNow     map[int64]bool                // описание Кинопоиска открытой раздачи без страницы качается сейчас
-	inFlight    map[int64]bool                // раздачи, чья страница качается сейчас (основной цикл и раздатчик видимых)
-	deepWG      sync.WaitGroup                // фоновые подкачки страниц раздела (тесты ждут их)
-	deepBusy    map[CategoryRef]chan struct{} // раздел → замок «страница раздела с трекера качается» (одна за раз)
+	mu           sync.Mutex
+	sections     []Section             // разделы из настроек
+	cats         []CategoryRef         // они же после раскрытия «+» по дереву (enabled)
+	urgent       map[string][]int64    // трекер → раздачи, которые открыли в пульте: догрузить первыми
+	found        map[string][]int64    // трекер → найденное поиском: после открытых, без .torrent
+	torrentNow   map[int64]bool        // .torrent открытой раздачи качается сейчас
+	yield        map[string]func()     // трекер → прервать фоновое ожидание .torrent: пришла срочная работа
+	retries      map[string]retryState // «poster:<id>», «torrent:<id>» → повтор после сбоя (хвост Х7)
+	openPoster   map[int64]time.Time   // открытая раздача без картинки → когда пробовали её постер (не чаще openPosterEvery)
+	posterWG     sync.WaitGroup        // постеры и .torrent, которые качаются вне шага догрузки (тесты ждут их)
+	posterSem    chan struct{}         // фоновые постеры: не больше двух одновременно
+	urgentSem    chan struct{}         // постеры найденных и показанных в сетке: свои два места, не за фоновыми
+	openSem      chan struct{}         // постеры открытых в пульте: свои два места, не за сеткой (спека 11b, 14.2)
+	bgWaiting    int                   // фоновых постеров ждут места
+	failures     int                   // неудачных проходов подряд
+	forumPaused  map[string]time.Time  // трекер → до какого времени не ходить за страницами раздач
+	runCtx       context.Context       // для фонового поиска: живёт, пока работает модуль
+	searches     map[string]*searchRun
+	preferred    string                        // формат в приоритете
+	deep         map[CategoryRef]deepList      // раздел → весь список после обновления (порции глубже первой сотни)
+	deepPos      map[CategoryRef]int           // раздел → курсор порций: у Rutor — страница, у Rutracker — место в списке
+	deepEnd      map[CategoryRef]bool          // раздел → список трекера кончился
+	deepEmpty    map[CategoryRef]int           // раздел → порций подряд без новых раздач
+	kpWait       map[string]int64              // «трекер:номер» → раздача без страницы из поиска: ждёт номер Кинопоиска для постера
+	descNow      map[int64]bool                // описание Кинопоиска открытой раздачи без страницы качается сейчас
+	inFlight     map[int64]bool                // раздачи, чья страница качается сейчас (основной цикл и раздатчик видимых)
+	deepWG       sync.WaitGroup                // фоновые подкачки страниц раздела (тесты ждут их)
+	deepBusy     map[CategoryRef]chan struct{} // раздел → замок «страница раздела с трекера качается» (одна за раз)
+	defaultOrder string                        // порядок разделов по умолчанию (план 14Б)
+	orders       map[orderKey]*orderList       // раздел и порядок → список порядка (кроме раздающих)
+	orderBusy    map[orderKey]chan struct{}    // замок «порция порядка качается»
 }
 
 func New(o Options) *Catalog {
@@ -149,7 +153,7 @@ func New(o Options) *Catalog {
 		urgent: map[string][]int64{}, found: map[string][]int64{}, torrentNow: map[int64]bool{}, yield: map[string]func(){}, retries: map[string]retryState{}, openPoster: map[int64]time.Time{},
 		posterSem: make(chan struct{}, 2), urgentSem: make(chan struct{}, 2), openSem: make(chan struct{}, 2),
 		forumPaused: map[string]time.Time{}, searches: map[string]*searchRun{}, torrentFormat: o.TorrentFormat, deep: map[CategoryRef]deepList{}, deepPos: map[CategoryRef]int{}, deepEnd: map[CategoryRef]bool{}, deepEmpty: map[CategoryRef]int{},
-		preferred: o.PreferredFormat, extra: o.Extra, filmDesc: o.FilmDescription, kpWait: map[string]int64{}, descNow: map[int64]bool{}}
+		preferred: o.PreferredFormat, defaultOrder: o.DefaultOrder, orders: map[orderKey]*orderList{}, orderBusy: map[orderKey]chan struct{}{}, extra: o.Extra, filmDesc: o.FilmDescription, kpWait: map[string]int64{}, descNow: map[int64]bool{}}
 	if o.Ratings != nil {
 		o.Ratings.OnResolved(c.ratingResolved)
 	}
@@ -326,6 +330,7 @@ func (c *Catalog) refreshCategory(ctx context.Context, cat CategoryRef, src sour
 		return dbError{err}
 	}
 	c.resetDeep(cat) // глубокие порции прежнего списка заменены новой сотней
+	c.resetOrders(cat)
 	c.clearProblem(ctx, problem)
 	return nil
 }

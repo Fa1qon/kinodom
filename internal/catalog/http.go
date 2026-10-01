@@ -11,6 +11,7 @@ import (
 
 	"kinodom/internal/httpx"
 	"kinodom/internal/meta"
+	"kinodom/internal/source"
 )
 
 // PageSize — раздач на странице каталога: шесть рядов по четыре на широком экране, по два — на
@@ -88,6 +89,8 @@ type ListView struct {
 	Section   string      `json:"section"`   // раздел, чья это порция
 	Next      int         `json:"next"`      // место последней карточки: следующая порция — after=next
 	More      bool        `json:"more"`      // есть ещё (у трекера или в базе); общее число раздач пульт не показывает
+	Order     string      `json:"order"`     // порядок этой порции (план 14Б)
+	Orders    []OrderView `json:"orders"`    // порядки разделов трекера: переключатель над разделом
 	UpdatedAt *time.Time  `json:"updatedAt"` // последнее удачное обновление разделов трекера; null — ещё не было
 	Entries   []EntryView `json:"entries"`
 }
@@ -137,7 +140,8 @@ func (c *Catalog) handleList(w http.ResponseWriter, r *http.Request) {
 	if err != nil || after < -1 {
 		after = -1
 	}
-	out := ListView{Section: q.Get("section"), Next: after, Entries: []EntryView{}}
+	order := c.order(name, q.Get("order"))
+	out := ListView{Section: q.Get("section"), Next: after, Entries: []EntryView{}, Order: order, Orders: c.orderViews(name)}
 	if out.Section == "" {
 		secs, err := c.trackerSections(r.Context(), name)
 		if err != nil {
@@ -150,7 +154,8 @@ func (c *Catalog) handleList(w http.ResponseWriter, r *http.Request) {
 	}
 	if out.Section != "" {
 		cat := CategoryRef{name, out.Section}
-		trackerMore := slices.Contains(c.enabled(), cat) && !c.deepEnded(cat)
+		feed := c.feed(r.Context(), cat, order, after)
+		trackerMore := slices.Contains(c.enabled(), cat) && !feed.ended()
 		var (
 			es   []Entry
 			next int
@@ -158,7 +163,7 @@ func (c *Catalog) handleList(w http.ResponseWriter, r *http.Request) {
 			perr error
 		)
 		for portions := 0; ; portions++ {
-			if es, next, rest, err = c.SectionPage(r.Context(), name, out.Section, after, PageSize); err != nil {
+			if es, next, rest, err = feed.page(); err != nil {
 				httpx.WriteError(w, http.StatusInternalServerError, "каталог не читается: "+err.Error())
 				return
 			}
@@ -169,12 +174,12 @@ func (c *Catalog) handleList(w http.ResponseWriter, r *http.Request) {
 			// фоне: Rutor отдаёт её до 77 с, API Rutracker не отвечает и по 90 с — пульт не ждёт (№ 20).
 			if len(es) > 0 {
 				if rest < PageSize {
-					c.prefetchDeep(cat)
+					feed.prefetch()
 				}
 				break
 			}
-			more, err := c.deepFetch(r.Context(), cat, func() (bool, error) {
-				es, _, _, err := c.SectionPage(r.Context(), name, out.Section, after, PageSize)
+			more, err := feed.fetch(func() (bool, error) {
+				es, _, _, err := feed.page()
 				return len(es) == 0, err
 			})
 			if isDBError(err) {
@@ -210,6 +215,34 @@ func (c *Catalog) handleList(w http.ResponseWriter, r *http.Request) {
 		out.UpdatedAt = &at
 	}
 	httpx.WriteJSON(w, http.StatusOK, out)
+}
+
+// sectionFeed — откуда берутся порции раздела для handleList: раздел по месту (раздающие) или список
+// порядка (план 14Б). page — карточки после after; fetch — страница с трекера, когда показать нечего;
+// prefetch — следующая в фоне; ended — у трекера список кончился.
+type sectionFeed struct {
+	page     func() ([]Entry, int, int, error)
+	fetch    func(need func() (bool, error)) (bool, error)
+	prefetch func()
+	ended    func() bool
+}
+
+func (c *Catalog) feed(ctx context.Context, cat CategoryRef, order string, after int) sectionFeed {
+	if order == source.OrderSeeders {
+		return sectionFeed{
+			page:     func() ([]Entry, int, int, error) { return c.SectionPage(ctx, cat.Tracker, cat.ID, after, PageSize) },
+			fetch:    func(need func() (bool, error)) (bool, error) { return c.deepFetch(ctx, cat, need) },
+			prefetch: func() { c.prefetchDeep(cat) },
+			ended:    func() bool { return c.deepEnded(cat) },
+		}
+	}
+	k := orderKey{cat, order}
+	return sectionFeed{
+		page:     func() ([]Entry, int, int, error) { return c.orderPage(ctx, k, after, PageSize) },
+		fetch:    func(need func() (bool, error)) (bool, error) { return c.orderFetch(ctx, k, need) },
+		prefetch: func() { c.prefetchOrder(k) },
+		ended:    func() bool { return c.orderEnded(k) },
+	}
 }
 
 // TreeNode — раздел трекера для выбора разделов в настройках.

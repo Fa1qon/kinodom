@@ -329,26 +329,32 @@ func (s catalogStore) posterURL(ctx context.Context, id int64) (string, error) {
 // liveRowsByID — раздачи по номерам без ушедших с трекера (карточки пульта: догружать их нечего).
 func (s catalogStore) liveRowsByID(ctx context.Context, ids []int64) (map[int64]row, error) {
 	out := map[int64]row{}
-	if len(ids) == 0 {
-		return out, nil
-	}
-	args := make([]any, len(ids))
-	for i, id := range ids {
-		args[i] = id
-	}
-	rows, err := s.db.R.QueryContext(ctx, `SELECT `+rowColumns+` FROM releases r WHERE r.removed = 0 AND r.id IN (?`+strings.Repeat(", ?", len(ids)-1)+`)`, args...)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	for rows.Next() {
-		r, err := scanRow(rows)
+	for len(ids) > 0 { // порциями: список порядка раздела бывает длиннее предела переменных SQLite
+		chunk := ids[:min(len(ids), 500)]
+		ids = ids[len(chunk):]
+		args := make([]any, len(chunk))
+		for i, id := range chunk {
+			args[i] = id
+		}
+		rows, err := s.db.R.QueryContext(ctx, `SELECT `+rowColumns+` FROM releases r WHERE r.removed = 0 AND r.id IN (?`+strings.Repeat(", ?", len(chunk)-1)+`)`, args...)
 		if err != nil {
 			return nil, err
 		}
-		out[r.ID] = r
+		for rows.Next() {
+			r, err := scanRow(rows)
+			if err != nil {
+				rows.Close()
+				return nil, err
+			}
+			out[r.ID] = r
+		}
+		err = rows.Err()
+		rows.Close()
+		if err != nil {
+			return nil, err
+		}
 	}
-	return out, rows.Err()
+	return out, nil
 }
 
 // rowsWhere — живые раздачи по условию (часть после WHERE), по убыванию раздающих.
