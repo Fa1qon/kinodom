@@ -154,3 +154,31 @@ func TestWorkKey(t *testing.T) {
 		t.Errorf("без названия: %q", got)
 	}
 }
+
+// Названия чужих трекеров через источник поиска (Kinozal, NNM-Club, Bitru, LostFilm; исследование 22.2):
+// «Ru / Orig / 2024 / озвучка / качество» — год отдельной частью, после него — не названия (11b-Д).
+func TestParseTitleSlashYear(t *testing.T) {
+	cases := []struct {
+		in       string
+		ru, orig string
+		year     int
+		quality  string
+		series   bool
+	}{
+		{"Фонари (1 сезон: 1-7 серии из 8) / Lanterns / 2026 / ПМ (HBO) / WEB-DLRip (AVC)", "Фонари", "Lanterns", 2026, "WEB-DLRip", true},
+		{"Джентльмены (2 сезон: 1-8 серии из 8) / The Gentlemen / 2026 / ДБ (Movie Dubbing), СТ / WEB-DL (1080p)", "Джентльмены", "The Gentlemen", 2026, "WEB-DL", true},
+		{"Матрица / The Matrix / 1999 / ДБ, АП (Гаврилов) / BDRip (1080p)", "Матрица", "The Matrix", 1999, "BDRip", false},
+		{"Холод / 2026 / WEB-DL 1080p", "Холод", "", 2026, "WEB-DL", false},
+	}
+	for _, c := range cases {
+		got := ParseTitle(c.in)
+		if got.Ru != c.ru || got.Orig != c.orig || got.Year != c.year || got.Quality != c.quality || got.Series != c.series {
+			t.Errorf("%q: %+v", c.in, got)
+		}
+		for _, n := range got.Names {
+			if n == "2026" || n == "1999" || n == "ПМ" || n == "ДБ, СТ" {
+				t.Errorf("%q: «%s» — не название", c.in, n)
+			}
+		}
+	}
+}

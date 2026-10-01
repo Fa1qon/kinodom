@@ -43,6 +43,8 @@ var (
 	reBracketYear = regexp.MustCompile(`\[((?:19|20)\d{2})(?:\s*-\s*\d{2,4})?(?:,([^\]]*))?\]`)
 	// Rutor: «… (2014) WEB-DL 1080p от Группа», «(1999-2003)».
 	reParenYear = regexp.MustCompile(`\(((?:19|20)\d{2})(?:\s*-\s*\d{2,4})?\)`)
+	// reSlashYear — год отдельной частью через « / » (Kinozal, NNM-Club, Bitru: «Ru / Orig / 2024 / ДБ / WEB-DLRip»).
+	reSlashYear = regexp.MustCompile(`\s+/\s+((?:19|20)\d{2})(?:\s+/\s+|$)`)
 	// Скобки внутри названий: режиссёр, «(1-5 серии из 5)», «[S01]», «[Обновлено]».
 	reGroup = regexp.MustCompile(`\([^()]*\)|\[[^\[\]]*\]`)
 	// Разделитель названий: « / » (у Rutracker бывает « \ »).
@@ -72,7 +74,18 @@ func ParseTitle(s string) Title {
 	names := s
 	rt := reBracketYear.FindStringSubmatchIndex(s)
 	ru := reParenYear.FindStringSubmatchIndex(s)
+	sy := reSlashYear.FindStringSubmatchIndex(s)
 	switch {
+	case sy != nil && (rt == nil || sy[0] < rt[0]) && (ru == nil || sy[0] < ru[0]):
+		// «Ru / Orig / 2024 / озвучка / качество»: названия — до года, качество — часть после него.
+		names = s[:sy[0]]
+		t.Year, _ = strconv.Atoi(s[sy[2]:sy[3]])
+		for _, part := range reNameSep.Split(s[sy[3]:], -1) {
+			if q := reQuality.FindString(part); q != "" {
+				t.Quality = q
+				break
+			}
+		}
 	case rt != nil && (ru == nil || rt[0] < ru[0]):
 		names = s[:rt[0]]
 		t.Year, _ = strconv.Atoi(s[rt[2]:rt[3]])
