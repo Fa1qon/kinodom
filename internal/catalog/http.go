@@ -67,28 +67,33 @@ func (e Entry) View() EntryView {
 		DetailsPending: e.DetailsPending}
 }
 
-// ListView — страница каталога трекера.
+// ListView — порция каталога трекера: карточки раздела после места after.
 type ListView struct {
-	Section   string      `json:"section"` // раздел, чья это страница
-	Page      int         `json:"page"`
-	Pages     int         `json:"pages"`     // страниц в разделе; общее число раздач пульт не показывает
+	Section   string      `json:"section"`   // раздел, чья это порция
+	Next      int         `json:"next"`      // место последней карточки: следующая порция — after=next
+	More      bool        `json:"more"`      // есть ещё (у трекера или в базе); общее число раздач пульт не показывает
 	UpdatedAt *time.Time  `json:"updatedAt"` // последнее удачное обновление разделов трекера; null — ещё не было
 	Entries   []EntryView `json:"entries"`
 }
 
-// handleList — страница раздела трекера по раздающим (спека этапа 7, раздел 5.4). Раздела в запросе
-// нет — первый раздел трекера, где есть раздачи; страница вне диапазона — пустой список.
+// portionsPerList — сколько порций с трекера может взять одна просьба пульта: склейка дублей бывает
+// плотной, но выкачивать трекер одной просьбой нельзя.
+const portionsPerList = 3
+
+// handleList — порция раздела трекера по месту (спека этапа 7, раздел 5.4; 11b, 7.2): карточки после
+// места after (-1 — с начала). Раздела в запросе нет — первый раздел трекера, где есть раздачи. Карточек
+// дальше меньше двух порций — с трекера следующая (не больше portionsPerList за просьбу).
 func (c *Catalog) handleList(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
 	name := q.Get("tracker")
 	if !c.tracker(w, name) {
 		return
 	}
-	page, err := strconv.Atoi(q.Get("page"))
-	if err != nil || page < 1 {
-		page = 1
+	after, err := strconv.Atoi(q.Get("after"))
+	if err != nil || after < -1 {
+		after = -1
 	}
-	out := ListView{Section: q.Get("section"), Page: page, Pages: 1, Entries: []EntryView{}}
+	out := ListView{Section: q.Get("section"), Next: after, Entries: []EntryView{}}
 	if out.Section == "" {
 		secs, err := c.trackerSections(r.Context(), name)
 		if err != nil {
@@ -100,31 +105,41 @@ func (c *Catalog) handleList(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	if out.Section != "" {
-		// Порция глубже загруженного — у трекера, на страницу вперёд (спека 11b, 7.2).
 		cat := CategoryRef{name, out.Section}
-		more, perr := false, error(nil)
-		if slices.Contains(c.enabled(), cat) {
-			more, perr = c.ensure(r.Context(), cat, (page+1)*PageSize)
+		trackerMore := slices.Contains(c.enabled(), cat) && !c.deepEnded(cat)
+		var (
+			es   []Entry
+			next int
+			rest int
+			perr error
+		)
+		for portions := 0; ; portions++ {
+			if es, next, rest, err = c.SectionPage(r.Context(), name, out.Section, after, PageSize); err != nil {
+				httpx.WriteError(w, http.StatusInternalServerError, "каталог не читается: "+err.Error())
+				return
+			}
+			// Запас — ещё порция пульта в базе: следующая просьба не ждёт трекер.
+			if !trackerMore || portions == portionsPerList || (len(es) == PageSize && rest >= PageSize) {
+				break
+			}
+			more, err := c.ensureOne(r.Context(), cat)
+			if isDBError(err) {
+				httpx.WriteError(w, http.StatusInternalServerError, "каталог не читается: "+err.Error())
+				return
+			}
+			if err != nil {
+				perr = err
+				break
+			}
+			trackerMore = more
 		}
-		if isDBError(perr) {
-			httpx.WriteError(w, http.StatusInternalServerError, "каталог не читается: "+perr.Error())
-			return
-		}
-		es, total, err := c.List(r.Context(), ListOptions{Tracker: name, Category: out.Section, Offset: (page - 1) * PageSize, Limit: PageSize})
-		if err != nil {
-			httpx.WriteError(w, http.StatusInternalServerError, "каталог не читается: "+err.Error())
-			return
-		}
-		if perr != nil && len(es) < PageSize {
-			// Порция не пришла: ошибка — пульт повторит при следующем подходе к низу (11b-А).
+		if perr != nil && len(es) == 0 {
+			// Порция не пришла и показать нечего: ошибка — пульт повторит по тому же месту (11b-А).
 			c.log.Info("каталог: порция раздела не пришла", "tracker", name, "section", out.Section, "err", perr)
 			httpx.WriteError(w, http.StatusBadGateway, "Порция каталога не пришла: "+perr.Error())
 			return
 		}
-		out.Pages = max(1, (total+PageSize-1)/PageSize)
-		if (more || perr != nil) && out.Pages <= page {
-			out.Pages = page + 1
-		}
+		out.Next, out.More = next, rest > 0 || trackerMore
 		ids := make([]int64, 0, len(es))
 		for _, e := range es {
 			out.Entries = append(out.Entries, e.View())
