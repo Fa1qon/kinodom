@@ -116,7 +116,7 @@ func (m *Module) AddFavorite(ctx context.Context, device, key string) error {
 	if !m.knownKey(key) {
 		return ErrNoChannel
 	}
-	return m.d.addFavorite(ctx, device, key)
+	return m.d.addFavorite(ctx, device, familyOf(key)) // ★ — у канала (11b-Е)
 }
 
 func (m *Module) RemoveFavorite(ctx context.Context, device, key string) error {

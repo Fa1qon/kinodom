@@ -12,9 +12,11 @@ var (
 	reParens   = regexp.MustCompile(`(?i)\((?:\d{3,4}[pi]|\d{1,2}|архив|not 24/7|geo-blocked)\)`) // «(2)» — номер дубля
 	rePlace    = regexp.MustCompile(`\s*\(([^()+\-−\d][^()]*)\)\s*$`)
 	reShift    = regexp.MustCompile(`^[+-][1-9]$`)
-	// reMinus — сдвиг «-1», «(-1)», «−1», «(- 1)» отдельной частью: перед знаком пробел или «(», после цифры —
-	// конец, пробел или «)». Дефис внутри названия («Россия-1», «ТВ-3») — не сдвиг.
-	reMinus = regexp.MustCompile(`(^|[\s(])[-−]\s?([1-9])(\)|\s|$)`)
+	// reMinus — сдвиг «(-1)», «(- 1)» или «-1», «−1» отдельным словом (пробел после знака — только в скобках).
+	// Сдвиг — только в конце названия (после него — разве что место в скобках и метки качества): «ТВС - 9
+	// канал», «Россия-1», «ТВ-3» — названия (финальное ревью 11b-Е).
+	reMinus  = regexp.MustCompile(`\(\s*[-−]\s?([1-9])\s*\)|(?:^|\s)[-−]([1-9])(?:\s|$)`)
+	reAnyPar = regexp.MustCompile(`\([^()]*\)`)
 )
 
 // quality — слова-метки качества: канал они не различают.
@@ -31,7 +33,7 @@ func Norm(name string) string {
 	n := strings.ReplaceAll(strings.ToLower(name), "ё", "е")
 	n = reBrackets.ReplaceAllString(n, " ")
 	n = reParens.ReplaceAllString(n, " ")
-	n = reMinus.ReplaceAllString(n, "$1 ~$2$3") // «~» — слово-сдвиг: words его не режет
+	n = markMinus(n)
 	ws := words(n)
 	out := make([]string, 0, len(ws))
 	for i := 0; i < len(ws); i++ {
@@ -58,6 +60,26 @@ func Norm(name string) string {
 		out = append(out, w)
 	}
 	return strings.Join(out, " ")
+}
+
+// markMinus — последний минус-сдвиг названия — словом «~N» (words его не режет), если после него только
+// место в скобках и метки качества.
+func markMinus(n string) string {
+	locs := reMinus.FindAllStringSubmatchIndex(n, -1)
+	if len(locs) == 0 {
+		return n
+	}
+	loc := locs[len(locs)-1]
+	for _, w := range words(reAnyPar.ReplaceAllString(n[loc[1]:], " ")) {
+		if !quality[w] {
+			return n
+		}
+	}
+	d := loc[2]
+	if d < 0 {
+		d = loc[4]
+	}
+	return n[:loc[0]] + " ~" + n[d:d+1] + " " + n[loc[1]:]
 }
 
 // words — части текста из букв, цифр, «+» и «~» (метка минус-сдвига, её ставит Norm).

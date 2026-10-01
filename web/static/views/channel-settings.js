@@ -47,14 +47,14 @@ export function sourceMarks(s, i) {
 
 // sourceButtons — кнопки источника i: keep — «Оставить основным» (первый, выбран проверками), main —
 // «Сделать основным», unpin — «Выбирать автоматически», hide — «Скрыть» (hide-last — недоступна:
-// единственный предлагаемый источник, для этого есть «Скрыть канал»), show — «Вернуть», other — «Это
-// другой канал».
-export function sourceButtons(s, i, sources) {
+// единственный предлагаемый источник, для этого есть «Скрыть канал»; у версии канала, когда у канала есть
+// другие рабочие версии, — доступна: версия уйдёт из ряда, 11b-Е), show — «Вернуть», other — «Это другой канал».
+export function sourceButtons(s, i, sources, otherVersions = false) {
   if (s.hidden) return ['show'];
   const out = [];
   if (s.pinned) out.push('unpin');
   else if (s.offered) out.push(i === 0 ? 'keep' : 'main');
-  out.push(s.offered && sources.filter((x) => x.offered).length === 1 ? 'hide-last' : 'hide');
+  out.push(s.offered && !otherVersions && sources.filter((x) => x.offered).length === 1 ? 'hide-last' : 'hide');
   out.push('other');
   return out;
 }
@@ -187,7 +187,7 @@ export function render(root, r, ctx) {
         h('div', { class: 'muted small' }, 'Неделя: ' + week(s.week)),
         s.error ? h('div', { class: 'error' }, s.error) : null);
       if (ctx.canEdit) {
-        row.append(h('div', { class: 'row wrap gap10' }, sourceButtons(s, n, card.sources).map((id) => button(s, id))));
+        row.append(h('div', { class: 'row wrap gap10' }, sourceButtons(s, n, card.sources, (card.versions || []).length > 1).map((id) => button(s, id))));
         if (reassign === s.id) row.append(reassignBox(s));
       }
       out.push(row);

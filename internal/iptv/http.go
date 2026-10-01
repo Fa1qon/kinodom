@@ -523,6 +523,16 @@ func (m *Module) handleOverride(w http.ResponseWriter, r *http.Request) {
 	// тот же, что у канала, — одна правка.
 	fk := familyOf(key)
 	o := m.Override(fk)
+	// Метки правились раньше у версии (до 11b-Е): при первой правке меток на канале они переезжают на канал —
+	// иначе «Как было» не снимало бы их, а правка одного поля теряла бы остальные (финальное ревью 11b-Е).
+	labelsChanged := req.Category.Set || req.Country.Set || req.Languages.Set
+	migrated := false
+	if labelsChanged && fk != key && o.Category == nil && o.Country == nil && o.Languages == nil {
+		if v := m.Override(key); v.Category != nil || v.Country != nil || v.Languages != nil {
+			o.Category, o.Country, o.Languages = v.Category, v.Country, v.Languages
+			migrated = true
+		}
+	}
 	if req.Hidden != nil {
 		o.Hidden = *req.Hidden
 	}
@@ -558,9 +568,12 @@ func (m *Module) handleOverride(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	family := o
-	familyChanged := req.Hidden != nil || req.Category.Set || req.Country.Set || req.Languages.Set
+	familyChanged := req.Hidden != nil || labelsChanged
 	if fk != key {
 		o = m.Override(key)
+		if migrated {
+			o.Category, o.Country, o.Languages = nil, nil, nil
+		}
 	}
 	if req.PinnedSource.Set {
 		o.PinnedURL = ""
@@ -590,7 +603,7 @@ func (m *Module) handleOverride(w http.ResponseWriter, r *http.Request) {
 		u := m.StreamURL(*req.ShowSource)
 		o.HiddenURLs = slices.DeleteFunc(slices.Clone(o.HiddenURLs), func(x string) bool { return x == u })
 	}
-	versionChanged := req.PinnedSource.Set || req.HideSource != nil || req.ShowSource != nil
+	versionChanged := req.PinnedSource.Set || req.HideSource != nil || req.ShowSource != nil || migrated
 	if fk != key && familyChanged {
 		if err := m.SetOverride(r.Context(), fk, family); err != nil {
 			writeEditError(w, err)
