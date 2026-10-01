@@ -11,8 +11,13 @@ $env:CGO_ENABLED = '0'
 
 # Версия одна на всё: номер из VERSION и метка git (kinodom version, установщик, «Состояние»).
 $base = (Get-Content VERSION -TotalCount 1).Trim()
-$rev = (git describe --always --dirty 2>$null)
-$version = if ($rev) { "$base-$rev" } else { $base }
+# Выпуск — коммит с тегом v<VERSION> без правок: «0.13.0»; между выпусками — метка после номера:
+# «0.13.0-3-g1a2b3c4» (3 коммита после тега), «0.13.0-dirty» — с несохранёнными правками; тегов нет — хэш.
+$desc = (git describe --tags --match 'v*' --dirty --always 2>$null)
+if ($desc -eq "v$base") { $version = $base }
+elseif ($desc -match '^v[\d.]+-(.+)$') { $version = "$base-$($Matches[1])" }
+elseif ($desc) { $version = "$base-$desc" }
+else { $version = $base }
 $numeric = "$base.0" # Inno Setup: VersionInfoVersion — только числа
 
 New-Item -ItemType Directory -Force bin | Out-Null
@@ -30,7 +35,9 @@ $sdk = if ($env:ANDROID_HOME) { $env:ANDROID_HOME } else { [Environment]::GetEnv
 if ($jdk -and $sdk -and (Test-Path "$jdk\bin\java.exe") -and (Test-Path "$sdk\platforms")) {
     $env:JAVA_HOME, $env:ANDROID_HOME = $jdk, $sdk
     & .\android\make-key.ps1
-    $code = [int](git rev-list --count HEAD)
+    # Номер сборки — 1000 + число коммитов: после чистки истории перед публикацией (2026-10-01) коммитов стало
+    # меньше, чем номер уже установленных приложений (до 445), а Android ставит обновление, только если номер больше.
+    $code = 1000 + [int](git rev-list --count HEAD)
     Push-Location android
     # Свойства — в кавычках: PowerShell режет «-PversionName=0.11.0-…» на два аргумента. Gradle пишет
     # предупреждения в поток ошибок — судим по коду выхода.
