@@ -14,9 +14,9 @@ import (
 	"testing"
 )
 
-// reTracker — домен трекера: t1.info, t2.org, d.t1.is, api.t2.cc… Зона — из
-// списка: «t2.login» и «t1.address» — ключи настроек, не адреса.
-var reTracker = regexp.MustCompile(`(?i)\brut(or|racker)\.(info|is|org|net|cc|ru|su|me|to|in|co|com|biz|lol|nl|tv|pw|io|xyz|online|site|top|club)\b`)
+// reTracker — домен трекера: t1.info, t2.org, d.t1.is, api.t2.cc… и публичного Jacred:
+// jac.red, jacred.xyz (11b-Д). Зона — из списка: «t2.login» и «t1.address» — ключи настроек, не адреса.
+var reTracker = regexp.MustCompile(`(?i)\b(rut(or|racker)|jacred)\.(info|is|org|net|cc|ru|su|me|to|in|co|com|biz|lol|nl|tv|pw|io|xyz|online|site|top|club|pro|red)\b|\bjac\.red\b`)
 
 // root — корень модуля (тест запускается из своей папки).
 const root = "../.."
@@ -92,12 +92,14 @@ func rel(path string) string {
 
 // Сама проверка ловит домены — иначе она прошла бы и на пустом месте.
 func TestTrackerPatternMatches(t *testing.T) {
-	for _, s := range []string{"https://t1.info", "d.t1.is/download", "api.t2.cc", "t2.ORG"} {
+	for _, s := range []string{"https://t1.info", "d.t1.is/download", "api.t2.cc", "t2.ORG",
+		"jac.red", "https://jacred.xyz/api/v1.0/conf", "JACRED.SU", "jacred.pro"} {
 		if !reTracker.MatchString(s) {
 			t.Errorf("не пойман: %s", s)
 		}
 	}
-	for _, s := range []string{"t1", "t2", "t2.login", "t1.address", "t2.passwordSet", "t1.isOff", "t1: ошибка"} {
+	for _, s := range []string{"t1", "t2", "t2.login", "t1.address", "t2.passwordSet", "t1.isOff", "t1: ошибка",
+		"jacred", "search.address", "kinodom/internal/source/jacred", "jacred.New", "Jacred: нужен ключ"} {
 		if reTracker.MatchString(s) {
 			t.Errorf("пойман лишний: %s", s)
 		}
