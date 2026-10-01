@@ -18,12 +18,17 @@ import ru.kinodom.app.core.Ssdp
 
 // ServerFinder — Kinodom в домашней сети по SSDP (спека этапа 13, раздел 3.2): M-SEARCH в группу, ответы за
 // timeoutMs, описание каждого ответившего. Многоадресный приём на Wi-Fi Android открывает только под MulticastLock.
+// Сети нет (ТВ только включили, телефон в режиме полёта) — отправка бросает ENETUNREACH: никого не нашли.
 class ServerFinder(private val context: Context) {
     suspend fun find(timeoutMs: Long = 5000): List<Found> = withContext(Dispatchers.IO) {
         val wifi = context.applicationContext.getSystemService(Context.WIFI_SERVICE) as WifiManager?
         val lock = wifi?.createMulticastLock("kinodom-ssdp")?.apply { setReferenceCounted(false); acquire() }
         try {
-            val locations = search(timeoutMs)
+            val locations = try {
+                search(timeoutMs)
+            } catch (e: Exception) {
+                emptyList()
+            }
             coroutineScope { locations.map { async { describe(it) } }.awaitAll() }.filterNotNull().distinctBy { it.base }
         } finally {
             lock?.release()

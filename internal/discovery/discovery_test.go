@@ -124,3 +124,29 @@ func freeUDPPort(t *testing.T) int {
 	defer c.Close()
 	return c.LocalAddr().(*net.UDPAddr).Port
 }
+
+// Финальное ревью 13a: модуль, перезапущенный сторожем, начинает с чистого списка интерфейсов — иначе на новом
+// сокете он считал бы прежние уже подключёнными к группе и не подключал их (поиск из тех сетей без ответа).
+func TestRunStartsWithFreshInterfaces(t *testing.T) {
+	ifaces := SystemIfaces()
+	if len(ifaces) == 0 {
+		t.Skip("на этом ПК нет интерфейса домашней сети")
+	}
+	group := netip.AddrPortFrom(netip.MustParseAddr("239.255.255.250"), uint16(freeUDPPort(t)))
+	m := New(Options{APIPort: 8090, Name: "тест", UUID: testUUID, Ifaces: func() []Iface { return ifaces }, Group: group,
+		Log: slog.New(slog.DiscardHandler)})
+	for i := range 2 {
+		ctx, cancel := context.WithCancel(context.Background())
+		done := make(chan error, 1)
+		go func() { done <- m.Run(ctx) }()
+		deadline := time.Now().Add(3 * time.Second)
+		for len(m.ifaces()) < len(ifaces) && time.Now().Before(deadline) {
+			time.Sleep(10 * time.Millisecond)
+		}
+		cancel()
+		<-done
+		if n := len(m.ifaces()); n != 0 {
+			t.Fatalf("запуск %d: после остановки в списке подключённых %d интерфейсов", i+1, n)
+		}
+	}
+}
