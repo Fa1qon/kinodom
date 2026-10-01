@@ -288,6 +288,54 @@ for (const [got, want] of checks) {
 	}
 }
 
+// «Смотреть» в приложении (план 13b, задача 2; спека 13, 5.2): встроенный плеер — только у приложения с
+// playChannels и не выбранным системным плеером; пульт в браузере и приложение 13a — как раньше (Review Focus 1).
+// Список плееру — каналы экрана по порядку, стартовый — по ключу версии; подпись версии — только если их несколько.
+func TestPultWatchInApp(t *testing.T) {
+	node := lookNode(t)
+	script := `
+import { watchRoute, channelPayload, listFor } from './views/tvkit.js';
+const fn = () => true;
+const ch = (key, version, extra = {}) => ({ key, version, name: key.toUpperCase(), number: 0, logo: '', versionLabel: 'МСК', versionCount: 1, ...extra });
+const list = [ch('pervy', 'pervy-pl4', { number: 1, logo: '/logo/pervy-pl4', versionLabel: 'МСК+4', versionCount: 3 }), ch('ntv', 'ntv', { number: 4 }), ch('kino', 'kino')];
+const p1 = channelPayload(list, list[1], 'Федеральные');
+const p2 = channelPayload(list, { ...list[0], version: 'pervy-mn1', versionLabel: 'МСК−1' }, 'Все');
+const p3 = channelPayload(list, ch('bbc', 'bbc'), 'Избранные');
+const stored = { listName: 'Спорт', list: [ch('match', 'match'), ch('euro', 'euro')] };
+const checks = [
+  [watchRoute(null), 'external'],
+  [watchRoute(undefined), 'external'],
+  [watchRoute({ version: () => '0.11.0' }), 'external'],
+  [watchRoute({ playChannels: fn, player: () => 'system' }), 'external'],
+  [watchRoute({ playChannels: fn, player: () => 'builtin' }), 'app'],
+  [watchRoute({ playChannels: fn }), 'app'],
+  [JSON.stringify(p1), JSON.stringify({ list: [
+    { key: 'pervy', version: 'pervy-pl4', name: 'PERVY', number: 1, logo: '/logo/pervy-pl4', label: 'МСК+4' },
+    { key: 'ntv', version: 'ntv', name: 'NTV', number: 4, logo: '', label: '' },
+    { key: 'kino', version: 'kino', name: 'KINO', number: 0, logo: '', label: '' }], start: 1, listName: 'Федеральные' })],
+  // Выбранная на странице версия заменяет версию по умолчанию на её месте в списке.
+  [p2.start + ' ' + p2.list[0].version + ' ' + p2.list[0].label + ' ' + p2.list.length, '0 pervy-mn1 МСК−1 3'],
+  // Канала нет в списке — он первым.
+  [p3.start + ' ' + p3.list.map((x) => x.key).join(','), '0 bbc,pervy,ntv,kino'],
+  [JSON.stringify(channelPayload([{ key: 'x' }], { key: 'x' }, 'Все').list[0]), '{"key":"x","version":"x","name":"","number":0,"logo":"","label":""}'],
+  [listFor('euro', stored) && listFor('euro', stored).listName, 'Спорт'],
+  [listFor('pervy', stored), null],
+  [listFor('pervy', null), null],
+];
+for (const [got, want] of checks) {
+  if (got !== want) {
+    console.error(JSON.stringify(got), '≠', JSON.stringify(want));
+    process.exitCode = 1;
+  }
+}
+`
+	cmd := exec.Command(node, "--input-type=module", "--no-warnings", "-e", script)
+	cmd.Dir = "static"
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Errorf("%v\n%s", err, out)
+	}
+}
+
 // История (спека этапа 8, раздел 7.5): где остановились — минутами, процентом или «досмотрено»; какой
 // файл продолжать — начатый и недосмотренный, смотренный последним, иначе следующий после последнего
 // просмотренного.
