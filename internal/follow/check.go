@@ -140,7 +140,11 @@ func (m *Module) apply(ctx context.Context, oldHex string, raw []byte, download 
 			return m.o.Torrents.Upgrade(ctx, old, raw, download, m.o.Rekey)
 		}
 	}
-	ih, err := m.o.Torrents.Open(ctx, torrents.Source{Torrent: raw})
+	src := torrents.Source{Torrent: raw}
+	if m.o.NewDir != nil {
+		src.Dir = m.o.NewDir(ctx)
+	}
+	ih, err := m.o.Torrents.Open(ctx, src)
 	if err != nil {
 		return metainfo.Hash{}, err
 	}

@@ -7,6 +7,7 @@ import (
 
 	"kinodom/internal/library"
 	"kinodom/internal/meta"
+	"kinodom/internal/torrents"
 )
 
 // initLibrary — медиатека (спека этапа 9): скачанное в Kinodom и папки заказчика одними карточками.
@@ -19,7 +20,14 @@ func (a *App) initLibrary(ctx context.Context) {
 	o := library.Options{DB: a.DB, KP: kp, KPPoster: a.kp.PosterURL, Ratings: a.Ratings, Downloads: libraryDownloads{a}, History: a.History, Power: a.Power,
 		DownloadsDir: func() string { return a.Settings.Current().DownloadsDir },
 		KeepDays:     func() int { return a.Settings.Current().KeepDays },
-		Log:          a.Log.With("module", "library")}
+		TorrentFolders: func(ctx context.Context) ([]string, error) { // скачанное в папку медиатеки — единицей раздачи (план 14В)
+			if a.Torrents != nil && a.Torrents.Engine() != nil {
+				return a.Torrents.Folders(ctx) // и открытые раздачи, чья метаинфо ещё не в базе
+			}
+			// Движок ещё не поднялся (первый обход при запуске) — папки раздач по реестру (ревью 14В).
+			return torrents.NewRegistry(a.DB).Folders(ctx, a.Settings.Current().DownloadsDir)
+		},
+		Log: a.Log.With("module", "library")}
 	if a.Images != nil {
 		o.Posters = a.Images
 	}

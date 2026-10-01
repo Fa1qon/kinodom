@@ -3,6 +3,7 @@
 import { h, icon, size, poll, keepFocus, offWarn, store, formatTag } from '../ui.js';
 import { get, del } from '../api.js';
 import { poster } from './catalog.js';
+import { filmHeader } from './kpcat.js';
 
 // OWN — свои трекеры: страница раздачи, вкладка каталога; остальные — источник поиска Jacred / Jackett и
 // трекеры его раздач (11b-Д).
@@ -44,7 +45,15 @@ export function render(root, r, ctx) {
     const v = field.value.trim();
     if (v) ctx.go('#/search?q=' + encodeURIComponent(v));
   } }, h('label', { class: 'field' }, icon('search'), field));
-  root.append(h('div', { class: 'screen' }, form, h('h1', null, q ? `Поиск: «${q}»` : 'Поиск'), history, off, trackers, table));
+  // Пришли с карточки «Кинопоиска» (план 14Г) — над результатами шапка фильма.
+  const film = h('div');
+  const kp = Number(r.query.get('kp')) || 0;
+  if (kp > 0) {
+    get(`/kpcat/films/${kp}`).then((f) => {
+      if (alive) film.replaceChildren(filmHeader(f));
+    }, () => {});
+  }
+  root.append(h('div', { class: 'screen' }, form, h('h1', null, q ? `Поиск: «${q}»` : 'Поиск'), film, history, off, trackers, table));
   const onStatus = (status) => {
     const tr = (status && status.trackers) || {};
     keepFocus(off, () => off.replaceChildren(...OWN.filter((t) => tr[t] && tr[t].state === 'off').map((t) => offWarn(tr[t].text))));

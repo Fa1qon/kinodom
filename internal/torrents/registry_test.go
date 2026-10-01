@@ -127,7 +127,8 @@ func TestFoldersOfRegistry(t *testing.T) {
 	if _, err := r.Remember(ctx, a, "magnet:a", `D:\Old`); err != nil {
 		t.Fatal(err)
 	}
-	must(t, r.SaveMetainfo(ctx, a, "Фильм", mi1.InfoBytes))
+	// В базе — полный .torrent (saveMetainfo пишет его, ревью 14В); старые записи — одна часть info.
+	must(t, r.SaveMetainfo(ctx, a, "Фильм", torrentBytes(t, mi1)))
 	must(t, r.SaveMetainfo(ctx, b, "Сериал", mi2.InfoBytes))
 	remember(t, r, c, "magnet:c") // метаинфо не пришла
 	got, err := r.Folders(ctx, `E:\Kinodom`)

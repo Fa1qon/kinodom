@@ -29,6 +29,7 @@ import (
 	"kinodom/internal/history"
 	"kinodom/internal/httpx"
 	"kinodom/internal/iptv"
+	"kinodom/internal/kpcat"
 	"kinodom/internal/library"
 	"kinodom/internal/logx"
 	"kinodom/internal/meta"
@@ -88,16 +89,18 @@ type App struct {
 	DB       *store.DB
 	Sup      *supervisor.Supervisor
 	API      *api.Server
-	Power    *power.Keeper     // запрет сна, пока идёт поток любого модуля (спека, раздел 9)
-	Torrents *torrents.Service // nil, если движок не запустился (см. проблему torrents.engine)
-	Ratings  *meta.Ratings     // рейтинги Кинопоиска (модуль ratings)
-	Images   *meta.Images      // картинки, которые сервер отдаёт по /img/{key}
-	Catalog  *catalog.Catalog  // каталог и поиск (модуль catalog)
-	Settings *settings.Service // настройки из пульта: меняются без перезапуска (этап 7)
-	IPTV     *iptv.Module      // каналы (модуль iptv, этап 8)
-	History  *history.Service  // история просмотров по устройствам (этап 8c)
-	Library  *library.Library  // медиатека: скачанное и папки заказчика (модуль library, этап 9)
-	Follow   *follow.Module    // подписка на новые серии (модуль follow, этап 11b-В)
+	Power    *power.Keeper         // запрет сна, пока идёт поток любого модуля (спека, раздел 9)
+	Torrents *torrents.Service     // nil, если движок не запустился (см. проблему torrents.engine)
+	Ratings  *meta.Ratings         // рейтинги Кинопоиска (модуль ratings)
+	Images   *meta.Images          // картинки, которые сервер отдаёт по /img/{key}
+	Catalog  *catalog.Catalog      // каталог и поиск (модуль catalog)
+	Settings *settings.Service     // настройки из пульта: меняются без перезапуска (этап 7)
+	IPTV     *iptv.Module          // каналы (модуль iptv, этап 8)
+	History  *history.Service      // история просмотров по устройствам (этап 8c)
+	Library  *library.Library      // медиатека: скачанное и папки заказчика (модуль library, этап 9)
+	Follow   *follow.Module        // подписка на новые серии (модуль follow, этап 11b-В)
+	KPCat    *kpcat.Module         // каталог «Кинопоиск» (модуль kpcat, план 14Г)
+	writable func(dir string) bool // служба может писать в папку медиатеки; nil — Library.Writable (тесты подменяют)
 
 	version   string
 	kp        *meta.Kinopoisk
@@ -184,6 +187,7 @@ func New(ctx context.Context, o Options) (*App, error) {
 	}
 	a.initLibrary(ctx)
 	a.initFollow(ctx)
+	a.initKPCat(ctx)
 	a.initSetup()
 	a.initDiscovery(ctx, o)
 	a.API.SetStatus(a.statusFields)
@@ -287,7 +291,7 @@ func (a *App) initMeta(ctx context.Context, o Options, v settings.Values) error 
 	a.kp = meta.NewKinopoisk(meta.KinopoiskOptions{Key: v.KinopoiskKey, APIBase: o.KinopoiskAPI, RatingBase: o.KinopoiskAPI, PosterBase: o.KinopoiskAPI})
 	wo := meta.KPWebOptions{Log: a.Log.With("module", "kinopoisk")}
 	if o.KinopoiskAPI != "" {
-		wo.GraphQL, wo.Site = strings.TrimRight(o.KinopoiskAPI, "/")+"/graphql/", o.KinopoiskAPI
+		wo.GraphQL, wo.Site, wo.RatingBase = strings.TrimRight(o.KinopoiskAPI, "/")+"/graphql/", o.KinopoiskAPI, o.KinopoiskAPI
 	}
 	a.kpweb = meta.NewKPWeb(wo)
 	a.Ratings = meta.NewRatings(meta.RatingsOptions{KP: a.kp, Web: a.kpweb, DB: a.DB, Log: a.Log.With("module", "ratings")})
@@ -361,11 +365,23 @@ func (a *App) initCatalog(ctx context.Context, o Options, v settings.Values) err
 			return d.Description, err
 		},
 		Ratings: a.Ratings, Images: a.Images, KinopoiskPoster: a.kp.PosterURL, TorrentFormat: torrentFormat,
-		KeepImages: func(ctx context.Context) (map[string]bool, error) { // постеры медиатеки (этап 9)
-			if a.Library == nil {
-				return nil, nil
+		KeepImages: func(ctx context.Context) (map[string]bool, error) { // постеры медиатеки (этап 9) и каталога «Кинопоиск» (14Г)
+			keep := map[string]bool{}
+			if a.Library != nil {
+				ks, err := a.Library.ImageKeys(ctx)
+				if err != nil {
+					return nil, err
+				}
+				maps.Copy(keep, ks)
 			}
-			return a.Library.ImageKeys(ctx)
+			if a.KPCat != nil {
+				ks, err := a.KPCat.ImageKeys(ctx)
+				if err != nil {
+					return nil, err
+				}
+				maps.Copy(keep, ks)
+			}
+			return keep, nil
 		},
 		PreferredFormat: v.PreferredFormat, DefaultOrder: v.CatalogOrder, Log: log})
 	a.Catalog.Register(a.API)
@@ -531,7 +547,8 @@ func (a *App) handleDownload(w http.ResponseWriter, r *http.Request) {
 		httpx.WriteError(w, http.StatusConflict, "на странице раздачи нет magnet-ссылки — откройте раздачу на трекере")
 		return
 	}
-	ih, err := a.Torrents.Open(r.Context(), torrents.Source{Torrent: rel.Torrent, Magnet: rel.Magnet})
+	dir := a.downloadDir(r.Context(), a.Catalog.IsSeries(r.Context(), rel.Entry))
+	ih, err := a.Torrents.Open(r.Context(), torrents.Source{Torrent: rel.Torrent, Magnet: rel.Magnet, Dir: dir})
 	if err != nil {
 		httpx.WriteError(w, http.StatusBadRequest, err.Error())
 		return
@@ -556,6 +573,32 @@ func (a *App) handleDownload(w http.ResponseWriter, r *http.Request) {
 	default:
 		httpx.WriteJSON(w, http.StatusOK, map[string]string{"hash": ih.HexString()})
 	}
+}
+
+// downloadDir — папка новой раздачи (план 14В): фильм — первая папка «Фильмов» медиатеки, сериал —
+// «Сериалов»; папок нет или служба не может в неё писать — "" (папка загрузок; у папки медиатеки — проблема
+// no_write и «Разрешить доступ», их ставит обход медиатеки). Знакомая раздача остаётся, где качалась.
+func (a *App) downloadDir(ctx context.Context, series bool) string {
+	if a.Library == nil {
+		return ""
+	}
+	kind := "films"
+	if series {
+		kind = "series"
+	}
+	dir, err := a.Library.TargetFolder(ctx, kind)
+	if err != nil || dir == "" {
+		return ""
+	}
+	can := a.Library.Writable
+	if a.writable != nil {
+		can = a.writable
+	}
+	if !can(dir) {
+		a.Log.Info("медиатека: в папку нельзя писать — скачанное идёт в папку загрузок", "dir", dir)
+		return ""
+	}
+	return dir
 }
 
 // cachedCheck — проверка раз в every: «Состояние» пульт спрашивает часто, а реестр меняется редко.

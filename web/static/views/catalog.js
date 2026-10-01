@@ -2,6 +2,7 @@
 // (спека этапа 7, разделы 5.4 и 6.3).
 import { h, icon, ago, size, rating, store, plural, keepFocus, offWarn, poll, formatTag, altFormatTag } from '../ui.js';
 import { get } from '../api.js';
+import { render as renderKP } from './kpcat.js';
 
 export const TRACKERS = [['rutracker', 'Rutracker'], ['rutor', 'Rutor']];
 
@@ -212,7 +213,17 @@ export function orderStat(e, order) {
   return null;
 }
 
+// trackerTabs — вкладки каталога: трекеры (со значком, если у трекера проблемы) и «Кинопоиск» (план 14Г).
+export function trackerTabs(current, trackers = {}) {
+  return [...TRACKERS, ['kinopoisk', 'Кинопоиск']].map(([id, title]) => {
+    const bad = trackers[id] && trackers[id].state !== 'ok';
+    return h('a', { href: `#/catalog/${id}`, class: id === current ? 'on' : null, 'aria-current': id === current ? 'page' : null, 'data-key': `tab-${id}` },
+      title, bad ? icon('warning', 18, 'Есть проблемы') : null);
+  });
+}
+
 export function render(root, r, ctx) {
+  if (r.parts[1] === 'kinopoisk') return renderKP(root, r, ctx);
   const tracker = TRACKERS.some(([id]) => id === r.parts[1]) ? r.parts[1] : 'rutor';
   const section = r.parts[2] || '';
   // Порядок: из адреса, иначе выбранный раньше, иначе — умолчание сервера (план 14Б).
@@ -244,11 +255,7 @@ export function render(root, r, ctx) {
   // Вкладки и предупреждение трекера — из «Состояния»: у вкладки со значком есть проблемы.
   const onStatus = (status) => {
     const trackers = (status && status.trackers) || {};
-    keepFocus(tabs, () => tabs.replaceChildren(...TRACKERS.map(([id, title]) => {
-      const bad = trackers[id] && trackers[id].state !== 'ok';
-      return h('a', { href: `#/catalog/${id}`, class: id === tracker ? 'on' : null, 'aria-current': id === tracker ? 'page' : null, 'data-key': `tab-${id}` },
-        title, bad ? icon('warning', 18, 'Есть проблемы') : null);
-    })));
+    keepFocus(tabs, () => tabs.replaceChildren(...trackerTabs(tracker, trackers)));
     const t = trackers[tracker];
     keepFocus(warn, () => warn.replaceChildren(t && t.state === 'off' ? offWarn(t.text)
       : t && t.state !== 'ok' && t.text ? h('div', { class: 'warn' }, icon('warning'), t.text) : ''));

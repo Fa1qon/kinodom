@@ -592,6 +592,11 @@ const redrawn = new El('button'); redrawn.setAttribute('data-key', 'pick-0'); vi
 body.find('dlg-no').fire('click');
 await p;
 checks.push(['после перерисовки фокус — на тот же ключ', document.activeElement === redrawn]);
+// Ревью 14В: безвозвратное (удалить своё с диска) — фокус на «Нет»: второе OK на пульте ТВ не удаляет.
+p = confirmDialog({ title: 'Удалить «Фильм» с диска навсегда?', yes: 'Удалить', safe: true });
+checks.push(['безвозвратное — фокус на «Нет»', document.activeElement === body.find('dlg-no')]);
+body.find('dlg-no').fire('click');
+checks.push(['«Нет» — false', (await p) === false]);
 for (const [name, ok] of checks) {
   if (!ok) {
     console.error('не выполнено:', name);
@@ -1851,6 +1856,38 @@ for (const [got, want] of checks) {
 	}
 }
 
+// План 14В: «Удалить» на карточке медиатеки — своё через медиатеку, скачанное — как в «Загрузках»;
+// «Разрешить доступ» и у папки, куда нельзя писать.
+func TestPultLibraryDelete(t *testing.T) {
+	node := lookNode(t)
+	script := `
+globalThis.Node = class {};
+const { deleteRequest } = await import('./views/library-card.js');
+const { grantView } = await import('./views/folders.js');
+const own = deleteRequest({ unit: 7, hash: 'lib-7', path: 'D:\\Films\\Фильм.mkv', source: 'Фильмы' });
+const dl = deleteRequest({ unit: 9, hash: 'abcdef', path: 'D:\\Films\\X [abcdef12]', source: 'Скачано' });
+const g = grantView({ local: true }, { path: 'D:\\Films', problem: 'no_write' }, 8090);
+const checks = [
+  [own.path, '/library/units/7'],
+  [own.text.includes('Фильм.mkv'), true],
+  [dl.path, '/downloads/abcdef'],
+  [!!(g && g.link && g.link.startsWith('kinodom://grant?')), true],
+  [grantView({ local: true }, { path: 'D:\\Films', problem: '' }, 8090), null],
+];
+for (const [got, want] of checks) {
+  if (got !== want) {
+    console.error(JSON.stringify(got), '≠', JSON.stringify(want));
+    process.exitCode = 1;
+  }
+}
+`
+	cmd := exec.Command(node, "--input-type=module", "--no-warnings", "-e", script)
+	cmd.Dir = "static"
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Errorf("%v\n%s", err, out)
+	}
+}
+
 // План 14Б: переключатель порядка над разделом и цифра порядка на карточке.
 func TestPultCatalogOrder(t *testing.T) {
 	node := lookNode(t)
@@ -1882,6 +1919,40 @@ const checks = [
   [op('', { o: 'new', d: 'seeders' }, ''), '{"order":"new","since":"seeders"}'],
   [op('', { o: 'new', d: '' }, ''), '{"order":"new"}'],
   [op('', { o: '', d: '' }, ''), '{}'],
+];
+for (const [got, want] of checks) {
+  if (got !== want) {
+    console.error(JSON.stringify(got), '≠', JSON.stringify(want));
+    process.exitCode = 1;
+  }
+}
+`
+	cmd := exec.Command(node, "--input-type=module", "--no-warnings", "-e", script)
+	cmd.Dir = "static"
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Errorf("%v\n%s", err, out)
+	}
+}
+
+// План 14Г: карточка «Кинопоиска» ведёт в поиск по названию и году (кодирование — Review Focus 4); строка
+// карточки — год и оценки, пустые части пропускаются.
+func TestPultKPCatalog(t *testing.T) {
+	node := lookNode(t)
+	script := `
+const { filmSearchHref, filmLine, kpRestoreCount } = await import('./views/kpcat.js');
+const here = '#/catalog/kinopoisk/films-ru?order=kp';
+const checks = [
+  // Ревью 14Г: сериал — без года (идущий сезон новее первого, а трекерам нужны все слова запроса).
+  [filmSearchHref({ id: 7, title: 'Гангстерленд', year: 2025, type: 'TV_SERIES' }), '#/search?q=' + encodeURIComponent('Гангстерленд') + '&kp=7'],
+  [filmSearchHref({ id: 8, title: 'Сериал', year: 2024, type: 'MINI_SERIES' }), '#/search?q=' + encodeURIComponent('Сериал') + '&kp=8'],
+  // Ревью 14Г: возврат на место — столько карточек, сколько было на этой странице.
+  [kpRestoreCount({ at: here, count: 72 }, here), 72],
+  [kpRestoreCount({ at: '#/catalog/kinopoisk/docs', count: 72 }, here), 0],
+  [kpRestoreCount(null, here), 0],
+  [filmSearchHref({ id: 5, title: 'Мастер и Маргарита: «Тест»', year: 2024 }), '#/search?q=' + encodeURIComponent('Мастер и Маргарита: «Тест» 2024') + '&kp=5'],
+  [filmSearchHref({ id: 6, title: 'Без года', year: 0 }), '#/search?q=' + encodeURIComponent('Без года') + '&kp=6'],
+  [filmLine({ year: 2024, kinopoisk: 8.1, imdb: 0 }), '2024 · КП 8,1'],
+  [filmLine({ year: 0, kinopoisk: 0, imdb: 7.25 }), 'IMDb 7,3'],
 ];
 for (const [got, want] of checks) {
   if (got !== want) {

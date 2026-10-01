@@ -7,12 +7,12 @@ import { layout, remoteNote } from './settings-layout.js';
 import { pickFolder, grantControl } from './folders.js';
 
 const LAYOUTS = [['films', 'Как фильмы — файл или папка = фильм'], ['series', 'Как сериалы — папка = сериал, курс']];
-const PROBLEM = { not_found: 'папка не найдена', no_access: 'папка не читается — нет прав' };
+const PROBLEM = { not_found: 'папка не найдена', no_access: 'папка не читается — нет прав', no_write: 'нет права записи' };
 
 // stillDenied — у какой-то папки нет доступа службы: после «Разрешить доступ» категории перечитываются,
 // пока это так (хвост Х41).
 export function stillDenied(cats) {
-  return !!cats && cats.some((c) => (c.folders || []).some((f) => f.problem === 'no_access'));
+  return !!cats && cats.some((c) => (c.folders || []).some((f) => f.problem === 'no_access' || f.problem === 'no_write'));
 }
 
 const GRANT_EVERY = 2000; // после «Разрешить доступ» — раз в 2 с…

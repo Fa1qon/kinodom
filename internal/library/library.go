@@ -92,8 +92,15 @@ type Options struct {
 	Power        *power.Keeper
 	DownloadsDir func() string // папка загрузок: её нельзя добавить в категорию
 	KeepDays     func() int    // срок хранения скачанного (torrents.keepDays)
-	Log          *slog.Logger
-	Now          func() time.Time
+	// TorrentFolders — папки раздач Kinodom (torrents.Service.Folders): обход их пропускает — скачанное в
+	// папку медиатеки приходит единицей раздачи (план 14В). nil — нет.
+	TorrentFolders func(ctx context.Context) ([]string, error)
+	// Writable — служба может писать в папку (папки «Фильмов» и «Сериалов» — для скачанного); nil — проба файлом.
+	Writable func(dir string) bool
+	// Remove — удаление файла или папки своей единицы («Удалить»); nil — os.RemoveAll (тесты подменяют отказ).
+	Remove func(path string) error
+	Log    *slog.Logger
+	Now    func() time.Time
 }
 
 // Library — модуль «library».
@@ -111,7 +118,8 @@ type Library struct {
 	// время, а не через час (хвост Х21); ноль — не нужен.
 	dlRetry  time.Time
 	lastScan time.Time
-	problems map[int64]string // папка категории → not_found, no_access
+	problems map[int64]string // папка категории → not_found, no_access, no_write
+	noWrite  map[int64]bool   // папки, где «Удалить» упёрлось в права (ревью 14В): no_write, пока удаление не пройдёт
 	kpPause  time.Time        // квота Кинопоиска кончилась — распознавание не раньше
 	retries  map[string]retry // «details:<номер>», «poster:<номер>» → повтор после сбоя (Х9)
 	recWake  chan struct{}    // разбудить цикл распознавания (после обхода)
@@ -275,11 +283,32 @@ func (l *Library) scanNow(ctx context.Context) error {
 	}
 	problems := map[int64]string{}
 	now := l.now()
+	torrentDirs := map[string]bool{}
+	var tfErr error
+	if l.o.TorrentFolders != nil {
+		var ps []string
+		if ps, tfErr = l.o.TorrentFolders(ctx); tfErr != nil {
+			l.log.Warn("медиатека: папки раздач не прочитались", "err", tfErr)
+		}
+		for _, p := range ps {
+			torrentDirs[pathKey(p)] = true
+		}
+	}
 	for _, c := range cats {
-		for _, f := range c.Folders {
+		target := c.Builtin == "films" || c.Builtin == "series"
+		for j, f := range c.Folders {
+			if tfErr != nil && target {
+				// Папки раздач не прочитались, а сюда качает Kinodom: без пропуска скачанное стало бы своим
+				// файлом, а «папка = сериал» пересоздалась бы с новой историей — до следующего обхода как было
+				// (ревью 14В, Important 2).
+				continue
+			}
 			dl := l.o.DownloadsDir()
 			skip := func(p string) bool {
 				if dl != "" && pathKey(p) == pathKey(dl) { // скачанное и так в медиатеке, недокачанное — пустое
+					return true
+				}
+				if torrentDirs[pathKey(p)] { // раздача Kinodom в папке медиатеки — единица скачанного (план 14В)
 					return true
 				}
 				id, ok := folders[pathKey(p)]
@@ -299,9 +328,17 @@ func (l *Library) scanNow(ctx context.Context) error {
 			if err := l.d.syncFolder(ctx, f.ID, c, units, now); err != nil {
 				return err
 			}
+			if target && j == 0 && !l.Writable(f.Path) {
+				problems[f.ID] = "no_write" // сюда качается скачанное (план 14В); в остальные папки — нет (ревью 14В)
+			}
 		}
 	}
 	l.mu.Lock()
+	for id := range l.noWrite {
+		if problems[id] == "" {
+			problems[id] = "no_write"
+		}
+	}
 	l.problems = problems
 	l.mu.Unlock()
 	if err := l.syncProblems(ctx, cats, problems); err != nil {
@@ -385,12 +422,18 @@ func (l *Library) recognizeOnce(ctx context.Context) {
 func (l *Library) syncProblems(ctx context.Context, cats []Category, problems map[int64]string) error {
 	want := map[string]string{}
 	for _, c := range cats {
-		for _, f := range c.Folders {
+		for j, f := range c.Folders {
 			switch problems[f.ID] {
 			case "not_found":
 				want[problemID(f.ID)] = "Папка медиатеки не найдена: " + f.Path + " (категория «" + c.Name + "»)"
 			case "no_access":
 				want[problemID(f.ID)] = "Папка медиатеки не читается — нет прав: " + f.Path + " (категория «" + c.Name + "»)"
+			case "no_write":
+				if (c.Builtin == "films" || c.Builtin == "series") && j == 0 {
+					want[problemID(f.ID)] = "Нет права записи в папку медиатеки: " + f.Path + " (категория «" + c.Name + "») — скачанное идёт в папку загрузок"
+				} else {
+					want[problemID(f.ID)] = "Нет права изменять папку медиатеки: " + f.Path + " (категория «" + c.Name + "») — удалить из неё нельзя"
+				}
 			}
 		}
 	}
