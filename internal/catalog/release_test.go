@@ -130,9 +130,11 @@ func TestKinopoiskPosterIsFetchedLater(t *testing.T) {
 		t.Fatalf("картинка при мёртвых хостингах: %q", es[0].ImageKey)
 	}
 	kpUp.Store(true)
-	if _, err := c.Release(ctx, es[0].ID); err != nil {
+	r, err := c.Release(ctx, es[0].ID)
+	if err != nil {
 		t.Fatal(err)
 	}
+	c.PosterOnOpen(ctx, r) // экран раздачи (GET /releases/{id})
 	c.posterWG.Wait()
 	if es := list(t, c, ListOptions{}); es[0].ImageKey != meta.ImageKey(host.URL+"/kp/301.jpg") {
 		t.Fatalf("постер Кинопоиска не догрузился: %q", es[0].ImageKey)

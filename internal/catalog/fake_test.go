@@ -36,10 +36,11 @@ type fakeSource struct {
 	tree         []source.Category // дерево разделов; nil — по разделам топов, без вложенности
 	off          bool              // адрес трекера не введён (этап 11a)
 	calls        map[string]int
-	atOnce       int           // DetailsAtOnce: страниц раздач одновременно; 0 — как у источника без признака
-	detailsBlock chan struct{} // если задан — страница раздачи ждёт его закрытия (или отмены)
-	inDetails    int           // страниц качается сейчас
-	maxDetails   int           // больше всего одновременно
+	atOnce       int             // DetailsAtOnce: страниц раздач одновременно; 0 — как у источника без признака
+	detailsBlock chan struct{}   // если задан — страница раздачи ждёт его закрытия (или отмены)
+	detailsPanic map[string]bool // номер → разбор страницы падает паникой
+	inDetails    int             // страниц качается сейчас
+	maxDetails   int             // больше всего одновременно
 }
 
 func (f *fakeSource) DetailsAtOnce() int { f.mu.Lock(); defer f.mu.Unlock(); return f.atOnce }
@@ -123,6 +124,9 @@ func (f *fakeSource) Details(ctx context.Context, id string) (source.Details, er
 	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	if f.detailsPanic[id] {
+		panic("разбор страницы " + id)
+	}
 	if err := f.detailsErr[id]; err != nil {
 		return source.Details{}, err
 	}

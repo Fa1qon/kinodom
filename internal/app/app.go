@@ -437,6 +437,9 @@ func (a *App) handleRelease(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	rel, err := a.Catalog.Release(r.Context(), id)
+	if err == nil {
+		a.Catalog.PosterOnOpen(r.Context(), rel) // экран раздачи открыт: постер без картинки — сразу (спека 11b, 14.2)
+	}
 	switch {
 	case errors.Is(err, catalog.ErrNoRelease):
 		httpx.WriteError(w, http.StatusNotFound, err.Error())

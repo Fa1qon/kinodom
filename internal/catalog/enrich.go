@@ -3,6 +3,8 @@ package catalog
 import (
 	"context"
 	"errors"
+	"fmt"
+	"runtime/debug"
 	"strconv"
 	"sync"
 	"sync/atomic"
@@ -96,11 +98,21 @@ func (c *Catalog) soonLoop(ctx context.Context, tracker string) error {
 				defer wg.Done()
 				defer func() { <-sem; c.wakeSoon(tracker) }()
 				defer c.unclaim(r.ID)
-				if _, err := c.enrichRow(ctx, tracker, r, opened, true); err != nil {
+				fail := func(err error) {
 					select {
 					case errs <- err:
 					default:
 					}
+				}
+				// Разбор страницы трекера — вне горутины сторожа: паника — ошибка модуля каталога (сторож
+				// перезапустит его), а не падение всей программы (финальное ревью 11b-Ж).
+				defer func() {
+					if p := recover(); p != nil {
+						fail(fmt.Errorf("паника: догрузка раздачи %s %s: %v\n%s", tracker, r.TopicID, p, debug.Stack()))
+					}
+				}()
+				if _, err := c.enrichRow(ctx, tracker, r, opened, true); err != nil {
+					fail(err)
 				}
 			}()
 		}
