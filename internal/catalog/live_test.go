@@ -335,3 +335,93 @@ func TestOpenedPosterOnceWithPage(t *testing.T) {
 		t.Fatalf("попыток постера %d, нужна одна", n)
 	}
 }
+
+// loops — основной цикл догрузки трекера и раздатчик видимых, как их запускает Run (без сторожа).
+func loops(t *testing.T, c *Catalog, tracker string) context.CancelFunc {
+	t.Helper()
+	lctx, cancel := context.WithCancel(ctx)
+	var wg sync.WaitGroup
+	wg.Add(2)
+	go func() { defer wg.Done(); c.enrichLoop(lctx, tracker) }()
+	go func() { defer wg.Done(); c.soonLoop(lctx, tracker) }()
+	t.Cleanup(func() { cancel(); wg.Wait(); c.posterWG.Wait() })
+	return cancel
+}
+
+// Страницы раздач, которые на экране, найдены или открыты, у источника, который это выдерживает (Rutor), —
+// по несколько сразу (спека 11b, 14.4): вживую Rutor отдавал страницу за 4–77 с, по одной экран из 12
+// карточек заполнялся минуты. Каждая раздача — один раз.
+func TestVisiblePagesAtOnce(t *testing.T) {
+	rutor := newFake("rutor")
+	rutor.atOnce = 3
+	block := make(chan struct{})
+	rutor.detailsBlock = block
+	var rels []source.Release
+	for i := range 5 {
+		r := rel("rutor", fmt.Sprint(200+i), fmt.Sprintf("Сериал %d (2026) WEB-DL", i), 5, 1, fmt.Sprintf("v%d", i))
+		rels = append(rels, r)
+		rutor.details[r.TopicID] = source.Details{Release: r}
+	}
+	c, _ := newCatalog(t, openDB(t), nil, rutor)
+	ids, err := c.st.saveFound(ctx, rels, c.now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	c.enqueueFound(ctx, "rutor", ids, searchToEnrich)
+	loops(t, c, "rutor")
+	deadline := time.Now().Add(3 * time.Second)
+	for rutor.MaxDetails() < 3 {
+		if time.Now().After(deadline) {
+			t.Fatalf("страниц одновременно %d — видимые догружаются по одной", rutor.MaxDetails())
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	c.enqueueFound(ctx, "rutor", ids, searchToEnrich) // пульт спрашивает те же карточки снова, пока они качаются
+	close(block)
+	for _, id := range ids {
+		for {
+			if r, err := c.Release(ctx, id); err == nil && !r.DetailsPending {
+				break
+			}
+			if time.Now().After(deadline.Add(3 * time.Second)) {
+				t.Fatalf("раздача %d не догрузилась", id)
+			}
+			time.Sleep(10 * time.Millisecond)
+		}
+	}
+	for _, r := range rels {
+		if n := rutor.Calls("details:" + r.TopicID); n != 1 {
+			t.Fatalf("страница %s — %d раз", r.TopicID, n)
+		}
+	}
+	if n := rutor.MaxDetails(); n > 3 {
+		t.Fatalf("одновременно %d страниц, можно 3", n)
+	}
+}
+
+// Фон — по одной странице и у Rutor: спешит только то, что ждёт человек.
+func TestBackgroundPagesOneAtATime(t *testing.T) {
+	rutor := newFake("rutor")
+	rutor.atOnce = 3
+	block := make(chan struct{})
+	rutor.detailsBlock = block
+	rutor.top["12"] = manyDesc("rutor", 5)
+	for _, r := range rutor.top["12"] {
+		rutor.details[r.TopicID] = source.Details{Release: r}
+	}
+	c, _ := newCatalog(t, openDB(t), nil, rutor)
+	refresh(t, c, true)
+	loops(t, c, "rutor")
+	deadline := time.Now().Add(3 * time.Second)
+	for rutor.Calls("details") == 0 {
+		if time.Now().After(deadline) {
+			t.Fatal("фоновая догрузка не началась")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	time.Sleep(200 * time.Millisecond)
+	if n := rutor.MaxDetails(); n != 1 {
+		t.Fatalf("фон: страниц одновременно %d", n)
+	}
+	close(block)
+}

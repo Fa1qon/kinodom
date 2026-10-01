@@ -471,3 +471,12 @@ func TestCheck(t *testing.T) {
 		t.Fatalf("без адреса: %v", err)
 	}
 }
+
+// Страницы раздач Rutor каталог качает по несколько сразу (спека 11b, 14.4): страница идёт 4–77 с, а новый
+// запрос — всё равно не чаще ограничителя источника.
+func TestRutorDetailsAtOnce(t *testing.T) {
+	var r *Rutor
+	if n := r.DetailsAtOnce(); n != 4 {
+		t.Fatalf("страниц сразу %d", n)
+	}
+}
