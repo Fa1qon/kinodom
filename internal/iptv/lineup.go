@@ -45,9 +45,12 @@ type Channel struct {
 	// проверкой в фоне не проверяются (лёгкой — да: они запасные). Других предлагаемых нет — живые
 	// скрытые переходят в Sources запасными, чтобы канал не пропал вместе с кнопкой «Вернуть».
 	Rejected []*Stream
-	Grade    string // оценка первого источника: green, yellow, red, unrated; "" — источников нет
-	Hidden   string // почему скрыт (без учёта избранного); "" — на экране
-	Pinned   string // закреплённая ссылка
+	// HiddenOnly — предлагаются только скрытые вручную запасные: такая версия — рабочая, только если у канала
+	// других нет (финальное ревью 11b-Е: иначе неудачную версию не убрать, не скрыв весь канал).
+	HiddenOnly bool
+	Grade      string // оценка первого источника: green, yellow, red, unrated; "" — источников нет
+	Hidden     string // почему скрыт (без учёта избранного); "" — на экране
+	Pinned     string // закреплённая ссылка
 }
 
 // Offered — у канала есть что предложить плееру.
@@ -94,7 +97,7 @@ func pickDefault(vs []*Channel, local int) *Channel {
 }
 
 // reNameShift — сдвиг в конце имени версии: «Первый канал +4», «Россия 1 (-1)», «Спас −1».
-var reNameShift = regexp.MustCompile(`\s*\(?\s*[+−-]\s?[1-9]\s*\)?\s*$`)
+var reNameShift = regexp.MustCompile(`(?:\s+|\s*\()[+−-]\s?[1-9]\s*\)?\s*$`) // знак — после пробела или «(»: «Россия-1» — название
 
 // familyName — имя канала: имя базы в телепрограмме, иначе имя версии по умолчанию без сдвига.
 func familyName(f *Family, ix *epgIndex) string {
@@ -431,6 +434,7 @@ func build(in buildInput) *Lineup {
 				}
 				return false
 			})
+			c.HiddenOnly = len(c.Sources) > 0
 		}
 	}
 	for _, g := range groups {
@@ -472,6 +476,10 @@ func build(in buildInput) *Lineup {
 		}
 	}
 	for _, f := range l.Families {
+		// Версии только со скрытыми вручную запасными — в ряду и по умолчанию, только если других нет.
+		if real := slices.DeleteFunc(slices.Clone(f.Versions), func(c *Channel) bool { return c.HiddenOnly }); len(real) > 0 {
+			f.Versions = real
+		}
 		slices.SortFunc(f.Versions, func(a, b *Channel) int { return cmp.Or(cmp.Compare(a.Zone, b.Zone), cmp.Compare(a.Key, b.Key)) })
 		f.Default = pickDefault(f.Versions, in.localShift)
 		f.Name = familyName(f, in.epg)

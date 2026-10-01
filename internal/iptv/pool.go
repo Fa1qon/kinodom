@@ -503,12 +503,17 @@ func (d db) favorites(ctx context.Context, device string) ([]string, error) {
 	}
 	defer rows.Close()
 	out := []string{}
+	seen := map[string]bool{}
 	for rows.Next() {
 		var k string
 		if err := rows.Scan(&k); err != nil {
 			return nil, err
 		}
-		out = append(out, k)
+		// ★ — у канала: ключ версии (до 11b-Е ★ ставилась на версию) читается ключом канала.
+		if k = familyOf(k); !seen[k] {
+			seen[k] = true
+			out = append(out, k)
+		}
 	}
 	return out, rows.Err()
 }
@@ -526,7 +531,7 @@ func (d db) allFavorites(ctx context.Context) (map[string]bool, error) {
 		if err := rows.Scan(&k); err != nil {
 			return nil, err
 		}
-		out[k] = true
+		out[familyOf(k)] = true // ★ — у канала (11b-Е)
 	}
 	return out, rows.Err()
 }
@@ -539,10 +544,34 @@ func (d db) addFavorite(ctx context.Context, device, key string) error {
 	return err
 }
 
-// removeFavorite — убрать канал из избранного устройства.
+// removeFavorite — убрать канал из избранного устройства: и ключ канала, и ключи его версий (до 11b-Е ★
+// ставилась на версию — финальное ревью 11b-Е).
 func (d db) removeFavorite(ctx context.Context, device, key string) error {
-	_, err := d.W.ExecContext(ctx, `DELETE FROM iptv_favorites WHERE device = ? AND channel = ?`, device, key)
-	return err
+	rows, err := d.R.QueryContext(ctx, `SELECT channel FROM iptv_favorites WHERE device = ?`, device)
+	if err != nil {
+		return err
+	}
+	var gone []string
+	for rows.Next() {
+		var k string
+		if err := rows.Scan(&k); err != nil {
+			rows.Close()
+			return err
+		}
+		if familyOf(k) == familyOf(key) {
+			gone = append(gone, k)
+		}
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return err
+	}
+	for _, k := range gone {
+		if _, err := d.W.ExecContext(ctx, `DELETE FROM iptv_favorites WHERE device = ? AND channel = ?`, device, k); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // setFavorites заменяет избранное устройства; повторы убираются.
@@ -557,7 +586,7 @@ func (d db) setFavorites(ctx context.Context, device string, keys []string) erro
 	}
 	seen := map[string]bool{}
 	for i, k := range keys {
-		if k == "" || seen[k] {
+		if k = familyOf(k); k == "" || seen[k] { // ★ — у канала (11b-Е)
 			continue
 		}
 		seen[k] = true

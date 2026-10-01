@@ -253,6 +253,9 @@ const checks = [
   [sourceMarks({ offered: true, hidden: true, audio: false }, 0).join(), 'скрыт, но других рабочих нет — плеер получит его,без звука'],
   [sourceButtons({ offered: true, hidden: true }, 0, [{ offered: true, hidden: true }]).join(), 'show'],
   [sourceButtons({ offered: true }, 0, [{ offered: true }, { offered: true }]).join(), 'keep,hide,other'],
+  // Последний источник версии, а у канала есть другие рабочие версии (11b-Е): «Скрыть» доступна.
+  [sourceButtons({ offered: true }, 0, [{ offered: true }], true).join(), 'keep,hide,other'],
+  [sourceButtons({ offered: true }, 0, [{ offered: true }]).join(), 'keep,hide-last,other'],
   [sourceButtons({ offered: true }, 1, [{ offered: true }, { offered: true }]).join(), 'main,hide,other'],
   [sourceButtons({ offered: true, pinned: true }, 0, [{ offered: true }, { offered: true }]).join(), 'unpin,hide,other'],
   [sourceButtons({ offered: true }, 0, [{ offered: true }, { offered: false }]).join(), 'keep,hide-last,other'],
