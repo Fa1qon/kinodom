@@ -39,6 +39,7 @@ const ctx = {
     location.hash = hash;
   },
   listeners: new Set(), // экраны, которым нужно свежее «Состояние»: fn(status)
+  prev: '', // адрес (без «?…») до последнего перехода; '' — первый экран
   refreshStatus: () => statusPoll && statusPoll.now(),
 };
 let statusPoll = null;
@@ -163,7 +164,9 @@ function render() {
 
 buildHeader();
 initNav();
-window.addEventListener('hashchange', () => {
+window.addEventListener('hashchange', (e) => {
+  const at = e.oldURL.indexOf('#');
+  ctx.prev = at < 0 ? '' : e.oldURL.slice(at).split('?')[0];
   setMenu(false);
   render();
 });

@@ -194,6 +194,36 @@ func (c *Catalog) entries(ctx context.Context, rs []row) ([]Entry, error) {
 	return out, nil
 }
 
+// Cards — карточки раздач по номерам, в порядке ids; неизвестные и ушедшие с трекера пропущены. Так пульт
+// спрашивает незаконченные карточки у экрана (спека 11b, 14.1): свои без страницы — в догрузку вне очереди
+// в том же порядке (что на экране — первым). Variants не считается: метку «N раздач» пульт держит прежнюю.
+func (c *Catalog) Cards(ctx context.Context, ids []int64) ([]Entry, error) {
+	byID, err := c.st.liveRowsByID(ctx, ids)
+	if err != nil {
+		return nil, err
+	}
+	rs := make([]row, 0, len(ids))
+	pending := map[string][]int64{}
+	var trackers []string
+	for _, id := range ids {
+		r, ok := byID[id]
+		if !ok {
+			continue
+		}
+		rs = append(rs, r)
+		if r.DetailsAt.IsZero() && !c.pageless(r) {
+			if pending[r.Tracker] == nil {
+				trackers = append(trackers, r.Tracker)
+			}
+			pending[r.Tracker] = append(pending[r.Tracker], r.ID)
+		}
+	}
+	for _, t := range trackers {
+		c.enqueueFound(ctx, t, pending[t], cardsLimit)
+	}
+	return c.entries(ctx, rs)
+}
+
 // Category — раздел каталога для фильтра.
 type Category struct {
 	Tracker string

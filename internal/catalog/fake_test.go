@@ -36,7 +36,16 @@ type fakeSource struct {
 	tree         []source.Category // дерево разделов; nil — по разделам топов, без вложенности
 	off          bool              // адрес трекера не введён (этап 11a)
 	calls        map[string]int
+	atOnce       int             // DetailsAtOnce: страниц раздач одновременно; 0 — как у источника без признака
+	detailsBlock chan struct{}   // если задан — страница раздачи ждёт его закрытия (или отмены)
+	detailsPanic map[string]bool // номер → разбор страницы падает паникой
+	inDetails    int             // страниц качается сейчас
+	maxDetails   int             // больше всего одновременно
 }
+
+func (f *fakeSource) DetailsAtOnce() int { f.mu.Lock(); defer f.mu.Unlock(); return f.atOnce }
+
+func (f *fakeSource) MaxDetails() int { f.mu.Lock(); defer f.mu.Unlock(); return f.maxDetails }
 
 func newFake(name string) *fakeSource {
 	return &fakeSource{name: name, top: map[string][]source.Release{}, details: map[string]source.Details{},
@@ -97,11 +106,27 @@ func (f *fakeSource) TopPage(_ context.Context, cat string, page int) ([]source.
 	return append([]source.Release(nil), all[from:to]...), to-from == 100, nil
 }
 
-func (f *fakeSource) Details(_ context.Context, id string) (source.Details, error) {
+func (f *fakeSource) Details(ctx context.Context, id string) (source.Details, error) {
 	f.mu.Lock()
-	defer f.mu.Unlock()
 	f.calls["details"]++
 	f.calls["details:"+id]++
+	block := f.detailsBlock
+	f.inDetails++
+	f.maxDetails = max(f.maxDetails, f.inDetails)
+	f.mu.Unlock()
+	defer func() { f.mu.Lock(); f.inDetails--; f.mu.Unlock() }()
+	if block != nil {
+		select {
+		case <-block:
+		case <-ctx.Done():
+			return source.Details{}, ctx.Err()
+		}
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.detailsPanic[id] {
+		panic("разбор страницы " + id)
+	}
 	if err := f.detailsErr[id]; err != nil {
 		return source.Details{}, err
 	}
