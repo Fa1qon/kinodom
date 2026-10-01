@@ -85,16 +85,19 @@ func (m *Module) Register(r Router, logo func(w http.ResponseWriter, r *http.Req
 	r.HandleHome("GET /api/v1/iptv/streams/{id}/watch", n, http.HandlerFunc(m.handleWatch)) // просмотр источника в пульте (план 14Д)
 	r.HandleHome("GET /api/v1/iptv/relay", n, http.HandlerFunc(m.handleRelay))
 	r.Handle("GET /m3u/channel/{file}", n, http.HandlerFunc(m.handleM3U))
-	if logo != nil {
-		r.Handle("GET /logo/{key}", n, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			src := m.LogoURL(r.PathValue("key"))
-			if src == "" {
-				http.NotFound(w, r)
-				return
-			}
+	r.HandleHome("POST /api/v1/iptv/custom", n, http.HandlerFunc(m.handleCustom))
+	r.Handle("GET /logo/{key}", n, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		src := m.LogoURL(r.PathValue("key"))
+		switch {
+		case src == "":
+			http.NotFound(w, r)
+		case m.serveUploadedLogo(w, r, src): // свой канал с загруженным логотипом (план 14Д)
+		case logo != nil:
 			logo(w, r, src)
-		}))
-	}
+		default:
+			http.NotFound(w, r)
+		}
+	}))
 }
 
 // ChannelView — канал для пульта и телевизора.
@@ -623,6 +626,20 @@ func (m *Module) handleOverride(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	w.WriteHeader(http.StatusNoContent)
+}
+
+// handleCustom — «Новый канал» (план 14Д): {name, logo, logoData, category, country, group} → {key}.
+func (m *Module) handleCustom(w http.ResponseWriter, r *http.Request) {
+	var in CustomInput
+	if !httpx.ReadJSON(w, r, &in) {
+		return
+	}
+	key, err := m.CreateCustom(r.Context(), in)
+	if err != nil {
+		writeEditError(w, err)
+		return
+	}
+	httpx.WriteJSON(w, http.StatusOK, map[string]string{"key": key})
 }
 
 func writeEditError(w http.ResponseWriter, err error) {

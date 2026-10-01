@@ -456,6 +456,9 @@ func build(in buildInput) *Lineup {
 	for _, k := range keys {
 		c := l.ByKey[k]
 		c.Hidden, c.Pinned = "", p.overrides[k].PinnedURL // основной источник — у версии
+		if cu, ok := p.custom[k]; ok {                    // свой канал (план 14Д): название и логотип — свои, не из записей
+			c.Name, c.Logo = cu.Name, cu.Logo
+		}
 		c.Labels = channelLabels(c, labelOverride(p.overrides, k), in, l, resolved)
 		resolved[c.EPGID] = c.Labels
 		sortSources(c, in.goodShare)
