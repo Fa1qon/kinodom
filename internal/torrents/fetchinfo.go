@@ -23,6 +23,10 @@ func (s *Service) FetchInfo(ctx context.Context, magnet string) ([]byte, error) 
 	}
 	ih := m.InfoHash
 	s.mu.Lock()
+	if s.eng == nil {
+		s.mu.Unlock()
+		return nil, ErrNoEngine
+	}
 	if t, ok := s.eng.cl.Torrent(ih); ok {
 		s.mu.Unlock()
 		select {

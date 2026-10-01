@@ -77,10 +77,10 @@ func (m *Module) check(ctx context.Context, f Follow) error {
 	for _, x := range files {
 		paths = append(paths, x.Name)
 	}
-	_, _, total := meta.Episodes(v.Title)
+	episodes, total := episodesOut(v.Title, len(files))
 	if len(f.Paths) == 0 {
 		// Список серий подписанной версии (Rutracker без .torrent) — точка отсчёта, без оповещения.
-		return m.st.setVersion(ctx, f.Release, v.InfoHash, len(files), total, paths)
+		return m.st.setVersion(ctx, f.Release, v.InfoHash, episodes, total, paths)
 	}
 	known := map[string]bool{}
 	for _, p := range f.Paths {
@@ -104,13 +104,18 @@ func (m *Module) check(ctx context.Context, f Follow) error {
 		m.log.Info("подписка: раздачу смотрят — переход позже", "release", f.Release)
 		return nil
 	}
-	if err != nil {
+	if err != nil && newIH == (metainfo.Hash{}) {
 		return err
+	}
+	if err != nil {
+		// Переход записан, а файлы не перенеслись или серия не встала в очередь: переход доведёт уборка,
+		// а оповещение — сейчас, иначе серия потерялась бы (финальное ревью 11b-В).
+		m.log.Warn("подписка: переход записан, но не доведён — доведёт уборка", "release", f.Release, "err", err)
 	}
 	m.mu.Lock()
 	delete(m.retryAt, f.Release)
 	m.mu.Unlock()
-	if err := m.st.setVersion(ctx, f.Release, newIH.HexString(), len(files), total, paths); err != nil {
+	if err := m.st.setVersion(ctx, f.Release, newIH.HexString(), episodes, total, paths); err != nil {
 		return err
 	}
 	if len(fresh) == 0 {
@@ -125,7 +130,9 @@ func (m *Module) check(ctx context.Context, f Follow) error {
 }
 
 // apply — новая версия: раздача в «Загрузках» (что-то хранится) — переход со скачанным и докачка новых;
-// не качали — новая версия открывается и качаются только новые серии.
+// не качали (или переход уже записан, а подписка о нём не узнала — сбой) — новая версия открывается и
+// качаются только новые серии. Нулевой infohash с ошибкой — ничего не случилось, повтор при следующей
+// проверке; infohash с ошибкой — новая версия уже есть, не встала только докачка или перенос.
 func (m *Module) apply(ctx context.Context, oldHex string, raw []byte, download []int) (metainfo.Hash, error) {
 	var old metainfo.Hash
 	if err := old.FromHexString(oldHex); err == nil {
@@ -134,10 +141,23 @@ func (m *Module) apply(ctx context.Context, oldHex string, raw []byte, download 
 		}
 	}
 	ih, err := m.o.Torrents.Open(ctx, torrents.Source{Torrent: raw})
-	if err != nil || len(download) == 0 {
-		return ih, err
+	if err != nil {
+		return metainfo.Hash{}, err
+	}
+	if len(download) == 0 {
+		return ih, nil
 	}
 	return ih, m.o.Torrents.Download(ctx, ih, download)
+}
+
+// episodesOut — сколько серий вышло и сколько всего: из названия («[01-07 из 08]» — 7 из 8), а без «из N» —
+// по числу видеофайлов (бонус и трейлер иначе считались бы сериями и подписка кончалась бы до финала).
+func episodesOut(title string, files int) (episodes, total int) {
+	_, to, total := meta.Episodes(title)
+	if total > 0 && to > 0 {
+		return to, total
+	}
+	return files, total
 }
 
 func anyStored(st torrents.TorrentStatus) bool {

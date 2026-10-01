@@ -27,6 +27,7 @@ var (
 	ErrNotOpen    = errors.New("раздача не открыта")
 	ErrNoInfo     = errors.New("список файлов раздачи ещё не получен")
 	ErrNoSuchFile = errors.New("такого файла в раздаче нет")
+	ErrNoEngine   = errors.New("загрузки не работают — нет папки загрузок")
 )
 
 // Source — откуда открыть раздачу: magnet-ссылка или содержимое файла .torrent.
@@ -97,7 +98,10 @@ type Service struct {
 	sessions map[metainfo.Hash]*session
 	policy   Policy
 	fetching map[metainfo.Hash]chan struct{} // идёт FetchInfo: временная раздача без хранилища
-	rekey    Rekey                           // перенос ключей при доведении перехода после сбоя (SetRekey)
+	// upgrading — переход идёт в этом процессе (прежняя и новая версии): уборка его не трогает — ни
+	// доведением, ни восстановлением новой версии, пока файлы переносятся (финальное ревью 11b-В).
+	upgrading map[metainfo.Hash]bool
+	rekey     Rekey // перенос ключей при доведении перехода после сбоя (SetRekey)
 
 	upgradeStop func(phase string, rec upgradeRec) error // тесты: «сбой» посреди перехода
 
@@ -213,8 +217,8 @@ func (s *Service) restore(ctx context.Context) error {
 	}
 	missing := map[string]int{} // недоступная папка → сколько раздач в ней ждут
 	for _, rec := range recs {
-		if _, ok := s.eng.cl.Torrent(rec.InfoHash); ok {
-			continue
+		if _, ok := s.eng.cl.Torrent(rec.InfoHash); ok || s.isUpgrading(rec.InfoHash) {
+			continue // новую версию идущего перехода добавит сам переход, когда перенесёт файлы
 		}
 		if rec.Dir != "" {
 			if _, err := os.Stat(rec.Dir); err != nil {
@@ -334,6 +338,9 @@ func (s *Service) Open(ctx context.Context, src Source) (metainfo.Hash, error) {
 	// Под s.mu: уборка не должна убрать запись о раздаче между Remember и появлением сессии.
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if s.eng == nil {
+		return metainfo.Hash{}, ErrNoEngine
+	}
 	if err := s.waitFetch(ctx, ih); err != nil {
 		return metainfo.Hash{}, err
 	}

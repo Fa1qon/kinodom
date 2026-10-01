@@ -85,6 +85,23 @@ func (c *Catalog) ReleasesByHash(ctx context.Context, hashes []string) (map[stri
 	return out, nil
 }
 
+// ReleaseBrief — название и картинка раздачи без побочных действий Release (тот значит «человек открыл
+// раздачу»: догрузка вне очереди, постер без паузы) — для строк, которые опрашиваются: «Новые серии» под
+// колокольчиком раз в 15 с с каждого пульта (финальное ревью 11b-В).
+func (c *Catalog) ReleaseBrief(ctx context.Context, id int64) (ReleaseRef, error) {
+	var r ReleaseRef
+	err := c.db.R.QueryRowContext(ctx, `SELECT id, title, image_key FROM releases WHERE id = ?`, id).Scan(&r.ID, &r.Title, &r.ImageKey)
+	if errors.Is(err, sql.ErrNoRows) {
+		return ReleaseRef{}, ErrNoRelease
+	}
+	if err != nil {
+		return ReleaseRef{}, err
+	}
+	t := meta.ParseTitle(r.Title)
+	r.Season, r.Quality = t.Season, t.Quality
+	return r, nil
+}
+
 // magnetBuilder — источник собирает magnet из infohash со своими трекерами. У Rutracker без них
 // старт только через DHT — 35 с вместо 6–13 (основная спека, раздел 6).
 type magnetBuilder interface {
