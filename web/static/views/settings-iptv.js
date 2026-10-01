@@ -12,11 +12,11 @@ export function progressLine(name, p) {
   return p.finished ? `${name}: ${ago(p.finished)}` : `${name}: ещё не было`;
 }
 
-// hideCard — карточка «Скрытие»: категории, страны, языки, другие часовые пояса. draft — черновик
-// {categories, countries, languages, otherZones}, меняется отметками; «Сохранить» включается сразу, как
+// hideCard — карточка «Скрытие»: категории, страны, языки (версии по времени — внутри канала, 11b-Е).
+// draft — черновик {categories, countries, languages}, меняется отметками; «Сохранить» включается сразу, как
 // черновик разошёлся с настройками iv (опрос перерисовывает экран раз в 5 с — ждать его нельзя).
 export function hideCard(iv, all, draft, editable, onSave) {
-  const saved = () => JSON.stringify({ categories: iv.hiddenCategories, countries: iv.hiddenCountries, languages: iv.hiddenLanguages, otherZones: iv.hideOtherZones });
+  const saved = () => JSON.stringify({ categories: iv.hiddenCategories, countries: iv.hiddenCountries, languages: iv.hiddenLanguages });
   const save = editable ? h('button', { class: 'btn inv', type: 'button', 'data-key': 'hide-save', onclick: onSave }, icon('save'), 'Сохранить') : null;
   const sync = () => {
     if (save) save.disabled = JSON.stringify(draft) === saved();
@@ -33,12 +33,7 @@ export function hideCard(iv, all, draft, editable, onSave) {
   return h('div', { class: 'card' }, h('div', { class: 'row' }, h('div', { class: 'h grow' }, 'Скрытие'), save),
     group('Категории', CATEGORIES.map(([id, name]) => box('categories', id, name, catCount.get(id)))),
     group('Страны', all.countries.map((x) => box('countries', x.id, x.name, x.count))),
-    group('Языки', all.languages.map((x) => box('languages', x.id, x.name, x.count))),
-    h('label', { class: 'check' }, h('input', { type: 'checkbox', checked: draft.otherZones, disabled: !editable, 'data-key': 'hide-zones',
-      onchange: (e) => {
-        draft.otherZones = e.target.checked;
-        sync();
-      } }), 'Другие часовые пояса'));
+    group('Языки', all.languages.map((x) => box('languages', x.id, x.name, x.count))));
 }
 
 export function render(root, r, ctx) {
@@ -52,7 +47,7 @@ export function render(root, r, ctx) {
   let error = '';
   let adding = false;
   let confirm = 0; // плейлист, у которого корзина просит подтверждения
-  let hidden = null; // черновик скрытия: {categories, countries, languages, otherZones}
+  let hidden = null; // черновик скрытия: {categories, countries, languages}
   let favKeys = null; // /iptv/favorites — избранное этого устройства как сохранено
   // Поля ввода создаются один раз: опрос перерисовывает экран, а набранное не должно пропадать.
   const url = h('input', { class: 'input', name: 'url', placeholder: 'https://…/playlist.m3u', 'aria-label': 'Ссылка на плейлист', 'data-key': 'pl-url' });
@@ -197,9 +192,9 @@ export function render(root, r, ctx) {
   function hidingCard() {
     if (!all) return h('div', { class: 'card' }, h('div', { class: 'h' }, 'Скрытие'), h('p', { class: 'muted' }, 'Загружается…'));
     const iv = settings.iptv;
-    if (!hidden) hidden = { categories: [...iv.hiddenCategories], countries: [...iv.hiddenCountries], languages: [...iv.hiddenLanguages], otherZones: iv.hideOtherZones };
+    if (!hidden) hidden = { categories: [...iv.hiddenCategories], countries: [...iv.hiddenCountries], languages: [...iv.hiddenLanguages] };
     return hideCard(iv, all, hidden, canEdit(), () => act(async () => {
-      await put('/settings', { iptv: { hiddenCategories: hidden.categories, hiddenCountries: hidden.countries, hiddenLanguages: hidden.languages, hideOtherZones: hidden.otherZones } });
+      await put('/settings', { iptv: { hiddenCategories: hidden.categories, hiddenCountries: hidden.countries, hiddenLanguages: hidden.languages } });
       hidden = null;
       await reloadChannels();
     }));

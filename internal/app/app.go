@@ -405,8 +405,7 @@ func (a *App) initIPTV(ctx context.Context, o Options, v settings.Values) error 
 
 // hiddenOf — скрытие каналов из настроек.
 func hiddenOf(v settings.Values) iptv.Hidden {
-	return iptv.Hidden{Categories: v.HiddenCategories, Countries: v.HiddenCountries, Languages: v.HiddenLanguages,
-		OtherZones: v.HideOtherZones}
+	return iptv.Hidden{Categories: v.HiddenCategories, Countries: v.HiddenCountries, Languages: v.HiddenLanguages}
 }
 
 // t2Login — проблема t2.login, пока вход заблокирован (неверный пароль или капча):

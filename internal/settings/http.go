@@ -78,7 +78,6 @@ type IPTVView struct {
 	HiddenCategories []string `json:"hiddenCategories"`
 	HiddenCountries  []string `json:"hiddenCountries"`
 	HiddenLanguages  []string `json:"hiddenLanguages"`
-	HideOtherZones   bool     `json:"hideOtherZones"`
 	UTCOffset        int      `json:"utcOffset"`
 }
 
@@ -97,7 +96,7 @@ func (v Values) View() View {
 		Player:    v.Player,
 		Catalog:   CatalogView{Sections: splitSections(v.Sections), PreferredFormat: v.PreferredFormat},
 		IPTV: IPTVView{EPGURL: v.EPGURL, HiddenCategories: nonNil(v.HiddenCategories), HiddenCountries: nonNil(v.HiddenCountries),
-			HiddenLanguages: nonNil(v.HiddenLanguages), HideOtherZones: v.HideOtherZones, UTCOffset: v.UTCOffset},
+			HiddenLanguages: nonNil(v.HiddenLanguages), UTCOffset: v.UTCOffset},
 	}
 }
 
@@ -168,7 +167,6 @@ type IPTVPatch struct {
 	HiddenCategories *[]string `json:"hiddenCategories"`
 	HiddenCountries  *[]string `json:"hiddenCountries"`
 	HiddenLanguages  *[]string `json:"hiddenLanguages"`
-	HideOtherZones   *bool     `json:"hideOtherZones"`
 	UTCOffset        *int      `json:"utcOffset"`
 }
 
