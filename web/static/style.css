@@ -297,6 +297,13 @@ a.res-row:hover { background: var(--hover); }
 .mod { display: flex; align-items: center; gap: 14px; padding: 11px 0; border-bottom: 1px solid var(--line-soft); font-size: 15px; }
 .mod:last-child { border-bottom: 0; }
 .mod-name { width: 130px; flex-shrink: 0; font-weight: 600; }
+/* Сезон сериала у «Скачать» (план 14А): крупно — какой сезон скачается. */
+.season-big { font-size: 20px; font-weight: 700; margin-bottom: 12px; }
+/* Формат в приоритете (план 14А): синий, как «DOM» логотипа. */
+.fmt.pref { color: var(--blue); font-weight: 700; }
+.tag.pref { color: var(--blue); border-color: var(--blue); }
+.dl-name .fmt { margin-right: 8px; font-size: 13px; color: var(--muted); }
+.dl-name .fmt.pref { color: var(--blue); }
 .mark { display: inline-block; width: 10px; height: 10px; flex-shrink: 0; }
 .app-card .row { margin-top: 8px; }
 .app-addr { margin-top: 8px; font-size: 18px; font-weight: 700; overflow-wrap: anywhere; }
