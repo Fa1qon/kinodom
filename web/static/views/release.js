@@ -1,7 +1,7 @@
 // Раздача: постер, название, теги, описание; до «Скачать» — одна светлая кнопка, после — у каждого
 // файла прогресс и «Смотреть» цвета готовности, справа — панель файла в фокусе; ниже — «Другие раздачи»
 // фильма и «Искать на трекерах» (спека этапа 7, разделы 5.4, 5.5, 6.3 и 10.7).
-import { h, icon, size, speed, rating, minutes, ready, poll, copyText, store, plural, shortNames, keepFocus, fileFormat, openPlayer, confirmDialog } from '../ui.js';
+import { h, icon, size, speed, rating, minutes, ready, poll, copyText, store, plural, shortNames, keepFocus, fileFormat, openPlayer, confirmDialog, fill } from '../ui.js';
 import { get, post, put, del } from '../api.js';
 import { whereStopped, resumeIndex } from './history.js';
 import { poster } from './catalog.js';
@@ -132,7 +132,7 @@ export function render(root, r, ctx) {
     back.replaceChildren(h('a', { class: 'back', href: to.href }, icon('chevron_left', 18), to.text));
     cover.replaceChildren(poster(rel, title, 'poster big'));
     const desc = rel.description ? h('p', { class: descOpen ? 'desc' : 'desc clamp' }, rel.description) : null;
-    info.replaceChildren(
+    fill(info,
       h('h1', null, title),
       h('div', { class: 'muted sub' }, [rel.original, rel.year || null].filter(Boolean).join(' · ')),
       h('div', { class: 'tags' },
@@ -171,7 +171,7 @@ export function render(root, r, ctx) {
     const label = (f) => (series ? names.get(f.index) : rel.name || rel.title);
     keepFocus(root, () => {
       live.replaceChildren(series ? episodes(fs, label) : '');
-      side.replaceChildren(...panel(fs, label));
+      fill(side, panel(fs, label)); // «Следить» у не сериала — null: replaceChildren напечатал бы его
     });
     // Кнопки «Скачать» после удачного нажатия больше нет — фокус пульта ТВ на появившуюся «Смотреть».
     if (focusNext && (!document.activeElement || document.activeElement === document.body)) {

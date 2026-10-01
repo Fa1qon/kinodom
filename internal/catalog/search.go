@@ -223,6 +223,8 @@ func (c *Catalog) kinopoiskSoon(ctx context.Context, ids []int64) {
 		c.log.Warn("поиск: найденное не читается", "err", err)
 		return
 	}
+	noImage := map[string]int64{}
+	var keys []string
 	for _, id := range ids {
 		r, ok := byID[id]
 		if !ok || r.KinopoiskID != 0 {
@@ -232,14 +234,32 @@ func (c *Catalog) kinopoiskSoon(ctx context.Context, ids []int64) {
 			c.log.Warn("поиск: раздача не встала в очередь рейтингов", "err", err)
 			return
 		}
-		if r.ImageKey == "" {
-			c.mu.Lock()
-			if len(c.kpWait) >= kpWaitLimit {
-				clear(c.kpWait)
-			}
-			c.kpWait[r.Tracker+":"+r.TopicID] = true
-			c.mu.Unlock()
+		if key := r.Tracker + ":" + r.TopicID; r.ImageKey == "" {
+			noImage[key] = id
+			keys = append(keys, key)
 		}
+	}
+	if len(keys) == 0 {
+		return
+	}
+	// Номер мог найтись сразу, без очереди (соседняя раздача того же фильма): постер Кинопоиска — сейчас,
+	// срочным путём; нет — раздача ждёт номер (ratingResolved).
+	known, err := c.ratings.For(ctx, keys)
+	if err != nil {
+		c.log.Warn("поиск: рейтинги не читаются", "err", err)
+		return
+	}
+	for _, key := range keys {
+		if kp := known[key].KinopoiskID; kp > 0 {
+			c.posterLater(ctx, noImage[key], "", kp, true)
+			continue
+		}
+		c.mu.Lock()
+		if len(c.kpWait) >= kpWaitLimit {
+			clear(c.kpWait)
+		}
+		c.kpWait[key] = noImage[key]
+		c.mu.Unlock()
 	}
 }
 

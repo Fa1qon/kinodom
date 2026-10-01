@@ -182,3 +182,27 @@ func TestParseTitleSlashYear(t *testing.T) {
 		}
 	}
 }
+
+// Bitru (вживую 2026-10-01): «Название N сезон (1-7 из 10) (2026) WEBRip | от Группа» — сезон не часть
+// названия (иначе номер Кинопоиска не находится), качество — до « | » и до « от », что раньше.
+func TestParseTitleSeasonTail(t *testing.T) {
+	cases := []struct {
+		in, ru, orig string
+		year         int
+		quality      string
+	}{
+		{"Трудно быть богом 1 сезон (1-7 из 10) (2026) WEBRip | от ExKinoRay", "Трудно быть богом", "", 2026, "WEBRip"},
+		{"Фонари 1 сезон (1-4 из 8) / Lanterns (2026) WEB-DL | 4К, HDR+, 10-bit | GEKADOL ®", "Фонари", "Lanterns", 2026, "WEB-DL"},
+		{"Холод сезон 1 (2026) WEB-DLRip от Files-х | P", "Холод", "", 2026, "WEB-DLRip"},
+		{"Сезон охоты 2 (2008) BDRip от HQ-ViDEO", "Сезон охоты 2", "", 2008, "BDRip"},
+	}
+	for _, c := range cases {
+		got := ParseTitle(c.in)
+		if got.Ru != c.ru || got.Orig != c.orig || got.Year != c.year || got.Quality != c.quality {
+			t.Errorf("%q: %+v", c.in, got)
+		}
+	}
+	if !ParseTitle(cases[0].in).Series {
+		t.Errorf("%q — сериал", cases[0].in)
+	}
+}
