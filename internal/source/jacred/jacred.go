@@ -18,6 +18,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode"
+	"unicode/utf8"
 
 	"github.com/anacrolix/torrent/metainfo"
 
@@ -241,7 +243,8 @@ func checkText(err error) string {
 		return "Адрес не похож на Jacred или Jackett"
 	}
 	s := err.Error()
-	return strings.ToUpper(s[:1]) + s[1:]
+	first, n := utf8.DecodeRuneInString(s)
+	return string(unicode.ToUpper(first)) + s[n:]
 }
 
 // response — ответ поиска. Results — указатель: ответ без этого поля — не Jacred и не Jackett.
@@ -272,7 +275,9 @@ func (c *Client) search(ctx context.Context, addr, key string, q Query) (searchR
 		v.Set("apikey", key)
 	}
 	var resp response
-	if err := c.get(ctx, addr, resultsPath, v, key != "", &resp); err != nil {
+	if err := c.get(ctx, addr, resultsPath, v, key != "", &resp); errors.Is(err, errNoPage) {
+		return searchResponse{}, ErrNotSource // поиска по этому адресу нет: не Jacred и не Jackett (или другой путь)
+	} else if err != nil {
 		return searchResponse{}, err
 	}
 	if resp.Results == nil {

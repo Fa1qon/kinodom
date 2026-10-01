@@ -761,6 +761,7 @@ func (a *App) Apply(ctx context.Context, old, n settings.Values) {
 	}
 	if n.SearchAddress != old.SearchAddress || n.SearchKey != old.SearchKey {
 		a.search.SetAddress(n.SearchAddress, n.SearchKey)
+		a.Catalog.ForgetSearches() // тот же запрос — уже с новым источником или ключом
 	}
 	a.Log.Info("настройки изменены в пульте") // без значений: среди них пароли и ключ
 }

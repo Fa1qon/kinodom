@@ -41,6 +41,7 @@ type SearchState struct {
 // searchRun — идущий или законченный поиск.
 type searchRun struct {
 	started  time.Time
+	sources  string // кто искал (searchSources): другой набор — кэш не годится
 	mu       sync.Mutex
 	ids      []int64 // найденные раздачи в базе
 	status   map[string]string
@@ -81,19 +82,19 @@ func (c *Catalog) startSearch(query string, poll, enrich bool) (*searchRun, stri
 			delete(c.searches, k)
 		}
 	}
+	names := c.searchSources()
+	sig := strings.Join(names, ",")
 	run, ok := c.searches[key]
 	if ok && !poll && run.staleWithErrors(now) {
 		ok = false // поиск с ошибками не кэшируется: новый запрос ищет заново, повторный опрос — нет
 	}
+	if ok && !poll && run.sources != sig {
+		ok = false // включили или выключили трекер или источник поиска
+	}
 	if !ok {
-		run = &searchRun{started: now, status: map[string]string{}}
-		for name := range c.sources {
-			if c.configured(name) { // без адреса трекер выключен: в поиске его нет
-				run.status[name] = SearchRunning
-			}
-		}
-		if c.extra != nil && c.extra.Configured() {
-			run.status[c.extra.Name()] = SearchRunning
+		run = &searchRun{started: now, sources: sig, status: map[string]string{}}
+		for _, name := range names {
+			run.status[name] = SearchRunning
 		}
 		c.searches[key] = run
 		parent := c.runCtx
@@ -134,7 +135,7 @@ func (c *Catalog) runSearch(ctx context.Context, cancel context.CancelFunc, run 
 			var ids []int64
 			var serr error
 			if extra {
-				ids, serr = c.st.saveExtra(context.WithoutCancel(ctx), rs, c.ownWithAddress, c.now())
+				ids, serr = c.st.saveExtra(context.WithoutCancel(ctx), rs, c.Own, c.ownWithAddress, c.now())
 			} else {
 				ids, serr = c.st.saveFound(context.WithoutCancel(ctx), rs, c.now())
 			}
@@ -209,7 +210,7 @@ func (c *Catalog) extraFound(ctx context.Context, rs []source.Release, ids []int
 			c.enqueueFound(ctx, tracker, ids)
 		}
 	}
-	c.kinopoiskSoon(ctx, pageless[:min(len(pageless), searchToEnrich)])
+	c.kinopoiskSoon(ctx, pageless)
 }
 
 // kinopoiskSoon — раздачи без страницы без номера Кинопоиска — в очередь рейтингов первыми; у кого нет
@@ -225,14 +226,20 @@ func (c *Catalog) kinopoiskSoon(ctx context.Context, ids []int64) {
 	}
 	noImage := map[string]int64{}
 	var keys []string
+	queued := 0
 	for _, id := range ids {
 		r, ok := byID[id]
 		if !ok || r.KinopoiskID != 0 {
 			continue
 		}
-		if err := c.ratings.Enqueue(ctx, 0, ratingItem(r)); err != nil {
-			c.log.Warn("поиск: раздача не встала в очередь рейтингов", "err", err)
-			return
+		// В очередь рейтингов — первые searchToEnrich (квота Кинопоиска без токена), а постер по уже
+		// известному номеру — всем: экран сортирует по раздающим, источник — нет (финальное ревью 11b-Д).
+		if queued < searchToEnrich {
+			queued++
+			if err := c.ratings.Enqueue(ctx, 0, ratingItem(r)); err != nil {
+				c.log.Warn("поиск: раздача не встала в очередь рейтингов", "err", err)
+				return
+			}
 		}
 		if key := r.Tracker + ":" + r.TopicID; r.ImageKey == "" {
 			noImage[key] = id
@@ -316,4 +323,27 @@ func (c *Catalog) runRows(ctx context.Context, run *searchRun) ([]row, SearchSta
 		}
 	}
 	return rs, SearchState{Complete: done, Trackers: status}, nil
+}
+
+// ForgetSearches — настройки источников сменили (адрес, ключ): законченные поиски из кэша не берутся —
+// иначе тот же запрос ещё 30 минут отвечал бы прежним набором (финальное ревью 11b-Д).
+func (c *Catalog) ForgetSearches() {
+	c.mu.Lock()
+	clear(c.searches)
+	c.mu.Unlock()
+}
+
+// searchSources — кто сейчас ищет: свои трекеры с адресом и источник поиска с адресом. Вызывать под c.mu.
+func (c *Catalog) searchSources() []string {
+	var names []string
+	for name := range c.sources {
+		if c.configured(name) { // без адреса трекер выключен: в поиске его нет
+			names = append(names, name)
+		}
+	}
+	if c.extra != nil && c.extra.Configured() {
+		names = append(names, c.extra.Name())
+	}
+	slices.Sort(names)
+	return names
 }
