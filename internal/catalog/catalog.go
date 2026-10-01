@@ -104,7 +104,6 @@ type Catalog struct {
 	refreshNow      chan struct{}
 	sectionsChanged chan struct{} // разделы сменили в пульте: пройти по разделам без ожидания
 	enrichWake      map[string]chan struct{}
-	postersWake     chan struct{}
 
 	mu          sync.Mutex
 	sections    []Section             // разделы из настроек
@@ -114,10 +113,11 @@ type Catalog struct {
 	torrentNow  map[int64]bool        // .torrent открытой раздачи качается сейчас
 	yield       map[string]func()     // трекер → прервать фоновое ожидание .torrent: пришла срочная работа
 	retries     map[string]retryState // «poster:<id>», «torrent:<id>» → повтор после сбоя (хвост Х7)
-	forced      map[int64]bool        // открыли раздачу без картинки — постер без паузы
+	openPoster  map[int64]time.Time   // открытая раздача без картинки → когда пробовали её постер (не чаще openPosterEvery)
 	posterWG    sync.WaitGroup        // постеры и .torrent, которые качаются вне шага догрузки (тесты ждут их)
 	posterSem   chan struct{}         // фоновые постеры: не больше двух одновременно
-	urgentSem   chan struct{}         // постеры открытых и найденных: свои два места, не за фоновыми
+	urgentSem   chan struct{}         // постеры найденных и показанных в сетке: свои два места, не за фоновыми
+	openSem     chan struct{}         // постеры открытых в пульте: свои два места, не за сеткой (спека 11b, 14.2)
 	bgWaiting   int                   // фоновых постеров ждут места
 	failures    int                   // неудачных проходов подряд
 	forumPaused map[string]time.Time  // трекер → до какого времени не ходить за страницами раздач
@@ -142,8 +142,8 @@ func New(o Options) *Catalog {
 	c := &Catalog{st: catalogStore{o.DB}, db: o.DB, sources: map[string]source.Source{}, sections: o.Sections,
 		ratings: o.Ratings, images: o.Images, kpPoster: o.KinopoiskPoster, keepImages: o.KeepImages, log: o.Log, now: time.Now,
 		refreshNow: make(chan struct{}, 1), sectionsChanged: make(chan struct{}, 1), enrichWake: map[string]chan struct{}{},
-		postersWake: make(chan struct{}, 1), urgent: map[string][]int64{}, found: map[string][]int64{}, torrentNow: map[int64]bool{}, yield: map[string]func(){}, retries: map[string]retryState{}, forced: map[int64]bool{},
-		posterSem: make(chan struct{}, 2), urgentSem: make(chan struct{}, 2),
+		urgent: map[string][]int64{}, found: map[string][]int64{}, torrentNow: map[int64]bool{}, yield: map[string]func(){}, retries: map[string]retryState{}, openPoster: map[int64]time.Time{},
+		posterSem: make(chan struct{}, 2), urgentSem: make(chan struct{}, 2), openSem: make(chan struct{}, 2),
 		forumPaused: map[string]time.Time{}, searches: map[string]*searchRun{}, torrentFormat: o.TorrentFormat, deep: map[CategoryRef]deepList{}, deepPos: map[CategoryRef]int{}, deepEnd: map[CategoryRef]bool{}, deepEmpty: map[CategoryRef]int{},
 		preferred: o.PreferredFormat, extra: o.Extra, filmDesc: o.FilmDescription, kpWait: map[string]int64{}, descNow: map[int64]bool{}}
 	if o.Ratings != nil {
@@ -444,7 +444,7 @@ func (c *Catalog) ratingResolved(release string) {
 		return
 	}
 	if kp := known[release].KinopoiskID; kp > 0 {
-		c.posterLater(base, id, "", kp, true)
+		c.posterLater(base, id, "", kp, posterSoon)
 	}
 }
 

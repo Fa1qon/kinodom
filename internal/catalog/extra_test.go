@@ -115,10 +115,6 @@ func TestExtraSearchForeign(t *testing.T) {
 	if q, err := ratings.Status(ctx); err != nil || q.Queue != 1 {
 		t.Fatalf("очередь рейтингов: %+v, %v", q, err)
 	}
-	select {
-	case <-c.postersWake:
-	default:
-	}
 	r, err := c.Release(ctx, e.ID)
 	if err != nil {
 		t.Fatal(err)

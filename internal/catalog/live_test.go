@@ -1,11 +1,16 @@
 package catalog
 
 import (
+	"context"
 	"fmt"
 	"net/http"
+	"net/http/httptest"
 	"slices"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	"kinodom/internal/meta"
 	"kinodom/internal/source"
@@ -135,5 +140,198 @@ func TestCardsLimit(t *testing.T) {
 	}
 	if code := getJSON(t, mux, "/api/v1/catalog/cards?ids="+strings.Join(ids[:cardsLimit], ","), nil); code != 200 {
 		t.Fatalf("ровно предел: %d", code)
+	}
+}
+
+// stallHost — хостинг картинок: /slow/… висит до конца теста, /down/… — 502, пока не поднят up, остальное —
+// картинка; считает запросы по путям.
+type stallHost struct {
+	*httptest.Server
+	up   atomic.Bool
+	mu   sync.Mutex
+	hits map[string]int
+}
+
+func newStallHost(t *testing.T) *stallHost {
+	pic := pngBytes(t)
+	hang := make(chan struct{})
+	h := &stallHost{hits: map[string]int{}}
+	h.Server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		h.mu.Lock()
+		h.hits[r.URL.Path]++
+		h.mu.Unlock()
+		switch {
+		case strings.HasPrefix(r.URL.Path, "/slow/"):
+			select {
+			case <-hang:
+			case <-r.Context().Done():
+			}
+			return
+		case strings.HasPrefix(r.URL.Path, "/down/") && !h.up.Load():
+			w.WriteHeader(http.StatusBadGateway)
+			return
+		}
+		w.Write(pic)
+	}))
+	t.Cleanup(func() { close(hang); h.Close() })
+	return h
+}
+
+func (h *stallHost) Hits(path string) int { h.mu.Lock(); defer h.mu.Unlock(); return h.hits[path] }
+
+func stallCatalog(t *testing.T, h *stallHost, rutor *fakeSource) (*Catalog, *clock) {
+	t.Helper()
+	im, err := meta.NewImages(meta.ImagesOptions{Dir: t.TempDir(), Rate: 1000, AllowPrivate: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return newCatalog(t, openDB(t), func(o *Options) { o.Images = im }, rutor)
+}
+
+// waitImage — открытая раздача получает картинку за 3 с (экран раздачи спрашивает её, как пульт).
+func waitImage(t *testing.T, c *Catalog, id int64, what string) {
+	t.Helper()
+	deadline := time.Now().Add(3 * time.Second)
+	for {
+		if r, err := c.Release(ctx, id); err == nil && r.ImageKey != "" {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatal(what)
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+}
+
+// Постер открытой раздачи — на своих местах (спека 11b, 14.2): постеры показанной сетки на зависшем
+// хостинге его не держат (вживую 2026-10-01: открытая раздача ждала постеры всей сетки).
+func TestOpenedPosterNotBehindShown(t *testing.T) {
+	h := newStallHost(t)
+	rutor := newFake("rutor")
+	var rels []source.Release
+	for i := range 7 {
+		rels = append(rels, rel("rutor", fmt.Sprint(100+i), fmt.Sprintf("Ф%d (2020) WEB-DL", i), 5, 1, fmt.Sprintf("h%d", i)))
+	}
+	rutor.details["106"] = source.Details{Release: rels[6], PosterURL: h.URL + "/fast.jpg"}
+	c, _ := stallCatalog(t, h, rutor)
+	ids, err := c.st.saveFound(ctx, rels, c.now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	bctx, cancel := context.WithCancel(ctx)
+	t.Cleanup(cancel)
+	for i, id := range ids[:6] {
+		c.posterLater(bctx, id, fmt.Sprintf("%s/slow/%d.jpg", h.URL, i), 0, posterSoon)
+	}
+	if _, err := c.Release(ctx, ids[6]); err != nil { // открыли: страница — вне очереди первой
+		t.Fatal(err)
+	}
+	if did, err := c.enrichStep(ctx, "rutor"); !did || err != nil {
+		t.Fatal(did, err)
+	}
+	waitImage(t, c, ids[6], "постер открытой раздачи ждёт постеры показанной сетки")
+	cancel()
+	c.posterWG.Wait()
+}
+
+// Открыли раздачу со страницей без картинки (постер не скачался раньше) — постер сразу (спека 11b, 14.2), а не
+// когда кончится фоновый проход повторов: тот висит на мёртвом хостинге до минуты на постер.
+func TestOpenedPosterNotBehindRetryPass(t *testing.T) {
+	h := newStallHost(t)
+	rutor := newFake("rutor")
+	rutor.top["12"] = []source.Release{rel("rutor", "1", "Икс (2020) WEB-DL", 9, 1, "x"), rel("rutor", "2", "Игрек (2020) WEB-DL", 5, 1, "y")}
+	rutor.details["1"] = source.Details{Release: source.Release{Title: "Икс (2020) WEB-DL"}, PosterURL: h.URL + "/slow/x.jpg"}
+	rutor.details["2"] = source.Details{Release: source.Release{Title: "Игрек (2020) WEB-DL"}, PosterURL: h.URL + "/down/y.jpg"}
+	c, clk := stallCatalog(t, h, rutor)
+	refresh(t, c, true)
+	bctx, cancel := context.WithCancel(ctx)
+	t.Cleanup(cancel)
+	for range 2 {
+		if did, err := c.enrichStep(bctx, "rutor"); !did || err != nil {
+			t.Fatal(did, err)
+		}
+	}
+	y := list(t, c, ListOptions{})[1].ID
+	deadline := time.Now().Add(3 * time.Second)
+	for h.Hits("/down/y.jpg") == 0 || !func() bool { c.mu.Lock(); defer c.mu.Unlock(); _, ok := c.retries["poster:"+fmt.Sprint(y)]; return ok }() {
+		if time.Now().After(deadline) {
+			t.Fatal("постер Игрека не пробовали")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	clk.add(time.Hour) // пауза повтора прошла: проход повторов возьмётся за обе раздачи, первой — Икс
+	go c.fixPosters(bctx)
+	for h.Hits("/slow/x.jpg") < 2 {
+		if time.Now().After(deadline.Add(2 * time.Second)) {
+			t.Fatal("проход повторов не дошёл до Икса")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	h.up.Store(true)
+	waitImage(t, c, y, "открытая раздача без картинки ждёт фоновый проход повторов")
+	cancel()
+	c.posterWG.Wait()
+}
+
+// Экран раздачи спрашивает её каждую секунду: постер открытой раздачи без картинки пробуется не чаще раза в
+// минуту (мёртвый хостинг — не шторм запросов; спека 11b, 14.2).
+func TestOpenedPosterOncePerMinute(t *testing.T) {
+	h := newStallHost(t)
+	rutor := newFake("rutor")
+	rutor.top["12"] = []source.Release{rel("rutor", "2", "Игрек (2020) WEB-DL", 5, 1, "y")}
+	rutor.details["2"] = source.Details{Release: source.Release{Title: "Игрек (2020) WEB-DL"}, PosterURL: h.URL + "/down/y.jpg"}
+	c, clk := stallCatalog(t, h, rutor)
+	refresh(t, c, true)
+	enrichAll(t, c, "rutor")
+	y := list(t, c, ListOptions{})[0].ID
+	if n := h.Hits("/down/y.jpg"); n != 1 {
+		t.Fatalf("догрузка: попыток %d", n)
+	}
+	open := func() {
+		t.Helper()
+		for range 5 {
+			if _, err := c.Release(ctx, y); err != nil {
+				t.Fatal(err)
+			}
+			c.posterWG.Wait()
+		}
+	}
+	open()
+	if n := h.Hits("/down/y.jpg"); n != 2 {
+		t.Fatalf("открыли 5 раз: попыток %d, нужна одна", n-1)
+	}
+	clk.add(openPosterEvery + time.Second)
+	open()
+	if n := h.Hits("/down/y.jpg"); n != 3 {
+		t.Fatalf("через минуту: попыток %d, нужна ещё одна", n-2)
+	}
+}
+
+// Открыли раздачу без страницы: постер пробует шаг догрузки, а экран раздачи, пока постера нет, второй
+// попытки не начинает — одна попытка в минуту на открытую раздачу (спека 11b, 14.2).
+func TestOpenedPosterOnceWithPage(t *testing.T) {
+	h := newStallHost(t)
+	rutor := newFake("rutor")
+	found := rel("rutor", "2", "Игрек (2020) WEB-DL", 5, 1, "y")
+	rutor.details["2"] = source.Details{Release: found, PosterURL: h.URL + "/down/y.jpg"}
+	c, _ := stallCatalog(t, h, rutor)
+	ids, err := c.st.saveFound(ctx, []source.Release{found}, c.now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := c.Release(ctx, ids[0]); err != nil {
+		t.Fatal(err)
+	}
+	if did, err := c.enrichStep(ctx, "rutor"); !did || err != nil {
+		t.Fatal(did, err)
+	}
+	for range 3 {
+		if _, err := c.Release(ctx, ids[0]); err != nil {
+			t.Fatal(err)
+		}
+		c.posterWG.Wait()
+	}
+	if n := h.Hits("/down/y.jpg"); n != 1 {
+		t.Fatalf("попыток постера %d, нужна одна", n)
 	}
 }

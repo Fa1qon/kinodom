@@ -97,7 +97,8 @@ func TestReleaseReadyBeforeItsPoster(t *testing.T) {
 }
 
 // Хостинг постера мёртв, и Кинопоиск в момент догрузки тоже не отдал постер: постер Кинопоиска
-// догружается позже; открытие раздачи без картинки будит догрузку сразу (хвост 5c).
+// догружается позже; открытие раздачи без картинки качает его сразу (хвост 5c; спека 11b, 14.2 — не через
+// проход повторов).
 func TestKinopoiskPosterIsFetchedLater(t *testing.T) {
 	pic := pngBytes(t)
 	var kpUp atomic.Bool
@@ -132,14 +133,7 @@ func TestKinopoiskPosterIsFetchedLater(t *testing.T) {
 	if _, err := c.Release(ctx, es[0].ID); err != nil {
 		t.Fatal(err)
 	}
-	select {
-	case <-c.postersWake:
-	default:
-		t.Fatal("открытие раздачи без картинки не разбудило догрузку постеров")
-	}
-	if err := c.fixPosters(ctx); err != nil {
-		t.Fatal(err)
-	}
+	c.posterWG.Wait()
 	if es := list(t, c, ListOptions{}); es[0].ImageKey != meta.ImageKey(host.URL+"/kp/301.jpg") {
 		t.Fatalf("постер Кинопоиска не догрузился: %q", es[0].ImageKey)
 	}
@@ -186,15 +180,10 @@ func TestReleaseBriefHasNoSideEffects(t *testing.T) {
 		t.Fatalf("кратко: %+v, %v", r, err)
 	}
 	c.mu.Lock()
-	urgent, forced := len(c.urgent["rutor"]), len(c.forced)
+	urgent, posters := len(c.urgent["rutor"]), len(c.openPoster)
 	c.mu.Unlock()
-	if urgent != 0 || forced != 0 {
-		t.Fatalf("побочные действия: срочная догрузка %d, постер без паузы %d", urgent, forced)
-	}
-	select {
-	case <-c.postersWake:
-		t.Fatal("разбужены постеры")
-	default:
+	if urgent != 0 || posters != 0 {
+		t.Fatalf("побочные действия: срочная догрузка %d, постер открытой %d", urgent, posters)
 	}
 	if _, err := c.ReleaseBrief(ctx, 999); !errors.Is(err, ErrNoRelease) {
 		t.Fatalf("нет раздачи: %v", err)
