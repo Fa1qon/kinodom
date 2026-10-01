@@ -1979,7 +1979,7 @@ func TestPultPreview(t *testing.T) {
 	}
 	node := lookNode(t)
 	script := `
-const { playerKind, previewStats, playerError, frameNote, playerSession } = await import('./views/preview.js');
+const { playerKind, previewStats, playerError, frameNote, playerSession, nativeError, hlsWay } = await import('./views/preview.js');
 const { logoFileError } = await import('./views/settings-unrecognized.js');
 const text = (e) => (e ? e.what + ': ' + e.text : null);
 const binary = { get responseText() { throw new Error('responseType arraybuffer'); } };
@@ -2009,6 +2009,18 @@ const checks = [
   [text(playerError('hls', { fatal: true, type: 'muxError', details: 'fragParsingError' })), 'codec: Браузер не показывает этот поток'],
   [text(playerError('mpegts', 'NetworkError', 'HttpStatusCodeInvalid', { code: 504, msg: 'Gateway Timeout' })), 'net: Источник не открылся (ответ 504)'],
   [text(playerError('mpegts', 'MediaError', 'MediaMSEError', {})), 'codec: Браузер не показывает этот поток'],
+  // Свой HLS браузера (Chrome 154, WebView ТВ) молчит, почему остановился: список спрашивается ещё раз.
+  [text(nativeError(4, 'MEDIA_ELEMENT_ERROR: Format error', 502, '{"error":"источник не отвечает"}')), 'net: Источник не открылся: источник не отвечает'],
+  [text(nativeError(4, 'DEMUXER_ERROR_NO_SUPPORTED_STREAMS', 200, '#EXTM3U')), 'codec: Браузер не показывает этот поток'],
+  [text(nativeError(3, '', 200, '#EXTM3U')), 'codec: Браузер не показывает этот поток'],
+  [text(nativeError(2, 'network', 200, '#EXTM3U')), 'net: Источник не открылся'],
+  [text(nativeError(4, '', 0, '')), 'net: Источник не открылся'],
+  // Свой HLS Chrome 154 не разбирает часть потоков, которые играет hls.js (bipbop 4x3, вживую 14Д): hls.js — везде,
+  // где есть MSE; свой — только без MSE (iPhone).
+  [hlsWay(true, true), 'hls.js'],
+  [hlsWay(true, false), 'hls.js'],
+  [hlsWay(false, true), 'native'],
+  [hlsWay(false, false), null],
   [frameNote('data:image/jpeg;base64,AAAA'), null],
   [frameNote('none'), 'нет картинки'],
   [frameNote('codec'), 'браузер не показывает этот поток'],
