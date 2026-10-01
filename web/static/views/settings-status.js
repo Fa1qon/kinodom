@@ -1,8 +1,9 @@
 // «Настройки → Состояние»: потоки и скорости, модули, трекеры, место, проблемы (спека этапа 7,
 // разделы 5.7 и 6.3).
-import { h, size, speed, ago, poll } from '../ui.js';
+import { h, fill, size, speed, ago, poll, icon } from '../ui.js';
 import { get } from '../api.js';
 import { layout } from './settings-layout.js';
+import { appBridge } from './tvkit.js';
 
 // MODULES — шесть модулей на экране; нет модуля у сервера — «ещё не сделан». DLNA исключён (решение заказчика
 // 2026-09-30) — на его месте обнаружение сервера приложением (спека этапа 13, раздел 5.1).
@@ -38,6 +39,38 @@ export function appLine(app, addrs) {
   return app && addrs && addrs.length ? addrs[0] + '/app' : null;
 }
 
+// appModel — карточка «Приложение для ТВ и телефона» (правки после 13b, заказчик 2026-10-01): APK на сервере нет —
+// null; в браузере — «Скачать» и адрес для ТВ; в приложении — версии и действие: update — приложение обновится по
+// кнопке, download — у приложения 13a/13b нет update(), latest — та же версия или новее серверной.
+export function appModel(app, addrs, bridge) {
+  if (!app) return null;
+  if (!bridge) return { mode: 'browser', version: app.version, download: app.url, address: appLine(app, addrs) };
+  const installed = typeof bridge.version === 'function' ? bridge.version() : '';
+  const code = typeof bridge.versionCode === 'function' ? bridge.versionCode() : 0;
+  const newer = code ? app.versionCode > code : app.version !== installed;
+  const action = !newer ? 'latest' : typeof bridge.update === 'function' ? 'update' : 'download';
+  return { mode: 'app', installed, server: app.version, action, download: app.url };
+}
+
+// appCard — карточка по appModel; bridge — для «Обновить».
+export function appCard(m, bridge) {
+  if (!m) return null;
+  const title = h('div', { class: 'h' }, 'Приложение для ТВ и телефона');
+  const download = () => h('a', { class: 'btn inv', href: m.download, download: '', 'data-key': 'app-download' }, icon('download'), 'Скачать');
+  if (m.mode === 'browser') {
+    return h('div', { class: 'card tight app-card' }, title,
+      h('div', { class: 'row wrap' }, download(), h('span', { class: 'muted' }, m.version)),
+      m.address ? h('div', { class: 'app-addr' }, m.address) : null);
+  }
+  const action = m.action === 'update'
+    ? h('button', { class: 'btn inv', type: 'button', 'data-key': 'app-update', onclick: () => bridge.update() }, icon('download'), 'Обновить')
+    : m.action === 'download' ? download() : h('span', { class: 'muted' }, 'Последняя версия');
+  return h('div', { class: 'card tight app-card' }, title,
+    h('div', { class: 'muted' }, `Установлено ${m.installed}`),
+    h('div', { class: 'muted' }, `На сервере ${m.server}`),
+    h('div', { class: 'row wrap' }, action));
+}
+
 const LOGIN = {
   none: 'логин не задан',
   unknown: 'вход ещё не проверялся',
@@ -47,9 +80,9 @@ const LOGIN = {
 export function render(root, r, ctx) {
   const content = layout(root, 'status', 'Состояние');
   let alive = true;
-  let appUrl = null; // «Приложение для ТВ и телефона»: сведения об APK и адреса — один раз
+  let appInfo = null; // «Приложение для ТВ и телефона»: сведения об APK и адреса — один раз
   Promise.all([get('/app').catch(() => null), get('/setup/addresses').catch(() => [])]).then(([app, addrs]) => {
-    appUrl = appLine(app, addrs);
+    appInfo = appModel(app, addrs, appBridge());
   });
   // Раз в 2 с — скорости меняются быстро; отметка проблем в меню обновляется своим опросом.
   const refresh = poll(async () => {
@@ -64,7 +97,8 @@ export function render(root, r, ctx) {
   }, 2000);
 
   function draw(st) {
-    content.replaceChildren(
+    // fill, а не replaceChildren: карточки приложения ещё нет (сведения грузятся) — пусто, а не «null».
+    fill(content,
       h('div', { class: 'tiles' },
         tile('Потоки', String(st.streams.count)),
         tile('Загрузка', speed(st.streams.downloadSpeed)),
@@ -77,9 +111,9 @@ export function render(root, r, ctx) {
           disk(st))),
       h('div', { class: 'card tight' }, h('div', { class: 'h' }, 'Проблемы'),
         st.problems.length
-          ? st.problems.map((p) => h('div', { class: 'mod' }, h('span', { class: 'mark', style: { background: 'var(--yellow)' } }), h('span', { class: 'grow' }, p.text), h('span', { class: 'muted small' }, ago(p.since))))
+          ? st.problems.map((p) => h('div', { class: 'mod' }, h('span', { class: 'mark', style: { background: 'var(--yellow)' } }), h('span', { class: 'grow' }, p.text), h('span', { class: 'muted small mod-when' }, ago(p.since))))
           : h('div', { class: 'muted' }, 'Проблем нет')),
-      appUrl ? h('div', { class: 'card tight' }, h('div', { class: 'h' }, 'Приложение для ТВ и телефона'), h('div', { class: 'setup-addr' }, appUrl)) : null,
+      appCard(appInfo, appBridge()),
     );
   }
 
@@ -133,11 +167,12 @@ function tile(label, value) {
   return h('div', { class: 'tile' }, h('div', { class: 'muted small' }, label), h('div', { class: 'v' }, value));
 }
 
+// row — строка модуля или трекера; длинное пояснение (long) на телефоне — под именем, во всю ширину.
 function row(mark, name, text, color) {
-  return h('div', { class: 'mod' },
+  return h('div', { class: text.length > 24 ? 'mod long' : 'mod' },
     h('span', { class: 'mark', style: { background: mark } }),
     h('span', { class: 'mod-name', style: { color: mark === 'var(--faint)' ? 'var(--faint)' : null } }, name),
-    h('span', { class: 'grow', style: { color } }, text));
+    h('span', { class: 'grow mod-text', style: { color } }, text));
 }
 
 // loginExtra — строка входа Rutracker, если она не повторяет строку трекера (хвост Х23: «Rutracker:

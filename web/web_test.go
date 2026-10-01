@@ -1766,6 +1766,42 @@ for (const [name, got, want] of checks) {
 
 // «Состояние» (спека этапа 13, раздел 5.3): строка «Приложение для ТВ и телефона» с адресом ПК в домашней сети;
 // APK на сервере нет или адреса нет — строки нет.
+// Карточка «Приложение для ТВ и телефона» (правки после 13b, заказчик 2026-10-01): в браузере — «Скачать» и
+// адрес для ТВ; в приложении — установленная и серверная версии, «Обновить» (новое приложение) или «Скачать»
+// (приложение 13a/13b без update), одинаковые — «Последняя версия».
+func TestPultAppCard(t *testing.T) {
+	node := lookNode(t)
+	script := `
+import { appModel } from './views/settings-status.js';
+const app = { version: '0.11.0-new', versionCode: 450, url: '/app/kinodom.apk', size: 1 };
+const fn = (v) => () => v;
+const j = (x) => JSON.stringify(x);
+const checks = [
+  ['APK нет', j(appModel(null, ['http://192.168.0.26:8090'], null)), 'null'],
+  ['браузер', j(appModel(app, ['http://192.168.0.26:8090'], null)),
+    j({ mode: 'browser', version: '0.11.0-new', download: '/app/kinodom.apk', address: 'http://192.168.0.26:8090/app' })],
+  ['браузер без адреса', j(appModel(app, [], null)), j({ mode: 'browser', version: '0.11.0-new', download: '/app/kinodom.apk', address: null })],
+  ['приложение старее, есть update', j(appModel(app, [], { version: fn('0.11.0-old'), versionCode: fn(443), update: () => {} })),
+    j({ mode: 'app', installed: '0.11.0-old', server: '0.11.0-new', action: 'update', download: '/app/kinodom.apk' })],
+  ['приложение то же', appModel(app, [], { version: fn('0.11.0-new'), versionCode: fn(450), update: () => {} }).action, 'latest'],
+  ['приложение новее сервера', appModel(app, [], { version: fn('0.11.0-dev'), versionCode: fn(460), update: () => {} }).action, 'latest'],
+  ['приложение 13a/13b — без versionCode и update', appModel(app, [], { version: fn('0.11.0-161d766') }).action, 'download'],
+  ['приложение 13a/13b — та же версия', appModel(app, [], { version: fn('0.11.0-new') }).action, 'latest'],
+];
+for (const [name, got, want] of checks) {
+  if (got !== want) {
+    console.error(name, ':', got, '≠', want);
+    process.exitCode = 1;
+  }
+}
+`
+	cmd := exec.Command(node, "--input-type=module", "--no-warnings", "-e", script)
+	cmd.Dir = "static"
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Errorf("%v\n%s", err, out)
+	}
+}
+
 func TestPultAppLine(t *testing.T) {
 	node := lookNode(t)
 	script := `
