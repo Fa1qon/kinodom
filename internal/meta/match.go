@@ -13,7 +13,8 @@ var seriesTypes = map[string]bool{"TV_SERIES": true, "MINI_SERIES": true, "TV_SH
 // reSeasonNumber — номер сезона: «S02», «26 сезон», «Сезон: 2».
 var reSeasonNumber = regexp.MustCompile(`(?i)S(\d{1,2})|(\d{1,3})\s+(?:сезон|season)|(?:сезон|season)\s*:?\s*(\d{1,3})`)
 
-func seasonNumber(season string) int {
+// SeasonNumber — номер сезона из «S02», «2 сезон», «Сезон: 2»; 0 — нет.
+func SeasonNumber(season string) int {
 	m := reSeasonNumber.FindStringSubmatch(season)
 	if m == nil {
 		return 0
@@ -43,7 +44,7 @@ func MatchKP(hits []Film, t Title) (Film, bool) {
 	if len(names) == 0 {
 		return Film{}, false
 	}
-	season := seasonNumber(t.Season)
+	season := SeasonNumber(t.Season)
 	best, level := []Film(nil), 3
 	for _, h := range hits {
 		if season > 1 && h.Type == "MINI_SERIES" {
