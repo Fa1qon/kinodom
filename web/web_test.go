@@ -1499,3 +1499,22 @@ for (const [got, want] of checks) {
 		t.Errorf("%v\n%s", err, out)
 	}
 }
+
+// Ряд версий канала на 390 px (вживую 11b-Е: МСК…МСК+7 — пять кнопок, страница прокручивалась вбок):
+// ряд прокручивается сам, страница — нет. Класс — zones: «versions» занят «Есть дубли» медиатеки (столбик).
+func TestPultVersionsRowScrolls(t *testing.T) {
+	css, err := os.ReadFile("static/style.css")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !regexp.MustCompile(`\.seg\.zones\s*\{[^}]*overflow-x:\s*auto`).Match(css) || !regexp.MustCompile(`\.seg\.zones\s*\{[^}]*max-width:\s*100%`).Match(css) {
+		t.Error(".seg.zones без max-width: 100% и overflow-x: auto")
+	}
+	js, err := os.ReadFile("static/views/channel.js")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(js), `class: 'seg zones'`) {
+		t.Error("ряд версий без класса zones")
+	}
+}
