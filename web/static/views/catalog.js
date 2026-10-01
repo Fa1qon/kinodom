@@ -5,17 +5,19 @@ import { get } from '../api.js';
 
 export const TRACKERS = [['rutracker', 'Rutracker'], ['rutor', 'Rutor']];
 
-// portions — подгрузка каталога порциями (замечание № 9 этапа 11b): {loaded, page, pages, loading, error}.
-// 'more' — просить следующую (не во время загрузки и не после конца списка), 'loaded' — пришла,
-// 'failed' — не пришла (можно попросить снова).
+// portions — подгрузка каталога порциями (замечание № 9 этапа 11b): {loaded, page, next, more, loading,
+// error}; page — сколько порций пришло, next — курсор (место последней карточки раздела, -1 — с начала;
+// ревью 11b-Г). 'more' — просить следующую (не во время загрузки и не после конца списка), 'loaded' —
+// пришла, 'failed' — не пришла (можно попросить снова, с того же места).
 export function portions(state, action) {
-  const s = state || { loaded: [], page: 0, pages: 1, loading: false, error: '' };
+  const s = state || { loaded: [], page: 0, next: -1, more: true, loading: false, error: '' };
   switch (action.type) {
     case 'more':
-      if (s.loading || s.page >= s.pages) return s;
+      if (s.loading || !s.more) return s;
       return { ...s, loading: true, error: '' };
     case 'loaded':
-      return { loaded: [...s.loaded, ...action.list.entries], page: action.list.page, pages: action.list.pages, loading: false, error: '' };
+      return { loaded: [...s.loaded, ...action.list.entries], page: s.page + 1, next: action.list.next, more: action.list.more,
+        loading: false, error: '' };
     case 'failed':
       return { ...s, loading: false, error: action.error };
     default:
@@ -39,7 +41,7 @@ export function oneAtATime(fn) {
 export async function restoreDepth(more, getState, pages) {
   for (;;) {
     const s = getState();
-    if (s.error || s.page >= Math.min(pages, s.pages)) return;
+    if (s.error || !s.more || s.page >= pages) return;
     await more();
     if (getState().page === s.page) return;
   }
@@ -48,13 +50,13 @@ export async function restoreDepth(more, getState, pages) {
 // retryDue — порция не пришла, а низ сетки на экране или рядом: прокрутка или «вниз» просят её снова
 // (наблюдатель пересечения второй раз не срабатывает, пока низ не ушёл из зоны — ревью 11b-А).
 export function retryDue(state, tailTop, viewportH) {
-  return !!state.error && !state.loading && state.page < state.pages && tailTop < viewportH + 600;
+  return !!state.error && !state.loading && state.more && tailTop < viewportH + 600;
 }
 
 // fillDue — порция пришла, а низ сетки всё ещё рядом: следующую — сразу, не дожидаясь наблюдателя
 // (он срабатывает только на вход в зону; вживую 11b-Г низ оставался в зоне, и подгрузка вставала).
 export function fillDue(state, tailTop, viewportH) {
-  return !state.error && !state.loading && state.page < state.pages && tailTop < viewportH + 600;
+  return !state.error && !state.loading && state.more && tailTop < viewportH + 600;
 }
 
 // groupBar — ряды над сеткой (спека 11b, 7.1): у Rutracker — группы («Кино · Сериалы · Документалистика»,
@@ -124,7 +126,7 @@ export function render(root, r, ctx) {
     if (next === state) return;
     state = next;
     drawTail();
-    const q = new URLSearchParams({ tracker, page: String(state.page + 1) });
+    const q = new URLSearchParams({ tracker, after: String(state.next) });
     if (shownSection) q.set('section', shownSection);
     let list;
     try {

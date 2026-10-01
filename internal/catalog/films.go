@@ -56,10 +56,11 @@ func workKey(r row) string {
 // без номера, чей ключ произведения совпал с ключом раздачи с номером, — в карточку этого номера;
 // остальные без номера — по ключу произведения (дубли уходят, ещё до того как номер найден). Из группы
 // остаётся раздача в формате в приоритете с наибольшим числом раздающих, а если такой нет — с
-// наибольшим числом раздающих. Порядок — по раздающим оставшихся (bySeeders), иначе — по месту оставшейся
-// в разделе (первая сотня стоит по раздающим с обновления — тот же порядок, а порции не двигают
-// показанное). size — раздач в группе оставшейся.
-func films(rs []row, kp map[int64]int, pref string, bySeeders bool) (out []row, size map[int64]int) {
+// наибольшим числом раздающих. Порядок — по раздающим оставшихся (bySeeders), иначе — по месту карточки
+// в разделе: наименьшему месту её раздач (первая сотня стоит по раздающим с обновления, порции — за ней;
+// раздача из порции, лучше показанной, карточку не двигает — ревью 11b-Г). size — раздач в группе
+// оставшейся, place — место карточки (по оставшейся).
+func films(rs []row, kp map[int64]int, pref string, bySeeders bool) (out []row, size, place map[int64]int) {
 	better := func(a, b row) bool { // a лучше b
 		if pa, pb := prefers(a.Format, pref), prefers(b.Format, pref); pa != pb {
 			return pa
@@ -78,6 +79,7 @@ func films(rs []row, kp map[int64]int, pref string, bySeeders bool) (out []row, 
 	}
 	best := map[string]int{} // группа → индекс в out
 	count := map[string]int{}
+	first := map[string]int{} // группа → наименьшее место её раздач
 	out = make([]row, 0, len(rs))
 	for i, r := range rs {
 		g := ""
@@ -92,6 +94,9 @@ func films(rs []row, kp map[int64]int, pref string, bySeeders bool) (out []row, 
 			g = "id:" + strconv.FormatInt(r.ID, 10)
 		}
 		count[g]++
+		if p, ok := first[g]; !ok || r.Pos < p {
+			first[g] = r.Pos
+		}
 		if j, ok := best[g]; ok {
 			if better(r, out[j]) {
 				out[j] = r
@@ -102,15 +107,17 @@ func films(rs []row, kp map[int64]int, pref string, bySeeders bool) (out []row, 
 		out = append(out, r)
 	}
 	size = make(map[int64]int, len(out))
+	place = make(map[int64]int, len(out))
 	for g, j := range best {
 		size[out[j].ID] = count[g]
+		place[out[j].ID] = first[g]
 	}
 	if bySeeders {
 		slices.SortStableFunc(out, func(a, b row) int { return b.Seeders - a.Seeders })
 	} else {
-		slices.SortStableFunc(out, func(a, b row) int { return a.Pos - b.Pos })
+		slices.SortStableFunc(out, func(a, b row) int { return place[a.ID] - place[b.ID] })
 	}
-	return out, size
+	return out, size, place
 }
 
 // variantRows — живые раздачи фильмов kpIDs на обоих трекерах: по номеру из описания и по найденному

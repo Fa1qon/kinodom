@@ -113,6 +113,7 @@ type Catalog struct {
 	deep        map[CategoryRef]deepList // раздел → весь список после обновления (порции глубже первой сотни)
 	deepPos     map[CategoryRef]int      // раздел → курсор порций: у Rutor — страница, у Rutracker — место в списке
 	deepEnd     map[CategoryRef]bool     // раздел → список трекера кончился
+	deepEmpty   map[CategoryRef]int      // раздел → порций подряд без новых раздач
 }
 
 func New(o Options) *Catalog {
@@ -127,7 +128,7 @@ func New(o Options) *Catalog {
 		refreshNow: make(chan struct{}, 1), sectionsChanged: make(chan struct{}, 1), enrichWake: map[string]chan struct{}{},
 		postersWake: make(chan struct{}, 1), urgent: map[string][]int64{}, found: map[string][]int64{}, torrentNow: map[int64]bool{}, yield: map[string]func(){}, retries: map[string]retryState{}, forced: map[int64]bool{},
 		posterSem: make(chan struct{}, 2), urgentSem: make(chan struct{}, 2),
-		forumPaused: map[string]time.Time{}, searches: map[string]*searchRun{}, torrentFormat: o.TorrentFormat, deep: map[CategoryRef]deepList{}, deepPos: map[CategoryRef]int{}, deepEnd: map[CategoryRef]bool{},
+		forumPaused: map[string]time.Time{}, searches: map[string]*searchRun{}, torrentFormat: o.TorrentFormat, deep: map[CategoryRef]deepList{}, deepPos: map[CategoryRef]int{}, deepEnd: map[CategoryRef]bool{}, deepEmpty: map[CategoryRef]int{},
 		preferred: o.PreferredFormat}
 	// До первого прохода (там дерево и раскрытие «+») — разделы как записаны, без подразделов.
 	for _, s := range o.Sections {

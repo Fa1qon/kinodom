@@ -143,12 +143,21 @@ func (c *Catalog) enrichSoon(tracker string, id int64) {
 	}
 }
 
-// findSoon ставит найденное поиском в догрузку вне очереди — после открытых в пульте.
-func (c *Catalog) findSoon(tracker string, id int64) {
+// foundLimit — просьб догрузки вне очереди на трекер: при быстрой прокрутке старые отбрасываются.
+const foundLimit = 200
+
+// findSoon ставит найденное поиском и показанную порцию каталога в догрузку вне очереди — после открытых
+// в пульте, в начало: видимое сейчас — первым, по порядку показа; прежние просьбы — за ним (ревью 11b-Г).
+func (c *Catalog) findSoon(tracker string, ids []int64) {
 	c.mu.Lock()
-	if !slices.Contains(c.found[tracker], id) {
-		c.found[tracker] = append(c.found[tracker], id)
+	q := make([]int64, 0, len(ids)+len(c.found[tracker]))
+	q = append(q, ids...)
+	for _, id := range c.found[tracker] {
+		if !slices.Contains(ids, id) {
+			q = append(q, id)
+		}
 	}
+	c.found[tracker] = q[:min(len(q), foundLimit)]
 	c.interruptLocked(tracker)
 	c.mu.Unlock()
 	if ch, ok := c.enrichWake[tracker]; ok {
