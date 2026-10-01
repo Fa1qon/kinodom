@@ -199,7 +199,7 @@ func TestCheckCommand(t *testing.T) {
 	exe, _ := os.Executable()
 	f.Services[setup.ServiceName] = winsvc.ServiceConfig{Name: setup.ServiceName}
 	f.Running[setup.ServiceName] = true
-	f.Rules[setup.RuleAPI], f.Rules[setup.RuleTorrents] = winsvc.FirewallRule{}, winsvc.FirewallRule{}
+	f.Rules[setup.RuleAPI], f.Rules[setup.RuleTorrents], f.Rules[setup.RuleDiscovery] = winsvc.FirewallRule{}, winsvc.FirewallRule{}, winsvc.FirewallRule{}
 	f.Protocols[setup.Scheme] = setup.OpenCommand(filepath.Dir(exe))
 	code, out, errOut := runCmd(cmdCheck)
 	if code != 0 || !strings.Contains(out, "работает") || !strings.Contains(out, "0.11.0-test") || !strings.Contains(out, "Прокси не отвечает") {
@@ -207,8 +207,9 @@ func TestCheckCommand(t *testing.T) {
 	}
 	f.Protocols[setup.Scheme] = `"C:\old\kinodom.exe" open "%1"`
 	delete(f.Rules, setup.RuleTorrents)
+	delete(f.Rules, setup.RuleDiscovery)
 	code, out, _ = runCmd(cmdCheck)
-	if code != 1 || !strings.Contains(out, setup.RuleTorrents) || !strings.Contains(out, "kinodom://") {
+	if code != 1 || !strings.Contains(out, setup.RuleTorrents) || !strings.Contains(out, setup.RuleDiscovery) || !strings.Contains(out, "kinodom://") {
 		t.Fatalf("неполадки: код %d\n%s", code, out)
 	}
 	delete(f.Running, setup.ServiceName)
