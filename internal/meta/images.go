@@ -53,6 +53,9 @@ type ImagesOptions struct {
 	// постеры раздач — PosterStubSources; 0 — не распознаются (логотипы каналов: часовые версии и
 	// зеркала законно ведут на один файл — ревью 11b-А).
 	StubSources int
+	// KnownStubs — заглушки хостингов, известные заранее (с StubSources > 0): не постер с первого раза, а
+	// уже скачанные удаляются при запуске (план 14А). nil — KnownStubs пакета.
+	KnownStubs []KnownStub
 }
 
 // Images — картинки, которые сервер скачивает к себе и отдаёт клиентам сам (спека, раздел 8):
@@ -74,6 +77,31 @@ type Images struct {
 	stubs   map[string]bool            // sha256 заглушек (помнятся в stubs.txt)
 	keyHash map[string]string          // ключ → sha256 содержимого (скачанные и проверенные)
 	dropped []string                   // ключи, удалённые как заглушки: каталог снимает их с раздач
+}
+
+// KnownStub — заглушка хостинга, известная заранее: содержимое (sha256) и размер — по размеру отбираются
+// файлы для проверки при запуске.
+type KnownStub struct {
+	SHA256 string
+	Size   int64
+}
+
+// KnownStubs — заглушки, которые хостинги отдают вместо картинки: imgbox «Thumbnail Temporarily
+// Unavailable» — на любую несуществующую или неготовую миниатюру (проверено 2026-10-01; у заказчика —
+// вместо постера «Позывного Альфа»).
+var KnownStubs = []KnownStub{
+	{SHA256: "c0ff95f9ec7fea007b8236e8efddfcc6c0dfdd56f8e4c38c8ffed8fde655d8a7", Size: 8091},
+}
+
+var reImgboxThumb = regexp.MustCompile(`^https?://thumbs(\d*)\.imgbox\.com/([0-9A-Za-z]{2}/[0-9A-Za-z]{2}/[0-9A-Za-z]+)_t\.(jpe?g|png|gif|webp)$`)
+
+// PosterURL — адрес постера, который стоит качать: у миниатюры imgbox — оригинал (миниатюра бывает
+// заглушкой «Thumbnail Temporarily Unavailable», план 14А); остальные — как есть.
+func PosterURL(src string) string {
+	if m := reImgboxThumb.FindStringSubmatch(src); m != nil {
+		return "https://images" + m[1] + ".imgbox.com/" + m[2] + "_o." + m[3]
+	}
+	return src
 }
 
 // PosterStubSources — с стольких разных адресов одна и та же картинка у постеров — заглушка хостинга.
@@ -126,12 +154,56 @@ func NewImages(o ImagesOptions) (*Images, error) {
 		proxied.CheckRedirect, direct.CheckRedirect = publicRedirect, publicRedirect
 	}
 	stubs := map[string]bool{}
+	known := o.KnownStubs
+	if known == nil {
+		known = KnownStubs
+	}
 	if o.StubSources > 0 {
 		stubs = loadStubs(o.Dir)
+		for _, k := range known {
+			stubs[k.SHA256] = true
+		}
 	}
-	return &Images{o: o, proxied: proxied, direct: direct, lim: rate.NewLimiter(o.Rate, 1),
+	im := &Images{o: o, proxied: proxied, direct: direct, lim: rate.NewLimiter(o.Rate, 1),
 		noImage: map[string]time.Time{}, failed: map[string]failure{}, seen: map[string]map[string]bool{},
-		stubs: stubs, keyHash: map[string]string{}}, nil
+		stubs: stubs, keyHash: map[string]string{}}
+	if o.StubSources > 0 {
+		im.dropKnownStubs(known)
+	}
+	return im, nil
+}
+
+// dropKnownStubs — скачанные раньше известные заглушки удаляются; их ключи — в Stubbed(): каталог снимает
+// их с раздач и берёт постер Кинопоиска (план 14А). Проверяются только файлы размера заглушки.
+func (im *Images) dropKnownStubs(known []KnownStub) {
+	sizes := map[int64]bool{}
+	for _, k := range known {
+		sizes[k.Size] = true
+	}
+	es, err := os.ReadDir(im.o.Dir)
+	if err != nil {
+		return
+	}
+	for _, e := range es {
+		info, err := e.Info()
+		if err != nil || e.IsDir() || !sizes[info.Size()] {
+			continue
+		}
+		p := filepath.Join(im.o.Dir, e.Name())
+		b, err := os.ReadFile(p)
+		if err != nil {
+			continue
+		}
+		sum := sha256.Sum256(b)
+		if !im.stubs[hex.EncodeToString(sum[:])] {
+			continue
+		}
+		key := strings.TrimSuffix(e.Name(), filepath.Ext(e.Name()))
+		if !reImageKey.MatchString(key) || os.Remove(p) != nil {
+			continue
+		}
+		im.dropped = append(im.dropped, key)
+	}
 }
 
 // publicRedirect — редирект картинки на адрес этого ПК или домашней сети не выполняется (M10);
@@ -155,6 +227,7 @@ func ImageKey(src string) string {
 // Fetch скачивает картинку к себе (если её ещё нет) и возвращает ключ для /img/{ключ}.
 // Не картинка — ErrNoImage, файл не создаётся.
 func (im *Images) Fetch(ctx context.Context, src string, via Via) (string, error) {
+	src = PosterURL(src)
 	u, err := url.Parse(src)
 	if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" ||
 		(!im.o.AllowPrivate && netx.PrivateHost(u.Hostname())) {

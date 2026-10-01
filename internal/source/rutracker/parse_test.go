@@ -87,9 +87,62 @@ func TestParseTopicMissingBlocks(t *testing.T) {
 	if _, err := parseTopic(utf8Page(t, "topic-missing-99999999.raw-cp1251.html")); !errors.As(err, &pe) || !strings.Contains(pe.Block, "topic-title") {
 		t.Errorf("без названия: %v", err)
 	}
+	// План 14А: страница без magnet — не ошибка (TestParseTopicWithoutMagnetIsNotAnError).
 	noMagnet := `<a id="topic-title">Фильм</a><div class="post_body">текст</div>`
-	if _, err := parseTopic([]byte(noMagnet)); !errors.As(err, &pe) || !strings.Contains(pe.Block, "magnet") {
+	if _, err := parseTopic([]byte(noMagnet)); err != nil {
 		t.Errorf("без magnet: %v", err)
+	}
+}
+
+// План 14А, задача 1 (у заказчика 2026-10-01: «не найден блок magnet-ссылка — похоже, трекер изменил
+// разметку»): хэш раздачи — из запасных мест, если ссылки a.magnet-link нет.
+func TestParseTopicMagnetFallbacks(t *testing.T) {
+	hash := strings.Repeat("ab", 20)
+	up := strings.ToUpper(hash)
+	head := `<a id="topic-title">Фильм</a><div class="post_body">текст</div>`
+	cases := []struct{ name, html string }{
+		{"другая ссылка magnet", head + `<a class="med magnet-link-16" href="magnet:?xt=urn:btih:` + up + `&amp;tr=x">m</a>`},
+		{"title у data-topic_id", head + `<a data-topic_id="1" title="` + up + `" href="#">m</a>`},
+		{"#tor-hash", head + `<span id="tor-hash">` + up + `</span>`},
+		{"btih в тексте страницы", head + `<script>var m = "magnet:?xt=urn:btih:` + hash + `";</script>`},
+	}
+	for _, c := range cases {
+		d, err := parseTopic([]byte(c.html))
+		if err != nil || d.InfoHash != hash || d.Magnet != buildMagnet(hash) {
+			t.Errorf("%s: хэш %q, magnet %q, %v", c.name, d.InfoHash, d.Magnet, err)
+		}
+	}
+}
+
+// Ревью 14А (п. 7): основной ссылки нет, а в описании — magnet другой раздачи. Хэш берётся только у
+// ссылки самой раздачи (data-topic_id) или когда на странице он один; иначе — "" (каталог возьмёт хэш
+// списка), но не чужой.
+func TestParseTopicIgnoresForeignMagnets(t *testing.T) {
+	own, other := strings.Repeat("ab", 20), strings.Repeat("cd", 20)
+	head := `<a id="topic-title">Фильм</a>`
+	desc := `<div class="post_body">прошлая версия: <a href="magnet:?xt=urn:btih:` + other + `">m</a></div>`
+	cases := []struct{ name, html, want string }{
+		{"ссылка раздачи после чужой", head + desc + `<a class="med" data-topic_id="1" href="magnet:?xt=urn:btih:` + own + `">m</a>`, own},
+		{"две чужие без признаков", head + desc + `<a href="magnet:?xt=urn:btih:` + own + `">m</a>`, ""},
+		{"два хэша в тексте", head + `<script>var a = "btih:` + own + `", b = "btih:` + other + `";</script>`, ""},
+		{"один и тот же хэш дважды", head + `<a href="magnet:?xt=urn:btih:` + own + `">m</a><a href="magnet:?xt=urn:btih:` + strings.ToUpper(own) + `">m</a>`, own},
+	}
+	for _, c := range cases {
+		if d, err := parseTopic([]byte(c.html)); err != nil || d.InfoHash != c.want {
+			t.Errorf("%s: хэш %q, нужно %q, %v", c.name, d.InfoHash, c.want, err)
+		}
+	}
+}
+
+// Хэша на странице нет совсем — страница всё равно разобрана: название, постер, описание, номер
+// Кинопоиска сохраняются, magnet каталог соберёт из хэша списка раздела.
+func TestParseTopicWithoutMagnetIsNotAnError(t *testing.T) {
+	body := `<a id="topic-title">Фильм (2026)</a><div class="post_body">Описание <a href="https://www.kinopoisk.ru/film/123/">КП</a>` +
+		`<var class="postImg postImgAligned" title="https://img.example/p.jpg"></var></div>`
+	d, err := parseTopic([]byte(body))
+	if err != nil || d.Title != "Фильм (2026)" || d.PosterURL != "https://img.example/p.jpg" || d.KinopoiskID != "123" ||
+		d.InfoHash != "" || d.Magnet != "" {
+		t.Fatalf("страница без magnet: %+v, %v", d.Release, err)
 	}
 }
 

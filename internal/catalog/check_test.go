@@ -48,6 +48,28 @@ func TestCheckReleaseNewVersion(t *testing.T) {
 	}
 }
 
+// План 14А: на странице раздачи нет хэша (Rutracker сменил разметку) — версия по хэшу из списка раздела,
+// а не ошибка «нет infohash»: подписка продолжает работать.
+func TestCheckReleasePageWithoutHash(t *testing.T) {
+	c, rutor, id := followFixture(t)
+	rutor.set(func() {
+		d := rutor.details["1"]
+		d.InfoHash, d.Magnet = "", ""
+		rutor.details["1"] = d
+	})
+	v, err := c.CheckRelease(ctx, id)
+	if err != nil || v.InfoHash != "h1" {
+		t.Fatalf("версия без хэша на странице: %+v, %v", v, err)
+	}
+	// Ревью 14А, Important 1: хэш списка остаётся у раздачи — «Смотреть», «Загрузки» и следующая проверка.
+	if rel, err := c.Release(ctx, id); err != nil || rel.InfoHash != "h1" {
+		t.Fatalf("после проверки у раздачи хэш %q, %v", rel.InfoHash, err)
+	}
+	if v, err := c.CheckRelease(ctx, id); err != nil || v.InfoHash != "h1" {
+		t.Fatalf("вторая проверка: %+v, %v", v, err)
+	}
+}
+
 // Раздачу сняли с трекера — source.ErrRemoved, раздача помечена снятой.
 func TestCheckReleaseRemoved(t *testing.T) {
 	c, rutor, id := followFixture(t)

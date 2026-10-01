@@ -1258,3 +1258,25 @@ func TestLibraryThroughAPI(t *testing.T) {
 		t.Errorf("файл медиатеки в «Истории»: %+v", hs.Items)
 	}
 }
+
+// Ревью 14А (п. 6): страница раздачи загружена, а magnet-ссылки и хэша нет нигде — «Скачать» не обещает
+// «попробуйте через минуту» (догружать нечего), а говорит, что на странице нет magnet-ссылки.
+func TestDownloadWithoutMagnetAfterDetails(t *testing.T) {
+	a := rutorApp(t)
+	base := "http://" + a.API.Addr() + "/api/v1"
+	id := rutorRelease(t, a)
+	// Раздача Rutracker (у Rutor .torrent докачивается при открытии — там ожидание честное).
+	if _, err := a.DB.W.Exec(`UPDATE releases SET tracker = 'rutracker', magnet = '', torrent = NULL, infohash = '' WHERE id = ?`, id); err != nil {
+		t.Fatal(err)
+	}
+	resp, err := http.Post(fmt.Sprintf("%s/releases/%d/download", base, id), "application/json", strings.NewReader(`{}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	body, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode != http.StatusConflict || !strings.Contains(string(body), "на странице раздачи нет magnet-ссылки") ||
+		strings.Contains(string(body), "через минуту") {
+		t.Fatalf("код %d: %s", resp.StatusCode, body)
+	}
+}

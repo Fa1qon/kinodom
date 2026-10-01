@@ -1,5 +1,6 @@
 // Пульт Kinodom: маршруты по адресу после «#», шапка, отметка проблем в меню (спека этапа 7, раздел 6).
 import { h, icon, clear, poll, store } from './ui.js';
+import { NAV } from './app-nav.js';
 import { get } from './api.js';
 import { initNav } from './nav.js';
 import * as catalog from './views/catalog.js';
@@ -56,14 +57,6 @@ function defaultRoute() {
   return store.get('catalog') || '#/catalog/rutor';
 }
 
-const NAV = [
-  ['catalog', 'Каталог'],
-  ['history', 'История'],
-  ['channels', 'Каналы'],
-  ['library', 'Медиатека'],
-  ['downloads', 'Загрузки'],
-  ['settings', 'Настройки'],
-];
 
 const top = document.getElementById('top');
 const navLinks = {};

@@ -1,7 +1,7 @@
 // Раздача: постер, название, теги, описание; до «Скачать» — одна светлая кнопка, после — у каждого
 // файла прогресс и «Смотреть» цвета готовности, справа — панель файла в фокусе; ниже — «Другие раздачи»
 // фильма и «Искать на трекерах» (спека этапа 7, разделы 5.4, 5.5, 6.3 и 10.7).
-import { h, icon, size, speed, rating, minutes, ready, poll, copyText, store, plural, shortNames, keepFocus, fileFormat, openPlayer, confirmDialog, fill } from '../ui.js';
+import { h, icon, size, speed, rating, minutes, ready, poll, copyText, store, plural, shortNames, keepFocus, fileFormat, formatTag, openPlayer, confirmDialog, fill } from '../ui.js';
 import { get, post, put, del } from '../api.js';
 import { whereStopped, resumeIndex } from './history.js';
 import { poster, returnTo } from './catalog.js';
@@ -22,6 +22,49 @@ const FORMATS_FOR = 120000; // формат найденных ждём не д�
 const MISSING_EVERY = 3000; // раздача не открыта (404) — её могут открыть с другого устройства: проверяем раз в 3 с
 const OTHERS_EVERY = 10000; // «Другие раздачи» перечитываются, пока экран открыт
 const COPIED_FOR = 2000; // «Скопировано» видно 2 с, перерисовка панели его не сбивает (Х25)
+
+// seasonLabel — какой сезон и какие серии в раздаче — крупно у «Скачать» (заказчик 2026-10-01): строка сезона
+// из заголовка («S01», «S02E01-08», «02x13 из 13», «Сезон: 1-3, Серии: 1-24 из 24», «1-5 серий из 5», у Rutor —
+// «01-07 из 08») — «Сезон 2 · серии 1–8», «Сезоны 1–3 · серии 1–24 из 24»; «11 серий из 11» — сколько серий,
+// а не номер последней (ревью 14А): «серии 1–11 из 11»; не сериал — "".
+export function seasonLabel(season) {
+  const s = (season || '').trim();
+  if (!s) return '';
+  const range = (a, b) => (b && b !== a ? `${Number(a)}–${Number(b)}` : String(Number(a)));
+  let seasons = null; // [from, to]
+  let eps = null; // [from, to, of]
+  let m;
+  if ((m = s.match(/S(\d{1,2})(?:-S?(\d{1,3}))?(?:E(\d{1,3})(?:-E?(\d{1,3}))?)?/i))) {
+    if (m[3]) {
+      seasons = [m[1]];
+      eps = [m[3], m[4]];
+    } else {
+      seasons = [m[1], m[2]];
+    }
+  } else if ((m = s.match(/(\d{1,2})x(\d{1,3})(?:-(\d{1,3}))?(?:\s+из\s+(\d+))?/i))) {
+    seasons = [m[1]];
+    eps = [m[2], m[3], m[4]];
+  }
+  if (!seasons && (m = s.match(/(?:сезон|season)\s*:?\s*(\d+)(?:\s*-\s*(\d+))?/i) || s.match(/(\d+)(?:\s*-\s*(\d+))?\s+(?:сезон|season)/i))) {
+    seasons = [m[1], m[2]];
+  }
+  if (!eps && (m = s.match(/(?:серии|серия)\s*:?\s*(\d+)(?:\s*-\s*(\d+))?(?:\s+из\s+(\d+))?/i))) {
+    eps = [m[1], m[2], m[3]];
+  } else if (!eps && (m = s.match(/(\d+)(?:\s*-\s*(\d+))?\s+сери[йияю]\s+из\s+(\d+)/i))) {
+    eps = m[2] ? [m[1], m[2], m[3]] : ['1', m[1], m[3]]; // «8 серий из 10» — первые восемь
+  } else if (!eps && !seasons && (m = s.match(/^\[?(\d+)(?:\s*-\s*(\d+))?\s+из\s+(\d+)\]?$/i))) {
+    eps = [m[1], m[2], m[3]];
+  }
+  const parts = [];
+  if (seasons) parts.push((seasons[1] && seasons[1] !== seasons[0] ? 'Сезоны ' : 'Сезон ') + range(seasons[0], seasons[1]));
+  if (eps) {
+    const many = eps[1] && eps[1] !== eps[0];
+    let t = (many ? 'серии ' : 'серия ') + range(eps[0], eps[1]);
+    if (eps[2]) t += ` из ${Number(eps[2])}`;
+    parts.push(parts.length ? t : t[0].toUpperCase() + t.slice(1));
+  }
+  return parts.join(' · ');
+}
 
 // episodeAction — OK на строке серии (замечание № 3 этапа 11b): до «Скачать» — окно «Скачать?»,
 // после — выбрать файл панели; пока идёт действие — ничего.
@@ -160,7 +203,7 @@ export function render(root, r, ctx) {
         rel.kinopoisk > 0 ? h('span', { class: 'tag strong' }, 'КП ' + rating(rel.kinopoisk)) : null,
         h('span', { class: 'tag', title: 'Раздающих' }, icon('arrow_upward', 16), String(rel.seeders)),
         rel.quality ? h('span', { class: 'tag' }, rel.quality) : null,
-        rel.format ? h('span', { class: 'tag', title: 'Формат файлов' }, rel.format) : null,
+        rel.format ? h('span', { class: rel.preferred ? 'tag pref' : 'tag', title: rel.preferred ? 'Формат в приоритете' : 'Формат файлов' }, rel.format) : null,
         rel.size ? h('span', { class: 'tag' }, size(rel.size)) : null,
         rel.trackerUrl ? h('a', { class: 'tag', href: rel.trackerUrl, target: '_blank', rel: 'noopener' }, 'На трекере', icon('open_in_new', 16)) : null),
       desc || (rel.detailsPending ? h('div', { class: 'lines', 'aria-label': 'Описание загружается' }, h('div', { class: 'skel', style: { width: '80%' } }), h('div', { class: 'skel', style: { width: '55%' } })) : null),
@@ -237,6 +280,8 @@ export function render(root, r, ctx) {
 
   function panel(fs, label) {
     const out = [];
+    const sl = seasonLabel(rel && rel.season);
+    if (sl) out.push(h('div', { class: 'season-big', 'data-key': 'season' }, sl));
     const f = panelFile(fs);
     const failed = st && st.state === 'error';
     const error = actionError || (st && st.error) || '';
@@ -429,7 +474,7 @@ export function render(root, r, ctx) {
       h('span', { class: 'strong ellipsis' }, [trackerLabel(e.tracker), e.quality].filter(Boolean).join(' · ')),
       h('span', { class: 'muted small ellipsis', title: e.title }, [current ? 'эта раздача' : null, e.season || null].filter(Boolean).join(' · ') || e.name));
     const cells = [what,
-      e.format ? h('span', null, e.format) : h('span', { class: 'muted', 'aria-label': e.detailsPending ? 'формат загружается' : 'формат неизвестен' }, e.detailsPending ? '…' : '—'),
+      e.format ? formatTag(e.format, e.preferred) : h('span', { class: 'muted', 'aria-label': e.detailsPending ? 'формат загружается' : 'формат неизвестен' }, e.detailsPending ? '…' : '—'),
       h('span', null, size(e.size)),
       h('span', { class: 'seeders' }, icon('arrow_upward', 16), String(e.seeders))];
     return current

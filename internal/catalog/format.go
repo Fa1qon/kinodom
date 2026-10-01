@@ -2,6 +2,7 @@ package catalog
 
 import (
 	"context"
+	"path"
 	"slices"
 	"strings"
 
@@ -46,6 +47,12 @@ func (c *Catalog) PreferredFormat() string {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	return c.preferred
+}
+
+// FilePreferred — формат файла (по расширению) — формат в приоритете: «Загрузки» подсвечивают его (план 14А).
+func FilePreferred(name, pref string) bool {
+	ext := strings.TrimPrefix(path.Ext(strings.ReplaceAll(name, `\`, "/")), ".")
+	return pref != "" && ext != "" && strings.EqualFold(ext, pref)
 }
 
 // prefers — основной (самый большой) формат раздачи совпадает с форматом в приоритете.
