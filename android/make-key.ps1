@@ -21,9 +21,16 @@ New-Item -ItemType Directory -Force $dir | Out-Null
 $bytes = New-Object byte[] 24
 [System.Security.Cryptography.RandomNumberGenerator]::Create().GetBytes($bytes)
 $pass = [Convert]::ToBase64String($bytes) -replace '[+/=]', 'x'
+# keytool пишет «Generating … key pair» в поток ошибок: PowerShell 5.1 при Stop счёл бы это ошибкой — судим по коду.
+$ErrorActionPreference = 'Continue'
 & $keytool -genkeypair -keystore $jks -storetype PKCS12 -alias kinodom -keyalg RSA -keysize 4096 -validity 36500 `
     -storepass $pass -keypass $pass -dname 'CN=Kinodom, O=Kinodom, C=RU' 2>&1 | Out-Null
-if ($LASTEXITCODE -ne 0) { throw "keytool exit code $LASTEXITCODE" }
+$code = $LASTEXITCODE
+$ErrorActionPreference = 'Stop'
+if ($code -ne 0) {
+    if (Test-Path $jks) { Remove-Item $jks }
+    throw "keytool exit code $code"
+}
 $store = $jks -replace '\\', '/'
 @("storeFile=$store", "storePassword=$pass", 'keyAlias=kinodom', "keyPassword=$pass") | Set-Content -Encoding ascii $props
 Write-Host "Signing key created: $jks"
