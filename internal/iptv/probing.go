@@ -130,7 +130,7 @@ func (m *Module) fullTargets(onlyNew bool, favorites map[string]bool) []int64 {
 	slices.Sort(keys)
 	for _, k := range keys {
 		c := m.lineup.ByKey[k]
-		if c.Hidden != "" && !favorites[k] {
+		if c.Hidden != "" && !favorites[k] && !favorites[m.lineup.FamilyOf[k]] { // ★ — у канала (11b-Е)
 			continue
 		}
 		for i, s := range c.Sources {
