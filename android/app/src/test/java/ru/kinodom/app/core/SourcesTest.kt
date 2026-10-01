@@ -22,6 +22,14 @@ class SourcesTest {
         assertEquals(emptyList<Source>(), Sources.parse("""{"error":"у канала сейчас нет работающих источников"}"""))
     }
 
+    // Без своего User-Agent — тот, с которым сервер проверял источник (probe.UserAgent): иные источники
+    // отказывают «ExoPlayerLib».
+    @Test
+    fun userAgent() {
+        assertEquals("UA", Sources.userAgent(Source("u", "UA", "", "hls")))
+        assertEquals("VLC/3.0.20 LibVLC/3.0.20", Sources.userAgent(Source("u", "", "", "hls")))
+    }
+
     @Test
     fun mime() {
         assertEquals("application/x-mpegURL", Sources.mime("hls"))

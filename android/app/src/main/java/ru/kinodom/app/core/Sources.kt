@@ -7,6 +7,11 @@ import org.json.JSONObject
 data class Source(val url: String, val userAgent: String, val referrer: String, val kind: String)
 
 object Sources {
+    // UA — с ним сервер проверяет источники (internal/iptv/probe, UserAgent): с «ExoPlayerLib» иные отказывают.
+    const val UA = "VLC/3.0.20 LibVLC/3.0.20"
+
+    fun userAgent(s: Source): String = s.userAgent.ifEmpty { UA }
+
     // parse — источники по порядку; без адреса — пропуск; мусор или ошибка сервера — пусто.
     fun parse(json: String): List<Source> = try {
         val arr = JSONObject(json).optJSONArray("items")
