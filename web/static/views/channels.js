@@ -139,7 +139,7 @@ export function render(root, r, ctx) {
           next ? h('span', { class: 'ch-next muted small' }, `${hhmm(next.start, data.utcOffset)} ${next.title}`) : null)),
       gradeMark(c.grade),
       h('button', { class: 'btn', type: 'button', 'data-key': `watch-${c.key}`, 'aria-label': `Смотреть ${c.name}`,
-        onclick: () => watch(c.key) }, icon('play_arrow'), h('span', { class: 'wide-only' }, 'Смотреть')));
+        onclick: () => watch(c.version || c.key) }, icon('play_arrow'), h('span', { class: 'wide-only' }, 'Смотреть')));
   }
 
   return () => {
