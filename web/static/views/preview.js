@@ -44,8 +44,63 @@ export function previewStats(s) {
   ].filter(Boolean).join(' · ');
 }
 
-// attach — источник в <video>: {destroy, latency()}. Ошибка библиотеки — исключение.
-async function attach(video, url, kind) {
+// serverError — текст ошибки сервера из тела ответа ({"error": …}); тело не текст или не JSON — ''.
+function serverError(details) {
+  try {
+    return JSON.parse(details.responseText).error || '';
+  } catch {
+    return '';
+  }
+}
+
+// playerError — остановка плеера словами (ревью 14Д, п. 4): {what: 'net' | 'codec', text}; не остановка —
+// null. hls — (data) события Hls.Events.ERROR; mpegts — (тип, подробность, сведения) события ERROR.
+export function playerError(lib, a, b, c) {
+  const codec = { what: 'codec', text: 'Браузер не показывает этот поток' };
+  const net = (code, msg) => ({ what: 'net', text: msg ? `Источник не открылся: ${msg}` : code ? `Источник не открылся (ответ ${code})` : 'Источник не открылся' });
+  if (lib === 'hls') {
+    if (!a || !a.fatal) return null;
+    if (a.type === 'mediaError' || a.type === 'muxError') return codec;
+    if (a.type === 'networkError') return net(a.response && a.response.code, a.networkDetails ? serverError(a.networkDetails) : '');
+    return { what: 'net', text: `Плеер остановился (${a.details || a.type})` };
+  }
+  if (a === 'MediaError') return codec;
+  if (a === 'NetworkError') return net(c && c.code, '');
+  return { what: 'net', text: `Плеер остановился (${b || a})` };
+}
+
+// frameNote — подпись вместо кадра: data URL — кадр есть (null); иначе — почему его нет.
+export function frameNote(shot) {
+  if (String(shot).startsWith('data:')) return null;
+  return { codec: 'браузер не показывает этот поток', dash: 'DASH в браузере не показывается', error: 'источник не открылся' }[shot] || 'нет картинки';
+}
+
+// playerSession — плеер окна: ready — подключённый плеер; close() разбирает его сейчас или, если окно закрыли,
+// пока грузилась библиотека, — как только подключится (ready тогда — null; ревью 14Д, п. 3).
+export function playerSession(pending) {
+  let player = null;
+  let closed = false;
+  const ready = pending.then((p) => {
+    if (closed) {
+      p.destroy();
+      return null;
+    }
+    player = p;
+    return p;
+  });
+  return {
+    ready,
+    close() {
+      closed = true;
+      if (player) player.destroy();
+      player = null;
+    },
+  };
+}
+
+// attach — источник в <video>: {destroy, latency()}; остановка плеера — onFail(playerError(…)). Библиотека не
+// загрузилась или браузер её не тянет — исключение.
+async function attach(video, url, kind, onFail = () => {}) {
   if (kind === 'hls') {
     if (video.canPlayType('application/vnd.apple.mpegurl')) {
       video.src = url;
@@ -54,6 +109,10 @@ async function attach(video, url, kind) {
     const Hls = await loadLib('vendor/hls.light.min.js', 'Hls');
     if (!Hls.isSupported()) throw new Error('браузер не умеет HLS');
     const hls = new Hls({ enableWorker: true, maxBufferLength: 10 });
+    hls.on(Hls.Events.ERROR, (_, data) => {
+      const e = playerError('hls', data);
+      if (e) onFail(e);
+    });
     hls.loadSource(url);
     hls.attachMedia(video);
     return { destroy: () => hls.destroy(), latency: () => hls.latency || 0 };
@@ -61,6 +120,7 @@ async function attach(video, url, kind) {
   const mpegts = await loadLib('vendor/mpegts.js', 'mpegts');
   if (!mpegts.isSupported()) throw new Error('браузер не умеет MPEG-TS');
   const p = mpegts.createPlayer({ type: 'mpegts', isLive: true, url }, { enableWorker: false, liveBufferLatencyChasing: true });
+  p.on(mpegts.Events.ERROR, (type, detail, info) => onFail(playerError('mpegts', type, detail, info)));
   p.attachMediaElement(video);
   p.load();
   return {
@@ -85,13 +145,12 @@ export function openPreview(src, title, now = '') {
   video.muted = true;
   const stats = h('div', { class: 'muted small', role: 'status' });
   const err = h('div', { class: 'error' });
-  let player = null;
+  let session = null;
   let timer = 0;
   let modal = null;
   const close = () => {
     clearInterval(timer);
-    if (player) player.destroy();
-    player = null;
+    if (session) session.close();
     modal.close();
   };
   const closeBtn = h('button', { class: 'btn', type: 'button', 'data-key': 'preview-close', onclick: close }, icon('close'), 'Закрыть');
@@ -111,13 +170,15 @@ export function openPreview(src, title, now = '') {
   video.addEventListener('waiting', () => {
     if (s.firstMs) s.stalls++;
   });
-  attach(video, watchURL(src.id), kind).then((p) => {
-    if (!modal) return p.destroy();
-    player = p;
+  session = playerSession(attach(video, watchURL(src.id), kind, (e) => {
+    err.textContent = e.text;
+  }));
+  session.ready.then((player) => {
+    if (!player) return;
     timer = setInterval(() => {
       s.w = video.videoWidth;
       s.h = video.videoHeight;
-      s.latency = player ? player.latency() : 0;
+      s.latency = player.latency();
       stats.textContent = previewStats(s);
     }, 1000);
   }, (e) => {
@@ -129,23 +190,34 @@ export function openPreview(src, title, now = '') {
   return close;
 }
 
-// grabFrame — кадр источника для «Кадров»: открыть без звука, дождаться картинки, снять 320×180; нет картинки за
-// timeoutMs — null.
+// grabFrame — кадр источника для «Кадров»: открыть без звука, дождаться картинки, снять 320×180 — data URL.
+// Кадра нет — почему (frameNote): 'dash', 'codec' (браузер не показывает), 'error' (источник не открылся) —
+// сразу; 'none' — нет картинки за timeoutMs.
 export async function grabFrame(src, timeoutMs = 8000) {
   const kind = playerKind(src);
-  if (kind === 'dash') return null;
+  if (kind === 'dash') return 'dash';
   // Без autoplay и в пределах окна (невидимым): Chrome ставит на паузу беззвучный автозапуск вне экрана —
   // кадр не приходил (вживую 14Д); явный play() так не останавливается.
   const video = h('video', { muted: true, playsinline: true, class: 'frame-probe' });
   video.muted = true;
   document.body.append(video);
   let player = null;
+  let failed = '';
+  let stop = null;
   try {
-    player = await attach(video, watchURL(src.id), kind);
+    player = await attach(video, watchURL(src.id), kind, (e) => {
+      failed = e.what === 'codec' ? 'codec' : 'error';
+      if (stop) stop();
+    });
     video.play().catch(() => {});
     // Кадр — после полутора секунд эфира: первые кадры бывают чёрными (затемнение, ключевой кадр не пришёл).
     const ok = await new Promise((resolve) => {
+      if (failed) return resolve(false);
       const t = setTimeout(() => resolve(video.currentTime > 0 && video.videoWidth > 0), timeoutMs);
+      stop = () => {
+        clearTimeout(t);
+        resolve(false);
+      };
       const tick = () => {
         if (video.currentTime >= 1.5 && video.videoWidth > 0) {
           clearTimeout(t);
@@ -155,18 +227,19 @@ export async function grabFrame(src, timeoutMs = 8000) {
       };
       video.addEventListener('timeupdate', tick);
       video.addEventListener('error', () => {
+        failed ||= 'error';
         clearTimeout(t);
         resolve(false);
       }, { once: true });
     });
-    if (!ok) return null;
+    if (!ok) return failed || 'none';
     const c = document.createElement('canvas');
     c.width = 320;
     c.height = 180;
     c.getContext('2d').drawImage(video, 0, 0, 320, 180);
     return c.toDataURL('image/jpeg', 0.7);
   } catch {
-    return null;
+    return 'error';
   } finally {
     if (player) player.destroy();
     video.remove();

@@ -3,6 +3,7 @@ package iptv
 import (
 	"bufio"
 	"bytes"
+	"context"
 	"crypto/hmac"
 	"crypto/rand"
 	"crypto/sha256"
@@ -14,6 +15,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"time"
 
 	"kinodom/internal/httpx"
 	"kinodom/internal/iptv/m3u"
@@ -23,6 +25,9 @@ import (
 // Пересылка источника в пульт (план 14Д): «Смотреть» и «Кадры» в настройках каналов. Сервер ходит только к
 // известным ему источникам — по номеру; ссылки внутри списков HLS подписаны ключом этого запуска, поэтому
 // чужой адрес через пересылку не открыть. Заголовки — User-Agent и Referer записи плейлиста.
+
+// relayWait — сколько ждать ответа источника (заголовков); тело потока не ограничено — он живой.
+var relayWait = 15 * time.Second
 
 // newRelayKey — ключ подписи ссылок пересылки: свой у каждого запуска.
 func newRelayKey() []byte {
@@ -94,6 +99,25 @@ func (m *Module) streamFor(id int64) (url, kind string, h m3u.Headers, ok bool) 
 	return s.URL, s.Kind, h, true
 }
 
+// crossSite — запрос пришёл с чужого сайта (страница в браузере человека открывает пересылку): 403. Пульт и
+// плеер ходят со своего адреса или без этого заголовка.
+func crossSite(w http.ResponseWriter, r *http.Request) bool {
+	if r.Header.Get("Sec-Fetch-Site") != "cross-site" {
+		return false
+	}
+	httpx.WriteError(w, http.StatusForbidden, "запрос с чужого сайта")
+	return true
+}
+
+// relayType — тип ответа пересылки: видео и звук — как у источника, остальное — просто байты. Страница
+// источника, отданная страницей, работала бы от имени пульта (ревью 14Д, п. 2).
+func relayType(ct string) string {
+	if t := strings.ToLower(ct); strings.HasPrefix(t, "video/") || strings.HasPrefix(t, "audio/") {
+		return ct
+	}
+	return "application/octet-stream"
+}
+
 func relayID(w http.ResponseWriter, s string) (int64, bool) {
 	id, err := strconv.ParseInt(s, 10, 64)
 	if err != nil {
@@ -106,6 +130,9 @@ func relayID(w http.ResponseWriter, s string) (int64, bool) {
 // handleWatch — GET /api/v1/iptv/streams/{id}/watch: источник для плеера пульта. HLS — список через
 // пересылку, поток — как есть, DASH — 409 (в браузере не смотрим, «Открыть в VLC»).
 func (m *Module) handleWatch(w http.ResponseWriter, r *http.Request) {
+	if crossSite(w, r) {
+		return
+	}
 	id, ok := relayID(w, r.PathValue("id"))
 	if !ok {
 		return
@@ -124,6 +151,9 @@ func (m *Module) handleWatch(w http.ResponseWriter, r *http.Request) {
 
 // handleRelay — GET /api/v1/iptv/relay?s=&u=&sig=: адрес из списка источника s, подпись — этого запуска.
 func (m *Module) handleRelay(w http.ResponseWriter, r *http.Request) {
+	if crossSite(w, r) {
+		return
+	}
 	q := r.URL.Query()
 	id, ok := relayID(w, q.Get("s"))
 	if !ok {
@@ -143,7 +173,9 @@ func (m *Module) handleRelay(w http.ResponseWriter, r *http.Request) {
 
 // relay — адрес u источника id: список HLS — переписанный, остальное — байты как есть, пока клиент читает.
 func (m *Module) relay(w http.ResponseWriter, r *http.Request, id int64, u string, h m3u.Headers) {
-	req, err := http.NewRequestWithContext(r.Context(), http.MethodGet, u, nil)
+	ctx, cancel := context.WithCancel(r.Context())
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
 	if err != nil || (req.URL.Scheme != "http" && req.URL.Scheme != "https") {
 		httpx.WriteError(w, http.StatusBadRequest, "адрес источника не http(s)")
 		return
@@ -156,14 +188,29 @@ func (m *Module) relay(w http.ResponseWriter, r *http.Request, id int64, u strin
 	if h.Referrer != "" {
 		req.Header.Set("Referer", h.Referrer)
 	}
+	// Ответа (заголовков) ждём relayWait; дальше поток идёт, пока клиент читает.
+	late := time.AfterFunc(relayWait, cancel)
 	resp, err := m.client.Do(req)
-	if err != nil {
-		if r.Context().Err() == nil {
-			httpx.WriteError(w, http.StatusBadGateway, "источник не отвечает")
+	waited := !late.Stop()
+	switch {
+	case r.Context().Err() != nil:
+		if err == nil {
+			resp.Body.Close()
 		}
+		return
+	case waited:
+		if err == nil {
+			resp.Body.Close()
+		}
+		httpx.WriteError(w, http.StatusGatewayTimeout, fmt.Sprintf("источник не ответил за %d с", int(relayWait/time.Second)))
+		return
+	case err != nil:
+		httpx.WriteError(w, http.StatusBadGateway, "источник не отвечает")
 		return
 	}
 	defer resp.Body.Close()
+	w.Header().Set("X-Content-Type-Options", "nosniff")
+	w.Header().Set("Content-Security-Policy", "sandbox")
 	if resp.StatusCode >= 400 {
 		httpx.WriteError(w, http.StatusBadGateway, fmt.Sprintf("источник ответил %d", resp.StatusCode))
 		return
@@ -183,9 +230,7 @@ func (m *Module) relay(w http.ResponseWriter, r *http.Request, id int64, u strin
 		w.Write(rewritePlaylist(body, final, func(abs string) string { return m.relayLink(id, abs) }))
 		return
 	}
-	if ct := resp.Header.Get("Content-Type"); ct != "" {
-		w.Header().Set("Content-Type", ct)
-	}
+	w.Header().Set("Content-Type", relayType(resp.Header.Get("Content-Type")))
 	w.Header().Set("Cache-Control", "no-store")
 	w.WriteHeader(http.StatusOK)
 	fl, _ := w.(http.Flusher)

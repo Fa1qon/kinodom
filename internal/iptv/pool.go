@@ -237,7 +237,7 @@ func (d db) load(ctx context.Context) (*pool, error) {
 		return nil, err
 	}
 	rows.Close()
-	rows, err = tx.QueryContext(ctx, `SELECT key, name, logo FROM iptv_custom`)
+	rows, err = tx.QueryContext(ctx, `SELECT key, name, logo FROM iptv_custom WHERE deleted_at IS NULL`)
 	if err != nil {
 		return nil, err
 	}

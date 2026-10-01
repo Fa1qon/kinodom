@@ -236,3 +236,71 @@ func TestRelayDASH(t *testing.T) {
 		t.Fatalf("неизвестный: %d", rec.Code)
 	}
 }
+
+// relayOne — модуль с одним источником: адрес /x отдаёт handler (свой сервер — фоновая проверка других тестов
+// сюда не ходит).
+func relayOne(t *testing.T, handler http.HandlerFunc) (*http.ServeMux, int64) {
+	t.Helper()
+	srv := httptest.NewServer(handler)
+	t.Cleanup(srv.Close)
+	f := newFakeNet(t)
+	m, _ := startModule(t, f)
+	f.setPlaylist("#EXTM3U\n#EXTINF:-1,Канал\n" + srv.URL + "/x\n")
+	if _, err := m.AddPlaylist(context.Background(), PlaylistInput{URL: f.srv.URL + "/pl.m3u"}); err != nil {
+		t.Fatal(err)
+	}
+	m.mu.Lock()
+	s := m.pool.byURL[srv.URL+"/x"]
+	m.mu.Unlock()
+	if s == nil {
+		t.Fatal("источника нет")
+	}
+	mux := http.NewServeMux()
+	m.Register(testRouter{mux}, nil)
+	return mux, s.ID
+}
+
+// Ревью 14Д, п. 2: страница вместо потока не отдаётся страницей — иначе её скрипт работал бы от имени пульта;
+// запрос с чужого сайта — 403.
+func TestRelayNotAPage(t *testing.T) {
+	page := "<html><script>fetch('/api/v1/torrents',{method:'POST'})</script></html>"
+	for name, h := range map[string]http.HandlerFunc{
+		"text/html": func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Content-Type", "text/html")
+			io.WriteString(w, page)
+		},
+		"без типа": func(w http.ResponseWriter, r *http.Request) {
+			w.Header()["Content-Type"] = nil
+			io.WriteString(w, page)
+		},
+	} {
+		mux, id := relayOne(t, h)
+		path := fmt.Sprintf("/api/v1/iptv/streams/%d/watch", id)
+		rec := get(t, mux, path)
+		if ct := rec.Header().Get("Content-Type"); rec.Code != 200 || ct != "application/octet-stream" ||
+			rec.Header().Get("X-Content-Type-Options") != "nosniff" || !strings.Contains(rec.Header().Get("Content-Security-Policy"), "sandbox") {
+			t.Errorf("%s: %d %q %v", name, rec.Code, ct, rec.Header())
+		}
+		req := httptest.NewRequest("GET", path, nil)
+		req.RemoteAddr = fromPhone
+		req.Header.Set("Sec-Fetch-Site", "cross-site")
+		rec = httptest.NewRecorder()
+		mux.ServeHTTP(rec, req)
+		if rec.Code != http.StatusForbidden {
+			t.Errorf("%s, с чужого сайта: %d", name, rec.Code)
+		}
+	}
+}
+
+// План 14Д, задача 1 (ревью, п. 6): источник не прислал ответ за relayWait — 504 словами, а не вечное ожидание.
+func TestRelayHeaderTimeout(t *testing.T) {
+	old := relayWait
+	relayWait = 300 * time.Millisecond
+	defer func() { relayWait = old }()
+	mux, id := relayOne(t, func(w http.ResponseWriter, r *http.Request) { <-r.Context().Done() })
+	start := time.Now()
+	rec := get(t, mux, fmt.Sprintf("/api/v1/iptv/streams/%d/watch", id))
+	if rec.Code != http.StatusGatewayTimeout || !strings.Contains(rec.Body.String(), "не ответил") || time.Since(start) > 5*time.Second {
+		t.Fatalf("%d %s за %v", rec.Code, rec.Body, time.Since(start))
+	}
+}

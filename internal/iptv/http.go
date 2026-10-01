@@ -86,12 +86,20 @@ func (m *Module) Register(r Router, logo func(w http.ResponseWriter, r *http.Req
 	r.HandleHome("GET /api/v1/iptv/relay", n, http.HandlerFunc(m.handleRelay))
 	r.Handle("GET /m3u/channel/{file}", n, http.HandlerFunc(m.handleM3U))
 	r.HandleHome("POST /api/v1/iptv/custom", n, http.HandlerFunc(m.handleCustom))
+	r.HandleHome("DELETE /api/v1/iptv/custom/{key}", n, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if err := m.DeleteCustom(r.Context(), r.PathValue("key")); err != nil {
+			writeEditError(w, err)
+			return
+		}
+		w.WriteHeader(http.StatusNoContent)
+	}))
 	r.Handle("GET /logo/{key}", n, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		src := m.LogoURL(r.PathValue("key"))
 		switch {
 		case src == "":
 			http.NotFound(w, r)
-		case m.serveUploadedLogo(w, r, src): // свой канал с загруженным логотипом (план 14Д)
+		case strings.HasPrefix(src, "upload:"): // свой канал с загруженным логотипом (план 14Д)
+			m.serveUploadedLogo(w, r, r.PathValue("key"), src)
 		case logo != nil:
 			logo(w, r, src)
 		default:
@@ -635,6 +643,11 @@ func (m *Module) handleCustom(w http.ResponseWriter, r *http.Request) {
 	dec := json.NewDecoder(http.MaxBytesReader(w, r.Body, 2<<20))
 	dec.DisallowUnknownFields()
 	if err := dec.Decode(&in); err != nil {
+		var big *http.MaxBytesError
+		if errors.As(err, &big) {
+			httpx.WriteError(w, http.StatusBadRequest, "логотип больше 1 МБ")
+			return
+		}
 		httpx.WriteError(w, http.StatusBadRequest, "не удалось разобрать запрос: "+err.Error())
 		return
 	}
