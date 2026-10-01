@@ -5,6 +5,8 @@ import (
 	"errors"
 	"fmt"
 	"path/filepath"
+	"slices"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -36,13 +38,40 @@ type fakeSource struct {
 	tree         []source.Category // дерево разделов; nil — по разделам топов, без вложенности
 	off          bool              // адрес трекера не введён (этап 11a)
 	calls        map[string]int
-	atOnce       int             // DetailsAtOnce: страниц раздач одновременно; 0 — как у источника без признака
-	detailsBlock chan struct{}   // если задан — страница раздачи ждёт его закрытия (или отмены)
-	detailsPanic map[string]bool // номер → разбор страницы падает паникой
-	pageBlock    chan struct{}   // если задан — страница раздела (TopPage) ждёт его закрытия (или отмены)
-	pagePanic    bool            // разбор страницы раздела падает паникой
-	inDetails    int             // страниц качается сейчас
-	maxDetails   int             // больше всего одновременно
+	atOnce       int                                    // DetailsAtOnce: страниц раздач одновременно; 0 — как у источника без признака
+	detailsBlock chan struct{}                          // если задан — страница раздачи ждёт его закрытия (или отмены)
+	detailsPanic map[string]bool                        // номер → разбор страницы падает паникой
+	pageBlock    chan struct{}                          // если задан — страница раздела (TopPage) ждёт его закрытия (или отмены)
+	pagePanic    bool                                   // разбор страницы раздела падает паникой
+	inDetails    int                                    // страниц качается сейчас
+	maxDetails   int                                    // больше всего одновременно
+	sortOrders   []string                               // порядки раздела, которые отдаёт сам трекер (план 14Б)
+	sorted       map[string]map[string][]source.Release // порядок → раздел (первый форум) → список
+	sortedErr    error                                  // ошибка страницы порядка (трекер не ответил)
+}
+
+func (f *fakeSource) SortOrders() []string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return slices.Clone(f.sortOrders)
+}
+
+// SortedPage — страница раздела в порядке order по 100 (как Rutor); forums — раздел или форумы подраздела.
+func (f *fakeSource) SortedPage(_ context.Context, forums []string, order string, page int) ([]source.Release, bool, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.calls["sorted:"+order]++
+	f.calls["sortedForums:"+strings.Join(forums, ",")]++
+	if f.sortedErr != nil {
+		return nil, false, f.sortedErr
+	}
+	if !slices.Contains(f.sortOrders, order) || len(forums) == 0 {
+		return nil, false, fmt.Errorf("порядок %s не поддерживается", order)
+	}
+	all := f.sorted[order][forums[0]]
+	from := min(page*100, len(all))
+	to := min(from+100, len(all))
+	return slices.Clone(all[from:to]), to-from == 100, nil
 }
 
 func (f *fakeSource) DetailsAtOnce() int { f.mu.Lock(); defer f.mu.Unlock(); return f.atOnce }

@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strconv"
 	"strings"
 	"sync"
@@ -75,6 +76,7 @@ type Server struct {
 	lastQuery  string
 	lastUA     string
 	lastForums string
+	lastParams url.Values
 	sessionGen int
 }
 
@@ -105,6 +107,9 @@ func (s *Server) LastQuery() string { s.mu.Lock(); defer s.mu.Unlock(); return s
 
 // LastForums — параметр f последнего поиска (как пришёл).
 func (s *Server) LastForums() string { s.mu.Lock(); defer s.mu.Unlock(); return s.lastForums }
+
+// LastParams — параметры последнего поиска (как пришли).
+func (s *Server) LastParams() url.Values { s.mu.Lock(); defer s.mu.Unlock(); return s.lastParams }
 
 // LastUserAgent — User-Agent последнего запроса к форуму.
 func (s *Server) LastUserAgent() string { s.mu.Lock(); defer s.mu.Unlock(); return s.lastUA }
@@ -161,6 +166,7 @@ func (s *Server) forum(w http.ResponseWriter, r *http.Request) {
 		s.mu.Lock()
 		s.lastQuery = q
 		s.lastForums = r.URL.Query().Get("f")
+		s.lastParams = r.URL.Query()
 		s.mu.Unlock()
 		s.html(w, "search-f2076-seeds.raw-cp1251.html")
 	case "/forum/login.php":

@@ -46,6 +46,7 @@ const (
 	KeyPlayer           = "player"
 	KeySections         = "catalog.categories"
 	KeyPreferredFormat  = "catalog.preferredFormat"
+	KeyCatalogOrder     = "catalog.order"
 	// Каналы (спека этапа 8, раздел 5.6); списки — JSON.
 	KeyEPGURL           = "iptv.epgUrl"
 	KeyHiddenCategories = "iptv.hiddenCategories"
@@ -70,6 +71,9 @@ var Players = []string{"auto", "vlc", "mpc-hc"}
 // Formats — форматы, которые можно поставить в приоритет; "" — нет (спека этапа 7, раздел 10.3).
 var Formats = []string{"", "MKV", "MP4", "AVI"}
 
+// Orders — порядки разделов каталога (план 14Б): раздающие, качающие, новые, число скачиваний.
+var Orders = []string{"seeders", "leechers", "new", "downloads"}
+
 // Values — действующие настройки.
 type Values struct {
 	RutrackerLogin    string
@@ -92,6 +96,7 @@ type Values struct {
 	Player            string
 	Sections          string // «rutracker:2110,rutracker:46+,rutor:12» (формат — пакет catalog)
 	PreferredFormat   string // формат в приоритете: "", MKV, MP4, AVI
+	CatalogOrder      string // порядок разделов каталога по умолчанию: Orders
 	EPGURL            string // телепрограмма; "" — по умолчанию
 	HiddenCategories  []string
 	HiddenCountries   []string
@@ -177,6 +182,11 @@ func Load(ctx context.Context, db *store.DB, def Defaults, overrides map[string]
 	if !slices.Contains(Formats, v.PreferredFormat) {
 		v.PreferredFormat = ""
 	}
+	v.CatalogOrder, err = str(KeyCatalogOrder, Orders[0])
+	collect(err)
+	if !slices.Contains(Orders, v.CatalogOrder) {
+		v.CatalogOrder = Orders[0]
+	}
 	v.EPGURL, err = str(KeyEPGURL, "")
 	collect(err)
 	list := func(key string, fallback []string) ([]string, error) {
@@ -251,6 +261,7 @@ func (v Values) entries() map[string]string {
 		KeyPlayer:            v.Player,
 		KeySections:          v.Sections,
 		KeyPreferredFormat:   v.PreferredFormat,
+		KeyCatalogOrder:      v.CatalogOrder,
 		KeyEPGURL:            v.EPGURL,
 		KeyHiddenCategories:  jsonList(v.HiddenCategories),
 		KeyHiddenCountries:   jsonList(v.HiddenCountries),
@@ -390,6 +401,12 @@ func (v Values) With(p Patch) (Values, error) {
 			return v, fieldErr("Формат в приоритете", "нужно «нет», MKV, MP4 или AVI")
 		}
 		n.PreferredFormat = *c.PreferredFormat
+	}
+	if c := p.Catalog; c != nil && c.Order != nil {
+		if !slices.Contains(Orders, *c.Order) {
+			return v, fieldErr("Порядок по умолчанию", "нужно seeders, leechers, new или downloads")
+		}
+		n.CatalogOrder = *c.Order
 	}
 	if i := p.IPTV; i != nil {
 		if err := i.apply(&n); err != nil {

@@ -49,17 +49,18 @@ type row struct {
 	Section     string    // раздел каталога записи (catalog_entries); у Rutracker — подраздел первого уровня, а CategoryID — форум раздачи
 	Pos         int       // место записи в разделе: первая сотня — по раздающим при обновлении, порции — в конце
 	Link        string    // ссылка на тему у раздачи из источника поиска без страницы; у своих — ""
+	Downloads   int       // сколько раз скачана; 0 — неизвестно (план 14Б)
 }
 
 const rowColumns = `r.id, r.tracker, r.topic_id, r.title, r.category_id, r.seeders, r.leechers, r.size,
-	r.added_at, r.infohash, r.image_key, r.kinopoisk_id, r.imdb_id, r.details_at, r.retry_at, COALESCE(r.format, ''), r.link`
+	r.added_at, r.infohash, r.image_key, r.kinopoisk_id, r.imdb_id, r.details_at, r.retry_at, COALESCE(r.format, ''), r.link, r.downloads`
 
 // scanRow читает столбцы rowColumns и, после них, extra.
 func scanRow(sc interface{ Scan(...any) error }, extra ...any) (row, error) {
 	var r row
 	var added, detailsAt, retryAt int64
 	dest := append([]any{&r.ID, &r.Tracker, &r.TopicID, &r.Title, &r.CategoryID, &r.Seeders, &r.Leechers, &r.Size,
-		&added, &r.InfoHash, &r.ImageKey, &r.KinopoiskID, &r.IMDbID, &detailsAt, &retryAt, &r.Format, &r.Link}, extra...)
+		&added, &r.InfoHash, &r.ImageKey, &r.KinopoiskID, &r.IMDbID, &detailsAt, &retryAt, &r.Format, &r.Link, &r.Downloads}, extra...)
 	err := sc.Scan(dest...)
 	r.Added, r.DetailsAt, r.RetryAt = fromMS(added), fromMS(detailsAt), fromMS(retryAt)
 	return r, err
@@ -73,8 +74,8 @@ const newVersion = `excluded.infohash != '' AND releases.infohash != '' AND excl
 func upsertRelease(ctx context.Context, tx *sql.Tx, r source.Release, now time.Time) (int64, error) {
 	var id int64
 	err := tx.QueryRowContext(ctx,
-		`INSERT INTO releases(tracker, topic_id, title, category_id, seeders, leechers, size, added_at, infohash, updated_at)
-		 VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		`INSERT INTO releases(tracker, topic_id, title, category_id, seeders, leechers, size, added_at, infohash, updated_at, downloads)
+		 VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		 ON CONFLICT(tracker, topic_id) DO UPDATE SET
 		   title = CASE WHEN excluded.title != '' THEN excluded.title ELSE releases.title END,
 		   category_id = CASE WHEN excluded.category_id != '' THEN excluded.category_id ELSE releases.category_id END,
@@ -82,6 +83,7 @@ func upsertRelease(ctx context.Context, tx *sql.Tx, r source.Release, now time.T
 		   size = CASE WHEN excluded.size > 0 THEN excluded.size ELSE releases.size END,
 		   added_at = CASE WHEN excluded.added_at > 0 THEN excluded.added_at ELSE releases.added_at END,
 		   infohash = CASE WHEN excluded.infohash != '' THEN excluded.infohash ELSE releases.infohash END,
+		   downloads = CASE WHEN excluded.downloads > 0 THEN excluded.downloads ELSE releases.downloads END,
 		   -- Новая версия раздачи (другой infohash): magnet и .torrent прежней сбрасываются, страница —
 		   -- заново, иначе «Скачать» открыл бы прежнюю версию (спека 11b, 6.2).
 		   magnet = CASE WHEN `+newVersion+` THEN '' ELSE releases.magnet END,
@@ -92,7 +94,7 @@ func upsertRelease(ctx context.Context, tx *sql.Tx, r source.Release, now time.T
 		   link = '',
 		   removed = 0, updated_at = excluded.updated_at
 		 RETURNING id`,
-		r.Tracker, r.TopicID, r.Title, r.CategoryID, r.Seeders, r.Leechers, r.Size, ms(r.Added), r.InfoHash, ms(now)).Scan(&id)
+		r.Tracker, r.TopicID, r.Title, r.CategoryID, r.Seeders, r.Leechers, r.Size, ms(r.Added), r.InfoHash, ms(now), r.Downloads).Scan(&id)
 	return id, err
 }
 
@@ -327,26 +329,32 @@ func (s catalogStore) posterURL(ctx context.Context, id int64) (string, error) {
 // liveRowsByID — раздачи по номерам без ушедших с трекера (карточки пульта: догружать их нечего).
 func (s catalogStore) liveRowsByID(ctx context.Context, ids []int64) (map[int64]row, error) {
 	out := map[int64]row{}
-	if len(ids) == 0 {
-		return out, nil
-	}
-	args := make([]any, len(ids))
-	for i, id := range ids {
-		args[i] = id
-	}
-	rows, err := s.db.R.QueryContext(ctx, `SELECT `+rowColumns+` FROM releases r WHERE r.removed = 0 AND r.id IN (?`+strings.Repeat(", ?", len(ids)-1)+`)`, args...)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	for rows.Next() {
-		r, err := scanRow(rows)
+	for len(ids) > 0 { // порциями: список порядка раздела бывает длиннее предела переменных SQLite
+		chunk := ids[:min(len(ids), 500)]
+		ids = ids[len(chunk):]
+		args := make([]any, len(chunk))
+		for i, id := range chunk {
+			args[i] = id
+		}
+		rows, err := s.db.R.QueryContext(ctx, `SELECT `+rowColumns+` FROM releases r WHERE r.removed = 0 AND r.id IN (?`+strings.Repeat(", ?", len(chunk)-1)+`)`, args...)
 		if err != nil {
 			return nil, err
 		}
-		out[r.ID] = r
+		for rows.Next() {
+			r, err := scanRow(rows)
+			if err != nil {
+				rows.Close()
+				return nil, err
+			}
+			out[r.ID] = r
+		}
+		err = rows.Err()
+		rows.Close()
+		if err != nil {
+			return nil, err
+		}
 	}
-	return out, rows.Err()
+	return out, nil
 }
 
 // rowsWhere — живые раздачи по условию (часть после WHERE), по убыванию раздающих.
@@ -547,10 +555,11 @@ func (s catalogStore) saveDetails(ctx context.Context, id int64, d source.Detail
 		   seeders = CASE WHEN ? > 0 THEN ? ELSE seeders END,
 		   leechers = CASE WHEN ? > 0 THEN ? ELSE leechers END,
 		   size = CASE WHEN ? > 0 THEN ? ELSE size END,
+		   downloads = CASE WHEN ? > 0 THEN ? ELSE downloads END,
 		   format = ?, details_at = ?, retry_at = 0
 		 WHERE id = ?`,
 		d.Title, d.Title, d.Description, d.PosterURL, imageKey, kpID, d.IMDbID, d.Magnet,
-		d.InfoHash, d.InfoHash, d.Seeders, d.Seeders, d.Leechers, d.Leechers, d.Size, d.Size, format, ms(now), id)
+		d.InfoHash, d.InfoHash, d.Seeders, d.Seeders, d.Leechers, d.Leechers, d.Size, d.Size, d.Downloads, d.Downloads, format, ms(now), id)
 	return err
 }
 

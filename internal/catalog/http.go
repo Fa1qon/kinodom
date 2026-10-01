@@ -11,6 +11,7 @@ import (
 
 	"kinodom/internal/httpx"
 	"kinodom/internal/meta"
+	"kinodom/internal/source"
 )
 
 // PageSize — раздач на странице каталога: шесть рядов по четыре на широком экране, по два — на
@@ -64,25 +65,40 @@ type EntryView struct {
 	PreferredAlt string `json:"preferredAlt,omitempty"`
 	// DetailsPending — страницу раздачи ещё не загружали (найдено поиском): формат и номер Кинопоиска
 	// появятся после догрузки.
-	DetailsPending bool `json:"detailsPending"`
+	DetailsPending bool       `json:"detailsPending"`
+	Downloads      int        `json:"downloads,omitempty"` // сколько раз скачана; 0 — неизвестно (план 14Б)
+	Added          *time.Time `json:"added,omitempty"`     // когда раздачу добавили на трекер; нет — неизвестно
 }
 
 // View — раздача для API.
 func (e Entry) View() EntryView {
 	t := meta.ParseTitle(e.Title)
-	return EntryView{ID: e.ID, Tracker: e.Tracker, Title: e.Title, Name: t.Ru, Original: t.Orig, Year: t.Year,
+	v := EntryView{ID: e.ID, Tracker: e.Tracker, Title: e.Title, Name: t.Ru, Original: t.Orig, Year: t.Year,
 		Quality: e.Quality, Category: e.Category, Seeders: e.Seeders, Leechers: e.Leechers, Size: e.Size,
 		ImageKey: e.ImageKey, Kinopoisk: e.Rating.Kinopoisk, Format: e.Format, Season: t.Season, Variants: e.Variants,
-		DetailsPending: e.DetailsPending, Preferred: e.Preferred, PreferredAlt: e.PreferredAlt}
+		DetailsPending: e.DetailsPending, Preferred: e.Preferred, PreferredAlt: e.PreferredAlt, Downloads: e.Downloads}
+	if !e.Added.IsZero() {
+		at := e.Added
+		v.Added = &at
+	}
+	return v
 }
 
 // ListView — порция каталога трекера: карточки раздела после места after.
 type ListView struct {
-	Section   string      `json:"section"`   // раздел, чья это порция
-	Next      int         `json:"next"`      // место последней карточки: следующая порция — after=next
-	More      bool        `json:"more"`      // есть ещё (у трекера или в базе); общее число раздач пульт не показывает
-	UpdatedAt *time.Time  `json:"updatedAt"` // последнее удачное обновление разделов трекера; null — ещё не было
-	Entries   []EntryView `json:"entries"`
+	Section string      `json:"section"` // раздел, чья это порция
+	Next    int         `json:"next"`    // место последней карточки: следующая порция — after=next
+	More    bool        `json:"more"`    // есть ещё (у трекера или в базе); общее число раздач пульт не показывает
+	Order   string      `json:"order"`   // порядок этой порции (план 14Б)
+	Orders  []OrderView `json:"orders"`  // порядки разделов трекера: переключатель над разделом
+	// DefaultOrder — порядок по умолчанию из настроек: пульт запоминает при нём выбор (since) и забывает
+	// выбор, когда умолчание сменили (ревью 14Б).
+	DefaultOrder string `json:"defaultOrder"`
+	// OrderError — первая порция в выбранном порядке не пришла (трекер не ответил): раздел — по раздающим,
+	// здесь — почему (ревью 14Б); "" — нет.
+	OrderError string      `json:"orderError,omitempty"`
+	UpdatedAt  *time.Time  `json:"updatedAt"` // последнее удачное обновление разделов трекера; null — ещё не было
+	Entries    []EntryView `json:"entries"`
 }
 
 // handleCards — карточки по номерам раздач (спека 11b, 14.1): ?ids=1,2,3 — не больше cardsLimit, не числа
@@ -130,7 +146,13 @@ func (c *Catalog) handleList(w http.ResponseWriter, r *http.Request) {
 	if err != nil || after < -1 {
 		after = -1
 	}
-	out := ListView{Section: q.Get("section"), Next: after, Entries: []EntryView{}}
+	asked := q.Get("order")
+	if since := q.Get("since"); since != "" && since != c.defaultOrderSetting() {
+		asked = "" // выбор запомнен при прежнем умолчании, а его сменили в «Параметрах» — действует новое
+	}
+	order := c.order(name, asked)
+	out := ListView{Section: q.Get("section"), Next: after, Entries: []EntryView{}, Order: order, Orders: c.orderViews(name),
+		DefaultOrder: c.defaultOrderSetting()}
 	if out.Section == "" {
 		secs, err := c.trackerSections(r.Context(), name)
 		if err != nil {
@@ -143,42 +165,18 @@ func (c *Catalog) handleList(w http.ResponseWriter, r *http.Request) {
 	}
 	if out.Section != "" {
 		cat := CategoryRef{name, out.Section}
-		trackerMore := slices.Contains(c.enabled(), cat) && !c.deepEnded(cat)
-		var (
-			es   []Entry
-			next int
-			rest int
-			perr error
-		)
-		for portions := 0; ; portions++ {
-			if es, next, rest, err = c.SectionPage(r.Context(), name, out.Section, after, PageSize); err != nil {
-				httpx.WriteError(w, http.StatusInternalServerError, "каталог не читается: "+err.Error())
-				return
-			}
-			if !trackerMore || portions == portionsPerList {
-				break
-			}
-			// Есть что показать — сразу; запаса в базе меньше порции — следующая страница раздела с трекера в
-			// фоне: Rutor отдаёт её до 77 с, API Rutracker не отвечает и по 90 с — пульт не ждёт (№ 20).
-			if len(es) > 0 {
-				if rest < PageSize {
-					c.prefetchDeep(cat)
-				}
-				break
-			}
-			more, err := c.deepFetch(r.Context(), cat, func() (bool, error) {
-				es, _, _, err := c.SectionPage(r.Context(), name, out.Section, after, PageSize)
-				return len(es) == 0, err
-			})
-			if isDBError(err) {
-				httpx.WriteError(w, http.StatusInternalServerError, "каталог не читается: "+err.Error())
-				return
-			}
-			if err != nil {
-				perr = err
-				break
-			}
-			trackerMore = more
+		es, next, rest, trackerMore, perr, err := c.portion(cat, c.feed(r.Context(), cat, order, after))
+		if err == nil && perr != nil && len(es) == 0 && after == -1 && order != source.OrderSeeders {
+			// Первая порция порядка не пришла — у порядков нет запаса в базе: раздел по раздающим (они в базе),
+			// а не пустая сетка без переключателя (ревью 14Б, Important 1).
+			c.log.Info("каталог: порядок раздела недоступен — по раздающим", "tracker", name, "section", out.Section, "order", order, "err", perr)
+			out.OrderError = fmt.Sprintf("«%s» сейчас недоступны: %v", orderNames[order], perr)
+			order, out.Order = source.OrderSeeders, source.OrderSeeders
+			es, next, rest, trackerMore, perr, err = c.portion(cat, c.feed(r.Context(), cat, order, after))
+		}
+		if err != nil {
+			httpx.WriteError(w, http.StatusInternalServerError, "каталог не читается: "+err.Error())
+			return
 		}
 		if perr != nil && len(es) == 0 {
 			// Порция не пришла и показать нечего: ошибка — пульт повторит по тому же месту (11b-А).
@@ -203,6 +201,68 @@ func (c *Catalog) handleList(w http.ResponseWriter, r *http.Request) {
 		out.UpdatedAt = &at
 	}
 	httpx.WriteJSON(w, http.StatusOK, out)
+}
+
+// portion — порция раздела из feed (спека 11b, 15.2): есть что показать — сразу, а запаса меньше порции —
+// следующая страница с трекера в фоне; показать нечего — ждём трекер, не больше portionsPerList страниц.
+// trackerMore — у трекера, возможно, есть ещё; perr — трекер не ответил; err — база не читается.
+func (c *Catalog) portion(cat CategoryRef, feed sectionFeed) (es []Entry, next, rest int, trackerMore bool, perr, err error) {
+	trackerMore = slices.Contains(c.enabled(), cat) && !feed.ended()
+	for portions := 0; ; portions++ {
+		if es, next, rest, err = feed.page(); err != nil {
+			return nil, 0, 0, false, nil, err
+		}
+		if !trackerMore || portions == portionsPerList {
+			return es, next, rest, trackerMore, nil, nil
+		}
+		// Есть что показать — сразу; запаса в базе меньше порции — следующая страница раздела с трекера в
+		// фоне: Rutor отдаёт её до 77 с, API Rutracker не отвечает и по 90 с — пульт не ждёт (№ 20).
+		if len(es) > 0 {
+			if rest < PageSize {
+				feed.prefetch()
+			}
+			return es, next, rest, trackerMore, nil, nil
+		}
+		more, ferr := feed.fetch(func() (bool, error) {
+			es, _, _, err := feed.page()
+			return len(es) == 0, err
+		})
+		if isDBError(ferr) {
+			return nil, 0, 0, false, nil, ferr
+		}
+		if ferr != nil {
+			return es, next, rest, trackerMore, ferr, nil
+		}
+		trackerMore = more
+	}
+}
+
+// sectionFeed — откуда берутся порции раздела для handleList: раздел по месту (раздающие) или список
+// порядка (план 14Б). page — карточки после after; fetch — страница с трекера, когда показать нечего;
+// prefetch — следующая в фоне; ended — у трекера список кончился.
+type sectionFeed struct {
+	page     func() ([]Entry, int, int, error)
+	fetch    func(need func() (bool, error)) (bool, error)
+	prefetch func()
+	ended    func() bool
+}
+
+func (c *Catalog) feed(ctx context.Context, cat CategoryRef, order string, after int) sectionFeed {
+	if order == source.OrderSeeders {
+		return sectionFeed{
+			page:     func() ([]Entry, int, int, error) { return c.SectionPage(ctx, cat.Tracker, cat.ID, after, PageSize) },
+			fetch:    func(need func() (bool, error)) (bool, error) { return c.deepFetch(ctx, cat, need) },
+			prefetch: func() { c.prefetchDeep(cat) },
+			ended:    func() bool { return c.deepEnded(cat) },
+		}
+	}
+	k := orderKey{cat, order}
+	return sectionFeed{
+		page:     func() ([]Entry, int, int, error) { return c.orderPage(ctx, k, after, PageSize) },
+		fetch:    func(need func() (bool, error)) (bool, error) { return c.orderFetch(ctx, k, need) },
+		prefetch: func() { c.prefetchOrder(k) },
+		ended:    func() bool { return c.orderEnded(k) },
+	}
 }
 
 // TreeNode — раздел трекера для выбора разделов в настройках.
