@@ -63,6 +63,9 @@ func (m *Module) knownKey(key string) bool {
 	id, _ := parseKey(key)
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	if _, ok := m.pool.custom[key]; ok {
+		return true
+	}
 	return m.epg.has(id)
 }
 
@@ -232,8 +235,11 @@ func (m *Module) SearchEPG(q string, limit int) []EPGChannel {
 	m.mu.Lock()
 	g := m.guide
 	m.mu.Unlock()
-	if g == nil || q == "" {
+	if q == "" {
 		return []EPGChannel{}
+	}
+	if g == nil {
+		return m.customMatches(q)
 	}
 	type hit struct {
 		c    EPGChannel
@@ -263,14 +269,14 @@ func (m *Module) SearchEPG(q string, limit int) []EPGChannel {
 		}
 		return hits[i].c.Name < hits[j].c.Name
 	})
-	out := []EPGChannel{}
+	out := m.customMatches(q) // свои каналы (план 14Д) — первыми: их ищут по своему названию
 	for _, h := range hits {
-		if len(out) == limit {
+		if len(out) >= limit {
 			break
 		}
 		out = append(out, h.c)
 	}
-	return out
+	return out[:min(len(out), limit)]
 }
 
 // LogoURL — адрес логотипа канала в интернете; "" — нет.

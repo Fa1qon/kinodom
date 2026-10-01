@@ -96,11 +96,12 @@ type pool struct {
 	streamRules map[string]Rule // ссылка → правка
 	nameRules   map[string]Rule // нормализованное название → правка
 	overrides   map[string]Override
+	custom      map[string]Custom // свои каналы (план 14Д)
 }
 
 func newPool() *pool {
 	return &pool{playlists: map[int64]*Playlist{}, streams: map[int64]*Stream{}, byURL: map[string]*Stream{},
-		streamRules: map[string]Rule{}, nameRules: map[string]Rule{}, overrides: map[string]Override{}}
+		streamRules: map[string]Rule{}, nameRules: map[string]Rule{}, overrides: map[string]Override{}, custom: map[string]Custom{}}
 }
 
 // db — таблицы IPTV.
@@ -231,6 +232,22 @@ func (d db) load(ctx context.Context) (*pool, error) {
 			o.Languages = splitList(langs.String)
 		}
 		p.overrides[k] = o
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	rows.Close()
+	rows, err = tx.QueryContext(ctx, `SELECT key, name, logo FROM iptv_custom WHERE deleted_at IS NULL`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var c Custom
+		if err := rows.Scan(&c.Key, &c.Name, &c.Logo); err != nil {
+			return nil, err
+		}
+		p.custom[c.Key] = c
 	}
 	return p, rows.Err()
 }
