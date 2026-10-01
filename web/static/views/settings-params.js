@@ -25,6 +25,7 @@ const FIELD = {
   'Папка загрузок': 'downloadsDir',
   'Плеер': 'player',
   'Формат в приоритете': 'preferredFormat',
+  'Порядок по умолчанию': 'catalogOrder',
 };
 const LOGIN = { none: 'Логин не задан', unknown: 'Вход ещё не проверялся', ok: 'Вход выполнен' };
 
@@ -109,6 +110,13 @@ export function render(root, r, ctx) {
         h('input', { type: 'radio', name: 'pformat', value: id, checked: pf === id, disabled: !canEdit, 'data-key': `pformat-${id || 'none'}` }), t)));
     inputs.preferredFormat = formats;
     errs.preferredFormat = h('div', { class: 'error field-error' });
+    // Порядок разделов каталога по умолчанию (план 14Б): в разделе его можно сменить, выбор запоминается.
+    const co = v.catalog.order || 'seeders';
+    const orders = h('div', { class: 'checks', role: 'radiogroup', 'aria-label': 'Порядок по умолчанию' },
+      [['seeders', 'Раздающие'], ['leechers', 'Качающие'], ['new', 'Новые'], ['downloads', 'Скачивания']].map(([id, t]) => h('label', { class: 'check' },
+        h('input', { type: 'radio', name: 'corder', value: id, checked: co === id, disabled: !canEdit, 'data-key': `order-${id}` }), t)));
+    inputs.catalogOrder = orders;
+    errs.catalogOrder = h('div', { class: 'error field-error' });
     errs.general = h('div', { class: 'error' });
     const loginBtn = h('button', { class: 'btn', type: 'button', disabled: !canEdit, 'data-key': 'login', onclick: relogin }, icon('login'), 'Войти');
     // «Дополнительно» — служебные адреса трекеров (пусто — по адресу сайта) и запасной ключ Кинопоиска.
@@ -165,7 +173,9 @@ export function render(root, r, ctx) {
               field('Раздача, МБ/с', 'upload', upload)),
             uploadHint,
             field('Серий позади при нехватке места', 'keepBehind', input('keepBehind', String(v.storage.keepBehind), { inputmode: 'numeric' }))),
-          h('div', { class: 'card' }, h('div', { class: 'h' }, 'Плеер'), players, errs.player,
+          h('div', { class: 'card' }, h('div', { class: 'h' }, 'Плеер'), players, errs.player),
+          h('div', { class: 'card' }, h('div', { class: 'h' }, 'Каталог'),
+            h('div', { class: 'fld' }, 'Порядок по умолчанию', orders, errs.catalogOrder),
             h('div', { class: 'fld' }, 'Формат в приоритете', formats, errs.preferredFormat)))),
     );
     saveBtn.disabled = !canEdit;
@@ -277,6 +287,8 @@ export function render(root, r, ctx) {
     if (player !== v.player) p.player = player;
     const format = inputs.preferredFormat.querySelector('input:checked').value;
     if (format !== (v.catalog.preferredFormat || '')) set('catalog', 'preferredFormat', format);
+    const order = inputs.catalogOrder.querySelector('input:checked').value;
+    if (order !== (v.catalog.order || 'seeders')) set('catalog', 'order', order);
     return { p, bad };
   }
 
