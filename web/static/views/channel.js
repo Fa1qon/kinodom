@@ -1,10 +1,11 @@
 // Страница канала (спека этапа 8, раздел 6.2): «Смотреть», ★, .m3u8, программа на сегодня и завтра.
 // Источники, «Скрыть канал», «Проверить» и метки — в «Настройках канала» (#/channel/<ключ>/settings),
 // на странице их нет (отзыв заказчика 2026-09-30). Версии по времени (МСК, МСК+4, МСК−1) — ряд над
-// кнопками; выбранная играет, под ней её программа (спека 11b, 13.3).
+// кнопками; выбранная играет, под ней её программа (спека 11b, 13.3). В приложении «Смотреть» отдаёт плееру
+// список, из которого открыли страницу, иначе «Все»; ссылки .m3u8 нет (спека 13, 4.1 и 5.2).
 import { h, fill, icon, poll, keepFocus } from '../ui.js';
 import { get } from '../api.js';
-import { GRADE, gradeMark, hhmm, inZone, logo, watchChannel, toggleFavorite, starButton } from './tvkit.js';
+import { GRADE, gradeMark, hhmm, inZone, logo, watchChannel, toggleFavorite, starButton, appBridge, watchRoute, listFor } from './tvkit.js';
 import * as settings from './channel-settings.js';
 
 // dateStr — «2026-09-30» через days дней, день — по поясу каналов UTC+offset.
@@ -62,6 +63,13 @@ export function render(root, r, ctx) {
     if (alive) draw();
   }, 5000);
 
+  // watch — «Смотреть»: в приложении — со списком, из которого открыли страницу, иначе «Все».
+  async function watch(c, links) {
+    let from = listFor(c.key);
+    if (!from && watchRoute(appBridge()) === 'app') from = { list: (await get('/channels')).channels, listName: 'Все' };
+    await watchChannel(links.watch, ctx, from && { ...from, start: { ...c, version: links.watch } });
+  }
+
   async function act(fn) {
     try {
       await fn();
@@ -97,9 +105,9 @@ export function render(root, r, ctx) {
             cardPoll.now();
           } })))) : null);
       fill(actions,
-        h('button', { class: 'btn inv big', type: 'button', 'data-key': 'watch', onclick: () => act(() => watchChannel(links.watch, ctx)) }, icon('play_arrow'), 'Смотреть'),
+        h('button', { class: 'btn inv big', type: 'button', 'data-key': 'watch', onclick: () => act(() => watch(c, links)) }, icon('play_arrow'), 'Смотреть'),
         ctx.canEdit ? starButton(c.favorite, () => act(() => toggleFavorite(c.favorite, c.key)), 'star') : null,
-        h('a', { class: 'btn big wide-only', href: links.m3u, download: '', 'data-key': 'm3u' }, icon('playlist_play'), '.m3u8'),
+        appBridge() ? null : h('a', { class: 'btn big wide-only', href: links.m3u, download: '', 'data-key': 'm3u' }, icon('playlist_play'), '.m3u8'),
         h('a', { class: 'btn big', href: links.settings, 'data-key': 'settings' }, icon('tune'), 'Настройки канала'),
         error ? h('span', { class: 'error' }, error) : null);
       drawProgramme();

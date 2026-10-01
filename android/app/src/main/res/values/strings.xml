@@ -20,4 +20,7 @@
     <string name="update_loading">Загрузка обновления… %1$d %%</string>
     <string name="update_failed">Не удалось скачать обновление</string>
     <string name="close">Закрыть</string>
+    <string name="no_signal">Канал сейчас не показывает</string>
+    <string name="no_channel">Нет канала %1$s</string>
+    <string name="channel_list">Список</string>
 </resources>
