@@ -146,7 +146,7 @@ func (c *Catalog) runSearch(ctx context.Context, cancel context.CancelFunc, run 
 			case extra:
 				c.extraFound(context.WithoutCancel(ctx), rs, ids, enrich)
 			case enrich:
-				c.enqueueFound(context.WithoutCancel(ctx), name, ids)
+				c.enqueueFound(context.WithoutCancel(ctx), name, ids, searchToEnrich)
 			}
 			run.mu.Lock()
 			run.ids = append(run.ids, ids...)
@@ -168,9 +168,9 @@ func (c *Catalog) runSearch(ctx context.Context, cancel context.CancelFunc, run 
 const searchToEnrich = 20
 
 // enqueueFound — найденное трекером name без страницы раздачи — в догрузку вне очереди (после
-// открытых в пульте) в порядке выдачи.
+// открытых в пульте) в порядке выдачи, не больше limit.
 // Трекер выключен или форум на паузе — нет: догрузка всё равно не пойдёт.
-func (c *Catalog) enqueueFound(ctx context.Context, name string, ids []int64) {
+func (c *Catalog) enqueueFound(ctx context.Context, name string, ids []int64, limit int) {
 	if !c.configured(name) || c.forumPausedUntil(name).After(c.now()) {
 		return
 	}
@@ -182,7 +182,7 @@ func (c *Catalog) enqueueFound(ctx context.Context, name string, ids []int64) {
 	var batch []int64
 	for _, id := range ids {
 		if r, ok := byID[id]; ok && r.DetailsAt.IsZero() {
-			if batch = append(batch, id); len(batch) == searchToEnrich {
+			if batch = append(batch, id); len(batch) == limit {
 				break
 			}
 		}
@@ -207,7 +207,7 @@ func (c *Catalog) extraFound(ctx context.Context, rs []source.Release, ids []int
 	}
 	if enrich {
 		for tracker, ids := range own {
-			c.enqueueFound(ctx, tracker, ids)
+			c.enqueueFound(ctx, tracker, ids, searchToEnrich)
 		}
 	}
 	c.kinopoiskSoon(ctx, pageless)

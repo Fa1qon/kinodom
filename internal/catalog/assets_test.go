@@ -71,7 +71,7 @@ func TestFoundEnrichedWithoutTorrentUntilOpened(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	c.enqueueFound(ctx, "rutor", ids)
+	c.enqueueFound(ctx, "rutor", ids, searchToEnrich)
 	if did, err := c.enrichStep(ctx, "rutor"); !did || err != nil {
 		t.Fatal(did, err)
 	}
@@ -120,7 +120,7 @@ func TestUrgentWorkInterruptsBackgroundTorrent(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	c.enqueueFound(ctx, "rutor", ids)
+	c.enqueueFound(ctx, "rutor", ids, searchToEnrich)
 	select {
 	case err := <-done:
 		if err != nil {
@@ -202,7 +202,7 @@ func TestOpenedTorrentFailedStopsWaiting(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	c.enqueueFound(ctx, "rutor", ids)
+	c.enqueueFound(ctx, "rutor", ids, searchToEnrich)
 	if did, err := c.enrichStep(ctx, "rutor"); !did || err != nil {
 		t.Fatal(did, err)
 	}

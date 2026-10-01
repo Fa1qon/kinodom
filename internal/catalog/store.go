@@ -492,12 +492,16 @@ func (s catalogStore) nextToEnrich(ctx context.Context, tracker string, cats []C
 	if err != nil {
 		return row{}, false, err
 	}
+	// По месту в разделе: первые карточки всех разделов, потом вторые (спека 11b, 14.4) — первый экран
+	// любого раздела готов раньше глубины популярных; при равном месте — по порядку каталога.
+	var next row
+	ok := false
 	for _, r := range rs {
-		if r.Tracker == tracker && r.DetailsAt.IsZero() && !r.RetryAt.After(now) {
-			return r, true, nil
+		if r.Tracker == tracker && r.DetailsAt.IsZero() && !r.RetryAt.After(now) && (!ok || r.Pos < next.Pos) {
+			next, ok = r, true
 		}
 	}
-	return row{}, false, nil
+	return next, ok, nil
 }
 
 // saveDetails — страница раздачи. Цифры — только ненулевые: гостю Rutracker не видны раздающие
