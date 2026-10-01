@@ -241,3 +241,45 @@ func TestLiveStream(t *testing.T) {
 		srv.Close()
 	}
 }
+
+// Заглушка провайдера вместо эфира (замечание № 15): Ростелеком вне своей зоны перенаправляет плейлист
+// потока на запись «не показывает видео на этой территории» — 4 сегмента и конец записи. Запись — не эфир:
+// и лёгкая, и полная проверка — мёртв с причиной; «событие» без конца записи и обычный эфир — живы.
+func TestProbeStubPlaylist(t *testing.T) {
+	seg := make([]byte, 32<<10)
+	mux := http.NewServeMux()
+	mux.HandleFunc("/hls/CH_1TVSD_4/variant.m3u8", func(w http.ResponseWriter, r *http.Request) {
+		fmt.Fprint(w, "#EXTM3U\n#EXT-X-VERSION:5\n#EXT-X-STREAM-INF:PROGRAM-ID=1,BANDWIDTH=2698704,CODECS=\"avc1.64001e,mp4a.40.29\",RESOLUTION=800x450\n/hls/CH_1TVSD_4/playlist.m3u8\n")
+	})
+	mux.HandleFunc("/hls/CH_1TVSD_4/playlist.m3u8", func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, "/rtk_block.m3u8", http.StatusMovedPermanently)
+	})
+	mux.HandleFunc("/rtk_block.m3u8", func(w http.ResponseWriter, r *http.Request) {
+		fmt.Fprint(w, "#EXTM3U\n#EXT-X-VERSION:3\n#EXT-X-TARGETDURATION:10\n#EXT-X-MEDIA-SEQUENCE:0\n"+
+			"#EXTINF:10.000000,\n/index0.ts\n#EXTINF:10.000000,\n/index1.ts\n#EXTINF:10.000000,\n/index2.ts\n#EXTINF:10.000000,\n/index3.ts\n#EXT-X-ENDLIST\n")
+	})
+	mux.HandleFunc("/vod.m3u8", func(w http.ResponseWriter, r *http.Request) {
+		fmt.Fprint(w, "#EXTM3U\n#EXT-X-PLAYLIST-TYPE:VOD\n#EXT-X-TARGETDURATION:10\n#EXTINF:10,\n/index3.ts\n")
+	})
+	mux.HandleFunc("/event.m3u8", func(w http.ResponseWriter, r *http.Request) {
+		fmt.Fprint(w, "#EXTM3U\n#EXT-X-PLAYLIST-TYPE:EVENT\n#EXT-X-TARGETDURATION:1\n#EXTINF:0.5,\n/index3.ts\n#EXTINF:0.5,\n/index3.ts\n")
+	})
+	mux.HandleFunc("/live.m3u8", func(w http.ResponseWriter, r *http.Request) {
+		fmt.Fprint(w, "#EXTM3U\n#EXT-X-TARGETDURATION:1\n#EXT-X-MEDIA-SEQUENCE:1790830800\n#EXTINF:0.5,\n/index3.ts\n")
+	})
+	mux.HandleFunc("/index3.ts", func(w http.ResponseWriter, r *http.Request) { w.Write(seg) })
+	srv := httptest.NewServer(mux)
+	t.Cleanup(srv.Close)
+	p := prober()
+	for _, c := range []struct {
+		path string
+		stub bool
+	}{{"/hls/CH_1TVSD_4/variant.m3u8", true}, {"/vod.m3u8", true}, {"/event.m3u8", false}, {"/live.m3u8", false}} {
+		for name, check := range map[string]func(context.Context, Target) Result{"лёгкая": p.Light, "полная": p.Full} {
+			r := check(context.Background(), Target{URL: srv.URL + c.path})
+			if stub := r.Grade == GradeBlack && r.Error == StubError; stub != c.stub || (!c.stub && r.Grade == GradeBlack) {
+				t.Errorf("%s %s: %s %q", name, c.path, r.Grade, r.Error)
+			}
+		}
+	}
+}
