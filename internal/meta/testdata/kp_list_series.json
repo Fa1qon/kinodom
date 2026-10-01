@@ -1,0 +1,542 @@
+{
+ "data": {
+  "movieListBySlug": {
+   "compositeName": {
+    "parts": [
+     {
+      "name": "Популярные сериалы",
+      "__typename": "StaticMovieListNamePart"
+     }
+    ],
+    "__typename": "MovieListCompositeName"
+   },
+   "__typename": "MovieListMeta",
+   "id": 1149,
+   "name": "Популярные сериалы",
+   "description": "Рейтинг составлен на основе посещаемости страниц сериалов, а также запросов к поисковой системе сайта. Список обновляется один раз в сутки.",
+   "cover": {
+    "avatarsUrl": "//avatars.mds.yandex.net/get-kinopoisk-image/10768063/febf0a19-62ae-43af-abda-931280f57b2a",
+    "__typename": "Image"
+   },
+   "movies": {
+    "total": 1000,
+    "items": [
+     {
+      "movie": {
+       "id": 7036356,
+       "contentId": "457fe23395b24811a131c8274fa50b40",
+       "title": {
+        "russian": "Холод",
+        "original": null,
+        "__typename": "Title"
+       },
+       "gallery": {
+        "posters": {
+         "vertical": {
+          "avatarsUrl": "//avatars.mds.yandex.net/get-kinopoisk-image/4486454/87387feb-9961-49d5-bee7-c867bef417a0",
+          "__typename": "Image"
+         },
+         "__typename": "MoviePosters"
+        },
+        "logos": {
+         "rightholderForPoster": null,
+         "__typename": "MovieLogos"
+        },
+        "__typename": "MovieGallery"
+       },
+       "__typename": "TvSeries",
+       "countries": [
+        {
+         "id": 2,
+         "name": "Россия",
+         "__typename": "Country"
+        }
+       ],
+       "genres": [
+        {
+         "id": 8,
+         "name": "драма",
+         "__typename": "Genre"
+        },
+        {
+         "id": 4,
+         "name": "триллер",
+         "__typename": "Genre"
+        }
+       ],
+       "cast": {
+        "items": [
+         {
+          "details": "Евгения Плотникова",
+          "person": {
+           "name": null,
+           "originalName": "Любовь Аксёнова",
+           "__typename": "Person"
+          },
+          "__typename": "FilmCrewMember"
+         },
+         {
+          "details": "Надежда Цапкова",
+          "person": {
+           "name": null,
+           "originalName": "Лариса Гузеева",
+           "__typename": "Person"
+          },
+          "__typename": "FilmCrewMember"
+         },
+         {
+          "details": "Яна Рейн",
+          "person": {
+           "name": null,
+           "originalName": "Линда Лапиньш",
+           "__typename": "Person"
+          },
+          "__typename": "FilmCrewMember"
+         }
+        ],
+        "__typename": "PagingList_FilmCrewMember"
+       },
+       "directors": {
+        "items": [
+         {
+          "details": null,
+          "person": {
+           "name": null,
+           "originalName": "Алексей Казаков",
+           "__typename": "Person"
+          },
+          "__typename": "FilmCrewMember"
+         }
+        ],
+        "__typename": "PagingList_FilmCrewMember"
+       },
+       "url": "https://www.kinopoisk.ru/series/7036356/",
+       "rating": {
+        "kinopoisk": {
+         "value": 7.664,
+         "isActive": true,
+         "count": 233305,
+         "__typename": "RatingValue"
+        },
+        "plannedToWatch": null,
+        "__typename": "Rating"
+       },
+       "mainTrailer": {
+        "id": 212987,
+        "isEmbedded": false,
+        "__typename": "Trailer"
+       },
+       "viewOption": {
+        "buttonText": null,
+        "originalButtonText": null,
+        "promotionIcons": null,
+        "isAvailableOnline": false,
+        "purchasabilityStatus": "UNPURCHASABLE",
+        "type": null,
+        "rightholderLogoUrlForPoster": null,
+        "availabilityAnnounce": null,
+        "__typename": "ViewOption"
+       },
+       "ticketOption": {
+        "purchasable": false,
+        "__typename": "TicketOption"
+       },
+       "distribution": {
+        "rusRelease": {
+         "items": [],
+         "__typename": "PagingList_Release"
+        },
+        "worldPremiere": null,
+        "allReleases": {
+         "items": [
+          {
+           "date": {
+            "date": "2026-07-16",
+            "accuracy": "DAY",
+            "__typename": "IncompleteDate"
+           },
+           "__typename": "Release"
+          }
+         ],
+         "__typename": "PagingList_Release"
+        },
+        "__typename": "Distribution"
+       },
+       "releaseYears": [
+        {
+         "start": 2026,
+         "end": 2026,
+         "__typename": "YearsRange"
+        }
+       ],
+       "totalDuration": null,
+       "ratingLists": {
+        "top250": null,
+        "__typename": "MovieRatingLists"
+       }
+      },
+      "__typename": "PopularMovieListItem",
+      "positionDiff": 0
+     },
+     {
+      "movie": {
+       "id": 8744383,
+       "contentId": "a58fa4c9205843e19c030812af853b96",
+       "title": {
+        "russian": "Трудный ребёнок",
+        "original": null,
+        "__typename": "Title"
+       },
+       "gallery": {
+        "posters": {
+         "vertical": {
+          "avatarsUrl": "//avatars.mds.yandex.net/get-kinopoisk-image/10893610/9f23a9a5-1f27-4025-90dc-b15e245c851f",
+          "__typename": "Image"
+         },
+         "__typename": "MoviePosters"
+        },
+        "logos": {
+         "rightholderForPoster": null,
+         "__typename": "MovieLogos"
+        },
+        "__typename": "MovieGallery"
+       },
+       "__typename": "TvSeries",
+       "countries": [
+        {
+         "id": 2,
+         "name": "Россия",
+         "__typename": "Country"
+        }
+       ],
+       "genres": [
+        {
+         "id": 6,
+         "name": "комедия",
+         "__typename": "Genre"
+        }
+       ],
+       "cast": {
+        "items": [
+         {
+          "details": "Фил",
+          "person": {
+           "name": null,
+           "originalName": "Геннадий Блинов",
+           "__typename": "Person"
+          },
+          "__typename": "FilmCrewMember"
+         },
+         {
+          "details": "Макар",
+          "person": {
+           "name": null,
+           "originalName": "Борис Дейков",
+           "__typename": "Person"
+          },
+          "__typename": "FilmCrewMember"
+         },
+         {
+          "details": "Гуталин",
+          "person": {
+           "name": null,
+           "originalName": "Александр Лойе",
+           "__typename": "Person"
+          },
+          "__typename": "FilmCrewMember"
+         }
+        ],
+        "__typename": "PagingList_FilmCrewMember"
+       },
+       "directors": {
+        "items": [
+         {
+          "details": null,
+          "person": {
+           "name": null,
+           "originalName": "Владимир Болгов",
+           "__typename": "Person"
+          },
+          "__typename": "FilmCrewMember"
+         }
+        ],
+        "__typename": "PagingList_FilmCrewMember"
+       },
+       "url": "https://www.kinopoisk.ru/series/8744383/",
+       "rating": {
+        "kinopoisk": {
+         "value": 7.846,
+         "isActive": true,
+         "count": 65459,
+         "__typename": "RatingValue"
+        },
+        "plannedToWatch": null,
+        "__typename": "Rating"
+       },
+       "mainTrailer": {
+        "id": 212739,
+        "isEmbedded": false,
+        "__typename": "Trailer"
+       },
+       "viewOption": {
+        "buttonText": "С мультиподпиской Яндекс Плюс",
+        "originalButtonText": null,
+        "promotionIcons": null,
+        "isAvailableOnline": true,
+        "purchasabilityStatus": "PURCHASABLE",
+        "type": "SUBSCRIPTION",
+        "rightholderLogoUrlForPoster": null,
+        "availabilityAnnounce": null,
+        "__typename": "ViewOption"
+       },
+       "ticketOption": {
+        "purchasable": false,
+        "__typename": "TicketOption"
+       },
+       "distribution": {
+        "rusRelease": {
+         "items": [
+          {
+           "date": {
+            "date": "2026-09-21",
+            "accuracy": "DAY",
+            "__typename": "IncompleteDate"
+           },
+           "__typename": "Release"
+          }
+         ],
+         "__typename": "PagingList_Release"
+        },
+        "worldPremiere": null,
+        "allReleases": {
+         "items": [
+          {
+           "date": {
+            "date": "2026-09-21",
+            "accuracy": "DAY",
+            "__typename": "IncompleteDate"
+           },
+           "__typename": "Release"
+          }
+         ],
+         "__typename": "PagingList_Release"
+        },
+        "__typename": "Distribution"
+       },
+       "releaseYears": [
+        {
+         "start": 2026,
+         "end": 2026,
+         "__typename": "YearsRange"
+        }
+       ],
+       "totalDuration": null,
+       "ratingLists": {
+        "top250": null,
+        "__typename": "MovieRatingLists"
+       }
+      },
+      "__typename": "PopularMovieListItem",
+      "positionDiff": 2
+     },
+     {
+      "movie": {
+       "id": 5512084,
+       "contentId": "84fc8a712ac74f88a45f34dc0b7c4a07",
+       "title": {
+        "russian": "Гангстерленд",
+        "original": "MobLand",
+        "__typename": "Title"
+       },
+       "gallery": {
+        "posters": {
+         "vertical": {
+          "avatarsUrl": "//avatars.mds.yandex.net/get-kinopoisk-image/10703959/2066edaa-e602-46bd-8844-71c81e053e91",
+          "__typename": "Image"
+         },
+         "__typename": "MoviePosters"
+        },
+        "logos": {
+         "rightholderForPoster": null,
+         "__typename": "MovieLogos"
+        },
+        "__typename": "MovieGallery"
+       },
+       "__typename": "TvSeries",
+       "countries": [
+        {
+         "id": 11,
+         "name": "Великобритания",
+         "__typename": "Country"
+        },
+        {
+         "id": 1,
+         "name": "США",
+         "__typename": "Country"
+        }
+       ],
+       "genres": [
+        {
+         "id": 8,
+         "name": "драма",
+         "__typename": "Genre"
+        },
+        {
+         "id": 16,
+         "name": "криминал",
+         "__typename": "Genre"
+        },
+        {
+         "id": 3,
+         "name": "боевик",
+         "__typename": "Genre"
+        }
+       ],
+       "cast": {
+        "items": [
+         {
+          "details": "Harry Da Souza",
+          "person": {
+           "name": "Том Харди",
+           "originalName": "Tom Hardy",
+           "__typename": "Person"
+          },
+          "__typename": "FilmCrewMember"
+         },
+         {
+          "details": "Conrad Harrigan",
+          "person": {
+           "name": "Пирс Броснан",
+           "originalName": "Pierce Brosnan",
+           "__typename": "Person"
+          },
+          "__typename": "FilmCrewMember"
+         },
+         {
+          "details": "Kevin Harrigan",
+          "person": {
+           "name": "Пэдди Консидайн",
+           "originalName": "Paddy Considine",
+           "__typename": "Person"
+          },
+          "__typename": "FilmCrewMember"
+         }
+        ],
+        "__typename": "PagingList_FilmCrewMember"
+       },
+       "directors": {
+        "items": [
+         {
+          "details": null,
+          "person": {
+           "name": "Энтони Бирн",
+           "originalName": "Anthony Byrne",
+           "__typename": "Person"
+          },
+          "__typename": "FilmCrewMember"
+         }
+        ],
+        "__typename": "PagingList_FilmCrewMember"
+       },
+       "url": "https://www.kinopoisk.ru/series/5512084/",
+       "rating": {
+        "kinopoisk": {
+         "value": 8.214,
+         "isActive": true,
+         "count": 179161,
+         "__typename": "RatingValue"
+        },
+        "plannedToWatch": null,
+        "__typename": "Rating"
+       },
+       "mainTrailer": {
+        "id": 214442,
+        "isEmbedded": false,
+        "__typename": "Trailer"
+       },
+       "viewOption": {
+        "buttonText": null,
+        "originalButtonText": null,
+        "promotionIcons": null,
+        "isAvailableOnline": false,
+        "purchasabilityStatus": "UNPURCHASABLE",
+        "type": null,
+        "rightholderLogoUrlForPoster": null,
+        "availabilityAnnounce": null,
+        "__typename": "ViewOption"
+       },
+       "ticketOption": {
+        "purchasable": false,
+        "__typename": "TicketOption"
+       },
+       "distribution": {
+        "rusRelease": {
+         "items": [],
+         "__typename": "PagingList_Release"
+        },
+        "worldPremiere": {
+         "incompleteDate": {
+          "date": "2025-03-30",
+          "accuracy": "DAY",
+          "__typename": "IncompleteDate"
+         },
+         "__typename": "Premiere"
+        },
+        "allReleases": {
+         "items": [
+          {
+           "date": {
+            "date": "2025-03-30",
+            "accuracy": "DAY",
+            "__typename": "IncompleteDate"
+           },
+           "__typename": "Release"
+          }
+         ],
+         "__typename": "PagingList_Release"
+        },
+        "__typename": "Distribution"
+       },
+       "releaseYears": [
+        {
+         "start": 2025,
+         "end": null,
+         "__typename": "YearsRange"
+        }
+       ],
+       "totalDuration": null,
+       "ratingLists": {
+        "top250": {
+         "movieListSlug": "series-top250",
+         "position": 59,
+         "__typename": "MovieInList"
+        },
+        "__typename": "MovieRatingLists"
+       }
+      },
+      "__typename": "PopularMovieListItem",
+      "positionDiff": 3
+     }
+    ],
+    "__typename": "FilteredMovieList"
+   },
+   "descriptionLink": null
+  },
+  "webPage": {
+   "kpMovieListPage": {
+    "htmlMeta": {
+     "openGraph": {
+      "image": {
+       "avatarsUrl": "//avatars.mds.yandex.net/get-kinopoisk-image/10592371/5ee6adc6-b092-4b6b-898f-18de72c3d855",
+       "__typename": "Image"
+      },
+      "__typename": "OpenGraphMeta"
+     },
+     "__typename": "HtmlMeta"
+    },
+    "__typename": "WebPageConfiguration_KpMovieListPage"
+   },
+   "__typename": "WebPageContext"
+  }
+ }
+}

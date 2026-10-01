@@ -90,7 +90,7 @@ func TestOpenErrorShowsWindowAndLogs(t *testing.T) {
 }
 
 // «Разрешить доступ»: служба подтверждает папку → перезапуск себя от администратора командой grant
-// (--write для загрузок) → служба обходит медиатеку. Чужая папка — окно отказа, прав никто не просит.
+// (--write: в папки загрузок и медиатеки Kinodom качает и из них удаляет, план 14В) → служба обходит медиатеку. Чужая папка — окно отказа, прав никто не просит.
 func TestOpenGrant(t *testing.T) {
 	shown, _ := asGUI(t)
 	movies, downloads, foreign := `D:\Share\Movies`, `E:\Kinodom`, `C:\Windows`
@@ -106,7 +106,7 @@ func TestOpenGrant(t *testing.T) {
 	if code, _, _ := runCmd(cmdOpen, player.GrantURL(downloads, port)); code != 0 {
 		t.Fatal("загрузки")
 	}
-	want := [][]string{{"grant", movies}, {"grant", "--write", downloads}}
+	want := [][]string{{"grant", "--write", movies}, {"grant", "--write", downloads}}
 	if !slices.EqualFunc(elevated, want, slices.Equal) {
 		t.Fatalf("повышение прав %q", elevated)
 	}

@@ -206,7 +206,7 @@ export function render(root, r, ctx) {
           const inputs = rows.get(c.id);
           return h('div', { class: 'card' }, h('div', { class: 'h' }, label),
             c.folders.map((f) => h('div', { class: 'row folder-row' }, icon('folder'), h('span', { class: 'grow ellipsis', title: f.path }, f.path),
-              f.problem ? h('span', { class: 'tag warn-tag' }, icon('warning', 16), f.problem === 'no_access' ? 'нет доступа' : 'не найдена') : null,
+              f.problem ? h('span', { class: 'tag warn-tag' }, icon('warning', 16), f.problem === 'no_access' ? 'нет доступа' : f.problem === 'no_write' ? 'нет записи' : 'не найдена') : null,
               grantControl(ctx, f, `grant-${f.id}`, watchAgain))),
             inputs.map((el, i) => h('div', { class: 'row gap10' }, h('div', { class: 'grow' }, el),
               h('button', { class: 'btn', type: 'button', 'data-key': `browse-${c.id}-${i}`, disabled: !canEdit(), onclick: async () => {
