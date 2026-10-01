@@ -592,6 +592,11 @@ const redrawn = new El('button'); redrawn.setAttribute('data-key', 'pick-0'); vi
 body.find('dlg-no').fire('click');
 await p;
 checks.push(['после перерисовки фокус — на тот же ключ', document.activeElement === redrawn]);
+// Ревью 14В: безвозвратное (удалить своё с диска) — фокус на «Нет»: второе OK на пульте ТВ не удаляет.
+p = confirmDialog({ title: 'Удалить «Фильм» с диска навсегда?', yes: 'Удалить', safe: true });
+checks.push(['безвозвратное — фокус на «Нет»', document.activeElement === body.find('dlg-no')]);
+body.find('dlg-no').fire('click');
+checks.push(['«Нет» — false', (await p) === false]);
 for (const [name, ok] of checks) {
   if (!ok) {
     console.error('не выполнено:', name);
@@ -1836,6 +1841,38 @@ const checks = [
   [gf([{ file: 'Фильм.avi', preferred: false }]), '{"format":"AVI","preferred":false}'],
   [gf([{ file: 's\e1.avi', preferred: false }, { file: 's\e2.mkv', preferred: true }]), '{"format":"MKV","preferred":true}'],
   [gf([{ file: 'e1.mp4', preferred: false }, { file: 'e2.mp4', preferred: false }]), '{"format":"MP4","preferred":false}'],
+];
+for (const [got, want] of checks) {
+  if (got !== want) {
+    console.error(JSON.stringify(got), '≠', JSON.stringify(want));
+    process.exitCode = 1;
+  }
+}
+`
+	cmd := exec.Command(node, "--input-type=module", "--no-warnings", "-e", script)
+	cmd.Dir = "static"
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Errorf("%v\n%s", err, out)
+	}
+}
+
+// План 14В: «Удалить» на карточке медиатеки — своё через медиатеку, скачанное — как в «Загрузках»;
+// «Разрешить доступ» и у папки, куда нельзя писать.
+func TestPultLibraryDelete(t *testing.T) {
+	node := lookNode(t)
+	script := `
+globalThis.Node = class {};
+const { deleteRequest } = await import('./views/library-card.js');
+const { grantView } = await import('./views/folders.js');
+const own = deleteRequest({ unit: 7, hash: 'lib-7', path: 'D:\\Films\\Фильм.mkv', source: 'Фильмы' });
+const dl = deleteRequest({ unit: 9, hash: 'abcdef', path: 'D:\\Films\\X [abcdef12]', source: 'Скачано' });
+const g = grantView({ local: true }, { path: 'D:\\Films', problem: 'no_write' }, 8090);
+const checks = [
+  [own.path, '/library/units/7'],
+  [own.text.includes('Фильм.mkv'), true],
+  [dl.path, '/downloads/abcdef'],
+  [!!(g && g.link && g.link.startsWith('kinodom://grant?')), true],
+  [grantView({ local: true }, { path: 'D:\\Films', problem: '' }, 8090), null],
 ];
 for (const [got, want] of checks) {
   if (got !== want) {

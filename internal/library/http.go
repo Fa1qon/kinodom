@@ -26,6 +26,7 @@ func (l *Library) Register(r Router) {
 	r.Handle("POST /api/v1/library/scan", n, http.HandlerFunc(l.handleScan))
 	r.Handle("GET /api/v1/library/unrecognized", n, http.HandlerFunc(l.handleUnrecognized))
 	r.HandleHome("PUT /api/v1/library/units/{id}", n, http.HandlerFunc(l.handleUnitPut))
+	r.HandleHome("DELETE /api/v1/library/units/{id}", n, http.HandlerFunc(l.handleUnitDelete))
 	r.Handle("GET /api/v1/library/units/{id}/poster", n, http.HandlerFunc(l.handlePoster))
 	r.Handle("GET /api/v1/library/categories", n, http.HandlerFunc(l.handleCategories))
 	r.HandleHome("POST /api/v1/library/categories", n, http.HandlerFunc(l.handleCategoryAdd))
@@ -43,7 +44,9 @@ func writeError(w http.ResponseWriter, err error) {
 	switch {
 	case errors.Is(err, ErrNoCard), errors.Is(err, ErrNoUnit), errors.Is(err, ErrNoCategory), errors.Is(err, errNoFile):
 		httpx.WriteError(w, http.StatusNotFound, err.Error())
-	case errors.Is(err, ErrBuiltin), errors.Is(err, ErrFolderTaken):
+	case errors.Is(err, ErrNoWrite):
+		httpx.WriteError(w, http.StatusForbidden, err.Error())
+	case errors.Is(err, ErrBuiltin), errors.Is(err, ErrFolderTaken), errors.Is(err, ErrTorrentUnit), errors.Is(err, ErrOutside):
 		httpx.WriteError(w, http.StatusConflict, err.Error())
 	case errors.Is(err, ErrBadKP), errors.Is(err, ErrNoTitle), errors.Is(err, ErrNoName), errors.Is(err, ErrBadLayout),
 		errors.Is(err, ErrNotLocal), errors.Is(err, ErrFolderMissing), errors.Is(err, ErrFolderAccess), errors.Is(err, ErrFolderInDownloads):
@@ -129,6 +132,19 @@ func (l *Library) handleUnrecognized(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	httpx.WriteJSON(w, http.StatusOK, out)
+}
+
+// handleUnitDelete — «Удалить» свою единицу медиатеки (план 14В): {deleted: true}.
+func (l *Library) handleUnitDelete(w http.ResponseWriter, r *http.Request) {
+	id, ok := pathID(w, r)
+	if !ok {
+		return
+	}
+	if err := l.DeleteUnit(r.Context(), id); err != nil {
+		writeError(w, err)
+		return
+	}
+	httpx.WriteJSON(w, http.StatusOK, map[string]bool{"deleted": true})
 }
 
 // handleUnitPut — правка единицы: {kinopoisk: "<ссылка или номер>"}, {manual: {title, year}},

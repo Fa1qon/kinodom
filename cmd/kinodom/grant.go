@@ -37,7 +37,7 @@ func openGrant(link string, apiPort int, stdout, stderr io.Writer) int {
 		return report(stderr, "Эта папка не из настроек Kinodom — доступ не выдан.", fmt.Errorf("папка не из настроек: %s", path))
 	}
 	args := []string{"grant", path}
-	if kind == "downloads" {
+	if kind == "downloads" || kind == "library" { // в папки медиатеки Kinodom качает и из них удаляет (план 14В)
 		args = []string{"grant", "--write", path}
 	}
 	exe, err := os.Executable()

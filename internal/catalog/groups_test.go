@@ -91,3 +91,32 @@ func TestVideoForums(t *testing.T) {
 		t.Errorf("группы: %v", RutrackerGroups)
 	}
 }
+
+// План 14В: сериал или фильм — куда качать (папка «Сериалов» или «Фильмов»): сезон или серии в названии,
+// раздел сериалов Rutor (4, 16), форум группы Rutracker «Сериалы» (c18) на любой глубине.
+func TestIsSeries(t *testing.T) {
+	rt := newFake("rutracker")
+	rt.tree = []source.Category{
+		{ID: "c2", Name: "Кино, Видео и ТВ"}, {ID: "7", Name: "Зарубежное кино", ParentID: "c2"}, {ID: "313", Name: "HD", ParentID: "7"},
+		{ID: "c18", Name: "Сериалы"}, {ID: "189", Name: "Зарубежные сериалы", ParentID: "c18"}, {ID: "2100", Name: "HD", ParentID: "189"},
+	}
+	c, _ := newCatalog(t, openDB(t), func(o *Options) { o.Sections = []Section{{"rutracker", "7", false}} }, rt, newFake("rutor"))
+	refresh(t, c, false) // дерево
+	cases := []struct {
+		e    Entry
+		want bool
+	}{
+		{Entry{Tracker: "rutor", CategoryID: "1", Title: "Фильм (2026) WEB-DL 1080p"}, false},
+		{Entry{Tracker: "rutor", CategoryID: "4", Title: "Фильм (2026) WEB-DL 1080p"}, true},
+		{Entry{Tracker: "rutor", CategoryID: "16", Title: "Наш сериал (2026)"}, true},
+		{Entry{Tracker: "rutor", CategoryID: "1", Title: "Сериал / Show [S01] (2026) WEB-DL"}, true},
+		{Entry{Tracker: "rutor", CategoryID: "12", Title: "Nat Geo Wild: Дикая Япония [01-02 из 02] (2021) HDTV"}, true},
+		{Entry{Tracker: "rutracker", CategoryID: "313", Title: "Фильм (2026) WEB-DL"}, false},
+		{Entry{Tracker: "rutracker", CategoryID: "2100", Title: "Шоу / Show (2026) WEB-DL"}, true},
+	}
+	for _, x := range cases {
+		if got := c.IsSeries(ctx, x.e); got != x.want {
+			t.Errorf("%s %s %q: %v", x.e.Tracker, x.e.CategoryID, x.e.Title, got)
+		}
+	}
+}
