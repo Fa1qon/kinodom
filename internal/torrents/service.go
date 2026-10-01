@@ -73,6 +73,7 @@ type session struct {
 	focus        int               // файл, который качается сейчас (очередь загрузки, этап 7); −1 — никакой
 	wantAll      bool              // «Скачать» до получения списка файлов: скачать всё, когда он придёт
 	downloadErr  string            // отложенное «Скачать» не удалось (мало места)
+	upgradedFrom metainfo.Hash     // перешла с прежней версии: после проверки перенесённого снять пометку перехода
 }
 
 // prepared — файл, выбранный для просмотра.
@@ -96,6 +97,9 @@ type Service struct {
 	sessions map[metainfo.Hash]*session
 	policy   Policy
 	fetching map[metainfo.Hash]chan struct{} // идёт FetchInfo: временная раздача без хранилища
+	rekey    Rekey                           // перенос ключей при доведении перехода после сбоя (SetRekey)
+
+	upgradeStop func(phase string, rec upgradeRec) error // тесты: «сбой» посреди перехода
 
 	expiredAt  time.Time     // когда последний раз чистили по сроку хранения (только Run)
 	keeper     *power.Keeper // запрет сна, пока идёт поток; nil — без него
@@ -197,6 +201,10 @@ func (s *Service) Run(ctx context.Context) error {
 func (s *Service) restore(ctx context.Context) error {
 	// Первый вызов — при запуске модуля: раздачи без папки (до этапа 6) лежат в текущей папке.
 	if err := s.reg.PinDirs(ctx, s.eng.DownloadsDir()); err != nil {
+		return err
+	}
+	// Переход на обновлённую раздачу, прерванный сбоем, — довести до восстановления остальных раздач.
+	if err := s.resumeUpgrades(ctx); err != nil {
 		return err
 	}
 	recs, err := s.reg.Restorable(ctx)

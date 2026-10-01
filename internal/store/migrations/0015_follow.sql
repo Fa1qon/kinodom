@@ -29,7 +29,7 @@ CREATE INDEX updates_release ON updates(release_id);
 CREATE TABLE upgrades (
     old        TEXT PRIMARY KEY, -- infohash прежней версии
     new        TEXT NOT NULL,    -- infohash новой
-    moves      TEXT NOT NULL,    -- JSON [{from, to}] — абсолютные пути файлов
+    moves      TEXT NOT NULL,    -- JSON {dir, root, focus, moves: [{from, to, index}]} — абсолютные пути файлов
     state      TEXT NOT NULL,    -- db (база переписана, файлы ещё переносятся), moved (перенесены, ждут проверки)
     started_at INTEGER NOT NULL
 );

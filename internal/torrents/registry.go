@@ -40,8 +40,6 @@ func (r *Registry) Remember(ctx context.Context, ih metainfo.Hash, source, dir s
 	return got, err
 }
 
-// PinDirs закрепляет папку за раздачами без папки (записаны до этапа 6): они лежат в папке
-// загрузок, которая действует сейчас. Иначе после смены папки в пульте их искали бы в новой.
 // Hashes — все раздачи реестра: чьи отметки кусков нужны движку (остальные удаляются при старте).
 func (r *Registry) Hashes(ctx context.Context) ([]metainfo.Hash, error) {
 	rows, err := r.db.R.QueryContext(ctx, `SELECT infohash FROM torrents`)
@@ -64,6 +62,8 @@ func (r *Registry) Hashes(ctx context.Context) ([]metainfo.Hash, error) {
 	return out, rows.Err()
 }
 
+// PinDirs закрепляет папку за раздачами без папки (записаны до этапа 6): они лежат в папке
+// загрузок, которая действует сейчас. Иначе после смены папки в пульте их искали бы в новой.
 func (r *Registry) PinDirs(ctx context.Context, dir string) error {
 	_, err := r.db.W.ExecContext(ctx, `UPDATE torrents SET dir = ? WHERE dir = ''`, dir)
 	return err
