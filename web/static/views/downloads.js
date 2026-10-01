@@ -90,7 +90,7 @@ export function render(root, r, ctx) {
       thumb,
       h('div', { class: 'dl-name' },
         g.release ? h('a', { class: 'strong', href: `#/release/${g.release.id}`, title: full, 'data-key': `open-${g.hash}` }, title) : h('span', { class: 'strong' }, title),
-        h('span', { class: 'muted small ellipsis', title: single ? d0.file : null }, groupLine(g))),
+        h('span', { class: 'muted small ellipsis', title: single ? d0.file : null }, formatTagOf(g), groupLine(g))),
       stateCell(g.state, lead.readiness, g.percent, stateLabel({ state: g.state, streaming })),
       h('div', { class: 'dl-size' }, size(g.size), g.speed ? h('div', { class: 'muted small' }, speed(g.speed)) : null),
       h('div', { class: 'muted small dl-when' }, when(g.items), errorOf(key)),
@@ -116,7 +116,7 @@ export function render(root, r, ctx) {
   function episode(d, name) {
     const key = `${d.hash}-${d.index}`;
     return h('div', { class: 'dl child' },
-      h('div', { class: 'dl-name' }, h('span', { class: 'ellipsis', title: d.file }, name), formatTag(fileFormat(d.file), d.preferred)),
+      h('div', { class: 'dl-name' }, h('span', { class: 'ellipsis', title: d.file }, formatTag(fileFormat(d.file), d.preferred), name)),
       stateCell(d.state, d.readiness, d.percent, stateLabel(d)),
       h('div', { class: 'dl-size' }, size(d.size), d.speed ? h('div', { class: 'muted small' }, speed(d.speed)) : null),
       h('div', { class: 'muted small dl-when' }, when([d]), errorOf(key)),
@@ -242,6 +242,18 @@ export function groupDownloads(items) {
 // groupLine — вторая строка раздачи: сезон, качество и число серий («S01 · WEB-DL 1080p · 8 серий»), у
 // фильма из одного файла — имя файла. Сезон и качество различают раздачи одного сериала: без них два
 // сезона выглядели одинаково, а корзина удаляет раздачу целиком (финальное ревью 7b).
+// groupFormat — формат строки раздачи (ревью 14А, Important 3): у фильма из одного файла — его, у сериала —
+// файла в приоритете, если такой есть, иначе первого.
+export function groupFormat(g) {
+  const d = g.items.find((x) => x.preferred) || g.items[0];
+  return { format: fileFormat(d.file), preferred: !!d.preferred };
+}
+
+function formatTagOf(g) {
+  const f = groupFormat(g);
+  return formatTag(f.format, f.preferred);
+}
+
 export function groupLine(g) {
   const r = g.release || {};
   const tail = g.items.length === 1 ? g.items[0].file : plural(g.items.length, 'серия', 'серии', 'серий');

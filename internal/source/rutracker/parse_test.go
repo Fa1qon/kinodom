@@ -114,6 +114,26 @@ func TestParseTopicMagnetFallbacks(t *testing.T) {
 	}
 }
 
+// Ревью 14А (п. 7): основной ссылки нет, а в описании — magnet другой раздачи. Хэш берётся только у
+// ссылки самой раздачи (data-topic_id) или когда на странице он один; иначе — "" (каталог возьмёт хэш
+// списка), но не чужой.
+func TestParseTopicIgnoresForeignMagnets(t *testing.T) {
+	own, other := strings.Repeat("ab", 20), strings.Repeat("cd", 20)
+	head := `<a id="topic-title">Фильм</a>`
+	desc := `<div class="post_body">прошлая версия: <a href="magnet:?xt=urn:btih:` + other + `">m</a></div>`
+	cases := []struct{ name, html, want string }{
+		{"ссылка раздачи после чужой", head + desc + `<a class="med" data-topic_id="1" href="magnet:?xt=urn:btih:` + own + `">m</a>`, own},
+		{"две чужие без признаков", head + desc + `<a href="magnet:?xt=urn:btih:` + own + `">m</a>`, ""},
+		{"два хэша в тексте", head + `<script>var a = "btih:` + own + `", b = "btih:` + other + `";</script>`, ""},
+		{"один и тот же хэш дважды", head + `<a href="magnet:?xt=urn:btih:` + own + `">m</a><a href="magnet:?xt=urn:btih:` + strings.ToUpper(own) + `">m</a>`, own},
+	}
+	for _, c := range cases {
+		if d, err := parseTopic([]byte(c.html)); err != nil || d.InfoHash != c.want {
+			t.Errorf("%s: хэш %q, нужно %q, %v", c.name, d.InfoHash, c.want, err)
+		}
+	}
+}
+
 // Хэша на странице нет совсем — страница всё равно разобрана: название, постер, описание, номер
 // Кинопоиска сохраняются, magnet каталог соберёт из хэша списка раздела.
 func TestParseTopicWithoutMagnetIsNotAnError(t *testing.T) {

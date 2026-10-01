@@ -61,6 +61,13 @@ func TestCheckReleasePageWithoutHash(t *testing.T) {
 	if err != nil || v.InfoHash != "h1" {
 		t.Fatalf("версия без хэша на странице: %+v, %v", v, err)
 	}
+	// Ревью 14А, Important 1: хэш списка остаётся у раздачи — «Смотреть», «Загрузки» и следующая проверка.
+	if rel, err := c.Release(ctx, id); err != nil || rel.InfoHash != "h1" {
+		t.Fatalf("после проверки у раздачи хэш %q, %v", rel.InfoHash, err)
+	}
+	if v, err := c.CheckRelease(ctx, id); err != nil || v.InfoHash != "h1" {
+		t.Fatalf("вторая проверка: %+v, %v", v, err)
+	}
 }
 
 // Раздачу сняли с трекера — source.ErrRemoved, раздача помечена снятой.

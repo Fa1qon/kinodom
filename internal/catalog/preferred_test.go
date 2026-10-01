@@ -23,9 +23,9 @@ func TestPrefersMainFormat(t *testing.T) {
 	}
 }
 
-// План 14А, задача 2: формат в приоритете подсвечен везде — у карточки фильма, если он есть хоть у одной
-// его раздачи (показана «AVI, MKV», другие — MKV), в «Других раздачах» и на странице раздачи — по самой
-// раздаче; формат «Нет» — меток нет.
+// План 14А, задача 2: формат в приоритете подсвечен везде — у карточки по показанной раздаче, а если он есть
+// только у другой раздачи фильма — отдельной меткой с названием формата (ревью 14А, Important 2: синим не
+// красится чужой формат); в «Других раздачах» и на странице раздачи — по самой раздаче; «Нет» — меток нет.
 func TestPreferredFormatMarks(t *testing.T) {
 	c, db, ids := filmsFixture(t)
 	mux := http.NewServeMux()
@@ -34,22 +34,26 @@ func TestPreferredFormatMarks(t *testing.T) {
 	// а метку получает по другой раздаче фильма.
 	mustExec(t, db, `UPDATE releases SET format = 'AVI, MKV' WHERE topic_id IN ('1', '2', '3')`)
 	mustExec(t, db, `UPDATE releases SET format = 'MKV' WHERE topic_id = '9'`)
-	cards := func() map[string]bool {
+	cards := func() map[string]string {
 		t.Helper()
 		var lv ListView
 		if code := getJSON(t, mux, "/api/v1/catalog?tracker=rutor&section=12", &lv); code != 200 {
 			t.Fatalf("раздел: %d", code)
 		}
-		out := map[string]bool{}
+		out := map[string]string{}
 		for _, e := range lv.Entries {
-			out[topicOf(ids, e.ID)] = e.Preferred
+			mark := e.PreferredAlt
+			if e.Preferred {
+				mark = "своя"
+			}
+			out[topicOf(ids, e.ID)] = mark
 		}
 		return out
 	}
 	c.SetPreferredFormat("MKV")
 	got := cards()
-	if matrix := got["1"] || got["2"] || got["3"]; !matrix || got["4"] {
-		t.Fatalf("карточки: %v (у «Матрицы» MKV среди раздач — метка, у «Другого» — нет)", got)
+	if matrix := got["1"] + got["2"] + got["3"]; matrix != "MKV" || got["4"] != "" {
+		t.Fatalf("карточки: %v (у «Матрицы» MKV только у другой раздачи — метка «MKV», у «Другого» — нет)", got)
 	}
 	mustExec(t, db, `UPDATE releases SET format = 'MKV' WHERE topic_id IN ('2', '3')`)
 	var vv VariantsView
@@ -69,9 +73,9 @@ func TestPreferredFormatMarks(t *testing.T) {
 		t.Fatalf("страница раздачи MKV: %+v, %v", rel.Entry, err)
 	}
 	c.SetPreferredFormat("")
-	for topic, on := range cards() {
-		if on {
-			t.Fatalf("формат «Нет» — метка у %s", topic)
+	for topic, mark := range cards() {
+		if mark != "" {
+			t.Fatalf("формат «Нет» — метка %q у %s", mark, topic)
 		}
 	}
 }

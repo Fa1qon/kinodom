@@ -1,6 +1,6 @@
 // Каталог трекера: вкладки Rutracker и Rutor, раздел, сетка постеров по раздающим, страницы
 // (спека этапа 7, разделы 5.4 и 6.3).
-import { h, icon, ago, size, rating, store, plural, keepFocus, offWarn, poll, formatTag } from '../ui.js';
+import { h, icon, ago, size, rating, store, plural, keepFocus, offWarn, poll, formatTag, altFormatTag } from '../ui.js';
 import { get } from '../api.js';
 
 export const TRACKERS = [['rutracker', 'Rutracker'], ['rutor', 'Rutor']];
@@ -379,7 +379,7 @@ export function entry(e) {
   return h('a', { class: 'entry', href: `#/release/${e.id}`, 'data-key': `e-${e.id}` },
     poster(e, title),
     e.title
-      ? [h('div', { class: 'etitle' }, title), h('div', { class: 'muted small' }, dotted([e.year || null, e.quality || null, formatTag(e.format, e.preferred)]))]
+      ? [h('div', { class: 'etitle' }, title), h('div', { class: 'muted small' }, dotted([e.year || null, e.quality || null, formatTag(e.format, e.preferred), altFormatTag(e.preferredAlt)]))]
       : h('div', { class: 'lines', 'aria-label': 'Название ещё не загружено' }, h('div', { class: 'skel', style: { width: '90%' } }), h('div', { class: 'skel', style: { width: '60%' } })),
     h('div', { class: 'stats' },
       h('span', { class: 'stat', title: 'Раздающих' }, icon('arrow_upward', 16), String(e.seeders)),

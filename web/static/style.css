@@ -302,7 +302,7 @@ a.res-row:hover { background: var(--hover); }
 /* Формат в приоритете (план 14А): синий, как «DOM» логотипа. */
 .fmt.pref { color: var(--blue); font-weight: 700; }
 .tag.pref { color: var(--blue); border-color: var(--blue); }
-.dl-name .fmt { margin-left: 8px; font-size: 13px; color: var(--muted); }
+.dl-name .fmt { margin-right: 8px; font-size: 13px; color: var(--muted); }
 .dl-name .fmt.pref { color: var(--blue); }
 .mark { display: inline-block; width: 10px; height: 10px; flex-shrink: 0; }
 .app-card .row { margin-top: 8px; }

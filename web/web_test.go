@@ -1818,13 +1818,24 @@ class El extends Node {
 }
 globalThis.document = { createElement: (t) => new El(t), createElementNS: (_, t) => new El(t) };
 const { NAV } = await import('./app-nav.js');
-const { formatTag } = await import('./ui.js');
+const { formatTag, altFormatTag } = await import('./ui.js');
+const { groupFormat } = await import('./views/downloads.js');
 const tag = (f, p) => { const e = formatTag(f, p); return e ? e.className + ':' + e.textContent : null; };
+const alt = (f) => { const e = altFormatTag(f); return e ? e.className + ':' + e.textContent : null; };
+const gf = (items) => JSON.stringify(groupFormat({ items }));
 const checks = [
   [NAV.map((x) => x[0]).join(' '), 'catalog channels library downloads history settings'],
   [tag('MKV', true), 'fmt pref:MKV'],
   [tag('AVI, MKV', false), 'fmt:AVI, MKV'],
   [tag('', true), null],
+  // Ревью 14А, Important 2: MKV только у другой раздачи фильма — своя метка, чужой формат не синий.
+  [alt('MKV'), 'fmt pref:есть MKV'],
+  [alt(''), null],
+  // Ревью 14А, Important 3: строка раздачи в «Загрузках» — фильм из одного файла и свёрнутый сериал.
+  [gf([{ file: 'Фильм.mkv', preferred: true }]), '{"format":"MKV","preferred":true}'],
+  [gf([{ file: 'Фильм.avi', preferred: false }]), '{"format":"AVI","preferred":false}'],
+  [gf([{ file: 's\e1.avi', preferred: false }, { file: 's\e2.mkv', preferred: true }]), '{"format":"MKV","preferred":true}'],
+  [gf([{ file: 'e1.mp4', preferred: false }, { file: 'e2.mp4', preferred: false }]), '{"format":"MP4","preferred":false}'],
 ];
 for (const [got, want] of checks) {
   if (got !== want) {
@@ -1854,6 +1865,15 @@ const checks = [
   [seasonLabel('Сезон: 4'), 'Сезон 4'],
   [seasonLabel('S01-S03'), 'Сезоны 1–3'],
   [seasonLabel(''), ''],
+  [seasonLabel('02x13 из 13'), 'Сезон 2 · серия 13 из 13'],
+  [seasonLabel('1-5 серий из 5'), 'Серии 1–5 из 5'],
+  // Ревью 14А, Important 4: «N серий из M» — сколько серий, а не номер последней.
+  [seasonLabel('11 серий из 11'), 'Серии 1–11 из 11'],
+  [seasonLabel('Сезон 1, 8 серий из 10'), 'Сезон 1 · серии 1–8 из 10'],
+  // Rutor: «[01-07 из 08]» — серии без слова «серии» (ревью 14А, п. 5).
+  [seasonLabel('01-07 из 08'), 'Серии 1–7 из 8'],
+  [seasonLabel('001-270 из 270'), 'Серии 1–270 из 270'],
+  [seasonLabel('05 из 10'), 'Серия 5 из 10'],
 ];
 for (const [got, want] of checks) {
   if (got !== want) {
