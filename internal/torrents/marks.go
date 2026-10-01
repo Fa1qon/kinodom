@@ -149,3 +149,39 @@ func (s *Service) verifySome(budget time.Duration) {
 		s.mu.Unlock()
 	}
 }
+
+// forgetMarks — отметки кусков раздач, которых нет в keep (прежняя версия после перехода на обновлённую
+// раздачу, забытые раздачи), удаляются; вызывается до открытия bolt движком (спека 11b, 6.3.7). Файла
+// отметок ещё нет — ничего.
+func forgetMarks(stateDir string, keep map[metainfo.Hash]bool) error {
+	p := filepath.Join(stateDir, marksFile)
+	if _, err := os.Stat(p); errors.Is(err, fs.ErrNotExist) {
+		return nil
+	}
+	db, err := bbolt.Open(p, 0o600, &bbolt.Options{Timeout: time.Second})
+	if err != nil {
+		return err
+	}
+	defer db.Close()
+	return db.Update(func(tx *bbolt.Tx) error {
+		c := tx.Bucket([]byte("completion"))
+		if c == nil {
+			return nil
+		}
+		var gone [][]byte
+		if err := c.ForEach(func(k, v []byte) error {
+			if v == nil && len(k) == len(metainfo.Hash{}) && !keep[metainfo.Hash(k)] {
+				gone = append(gone, append([]byte(nil), k...))
+			}
+			return nil
+		}); err != nil {
+			return err
+		}
+		for _, k := range gone {
+			if err := c.DeleteBucket(k); err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+}
