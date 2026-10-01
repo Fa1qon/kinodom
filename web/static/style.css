@@ -297,6 +297,9 @@ a.res-row:hover { background: var(--hover); }
 .mod { display: flex; align-items: center; gap: 14px; padding: 11px 0; border-bottom: 1px solid var(--line-soft); font-size: 15px; }
 .mod:last-child { border-bottom: 0; }
 .mod-name { width: 130px; flex-shrink: 0; font-weight: 600; }
+/* Порядок раздела (план 14Б): ряд под разделами, мельче. */
+.filters.orders { margin-top: -4px; }
+.filters.orders .fil { height: 30px; padding: 0 10px; font-size: 13px; }
 /* Сезон сериала у «Скачать» (план 14А): крупно — какой сезон скачается. */
 .season-big { font-size: 20px; font-weight: 700; margin-bottom: 12px; }
 /* Формат в приоритете (план 14А): синий, как «DOM» логотипа. */
