@@ -1802,6 +1802,44 @@ for (const [name, got, want] of checks) {
 	}
 }
 
+// План 14А, задача 2: «История» в шапке между «Загрузками» и «Настройками»; метка формата — у формата в
+// приоритете с классом pref, без формата — ничего.
+func TestPultNavAndFormatTag(t *testing.T) {
+	node := lookNode(t)
+	script := `
+globalThis.Node = class {};
+class El extends Node {
+  constructor(tag) { super(); this.attrs = {}; this.children = []; this.style = {}; }
+  setAttribute(k, v) { this.attrs[k] = v; }
+  addEventListener() {}
+  append(...k) { this.children.push(...k); }
+  get className() { return this.attrs.class; }
+  get textContent() { return this.children.map((c) => (typeof c === 'string' ? c : c.textContent)).join(''); }
+}
+globalThis.document = { createElement: (t) => new El(t), createElementNS: (_, t) => new El(t) };
+const { NAV } = await import('./app-nav.js');
+const { formatTag } = await import('./ui.js');
+const tag = (f, p) => { const e = formatTag(f, p); return e ? e.className + ':' + e.textContent : null; };
+const checks = [
+  [NAV.map((x) => x[0]).join(' '), 'catalog channels library downloads history settings'],
+  [tag('MKV', true), 'fmt pref:MKV'],
+  [tag('AVI, MKV', false), 'fmt:AVI, MKV'],
+  [tag('', true), null],
+];
+for (const [got, want] of checks) {
+  if (got !== want) {
+    console.error(JSON.stringify(got), '≠', JSON.stringify(want));
+    process.exitCode = 1;
+  }
+}
+`
+	cmd := exec.Command(node, "--input-type=module", "--no-warnings", "-e", script)
+	cmd.Dir = "static"
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Errorf("%v\n%s", err, out)
+	}
+}
+
 func TestPultAppLine(t *testing.T) {
 	node := lookNode(t)
 	script := `

@@ -1,6 +1,6 @@
 // Каталог трекера: вкладки Rutracker и Rutor, раздел, сетка постеров по раздающим, страницы
 // (спека этапа 7, разделы 5.4 и 6.3).
-import { h, icon, ago, size, rating, store, plural, keepFocus, offWarn, poll } from '../ui.js';
+import { h, icon, ago, size, rating, store, plural, keepFocus, offWarn, poll, formatTag } from '../ui.js';
 import { get } from '../api.js';
 
 export const TRACKERS = [['rutracker', 'Rutracker'], ['rutor', 'Rutor']];
@@ -147,6 +147,16 @@ export function groupBar(sections, current) {
   const on = cur && cur.group ? cur.group : groups.length > 0 && !(cur && !cur.group) ? groups[0].id : '';
   for (const g of groups) g.on = g.id === on;
   return { groups, sections: sections.filter((s) => !s.group || s.group === on) };
+}
+
+// dotted — части строки через « · » (строки и элементы), пустые пропускаются.
+export function dotted(parts) {
+  const out = [];
+  for (const p of parts.filter(Boolean)) {
+    if (out.length) out.push(' · ');
+    out.push(typeof p === 'number' ? String(p) : p);
+  }
+  return out;
 }
 
 export function render(root, r, ctx) {
@@ -369,7 +379,7 @@ export function entry(e) {
   return h('a', { class: 'entry', href: `#/release/${e.id}`, 'data-key': `e-${e.id}` },
     poster(e, title),
     e.title
-      ? [h('div', { class: 'etitle' }, title), h('div', { class: 'muted small' }, [e.year || null, e.quality || null, e.format || null].filter(Boolean).join(' · '))]
+      ? [h('div', { class: 'etitle' }, title), h('div', { class: 'muted small' }, dotted([e.year || null, e.quality || null, formatTag(e.format, e.preferred)]))]
       : h('div', { class: 'lines', 'aria-label': 'Название ещё не загружено' }, h('div', { class: 'skel', style: { width: '90%' } }), h('div', { class: 'skel', style: { width: '60%' } })),
     h('div', { class: 'stats' },
       h('span', { class: 'stat', title: 'Раздающих' }, icon('arrow_upward', 16), String(e.seeders)),

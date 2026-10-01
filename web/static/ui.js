@@ -181,6 +181,12 @@ export function shortNames(names) {
   return short.every(Boolean) ? short : full;
 }
 
+// formatTag — формат раздачи или файла («MKV», «AVI, MKV»); формат в приоритете из настроек — подсвечен
+// (класс pref, заказчик 2026-10-01: «MKV должен подсвечиваться везде»). Формата нет — null.
+export function formatTag(format, preferred) {
+  return format ? h('span', { class: preferred ? 'fmt pref' : 'fmt', title: preferred ? 'Формат в приоритете' : null }, format) : null;
+}
+
 // fileFormat — формат файла по расширению: «MKV»; без расширения — "" (спека этапа 7, раздел 10.7).
 export function fileFormat(name) {
   const m = /\.([a-z0-9]{2,4})$/i.exec(name.split(/[\\/]/).pop());
