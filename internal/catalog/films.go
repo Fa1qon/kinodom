@@ -162,7 +162,7 @@ func (c *Catalog) variantRows(ctx context.Context, kpIDs []int) (map[int][]row, 
 	}
 	pref := c.PreferredFormat()
 	for id, rs := range byKP {
-		rs = collapse(rs)
+		rs = c.collapse(rs)
 		preferFirst(rs, pref)
 		byKP[id] = rs
 	}
@@ -203,7 +203,7 @@ func (c *Catalog) variantsOf(ctx context.Context, id int64) (row, []row, error) 
 		if err != nil {
 			return row{}, nil, err
 		}
-		all := collapse(append(vs[film], same...))
+		all := c.collapse(append(vs[film], same...))
 		preferFirst(all, c.PreferredFormat())
 		rs = withCurrent(all, r, c.PreferredFormat())
 	} else if wk := workKey(r); wk != "" {
@@ -218,7 +218,7 @@ func (c *Catalog) variantsOf(ctx context.Context, id int64) (row, []row, error) 
 				same = append(same, x)
 			}
 		}
-		same = collapse(same)
+		same = c.collapse(same)
 		preferFirst(same, c.PreferredFormat())
 		rs = withCurrent(same, r, c.PreferredFormat())
 	}

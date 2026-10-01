@@ -70,6 +70,8 @@ func (f *fakeCatalog) CheckRelease(_ context.Context, id int64) (catalog.Version
 	return v, nil
 }
 
+func (f *fakeCatalog) Own(tracker string) bool { return tracker == "rutor" || tracker == "rutracker" }
+
 func (f *fakeCatalog) Release(_ context.Context, id int64) (catalog.Release, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -482,4 +484,23 @@ func TestFollowRoutesHomeOnly(t *testing.T) {
 		t.Fatalf("после «Не следить»: %q", st)
 	}
 	_ = sql.ErrNoRows
+}
+
+// Раздача чужого трекера из источника поиска (спека 11b, раздел 8): страницу проверить нечем — «Следить» нет.
+func TestFollowForeignNotSeries(t *testing.T) {
+	r := newRig(t)
+	v1, h1 := version(t, "Lanterns.S01E01.mkv", "Lanterns.S01E02.mkv")
+	id := r.release(t, "Фонари (1 сезон: 1-2 серии из 8) / Lanterns / 2026 / ПМ / WEB-DLRip", v1, h1, false)
+	rel := r.cat.releases[id]
+	if !r.m.Series(context.Background(), rel) {
+		t.Fatal("сериал с нашего трекера — без «Следить»")
+	}
+	rel.Tracker = "kinozal"
+	r.cat.releases[id] = rel
+	if r.m.Series(context.Background(), rel) {
+		t.Fatal("у раздачи чужого трекера — «Следить»")
+	}
+	if err := r.m.Follow(context.Background(), id); !errors.Is(err, ErrNotSeries) {
+		t.Fatalf("подписка на чужой трекер: %v", err)
+	}
 }

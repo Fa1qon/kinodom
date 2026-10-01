@@ -92,6 +92,9 @@ func (c *Catalog) startSearch(query string, poll, enrich bool) (*searchRun, stri
 				run.status[name] = SearchRunning
 			}
 		}
+		if c.extra != nil && c.extra.Configured() {
+			run.status[c.extra.Name()] = SearchRunning
+		}
 		c.searches[key] = run
 		parent := c.runCtx
 		if parent == nil {
@@ -112,9 +115,13 @@ func (c *Catalog) runSearch(ctx context.Context, cancel context.CancelFunc, run 
 	names := slices.Collect(maps.Keys(run.status))
 	run.mu.Unlock()
 	for _, name := range names {
-		src := c.sources[name]
+		search := func(ctx context.Context, q string) ([]source.Release, error) { return c.sources[name].Search(ctx, q) }
+		extra := c.extra != nil && name == c.extra.Name()
+		if extra {
+			search = c.extra.Search
+		}
 		wg.Go(func() {
-			rs, err := src.Search(ctx, q)
+			rs, err := search(ctx, q)
 			var partial *source.PartialError
 			switch {
 			case errors.Is(err, context.DeadlineExceeded) && len(rs) == 0:
@@ -124,11 +131,20 @@ func (c *Catalog) runSearch(ctx context.Context, cancel context.CancelFunc, run 
 			case err != nil && !errors.As(err, &partial):
 				rs = nil
 			}
-			ids, serr := c.st.saveFound(context.WithoutCancel(ctx), rs, c.now())
-			if serr != nil {
+			var ids []int64
+			var serr error
+			if extra {
+				ids, serr = c.st.saveExtra(context.WithoutCancel(ctx), rs, c.ownWithAddress, c.now())
+			} else {
+				ids, serr = c.st.saveFound(context.WithoutCancel(ctx), rs, c.now())
+			}
+			switch {
+			case serr != nil:
 				c.log.Error("поиск: найденное не записалось", "err", serr)
 				err = errors.Join(err, serr)
-			} else if enrich {
+			case extra:
+				c.extraFound(context.WithoutCancel(ctx), rs, ids, enrich)
+			case enrich:
 				c.enqueueFound(context.WithoutCancel(ctx), name, ids)
 			}
 			run.mu.Lock()
@@ -175,6 +191,58 @@ func (c *Catalog) enqueueFound(ctx context.Context, name string, ids []int64) {
 	}
 }
 
+// extraFound — найденное источником поиска: темы своих трекеров — в догрузку вне очереди (поиск из строки
+// поиска), раздачи без страницы — в очередь рейтингов первыми: номер Кинопоиска по названию даёт постер и
+// рейтинг (спека 11b, раздел 8).
+func (c *Catalog) extraFound(ctx context.Context, rs []source.Release, ids []int64, enrich bool) {
+	own := map[string][]int64{}
+	var pageless []int64
+	for i, r := range rs {
+		if c.ownWithAddress(r.Tracker) {
+			own[r.Tracker] = append(own[r.Tracker], ids[i])
+		} else {
+			pageless = append(pageless, ids[i])
+		}
+	}
+	if enrich {
+		for tracker, ids := range own {
+			c.enqueueFound(ctx, tracker, ids)
+		}
+	}
+	c.kinopoiskSoon(ctx, pageless[:min(len(pageless), searchToEnrich)])
+}
+
+// kinopoiskSoon — раздачи без страницы без номера Кинопоиска — в очередь рейтингов первыми; у кого нет
+// картинки, ждут номер для постера (ratingResolved).
+func (c *Catalog) kinopoiskSoon(ctx context.Context, ids []int64) {
+	if c.ratings == nil || len(ids) == 0 {
+		return
+	}
+	byID, err := c.st.rowsByID(ctx, ids)
+	if err != nil {
+		c.log.Warn("поиск: найденное не читается", "err", err)
+		return
+	}
+	for _, id := range ids {
+		r, ok := byID[id]
+		if !ok || r.KinopoiskID != 0 {
+			continue
+		}
+		if err := c.ratings.Enqueue(ctx, 0, ratingItem(r)); err != nil {
+			c.log.Warn("поиск: раздача не встала в очередь рейтингов", "err", err)
+			return
+		}
+		if r.ImageKey == "" {
+			c.mu.Lock()
+			if len(c.kpWait) >= kpWaitLimit {
+				clear(c.kpWait)
+			}
+			c.kpWait[r.Tracker+":"+r.TopicID] = true
+			c.mu.Unlock()
+		}
+	}
+}
+
 // staleWithErrors — поиск закончился с ошибкой трекера и опросы клиента уже получили итог.
 func (s *searchRun) staleWithErrors(now time.Time) bool {
 	s.mu.Lock()
@@ -195,7 +263,7 @@ func (c *Catalog) searchState(ctx context.Context, q string, run *searchRun) (Se
 	if err != nil {
 		return SearchState{}, err
 	}
-	rs = collapse(rs)
+	rs = c.collapse(rs)
 	preferFirst(rs, c.PreferredFormat()) // формат в приоритете — первым (спека этапа 7, раздел 10.3)
 	if st.Results, err = c.entries(ctx, rs); err != nil {
 		return SearchState{}, err

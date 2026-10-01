@@ -4,8 +4,10 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"maps"
 	"slices"
 	"strconv"
+	"strings"
 	"time"
 
 	"kinodom/internal/meta"
@@ -49,16 +51,26 @@ type ReleaseRef struct {
 }
 
 // ReleasesByHash — раздачи каталога по infohash (нижний регистр); одинаковый infohash у двух
-// трекеров — та, где больше раздающих.
+// трекеров — раздача со страницей (свой трекер, не из источника поиска), из равных — где больше раздающих.
 func (c *Catalog) ReleasesByHash(ctx context.Context, hashes []string) (map[string]ReleaseRef, error) {
 	out := map[string]ReleaseRef{}
+	own := slices.Sorted(maps.Keys(c.sources))
+	in := "''"
+	args := []any{}
+	for _, t := range own {
+		args = append(args, t)
+	}
+	if len(own) > 0 {
+		in = "?" + strings.Repeat(", ?", len(own)-1)
+	}
 	for _, h := range hashes {
 		if _, ok := out[h]; ok || h == "" {
 			continue
 		}
 		var r ReleaseRef
 		err := c.db.R.QueryRowContext(ctx,
-			`SELECT id, title, image_key FROM releases WHERE infohash = ? AND removed = 0 ORDER BY seeders DESC LIMIT 1`, h).
+			`SELECT id, title, image_key FROM releases WHERE infohash = ? AND removed = 0
+			 ORDER BY CASE WHEN link = '' AND tracker IN (`+in+`) THEN 0 ELSE 1 END, seeders DESC LIMIT 1`, append([]any{h}, args...)...).
 			Scan(&r.ID, &r.Title, &r.ImageKey)
 		switch {
 		case errors.Is(err, sql.ErrNoRows):
@@ -100,7 +112,9 @@ func (c *Catalog) Release(ctx context.Context, id int64) (Release, error) {
 		return Release{}, err
 	}
 	out := Release{Entry: es[0], Description: desc, Magnet: magnet, Torrent: torrent}
-	if tu, ok := c.sources[r.Tracker].(topicURLer); ok {
+	if r.Link != "" {
+		out.TrackerURL = r.Link
+	} else if tu, ok := c.sources[r.Tracker].(topicURLer); ok {
 		out.TrackerURL = tu.TopicURL(r.TopicID)
 	}
 	// Страницы раздачи ещё нет, а infohash известен из списка — «Скачать» не ждёт догрузки.
@@ -117,6 +131,15 @@ func (c *Catalog) Release(ctx context.Context, id int64) (Release, error) {
 	if !r.DetailsAt.IsZero() && !removed && out.Torrent == nil && c.torrentOnOpen(r) {
 		out.DetailsPending = true
 	}
+	if c.pageless(r) && !removed {
+		// Раздача без страницы (источник поиска): номер Кинопоиска — очередью рейтингов первым, описание —
+		// с Кинопоиска; экран ждёт его, как страницу (спека 11b, раздел 8).
+		if kp := out.Rating.KinopoiskID; kp == 0 {
+			c.kinopoiskSoon(ctx, []int64{r.ID})
+		} else if desc == "" && c.descOnOpen(r.ID, kp) {
+			out.DetailsPending = true
+		}
+	}
 	if out.ImageKey == "" && !r.DetailsAt.IsZero() {
 		// Картинки нет, а человек открыл раздачу — постер (страницы или Кинопоиска) без паузы повтора.
 		c.mu.Lock()
@@ -125,6 +148,54 @@ func (c *Catalog) Release(ctx context.Context, id int64) (Release, error) {
 		c.wakePosters()
 	}
 	return out, nil
+}
+
+// descWait — сколько ждать описание Кинопоиска открытой раздачи без страницы.
+const descWait = 30 * time.Second
+
+// descOnOpen — открыли раздачу без страницы с известным номером Кинопоиска, а описания нет: описание
+// Кинопоиска качается сразу, экран ждёт его, как страницу. true — качается; false — не нужно или недавно
+// не пришло (повтор — после паузы).
+func (c *Catalog) descOnOpen(id int64, kp int) bool {
+	if c.filmDesc == nil || !c.due("kpdesc", id, c.now()) {
+		return false
+	}
+	c.mu.Lock()
+	if c.descNow[id] {
+		c.mu.Unlock()
+		return true
+	}
+	c.descNow[id] = true
+	base := c.runCtx
+	c.mu.Unlock()
+	if base == nil {
+		base = context.Background()
+	}
+	c.posterWG.Add(1)
+	go func() {
+		defer c.posterWG.Done()
+		defer func() {
+			c.mu.Lock()
+			delete(c.descNow, id)
+			c.mu.Unlock()
+		}()
+		ctx, cancel := context.WithTimeout(base, descWait)
+		text, err := c.filmDesc(ctx, kp)
+		cancel()
+		if base.Err() != nil {
+			return
+		}
+		if text = strings.TrimSpace(text); err != nil || text == "" {
+			c.log.Warn("каталог: описания Кинопоиска нет", "kp", kp, "err", err)
+			c.failed("kpdesc", id, c.now())
+			return
+		}
+		c.succeeded("kpdesc", id)
+		if err := c.st.saveDescription(context.WithoutCancel(base), id, text); err != nil {
+			c.log.Warn("каталог: описание не записалось", "err", err)
+		}
+	}()
+	return true
 }
 
 // enrichSoon ставит раздачу в догрузку первой: её страницу ждёт человек.

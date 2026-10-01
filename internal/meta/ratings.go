@@ -92,6 +92,15 @@ type Ratings struct {
 	blockedText string         // текст записанной проблемы kinopoisk.blocked; "" — снята
 	blockSynced bool           // проблема сверена с паузой сайта хоть раз (запись прошлого запуска снята)
 	kwFrom      map[string]int // раздача → с какого ключевого слова продолжить поиск по ключу (после 402/429)
+	resolved    func(release string)
+}
+
+// OnResolved — f узнаёт о каждой решённой задаче очереди (номер найден или «не найдено»): каталог
+// догружает постер раздачи из поиска сразу, а не следующим проходом (спека 11b, раздел 8).
+func (r *Ratings) OnResolved(f func(release string)) {
+	r.mu.Lock()
+	r.resolved = f
+	r.mu.Unlock()
 }
 
 func NewRatings(o RatingsOptions) *Ratings {
@@ -281,7 +290,16 @@ func (r *Ratings) Step(ctx context.Context) (did bool, err error) {
 	keyless := !key
 	switch {
 	case err == nil:
-		return true, r.st.done(ctx, it)
+		if err := r.st.done(ctx, it); err != nil {
+			return true, err
+		}
+		r.mu.Lock()
+		f := r.resolved
+		r.mu.Unlock()
+		if f != nil {
+			f(it.Release)
+		}
+		return true, nil
 	case ctx.Err() != nil:
 		return false, nil
 	case errors.Is(err, ErrQuota):

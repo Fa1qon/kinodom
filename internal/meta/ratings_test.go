@@ -823,3 +823,20 @@ func TestRatingsNeighborLinkedDuringPause(t *testing.T) {
 		t.Fatalf("соседняя раздача на паузе: %+v, %v", got, ok)
 	}
 }
+
+// Задача очереди решена — каталог узнаёт об этом сразу (постер раздачи чужого трекера из поиска — по
+// найденному номеру, не через 10 минут; спека 11b, раздел 8).
+func TestRatingsOnResolved(t *testing.T) {
+	f := newFakeKP(t)
+	r, _, _ := newRatings(t, f, testKey)
+	var mu sync.Mutex
+	var got []string
+	r.OnResolved(func(release string) { mu.Lock(); got = append(got, release); mu.Unlock() })
+	enqueue(t, r, 1, Item{Release: "kinozal:abc", KinopoiskID: 301, Title: "Матрица / The Matrix / 1999 / ДБ / BDRip"})
+	drain(t, r)
+	mu.Lock()
+	defer mu.Unlock()
+	if len(got) != 1 || got[0] != "kinozal:abc" {
+		t.Fatalf("решено: %v", got)
+	}
+}

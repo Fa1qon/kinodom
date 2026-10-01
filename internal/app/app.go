@@ -345,7 +345,16 @@ func (a *App) initCatalog(ctx context.Context, o Options, v settings.Values) err
 		httpx.WriteJSON(w, http.StatusOK, rtSrc.Relogin(r.Context()))
 	}))
 	a.Sup.Add(edge.NewModule(a.Log.With("module", "edge")), edgeOn)
-	a.Catalog = catalog.New(catalog.Options{DB: a.DB, Sources: []source.Source{rutorSrc, rtSrc}, Sections: sections,
+	// Описание Кинопоиска раздачам чужих трекеров из источника поиска (11b-Д): без токена, ключ — запасной.
+	kp := &meta.KPAny{Web: a.kpweb, Key: a.kp, Types: func(ctx context.Context, id int) (string, error) {
+		fs, err := a.Ratings.Films(ctx, []int{id})
+		return fs[id].Type, err
+	}}
+	a.Catalog = catalog.New(catalog.Options{DB: a.DB, Sources: []source.Source{rutorSrc, rtSrc}, Extra: a.search, Sections: sections,
+		FilmDescription: func(ctx context.Context, id int) (string, error) {
+			d, err := kp.Details(meta.Urgent(ctx), id) // человек открыл раздачу и ждёт
+			return d.Description, err
+		},
 		Ratings: a.Ratings, Images: a.Images, KinopoiskPoster: a.kp.PosterURL, TorrentFormat: torrentFormat,
 		KeepImages: func(ctx context.Context) (map[string]bool, error) { // постеры медиатеки (этап 9)
 			if a.Library == nil {
