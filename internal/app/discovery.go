@@ -6,8 +6,10 @@ import (
 	"fmt"
 	"net"
 	"os"
+	"path/filepath"
 	"strconv"
 
+	"kinodom/internal/appdist"
 	"kinodom/internal/discovery"
 )
 
@@ -28,6 +30,10 @@ func (a *App) initDiscovery(ctx context.Context, o Options) {
 		Group: o.DiscoveryGroup, Log: a.Log.With("module", "discovery")})
 	d.Register(a.API)
 	a.Sup.Add(d, a.ModuleEnabled(ctx, d.Name()))
+	// Приложение для Android — из папки программы (установщик кладёт APK рядом с kinodom.exe; спека этапа 13, 5.3).
+	if exe, err := os.Executable(); err == nil {
+		appdist.New(filepath.Dir(exe)).Register(a.API)
+	}
 }
 
 // newUUID — случайный UUID версии 4.

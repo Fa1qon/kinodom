@@ -32,6 +32,12 @@ export function kpLine(k) {
   return { text: `${web} · ${key}`, warn: !!kl.pausedUntil || (k.keySet && k.badKey) };
 }
 
+// appLine — адрес, по которому ТВ и телефон скачают приложение (спека этапа 13, 5.3): первый адрес ПК в домашней
+// сети; APK на сервере нет или адреса нет — null.
+export function appLine(app, addrs) {
+  return app && addrs && addrs.length ? addrs[0] + '/app' : null;
+}
+
 const LOGIN = {
   none: 'логин не задан',
   unknown: 'вход ещё не проверялся',
@@ -41,6 +47,10 @@ const LOGIN = {
 export function render(root, r, ctx) {
   const content = layout(root, 'status', 'Состояние');
   let alive = true;
+  let appUrl = null; // «Приложение для ТВ и телефона»: сведения об APK и адреса — один раз
+  Promise.all([get('/app').catch(() => null), get('/setup/addresses').catch(() => [])]).then(([app, addrs]) => {
+    appUrl = appLine(app, addrs);
+  });
   // Раз в 2 с — скорости меняются быстро; отметка проблем в меню обновляется своим опросом.
   const refresh = poll(async () => {
     let st;
@@ -69,6 +79,7 @@ export function render(root, r, ctx) {
         st.problems.length
           ? st.problems.map((p) => h('div', { class: 'mod' }, h('span', { class: 'mark', style: { background: 'var(--yellow)' } }), h('span', { class: 'grow' }, p.text), h('span', { class: 'muted small' }, ago(p.since))))
           : h('div', { class: 'muted' }, 'Проблем нет')),
+      appUrl ? h('div', { class: 'card tight' }, h('div', { class: 'h' }, 'Приложение для ТВ и телефона'), h('div', { class: 'setup-addr' }, appUrl)) : null,
     );
   }
 
