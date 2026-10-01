@@ -114,8 +114,9 @@ func (c *Catalog) handleCards(w http.ResponseWriter, r *http.Request) {
 const portionsPerList = 3
 
 // handleList — порция раздела трекера по месту (спека этапа 7, раздел 5.4; 11b, 7.2): карточки после
-// места after (-1 — с начала). Раздела в запросе нет — первый раздел трекера, где есть раздачи. Карточек
-// дальше меньше двух порций — с трекера следующая (не больше portionsPerList за просьбу).
+// места after (-1 — с начала). Раздела в запросе нет — первый раздел трекера, где есть раздачи. Есть что
+// показать — сразу, а запаса меньше порции — следующая страница с трекера в фоне; показать нечего — ждём
+// трекер (не больше portionsPerList страниц за просьбу; спека 11b, 15.2).
 func (c *Catalog) handleList(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
 	name := q.Get("tracker")
@@ -151,11 +152,21 @@ func (c *Catalog) handleList(w http.ResponseWriter, r *http.Request) {
 				httpx.WriteError(w, http.StatusInternalServerError, "каталог не читается: "+err.Error())
 				return
 			}
-			// Запас — ещё порция пульта в базе: следующая просьба не ждёт трекер.
-			if !trackerMore || portions == portionsPerList || (len(es) == PageSize && rest >= PageSize) {
+			if !trackerMore || portions == portionsPerList {
 				break
 			}
-			more, err := c.ensureOne(r.Context(), cat)
+			// Есть что показать — сразу; запаса в базе меньше порции — следующая страница раздела с трекера в
+			// фоне: Rutor отдаёт её до 77 с, API Rutracker не отвечает и по 90 с — пульт не ждёт (№ 20).
+			if len(es) > 0 {
+				if rest < PageSize {
+					c.prefetchDeep(cat)
+				}
+				break
+			}
+			more, err := c.deepFetch(r.Context(), cat, func() (bool, error) {
+				es, _, _, err := c.SectionPage(r.Context(), name, out.Section, after, PageSize)
+				return len(es) == 0, err
+			})
 			if isDBError(err) {
 				httpx.WriteError(w, http.StatusInternalServerError, "каталог не читается: "+err.Error())
 				return

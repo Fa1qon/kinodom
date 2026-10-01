@@ -94,10 +94,16 @@ func TestOneCardPerFilm(t *testing.T) {
 	mux := http.NewServeMux()
 	c.Register(muxRouter{mux})
 	var v ListView
-	if code := getJSON(t, mux, "/api/v1/catalog?tracker=rutor&section=12", &v); code != 200 || v.More || len(v.Entries) != 5 ||
+	if code := getJSON(t, mux, "/api/v1/catalog?tracker=rutor&section=12", &v); code != 200 || len(v.Entries) != 5 ||
 		v.Entries[0].Variants != 4 || v.Entries[0].Format != "MKV" {
 		t.Fatalf("список: %d %+v", code, v)
 	}
+	// Порция не ждёт трекер (№ 20): что раздел кончился, говорит следующая просьба — после подкачки.
+	var end ListView
+	if code := getJSON(t, mux, fmt.Sprintf("/api/v1/catalog?tracker=rutor&section=12&after=%d", v.Next), &end); code != 200 || end.More || len(end.Entries) != 0 {
+		t.Fatalf("конец раздела: %d %+v", code, end)
+	}
+	c.deepWG.Wait()
 }
 
 // «Другие раздачи» — раздачи того же фильма на обоих трекерах, включая эту: формат в приоритете, потом

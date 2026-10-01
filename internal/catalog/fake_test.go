@@ -39,6 +39,8 @@ type fakeSource struct {
 	atOnce       int             // DetailsAtOnce: страниц раздач одновременно; 0 — как у источника без признака
 	detailsBlock chan struct{}   // если задан — страница раздачи ждёт его закрытия (или отмены)
 	detailsPanic map[string]bool // номер → разбор страницы падает паникой
+	pageBlock    chan struct{}   // если задан — страница раздела (TopPage) ждёт его закрытия (или отмены)
+	pagePanic    bool            // разбор страницы раздела падает паникой
 	inDetails    int             // страниц качается сейчас
 	maxDetails   int             // больше всего одновременно
 }
@@ -90,10 +92,24 @@ func (f *fakeSource) Top(_ context.Context, cat string, _ int) ([]source.Release
 }
 
 // TopPage — страница топа по 100 (как Rutor): page 0 — первая сотня; pageErr — ошибка страницы.
-func (f *fakeSource) TopPage(_ context.Context, cat string, page int) ([]source.Release, bool, error) {
+func (f *fakeSource) TopPage(ctx context.Context, cat string, page int) ([]source.Release, bool, error) {
+	f.mu.Lock()
+	f.calls["toppage"]++
+	block := f.pageBlock
+	boom := f.pagePanic
+	f.mu.Unlock()
+	if boom {
+		panic("разбор страницы раздела")
+	}
+	if block != nil {
+		select {
+		case <-block:
+		case <-ctx.Done():
+			return nil, false, ctx.Err()
+		}
+	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	f.calls["toppage"]++
 	if f.pageErr != nil {
 		return nil, false, f.pageErr
 	}
