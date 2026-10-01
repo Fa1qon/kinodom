@@ -53,15 +53,17 @@ const (
 )
 
 type KPWebOptions struct {
-	GraphQL    string        // "" — DefaultKPGraphQL
-	Site       string        // "" — DefaultKPSite
-	Every      time.Duration // 0 — 3 с между запросами (GraphQL и страницы вместе)
-	DailyLimit int           // 0 — 500 запросов в сутки
-	Reserve    int           // из них — только правке в пульте и медиатеке; 0 — пятая часть, < 0 — нет
-	Pause      time.Duration // 0 — 6 ч после отказа
-	Timeout    time.Duration // 0 — 30 с
-	Now        func() time.Time
-	Log        *slog.Logger
+	GraphQL     string        // "" — DefaultKPGraphQL
+	Site        string        // "" — DefaultKPSite
+	Every       time.Duration // 0 — 3 с между запросами (GraphQL и страницы вместе)
+	DailyLimit  int           // 0 — 500 запросов в сутки
+	Reserve     int           // из них — только правке в пульте и медиатеке; 0 — пятая часть, < 0 — нет
+	Pause       time.Duration // 0 — 6 ч после отказа
+	Timeout     time.Duration // 0 — 30 с
+	RatingBase  string        // оценки КП и IMDb по номеру (план 14Г); "" — DefaultKPRating
+	RatingEvery time.Duration // между запросами оценок (свои ворота); 0 — 2 с
+	Now         func() time.Time
+	Log         *slog.Logger
 }
 
 // KPWebStatus — для «Состояния»: пауза поиска без токена (и её причина) и запросов за сутки.
@@ -86,6 +88,8 @@ type KPWeb struct {
 	blockReason   string
 	troubles      int                  // сбоев без отказа подряд (сеть, 5xx, непонятный ответ)
 	opPaused      map[string]time.Time // запрос, который сайт больше не принимает
+	ratingNext    time.Time            // оценки IMDb: не раньше — следующий запрос
+	ratingBlocked time.Time            // оценки IMDb: отказ — пауза до
 }
 
 func NewKPWeb(o KPWebOptions) *KPWeb {
@@ -113,6 +117,13 @@ func NewKPWeb(o KPWebOptions) *KPWeb {
 	}
 	if o.Timeout == 0 {
 		o.Timeout = 30 * time.Second
+	}
+	if o.RatingBase == "" {
+		o.RatingBase = DefaultKPRating
+	}
+	o.RatingBase = strings.TrimRight(o.RatingBase, "/")
+	if o.RatingEvery == 0 {
+		o.RatingEvery = 2 * time.Second
 	}
 	if o.Now == nil {
 		o.Now = time.Now
