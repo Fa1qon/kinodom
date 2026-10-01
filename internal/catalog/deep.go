@@ -3,6 +3,7 @@ package catalog
 import (
 	"context"
 	"errors"
+	"runtime/debug"
 	"slices"
 	"strings"
 	"time"
@@ -190,6 +191,13 @@ func (c *Catalog) prefetchDeep(cat CategoryRef) {
 	go func() {
 		defer c.deepWG.Done()
 		defer func() { <-l }()
+		// Разбор страницы трекера — вне обработчика HTTP и сторожа: паника — строка в журнале, а не падение
+		// всей программы (финальное ревью 11b-З); следующая просьба пульта попробует сама.
+		defer func() {
+			if p := recover(); p != nil {
+				c.log.Error("каталог: паника при подкачке раздела", "tracker", cat.Tracker, "section", cat.ID, "panic", p, "stack", string(debug.Stack()))
+			}
+		}()
 		if _, err := c.ensureOne(base, cat); err != nil && base.Err() == nil {
 			c.log.Info("каталог: порция раздела не подкачалась", "tracker", cat.Tracker, "section", cat.ID, "err", err)
 		}

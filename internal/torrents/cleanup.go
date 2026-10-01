@@ -79,7 +79,7 @@ func (s *Service) expire(ctx context.Context) error {
 		if o.IsZero() || !o.Before(cut) || busy[f.InfoHash] {
 			continue
 		}
-		switch err := s.DeleteFile(ctx, f.InfoHash, f.Index); {
+		switch err := s.deleteOld(ctx, f.InfoHash, f.Index); {
 		case err == nil:
 			s.log.Info("срок хранения вышел — файл удалён", "path", f.Path, "opened", f.LastOpened)
 		case errors.Is(err, errDirMissing):

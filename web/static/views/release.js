@@ -131,7 +131,7 @@ export function render(root, r, ctx) {
       }
       if (!alive) return;
       drawLive();
-      if (st && finished(st)) {
+      if (st && torrentDone(st)) {
         torrentPoll.stop();
         torrentPoll = null;
       }
@@ -542,6 +542,12 @@ export function removeTitle(name, st) {
 function finished(st) {
   const stored = st.files.filter((f) => f.stored);
   return stored.length > 0 && stored.every((f) => f.readiness === 'done');
+}
+
+// torrentDone — опрос загрузки можно остановить: всё хранимое скачано и ни у одного файла не открыт поток —
+// иначе «Удалить» у скачанной раздачи застывала бы серой, когда плеер закрыли (финальное ревью 11b-З).
+export function torrentDone(st) {
+  return finished(st) && !st.files.some((f) => f.stored && f.watching);
 }
 
 // fileInfo — строка под названием серии: формат файла, состояние, размер.

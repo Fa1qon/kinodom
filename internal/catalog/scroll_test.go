@@ -103,3 +103,20 @@ func TestDeepPrefetchOnce(t *testing.T) {
 		t.Fatalf("страница раздела запрошена %d раз", n)
 	}
 }
+
+// Финальное ревью 11b-З: разбор страницы раздела в фоновой подкачке упал паникой — это строка в журнале, а
+// не падение всей программы (раньше та же работа шла в обработчике HTTP под защитой от паник).
+func TestPrefetchPanicIsLogged(t *testing.T) {
+	c, t1, mux := t1Section(t, manyDesc("t1", 250))
+	t1.set(func() { t1.pagePanic = true })
+	next, shown := -1, 0
+	for shown < 100 {
+		r := within(t, askPortion(mux, "t1", "12", next), 2*time.Second, "порция из базы")
+		shown += len(r.v.Entries)
+		next = r.v.Next
+	}
+	c.deepWG.Wait()
+	if t1.Calls("toppage") == 0 {
+		t.Fatal("подкачка не запускалась")
+	}
+}

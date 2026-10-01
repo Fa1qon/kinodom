@@ -175,7 +175,7 @@ func (s *Service) freeUp(ctx context.Context, dir string, extra, short int64) er
 		if k < len(behind) {
 			err = s.deleteBehind(ctx, f.InfoHash, f.Index)
 		} else {
-			err = s.DeleteFile(ctx, f.InfoHash, f.Index)
+			err = s.deleteOld(ctx, f.InfoHash, f.Index)
 		}
 		switch {
 		case err == nil && k < len(behind):
