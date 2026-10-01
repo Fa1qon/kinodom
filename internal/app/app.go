@@ -414,7 +414,9 @@ func (a *App) rutrackerLogin(info rutracker.LoginInfo) {
 // если он известен до «Скачать» (спека этапа 7, раздел 5.4).
 type releaseView struct {
 	catalog.ReleaseView
-	Files []torrents.FileInfo `json:"files"` // [] — неизвестен, пока раздачу не открыли
+	Files  []torrents.FileInfo `json:"files"`  // [] — неизвестен, пока раздачу не открыли
+	Series bool                `json:"series"` // сериал: «Следить» (спека 11b, 6.1)
+	Follow string              `json:"follow"` // подписка: active, finished, removed; "" — не следят
 }
 
 func (a *App) handleRelease(w http.ResponseWriter, r *http.Request) {
@@ -446,6 +448,11 @@ func (a *App) handleRelease(w http.ResponseWriter, r *http.Request) {
 	}
 	if len(out.Files) > 0 { // файлы известны — формат по ним, а не по описанию (спека этапа 7, раздел 10.2)
 		out.Format = meta.Format(metaFiles(out.Files))
+	}
+	out.Series = a.Follow.Series(r.Context(), rel)
+	if out.Follow, err = a.Follow.State(r.Context(), id); err != nil {
+		httpx.WriteError(w, http.StatusInternalServerError, "подписка не читается: "+err.Error())
+		return
 	}
 	httpx.WriteJSON(w, http.StatusOK, out)
 }
@@ -597,7 +604,14 @@ func uploadBytes(v settings.Values) float64 {
 // downloadItem — строка «Загрузок»: файл — от торрентов, название и постер раздачи — от каталога.
 type downloadItem struct {
 	torrents.DownloadItem
-	Release *catalog.ReleaseRef `json:"release"` // null — раздача не из каталога
+	Release *downloadRelease `json:"release"` // null — раздача не из каталога
+}
+
+// downloadRelease — раздача каталога у загрузки: «Следить» у сериала в «Загрузках» (спека 11b, 6.1).
+type downloadRelease struct {
+	catalog.ReleaseRef
+	Series bool   `json:"series"` // по названию
+	Follow string `json:"follow"` // "" — не следят
 }
 
 // handleDownloads — экран «Загрузки» (спека этапа 7, раздел 5.5).
@@ -617,11 +631,22 @@ func (a *App) handleDownloads(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	items := make([]downloadItem, len(v.Items))
+	follows := map[int64]string{}
 	for i, it := range v.Items {
 		items[i].DownloadItem = it
-		if ref, ok := refs[it.Hash]; ok {
-			items[i].Release = &ref
+		ref, ok := refs[it.Hash]
+		if !ok {
+			continue
 		}
+		st, seen := follows[ref.ID]
+		if !seen {
+			if st, err = a.Follow.State(r.Context(), ref.ID); err != nil {
+				httpx.WriteError(w, http.StatusInternalServerError, "загрузки не читаются: "+err.Error())
+				return
+			}
+			follows[ref.ID] = st
+		}
+		items[i].Release = &downloadRelease{ReleaseRef: ref, Series: meta.ParseTitle(ref.Title).Series, Follow: st}
 	}
 	httpx.WriteJSON(w, http.StatusOK, struct {
 		torrents.DownloadsView
