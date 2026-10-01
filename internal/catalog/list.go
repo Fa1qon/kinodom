@@ -125,12 +125,18 @@ func (c *Catalog) SectionPage(ctx context.Context, tracker, section string, afte
 			filtered = append(filtered, r)
 		}
 	}
-	filtered = c.collapse(filtered)
-	kp, err := c.kinopoiskIDs(ctx, filtered)
+	return c.pageOf(ctx, filtered, after, limit)
+}
+
+// pageOf — карточки строк раздела (или списка порядка) после места after: склейка дублей и фильмов, место
+// карточки — наименьшее место её раздач.
+func (c *Catalog) pageOf(ctx context.Context, rs []row, after, limit int) (entries []Entry, next, rest int, err error) {
+	rs = c.collapse(rs)
+	kp, err := c.kinopoiskIDs(ctx, rs)
 	if err != nil {
 		return nil, after, 0, err
 	}
-	out, size, place := films(filtered, kp, c.PreferredFormat(), false)
+	out, size, place := films(rs, kp, c.PreferredFormat(), false)
 	from := len(out)
 	for i, r := range out {
 		if place[r.ID] > after {
