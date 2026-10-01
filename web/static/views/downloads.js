@@ -1,7 +1,8 @@
 // Загрузки — по раздачам: скачанное и то, что качается, серии внутри раздачи, место в папке; удаление —
 // из домашней сети (спека этапа 7, разделы 5.5, 6.3 и 10.7).
 import { h, icon, size, speed, day, ready, poll, keepFocus, plural, shortNames } from '../ui.js';
-import { get, del } from '../api.js';
+import { get, put, del } from '../api.js';
+import { followButton } from './release.js';
 
 // STATE — подпись, значок и цвет метки состояния.
 const STATE = {
@@ -84,6 +85,7 @@ export function render(root, r, ctx) {
             else open.add(g.hash);
             draw();
           } }, icon(isOpen ? 'expand_more' : 'chevron_right')),
+        single ? null : followToggle(g, key),
         !ctx.canEdit ? null
           : single ? trash(key, d0.canDelete, 'Удалить файл', () => removeFile(d0))
             : trash(key, g.canDelete, 'Удалить раздачу', () => removeRelease(g))))];
@@ -172,6 +174,18 @@ export function render(root, r, ctx) {
 
   // removeRelease — все файлы раздачи (спека этапа 7, раздел 10.6); серию, которую смотрят, сервер
   // оставляет.
+  // followToggle — «Следить» у сериала в «Загрузках» (спека 11b, 6.1): колокольчик, нажат — следят.
+  function followToggle(g, key) {
+    const b = g.release && followButton(g.release, ctx.canEdit);
+    if (!b) return null;
+    return h('button', { class: b.on ? 'sq following' : 'sq', type: 'button', 'data-key': `follow-${g.hash}`, 'aria-pressed': String(b.on),
+      'aria-label': b.label, title: b.label, onclick: () => run(key, async () => {
+        if (b.on) await del(`/releases/${g.release.id}/follow`);
+        else await put(`/releases/${g.release.id}/follow`, {});
+        return '';
+      }) }, icon('notifications'));
+  }
+
   async function removeRelease(g) {
     const res = await del(`/downloads/${g.hash}`);
     return res && res.skipped ? `Сейчас смотрят — ${plural(res.skipped, 'серия осталась', 'серии остались', 'серий осталось')}` : '';

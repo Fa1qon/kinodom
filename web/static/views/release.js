@@ -2,7 +2,7 @@
 // файла прогресс и «Смотреть» цвета готовности, справа — панель файла в фокусе; ниже — «Другие раздачи»
 // фильма и «Искать на трекерах» (спека этапа 7, разделы 5.4, 5.5, 6.3 и 10.7).
 import { h, icon, size, speed, rating, minutes, ready, poll, copyText, store, plural, shortNames, keepFocus, fileFormat, openPlayer, confirmDialog } from '../ui.js';
-import { get, post, put } from '../api.js';
+import { get, post, put, del } from '../api.js';
 import { whereStopped, resumeIndex } from './history.js';
 import { poster } from './catalog.js';
 import { trackerTags } from './search.js';
@@ -30,6 +30,7 @@ export function render(root, r, ctx) {
   let chosen = null; // файл панели, выбранный человеком; null — файл в фокусе
   let actionError = ''; // ошибка «Скачать» или «Смотреть»
   let busy = false;
+  let followBusy = false; // «Следить» отправляется
   let torrentPoll = null;
   let descOpen = false; // описание развёрнуто
   let focusNext = ''; // после «Скачать» с пульта ТВ — куда перевести фокус, когда появится «Смотреть»
@@ -224,7 +225,7 @@ export function render(root, r, ctx) {
       // До «Скачать»: одна светлая кнопка; после ошибки («нет раздающих», «мало места») — снова она.
       const waiting = st && !failed && !(st.files && st.files.length);
       out.push(h('button', { class: 'btn inv big', type: 'button', disabled: busy || waiting, 'data-key': 'download', 'data-nav-main': true, onclick: () => download() },
-        icon('download'), 'Скачать'));
+        icon('download'), 'Скачать'), followControl());
       if (waiting) out.push(h('div', { class: 'muted' }, st.state === 'connecting' ? 'Ищем раздающих…' : 'Получаем список файлов…'));
       if (error) out.push(h('div', { class: 'error' }, error));
       return out;
@@ -242,7 +243,7 @@ export function render(root, r, ctx) {
       h('span', { class: 'muted' }, plural(st.peers, 'пир', 'пира', 'пиров'))));
     if (f.readiness === 'wait' && f.waitSec > 0) out.push(h('div', { class: 'eta' }, `Без остановок через ${minutes(f.waitSec)}`));
     if (f.readiness && f.readiness !== 'none') {
-      out.push(watchButton(f, 'btn big wide'));
+      out.push(watchButton(f, 'btn big wide'), followControl());
       if (p && !p.watched && p.fraction > 0) {
         out.push(h('button', { class: 'btn', type: 'button', disabled: busy, 'data-key': `start-${f.index}`, onclick: () => watch(f, true) }, icon('history'), 'С начала'));
       }
@@ -251,6 +252,7 @@ export function render(root, r, ctx) {
         h('button', { class: 'btn grow', type: 'button', 'data-key': 'copy', 'aria-label': 'Скопировать ссылку на поток', onclick: () => copyLink(f) },
           ...copyLabel())));
     }
+    if (!f.readiness || f.readiness === 'none') out.push(followControl());
     if (ctx.canEdit && rel.hash) {
       const seen = !!(p && p.watched);
       out.push(h('button', { class: 'btn', type: 'button', 'data-key': `seen-${f.index}`, onclick: () => mark(f, !seen) },
@@ -258,6 +260,29 @@ export function render(root, r, ctx) {
     }
     if (error) out.push(h('div', { class: 'error' }, error));
     return out;
+  }
+
+  // followControl — «Следить» / «Не следить» под главной кнопкой панели (спека 11b, 6.1).
+  function followControl() {
+    const b = followButton(rel, ctx.canEdit);
+    if (!b) return null;
+    return h('button', { class: b.on ? 'btn following' : 'btn', type: 'button', disabled: followBusy, 'data-key': 'follow', 'aria-pressed': String(b.on),
+      onclick: () => toggleFollow(b.on) }, icon('notifications'), b.label);
+  }
+
+  async function toggleFollow(on) {
+    followBusy = true;
+    actionError = '';
+    drawLive();
+    try {
+      if (on) await del(`/releases/${id}/follow`);
+      else await put(`/releases/${id}/follow`, {});
+      rel = { ...rel, follow: on ? '' : 'active' };
+    } catch (e) {
+      actionError = e.message;
+    }
+    followBusy = false;
+    if (alive) drawLive();
   }
 
   // mark — «Просмотрено» / «Не просмотрено» у файла панели.
@@ -446,7 +471,7 @@ function positionLine(p) {
 // playerLink — плеер на другом устройстве. Android — сразу VLC ссылкой intent: Chrome считает
 // скачивание .m3u8 по http небезопасным и просит подтвердить (вживую при подготовке плана 7b);
 // нет VLC — Chrome откроет запасной адрес, тот же .m3u8. Остальные устройства — .m3u8.
-function playerLink(res) {
+export function playerLink(res) {
   if (!/Android/i.test(navigator.userAgent)) return res.m3uUrl;
   const u = new URL(res.play.url);
   // l.position — место для VLC, мс (спека этапа 8, раздел 7.3).
@@ -470,4 +495,12 @@ function fileInfo(f) {
   else if (f.queued) parts.push('в очереди', size(f.size));
   else parts.push(`${size(f.done)} из ${size(f.size)}`);
   return parts.filter(Boolean).join(' · ');
+}
+
+// followButton — «Следить» у сериала (только из домашней сети): следят — «Не следить»; закончилась или
+// снята — снова «Следить» (спека 11b, 6.1). null — кнопки нет.
+export function followButton(rel, canEdit) {
+  if (!canEdit || !rel || !rel.series) return null;
+  const on = rel.follow === 'active';
+  return { label: on ? 'Не следить' : 'Следить', on };
 }

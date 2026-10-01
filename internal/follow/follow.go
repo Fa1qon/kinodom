@@ -187,6 +187,7 @@ type UpdateView struct {
 	Release  int64        `json:"releaseId"`
 	Kind     string       `json:"kind"` // episodes, removed
 	Title    string       `json:"title"`
+	Name     string       `json:"name"` // название сериала (из названия раздачи)
 	ImageKey string       `json:"imageKey"`
 	Label    string       `json:"label"` // «1×07–1×08»
 	Hash     string       `json:"hash"`  // версия раздачи с новыми сериями
@@ -222,6 +223,7 @@ func (m *Module) Updates(ctx context.Context) ([]UpdateView, error) {
 		v := UpdateView{ID: u.ID, Release: u.Release, Kind: u.Kind, Label: u.Label, Hash: u.InfoHash, Files: nonNil(u.Files), At: u.At}
 		if rel, err := m.o.Catalog.Release(ctx, u.Release); err == nil {
 			v.Title, v.ImageKey = rel.Title, rel.ImageKey
+			v.Name = meta.ParseTitle(rel.Title).Ru
 		}
 		out = append(out, v)
 	}

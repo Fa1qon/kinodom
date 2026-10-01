@@ -110,6 +110,10 @@ h2 { margin: 0; font-size: 20px; font-weight: 700; }
 .btn.big { height: 48px; font-size: 15px; border-width: 2px; }
 .sq { display: inline-flex; align-items: center; justify-content: center; width: 40px; height: 40px; padding: 0; border: 1px solid var(--line-strong); background: transparent; color: var(--soft); cursor: pointer; }
 .sq:disabled { color: #4A4741; border-color: var(--line-soft); cursor: default; }
+.sq.following, .btn.following { background: var(--inv-bg); border-color: var(--inv-bg); color: var(--inv-text); } /* «Следить»: следят */
+.bell { position: relative; flex-shrink: 0; }
+.bell-n { position: absolute; top: -7px; right: -7px; min-width: 18px; height: 18px; padding: 0 4px; background: var(--yellow); color: #111; font-size: 11px; font-weight: 600; line-height: 18px; text-align: center; }
+.bell-n:empty { display: none; }
 .tag { display: inline-flex; align-items: center; gap: 4px; height: 28px; padding: 0 10px; border: 1px solid var(--line); font-size: 13px; color: var(--soft); white-space: nowrap; }
 .warn { display: flex; align-items: center; gap: 12px; padding: 10px 14px; border: 1px solid var(--warn-line); background: var(--warn-bg); font-size: 15px; color: var(--warn-text); }
 .warn .ic { color: var(--yellow); }
