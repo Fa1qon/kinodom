@@ -5,6 +5,7 @@ import { get, del } from '../api.js';
 import { poster } from './catalog.js';
 import { filmHeader } from './kpcat.js';
 import { appBridge } from './tvkit.js';
+import { playSound } from '../nav.js';
 
 // OWN — свои трекеры: страница раздачи, вкладка каталога; остальные — источник поиска Jacred / Jackett и
 // трекеры его раздач (11b-Д).
@@ -60,6 +61,12 @@ export function searchFocus(prev, queries, voice = false) {
   return voice ? 'voice' : 'search-field';
 }
 
+// micDown — куда «вниз» с микрофона: на последний запрос истории (под кнопкой — крестики «убрать из истории»: «вниз,
+// OK» удаляло запрос; ревью 17В); истории нет — решает навигация (null).
+export function micDown(queries) {
+  return queries.length ? `hist-${queries[0]}` : null;
+}
+
 // canVoice — приложение умеет голосовой поиск и на устройстве есть распознавание речи (план 17В); в браузере — нет.
 export function canVoice(app) {
   if (!app || typeof app.voiceAvailable !== 'function' || typeof app.voice !== 'function') return false;
@@ -93,7 +100,16 @@ export function render(root, r, ctx) {
   const app = appBridge();
   const voiceOn = canVoice(app);
   const voiceButton = () => (voiceOn ? h('button', { class: 'sq voice', type: 'button', 'data-key': 'voice', 'aria-label': 'Голосом', title: 'Голосом',
-    onclick: () => app.voice() }, icon('mic')) : null);
+    onclick: () => app.voice(),
+    onkeydown: (e) => {
+      const key = e.key === 'ArrowDown' ? micDown(shownQueries) : null;
+      const el = key ? root.querySelector(`[data-key="${CSS.escape(key)}"]`) : null;
+      if (!el) return;
+      e.preventDefault();
+      e.stopPropagation();
+      el.focus({ preventScroll: true });
+      playSound('move');
+    } }, icon('mic')) : null);
   const form = h('form', { class: 'search-here', role: 'search', onsubmit: (e) => {
     e.preventDefault();
     const v = field.value.trim();
@@ -166,8 +182,11 @@ export function render(root, r, ctx) {
     // последний запрос истории.
     loadHistory().then(() => {
       const a = document.activeElement;
-      if (!alive || (a && a !== document.body && root.contains(a))) return;
-      const el = root.querySelector(`[data-key="${CSS.escape(searchFocus(ctx.prev, shownQueries, voiceOn))}"]`);
+      const want = searchFocus(ctx.prev, shownQueries, voiceOn);
+      // Фокус уже на экране — не трогаем; кроме возврата с результатов: перенесённый ключ («Голосом») уступает
+      // последнему запросу (спека 17В, раздел 5).
+      if (!alive || (a && a !== document.body && root.contains(a) && !want.startsWith('hist-'))) return;
+      const el = root.querySelector(`[data-key="${CSS.escape(want)}"]`);
       if (el) el.focus({ preventScroll: true });
     });
     return () => {
