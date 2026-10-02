@@ -41,6 +41,7 @@ export function previewStats(s) {
     s.firstMs > 0 ? `${rating(Math.round(s.firstMs / 100) / 10)} с до кадра` : null,
     `подвисаний ${s.stalls || 0}`,
     s.latency > 0 ? `задержка ${Math.round(s.latency)} с` : null,
+    s.buffer > 0 ? `запас ${Math.round(s.buffer)} с` : null,
   ].filter(Boolean).join(' · ');
 }
 
@@ -125,8 +126,9 @@ export function hlsWay(mse, native) {
   return native ? 'native' : null;
 }
 
-// attach — источник в <video>: {destroy, latency()}; остановка плеера — onFail({what, text}). Библиотека не
-// загрузилась или браузер её не тянет — исключение.
+// attach — источник в <video>: {destroy, latency(), buffer()} — задержка от эфира (только живой HLS) и запас буфера
+// (поток MPEG-TS; ревью 14Д, п. 14); остановка плеера — onFail({what, text}). Библиотека не загрузилась или
+// браузер её не тянет — исключение.
 async function attach(video, url, kind, onFail = () => {}) {
   if (kind === 'hls') {
     const Hls = await loadLib('vendor/hls.light.min.js', 'Hls').catch(() => null);
@@ -135,7 +137,7 @@ async function attach(video, url, kind, onFail = () => {}) {
     if (way === 'native') {
       video.addEventListener('error', () => whyNative(video, url).then(onFail), { once: true });
       video.src = url;
-      return { destroy: () => { video.removeAttribute('src'); video.load(); }, latency: () => 0 };
+      return { destroy: () => { video.removeAttribute('src'); video.load(); }, latency: () => 0, buffer: () => 0 };
     }
     video.addEventListener('error', () => onFail(codec), { once: true });
     const hls = new Hls({ enableWorker: true, maxBufferLength: 10 });
@@ -143,9 +145,13 @@ async function attach(video, url, kind, onFail = () => {}) {
       const e = playerError('hls', data);
       if (e) onFail(e);
     });
+    let live = false; // запись (VOD) — «задержка» от её конца бессмысленна (сотни секунд)
+    hls.on(Hls.Events.LEVEL_LOADED, (_, d) => {
+      live = !!(d.details && d.details.live);
+    });
     hls.loadSource(url);
     hls.attachMedia(video);
-    return { destroy: () => hls.destroy(), latency: () => hls.latency || 0 };
+    return { destroy: () => hls.destroy(), latency: () => (live ? hls.latency || 0 : 0), buffer: () => 0 };
   }
   const mpegts = await loadLib('vendor/mpegts.js', 'mpegts');
   if (!mpegts.isSupported()) throw new Error('браузер не умеет MPEG-TS');
@@ -164,7 +170,8 @@ async function attach(video, url, kind, onFail = () => {}) {
         p.destroy();
       }
     },
-    latency: () => (video.buffered.length ? video.buffered.end(video.buffered.length - 1) - video.currentTime : 0),
+    latency: () => 0,
+    buffer: () => (video.buffered.length ? video.buffered.end(video.buffered.length - 1) - video.currentTime : 0),
   };
 }
 
@@ -193,10 +200,10 @@ export function openPreview(src, title, now = '') {
     err.textContent = 'DASH в пульте не показывается — откройте канал в VLC';
     return close;
   }
-  const s = { w: 0, h: 0, firstMs: 0, stalls: 0, latency: 0 };
-  const started = performance.now();
+  const s = { w: 0, h: 0, firstMs: 0, stalls: 0, latency: 0, buffer: 0 };
+  let started = 0; // плеер готов (библиотека загружена): «до кадра» — время самого источника
   video.addEventListener('playing', () => {
-    if (!s.firstMs) s.firstMs = performance.now() - started;
+    if (!s.firstMs && started) s.firstMs = performance.now() - started;
   });
   video.addEventListener('waiting', () => {
     if (s.firstMs) s.stalls++;
@@ -206,10 +213,12 @@ export function openPreview(src, title, now = '') {
   }));
   session.ready.then((player) => {
     if (!player) return;
+    started = performance.now();
     timer = setInterval(() => {
       s.w = video.videoWidth;
       s.h = video.videoHeight;
       s.latency = player.latency();
+      s.buffer = player.buffer();
       stats.textContent = previewStats(s);
     }, 1000);
   }, (e) => {
