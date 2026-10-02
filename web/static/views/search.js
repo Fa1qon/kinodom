@@ -4,6 +4,7 @@ import { h, icon, size, poll, keepFocus, offWarn, store, formatTag } from '../ui
 import { get, del } from '../api.js';
 import { poster } from './catalog.js';
 import { filmHeader } from './kpcat.js';
+import { appBridge } from './tvkit.js';
 
 // OWN — свои трекеры: страница раздачи, вкладка каталога; остальные — источник поиска Jacred / Jackett и
 // трекеры его раздач (11b-Д).
@@ -53,8 +54,20 @@ export function fieldKey(key, ro) {
 
 // searchFocus — куда фокус на странице поиска без запроса: вернулись с результатов (prev — страница поиска) — на
 // последний запрос истории (он первый: поиск поднял его), иначе — на поле.
-export function searchFocus(prev, queries) {
-  return prev === '#/search' && queries.length ? `hist-${queries[0]}` : 'search-field';
+// voice — в приложении есть голосовой поиск: тогда фокус на микрофоне (OK — и говорите; план 17В).
+export function searchFocus(prev, queries, voice = false) {
+  if (prev === '#/search' && queries.length) return `hist-${queries[0]}`;
+  return voice ? 'voice' : 'search-field';
+}
+
+// canVoice — приложение умеет голосовой поиск и на устройстве есть распознавание речи (план 17В); в браузере — нет.
+export function canVoice(app) {
+  if (!app || typeof app.voiceAvailable !== 'function' || typeof app.voice !== 'function') return false;
+  try {
+    return app.voiceAvailable() === true;
+  } catch {
+    return false;
+  }
 }
 
 // forgetFocus — после крестика у запроса i: на строку, вставшую на его место, иначе на предыдущую, истории нет — на поле.
@@ -75,11 +88,17 @@ export function render(root, r, ctx) {
   const table = h('div', { class: 'results' });
   // Поле поиска — здесь, на любой ширине (в шапке — только кнопка; план 16Б).
   const field = h('input', { name: 'q', value: q, placeholder: 'Поиск', 'aria-label': 'Поиск', autocomplete: 'off', enterkeyhint: 'search', 'data-key': 'search-field' });
+  // Голосом (план 17В): в приложении с распознаванием речи — кнопка с микрофоном справа от поля; сказанное приложение
+  // само откроет как поиск.
+  const app = appBridge();
+  const voiceOn = canVoice(app);
+  const voiceButton = () => (voiceOn ? h('button', { class: 'sq voice', type: 'button', 'data-key': 'voice', 'aria-label': 'Голосом', title: 'Голосом',
+    onclick: () => app.voice() }, icon('mic')) : null);
   const form = h('form', { class: 'search-here', role: 'search', onsubmit: (e) => {
     e.preventDefault();
     const v = field.value.trim();
     if (v) ctx.go('#/search?q=' + encodeURIComponent(v));
-  } }, h('label', { class: 'field' }, icon('search'), field));
+  } }, h('label', { class: 'field' }, icon('search'), field), voiceButton());
   // Поле «только для чтения», пока его не открыли: фокус на нём не вызывает клавиатуру ТВ; OK, касание или символ —
   // ввод. Ушли с поля — снова только для чтения (стрелками на него — без клавиатуры). OK — только снять «только для
   // чтения»: клавиатуру показывает сам WebView по OK; preventDefault или перефокус её не открывали (эмулятор ТВ).
@@ -148,7 +167,7 @@ export function render(root, r, ctx) {
     loadHistory().then(() => {
       const a = document.activeElement;
       if (!alive || (a && a !== document.body && root.contains(a))) return;
-      const el = root.querySelector(`[data-key="${CSS.escape(searchFocus(ctx.prev, shownQueries))}"]`);
+      const el = root.querySelector(`[data-key="${CSS.escape(searchFocus(ctx.prev, shownQueries, voiceOn))}"]`);
       if (el) el.focus({ preventScroll: true });
     });
     return () => {

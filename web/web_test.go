@@ -2523,3 +2523,29 @@ for (const [got, want] of checks) {
 		t.Errorf("%v\n%s", err, out)
 	}
 }
+
+// План 17В: микрофон на странице поиска — только в приложении, которое умеет голос; без запроса фокус на нём.
+func TestPultVoice(t *testing.T) {
+	node := lookNode(t)
+	script := `
+const { canVoice, searchFocus } = await import('./views/search.js');
+const checks = [
+  [canVoice(null), false],
+  [canVoice({}), false],
+  [canVoice({ voiceAvailable: () => false, voice: () => {} }), false],
+  [canVoice({ voiceAvailable: () => true, voice: () => {} }), true],
+  [canVoice({ voiceAvailable: () => { throw new Error('мост'); }, voice: () => {} }), false],
+  [searchFocus('#/library', ['дюна'], true), 'voice'],
+  [searchFocus('#/search', ['дюна'], true), 'hist-дюна'],
+  [searchFocus('#/library', [], false), 'search-field'],
+];
+for (const [got, want] of checks) {
+  if (JSON.stringify(got) !== JSON.stringify(want)) { console.error(JSON.stringify(got), '≠', JSON.stringify(want)); process.exitCode = 1; }
+}
+`
+	cmd := exec.Command(node, "--input-type=module", "--no-warnings", "-e", script)
+	cmd.Dir = "static"
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Errorf("%v\n%s", err, out)
+	}
+}
