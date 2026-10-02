@@ -1266,43 +1266,6 @@ func TestPultHiddenWins(t *testing.T) {
 	}
 }
 
-// Каталог Rutracker: ряд групп и ряд подразделов выбранной группы; у Rutor групп нет (спека 11b, 7.1).
-func TestPultGroupBar(t *testing.T) {
-	node := lookNode(t)
-	script := `
-import { groupBar } from './views/catalog.js';
-const secs = [
-  { id: '7', name: 'Зарубежное кино', group: 'c2', groupName: 'Кино' },
-  { id: '22', name: 'Наше кино', group: 'c2', groupName: 'Кино' },
-  { id: '189', name: 'Зарубежные сериалы', group: 'c18', groupName: 'Сериалы' },
-  { id: '46', name: 'Документальные', group: 'c20', groupName: 'Документалистика' },
-];
-const s = (v) => JSON.stringify(v);
-let r = groupBar(secs, '189');
-const checks = [
-  ['группы', s(r.groups.map((g) => g.name)), '["Кино","Сериалы","Документалистика"]'],
-  ['выбранная — по разделу', s(r.groups.filter((g) => g.on).map((g) => g.id)), '["c18"]'],
-  ['подразделы группы', s(r.sections.map((x) => x.id)), '["189"]'],
-  ['ссылка группы — на первый её подраздел', s(r.groups.map((g) => g.first)), '["7","189","46"]'],
-];
-r = groupBar(secs, '');
-checks.push(['без раздела — первая группа', s(r.sections.map((x) => x.id)), '["7","22"]']);
-r = groupBar([{ id: '12', name: 'Зарубежные фильмы', group: '' }, { id: '4', name: 'Сериалы', group: '' }], '4');
-checks.push(['Rutor — без групп', s([r.groups.length, r.sections.length]), '[0,2]']);
-for (const [name, got, want] of checks) {
-  if (got !== want) {
-    console.error(name, ':', got, '≠', want);
-    process.exitCode = 1;
-  }
-}
-`
-	cmd := exec.Command(node, "--input-type=module", "--no-warnings", "-e", script)
-	cmd.Dir = "static"
-	if out, err := cmd.CombinedOutput(); err != nil {
-		t.Errorf("%v\n%s", err, out)
-	}
-}
-
 // «Разделы каталога» Rutracker: три группы и подразделы первого уровня (спека 11b, 7.1). Прежний выбор —
 // подфорумы, «раздел+», «cN+» — отмечает свои подразделы первого уровня; сохраняется «подраздел+».
 func TestPultSectionsGroups(t *testing.T) {
@@ -2513,6 +2476,43 @@ playSound(null);
 globalThis.window = { KinodomApp: { sound: () => { throw new Error('мост занят'); } } };
 playSound('edge');
 checks.push([calls, ['move']]);
+for (const [got, want] of checks) {
+  if (JSON.stringify(got) !== JSON.stringify(want)) { console.error(JSON.stringify(got), '≠', JSON.stringify(want)); process.exitCode = 1; }
+}
+`
+	cmd := exec.Command(node, "--input-type=module", "--no-warnings", "-e", script)
+	cmd.Dir = "static"
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Errorf("%v\n%s", err, out)
+	}
+}
+
+// План 17А: каталог одной кнопкой — сводка «трекер · раздел · порядок», разделы Rutracker с заголовками групп,
+// «влево» открывает панель только с первой колонки.
+func TestPultFilters(t *testing.T) {
+	node := lookNode(t)
+	script := `
+const { filterSummary, drawerSections, firstColumn, setPending, takePending, samePlace } = await import('./views/catalog-parts.js');
+const s = (id, name, group, groupName) => ({ id, name, group, groupName });
+const checks = [
+  [filterSummary(['Rutor', 'Зарубежные фильмы', 'Раздающие']), 'Rutor · Зарубежные фильмы · Раздающие'],
+  [filterSummary(['Rutor', 'Зарубежные фильмы', '']), 'Rutor · Зарубежные фильмы'],
+  [filterSummary(['Кинопоиск', '', '']), 'Кинопоиск'],
+  [drawerSections([s('1', 'Без группы'), s('2', 'Фильмы', 'g1', 'Кино'), s('3', 'Мульты', 'g1', 'Кино'), s('4', 'Сериалы', 'g2', 'ТВ')])
+    .map((x) => x.head ? '#' + x.head : x.id), ['1', '#Кино', '2', '3', '#ТВ', '4']],
+  [firstColumn({ left: 24 }, { left: 24 }), true],
+  [firstColumn({ left: 24.5 }, { left: 24 }), true],
+  [firstColumn({ left: 250 }, { left: 24 }), false],
+  // Ревью 17А, Minor 6: разделы без группы после групп — под своим заголовком, а не под последней группой.
+  [drawerSections([s('2', 'Фильмы', 'g1', 'Кино'), s('5', 'Прочее')]).map((x) => x.head ? '#' + x.head : x.id), ['#Кино', '2', '#Другие разделы', '5']],
+  // Ревью 17А, Important 1: что сделать после перехода из панели — только на том адресе, куда переходили, и один раз.
+  [(setPending('#/catalog/rutor/1', 'grid'), takePending('#/downloads')), null],
+  [takePending('#/catalog/rutor/1'), null],
+  [(setPending('#/catalog/rutor', 'reopen'), takePending('#/catalog/rutor')), 'reopen'],
+  [takePending('#/catalog/rutor'), null],
+  [samePlace('#/catalog/rutor/1', '#/catalog/rutor/1'), true],
+  [samePlace('#/catalog/rutor/1?order=new', '#/catalog/rutor/1'), false],
+];
 for (const [got, want] of checks) {
   if (JSON.stringify(got) !== JSON.stringify(want)) { console.error(JSON.stringify(got), '≠', JSON.stringify(want)); process.exitCode = 1; }
 }
