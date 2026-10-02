@@ -272,6 +272,7 @@ a.res-row:hover { background: var(--hover); }
 .drow .ic { color: var(--yellow); flex-shrink: 0; }
 /* Кнопка-сводка над сеткой каталога */
 .fbtn { min-width: 0; max-width: 100%; gap: 10px; }
+.note:empty { display: none; }
 .fbtn .btn-label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
 .dlg { width: 100%; max-width: 560px; max-height: calc(100vh - 32px); background: var(--bg-raised); }
 .dlg-path { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; min-height: 24px; }
