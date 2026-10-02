@@ -2323,3 +2323,33 @@ for (const [got, want] of checks) {
 		t.Errorf("%v\n%s", err, out)
 	}
 }
+
+// План 16А: «Каналы» строились разом (460 строк, 4,5 с заморозки на ТВ) и перестраивались целиком раз в минуту.
+// Теперь — порциями по 40 и обновление на месте, пока набор каналов тот же.
+func TestPultChannelsPortions(t *testing.T) {
+	node := lookNode(t)
+	script := `
+const { flatRows, portionEnd, sameKeys, CH_PORTION } = await import('./views/channels.js');
+const ch = (key, block, categoryName) => ({ key, block, categoryName });
+const rows = flatRows([{ title: 'Избранные', items: [ch('a', 'favorite')] }, { title: 'Кино', items: [ch('b', ''), ch('c', '')] }]);
+const checks = [
+  [CH_PORTION, 40],
+  [rows.map((r) => r.sec || r.ch.key), ['Избранные', 'a', 'Кино', 'b', 'c']],
+  [flatRows([{ title: '', items: [ch('a')] }]).map((r) => r.sec === undefined ? r.ch.key : '#'), ['a']],
+  [portionEnd(100, 0, 40), 40],
+  [portionEnd(100, 80, 40), 100],
+  [portionEnd(10, 0, 40), 10],
+  [sameKeys([ch('a'), ch('b')], [ch('a'), ch('b')]), true],
+  [sameKeys([ch('a'), ch('b')], [ch('b'), ch('a')]), false],
+  [sameKeys([ch('a')], [ch('a'), ch('b')]), false],
+];
+for (const [got, want] of checks) {
+  if (JSON.stringify(got) !== JSON.stringify(want)) { console.error(JSON.stringify(got), '≠', JSON.stringify(want)); process.exitCode = 1; }
+}
+`
+	cmd := exec.Command(node, "--input-type=module", "--no-warnings", "-e", script)
+	cmd.Dir = "static"
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Errorf("%v\n%s", err, out)
+	}
+}
