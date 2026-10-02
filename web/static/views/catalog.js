@@ -179,6 +179,12 @@ export function readOrderMemory(raw) {
   return { o: String(raw), d: '' };
 }
 
+// catalogMemory — адрес раздела для «назад» со страницы раздачи: с порядком из адреса (ревью 14Б: обходной
+// путь «назад» возвращал с порядком из памяти устройства).
+export function catalogMemory(tracker, section, order) {
+  return `#/catalog/${tracker}/${encodeURIComponent(section)}` + (order ? `?order=${encodeURIComponent(order)}` : '');
+}
+
 // orderParams — порядок в запросе порции: показанный (следующие порции — тем же, что первая), иначе из
 // адреса, иначе из памяти (с умолчанием, при котором выбран), иначе — умолчание сервера.
 export function orderParams(urlOrder, mem, shown) {
@@ -438,7 +444,7 @@ export function render(root, r, ctx) {
       'data-key': `sec-${s.id}`,
     }, s.name)));
     bar.querySelector('.on')?.scrollIntoView({ block: 'nearest', inline: 'nearest' });
-    if (shownSection) store.set('catalog', `#/catalog/${tracker}/${encodeURIComponent(shownSection)}`);
+    if (shownSection) store.set('catalog', catalogMemory(tracker, shownSection, urlOrder));
     if (sections.length === 0) {
       // Трекер без адреса (этап 11a) не обновляется — об этом строка «Укажите адрес» выше.
       grid.replaceChildren(off ? '' : h('p', { class: 'muted' }, 'Каталог ещё пуст — идёт первое обновление'));

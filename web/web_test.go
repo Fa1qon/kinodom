@@ -2053,6 +2053,26 @@ for (const [got, want] of checks) {
 	}
 }
 
+// Ревью 14Б: обходной путь «назад» (другие раздачи → раздача → «назад») возвращал в раздел с порядком из памяти,
+// а не с тем, что был в адресе: память каталога — вместе с порядком.
+func TestPultCatalogMemory(t *testing.T) {
+	node := lookNode(t)
+	script := `
+const { catalogMemory } = await import('./views/catalog.js');
+const checks = [
+  [catalogMemory('rutor', '12', 'new'), '#/catalog/rutor/12?order=new'],
+  [catalogMemory('rutracker', 'c 2', ''), '#/catalog/rutracker/c%202'],
+  [catalogMemory('rutor', '12', null), '#/catalog/rutor/12'],
+];
+for (const [got, want] of checks) if (got !== want) { console.error(got, '≠', want); process.exitCode = 1; }
+`
+	cmd := exec.Command(node, "--input-type=module", "--no-warnings", "-e", script)
+	cmd.Dir = "static"
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Errorf("%v\n%s", err, out)
+	}
+}
+
 // План 14А, задача 3: на странице сериала крупно — какой сезон скачается.
 func TestPultSeasonLabel(t *testing.T) {
 	node := lookNode(t)

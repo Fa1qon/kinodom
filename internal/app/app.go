@@ -481,15 +481,23 @@ func (a *App) handleRelease(w http.ResponseWriter, r *http.Request) {
 			out.Files = fs
 		}
 	}
-	if len(out.Files) > 0 { // файлы известны — формат по ним, а не по описанию (спека этапа 7, раздел 10.2)
-		out.Format = meta.Format(metaFiles(out.Files))
-	}
+	fileFormat(&out, a.Catalog.PreferredFormat())
 	out.Series = a.Follow.Series(r.Context(), rel)
 	if out.Follow, err = a.Follow.State(r.Context(), id); err != nil {
 		httpx.WriteError(w, http.StatusInternalServerError, "подписка не читается: "+err.Error())
 		return
 	}
 	httpx.WriteJSON(w, http.StatusOK, out)
+}
+
+// fileFormat — файлы известны — формат по ним, а не по описанию (спека этапа 7, раздел 10.2), и признак
+// приоритета — по нему же (ревью 14А: оставался от формата из описания).
+func fileFormat(v *releaseView, pref string) {
+	if len(v.Files) == 0 {
+		return
+	}
+	v.Format = meta.Format(metaFiles(v.Files))
+	v.Preferred = catalog.FormatPreferred(v.Format, pref)
 }
 
 // torrentFormat — формат раздачи по видеофайлам .torrent (спека этапа 7, раздел 10.2).

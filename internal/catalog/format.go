@@ -56,6 +56,9 @@ func FilePreferred(name, pref string) bool {
 }
 
 // prefers — основной (самый большой) формат раздачи совпадает с форматом в приоритете.
+// FormatPreferred — основной формат format (первый в списке) — формат в приоритете pref.
+func FormatPreferred(format, pref string) bool { return prefers(format, pref) }
+
 func prefers(format, pref string) bool {
 	main, _, _ := strings.Cut(format, ", ")
 	return pref != "" && main == pref
