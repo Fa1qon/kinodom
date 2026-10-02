@@ -131,7 +131,7 @@ func (c *Catalog) SectionPage(ctx context.Context, tracker, section string, afte
 // pageOf — карточки строк раздела (или списка порядка) после места after: склейка дублей и фильмов, место
 // карточки — наименьшее место её раздач; byPlace — карточка показывает раздачу этого места (порядки).
 func (c *Catalog) pageOf(ctx context.Context, rs []row, after, limit int, byPlace bool) (entries []Entry, next, rest int, err error) {
-	rs = c.collapse(rs)
+	rs = c.collapseBy(rs, byPlace)
 	kp, err := c.kinopoiskIDs(ctx, rs)
 	if err != nil {
 		return nil, after, 0, err
@@ -156,7 +156,11 @@ func (c *Catalog) pageOf(ctx context.Context, rs []row, after, limit int, byPlac
 // collapse — одна карточка на infohash (спека, раздел 7): остаётся раздача со страницей (своего трекера,
 // не из источника поиска — спека 11b, раздел 8), из равных — с большим числом раздающих. Раздачи без
 // infohash не схлопываются. Порядок — по убыванию раздающих.
-func (c *Catalog) collapse(rs []row) []row {
+func (c *Catalog) collapse(rs []row) []row { return c.collapseBy(rs, false) }
+
+// collapseBy — collapse; byPlace (раздел в порядке, план 14Б) — из равных остаётся раздача меньшего места: она
+// и даёт карточке место (ревью 14Б: оставалась с большим числом раздающих, и карточка уезжала ниже).
+func (c *Catalog) collapseBy(rs []row, byPlace bool) []row {
 	best := map[string]int{} // infohash → индекс в out
 	out := make([]row, 0, len(rs))
 	for _, r := range rs {
@@ -171,7 +175,7 @@ func (c *Catalog) collapse(rs []row) []row {
 				}
 				continue
 			}
-			if r.Seeders > out[i].Seeders {
+			if byPlace && r.Pos < out[i].Pos || !byPlace && r.Seeders > out[i].Seeders {
 				out[i] = r
 			}
 			continue
