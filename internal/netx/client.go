@@ -228,6 +228,14 @@ func (c *Client) Get(ctx context.Context, path string, opts ...GetOption) (*Page
 			return nil, fmt.Errorf("%s: %w", c.o.Name, err)
 		}
 		v, reason := c.judge(p, g)
+		if v == MirrorDown && reason == stubReason && g.method != http.MethodPost {
+			// Короткая страница без каркаса бывает разовой (Rutracker 2026-10-02: 1,5 КБ вместо 96) — ещё раз здесь же.
+			c.o.Log.Info(c.o.Name+": повторяю запрос", "url", t.url, "reason", reason)
+			if p2, err2 := c.load(ctx, t.url, g); err2 == nil {
+				p = p2
+				v, reason = c.judge(p, g)
+			}
+		}
 		if v == MirrorDown {
 			down = append(down, host+" — "+reason)
 			foreign = foreign && strings.Contains(reason, "чуж")
@@ -281,6 +289,9 @@ func (c *Client) isOwn(host string) bool {
 	return c.own[strings.ToLower(host)]
 }
 
+// stubReason — признаки трекера сказали «не он»: заглушка провайдера, чужая или оборванная страница.
+const stubReason = "вместо трекера — заглушка или чужая страница"
+
 // judge — сначала общие признаки из спеки, затем признаки трекера.
 func (c *Client) judge(p *Page, g getOpts) (Verdict, string) {
 	if !c.isOwn(p.URL.Host) {
@@ -301,7 +312,7 @@ func (c *Client) judge(p *Page, g getOpts) (Verdict, string) {
 	}
 	v := c.o.Classify(p)
 	if v == MirrorDown {
-		return v, "вместо трекера — заглушка или чужая страница"
+		return v, stubReason
 	}
 	return v, ""
 }
