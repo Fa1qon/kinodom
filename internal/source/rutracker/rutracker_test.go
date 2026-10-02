@@ -596,3 +596,16 @@ func TestSortedPageOneForum(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+// Ревью 15А, п. 4: поиск форума отдаёт не больше 500 строк — страница с 450-й строки последняя.
+func TestSortedPageStopsAt500(t *testing.T) {
+	s := rutrackertest.NewServer(t)
+	s.Login, s.Password = "user", "pass"
+	r := newRutracker(t, s, withCreds("user", "pass"))
+	if _, more, err := r.SortedPage(ctx, []string{"313"}, source.OrderDownloads, 8); err != nil || !more {
+		t.Fatalf("страница 8: ещё %v, %v", more, err)
+	}
+	if _, more, err := r.SortedPage(ctx, []string{"313"}, source.OrderDownloads, 9); err != nil || more {
+		t.Fatalf("страница 9: ещё %v, %v", more, err)
+	}
+}

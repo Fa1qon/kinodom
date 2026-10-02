@@ -115,19 +115,26 @@ type orderList struct {
 	pos       int
 	end       bool
 	empty     int
-	forums    []forumCursor // «Скачивания» Rutracker: форумы раздела в слиянии; nil — ещё не начато (план 15А)
-	lastFirst string        // первая раздача прошлой страницы сайта: Rutor за концом повторяет страницу (план 15А)
+	forums    []forumCursor    // «Скачивания» Rutracker: форумы раздела в слиянии; nil — ещё не начато (план 15А)
+	carry     []source.Release // «Скачивания»: слитое порцией, которую отменили, — начало следующей (ревью 15А)
+	lastFirst string           // первая раздача прошлой страницы сайта: Rutor за концом повторяет страницу (план 15А)
 }
 
 // forumCursor — форум в слиянии «Скачиваний»: следующая страница поиска, ещё не отданные раздачи, конец, не
 // раньше какого времени спрашивать снова после сбоя.
 type forumCursor struct {
-	id    string
-	page  int
-	buf   []source.Release
-	end   bool
-	retry time.Time
+	id        string
+	page      int
+	buf       []source.Release
+	end       bool
+	retry     time.Time
+	fails     int    // неудач подряд: forumFails — форум без него (ревью 15А: иначе список не кончается)
+	err       error  // последняя неудача: нечего слить, а форум ждёт повтора — она и ответ
+	lastFirst string // первая раздача прошлой страницы: форум за концом повторяет страницу — его конец
 }
+
+// forumFails — после стольких неудач подряд форум «Скачиваний» больше не спрашивается до обновления раздела.
+const forumFails = 3
 
 // forumRetry — через сколько спросить снова форум «Скачиваний», который не ответил (раньше сбой помнился до
 // обновления раздела, до 6 ч — ревью 14Б).
@@ -176,8 +183,10 @@ func (c *Catalog) sectionList(ctx context.Context, cat CategoryRef, src source.S
 // downloadsPortion — следующие topSize раздач «Скачиваний» Rutracker: ленивое слияние страниц поиска крупных
 // форумов раздела по числу скачиваний — страница форума качается, когда его раздачи кончились (форум сортирует
 // только внутри себя — вживую 2026-10-01). Не ответивший форум пропускается и спрашивается снова через
-// forumRetry. Курсоры живут в списке порядка: отмена запроса бросает только недокачанную страницу (ревью 14Б).
-// Порции идут по одной (orderLock), поэтому курсоры без c.mu.
+// forumRetry, после forumFails неудач подряд — без него; нечего слить, а форум ждёт повтора, — ошибка (пульт
+// повторит по «вниз»), а не пустая порция с «ещё». Курсоры и слитое отменённой порции (carry) живут в списке
+// порядка: отмена запроса теряет только недокачанную страницу (ревью 14Б, 15А). Порции идут по одной
+// (orderLock), поэтому курсоры без c.mu.
 func (c *Catalog) downloadsPortion(ctx context.Context, k orderKey, src source.Source, ol *orderList) ([]source.Release, bool, error) {
 	sp, ok := src.(sortedPager)
 	if !ok {
@@ -189,13 +198,16 @@ func (c *Catalog) downloadsPortion(ctx context.Context, k orderKey, src source.S
 			return nil, false, err
 		}
 		fs := mainForums(c.sectionForums(ctx, k.cat), d.rs)
+		if ctx.Err() != nil {
+			return nil, false, ctx.Err() // дерево могло не прочитаться из-за отмены — курсоры не запоминаем
+		}
 		ol.forums = make([]forumCursor, len(fs))
 		for i, f := range fs {
 			ol.forums[i] = forumCursor{id: f}
 		}
 	}
-	var out []source.Release
-	var lastErr error
+	out := ol.carry
+	ol.carry = nil
 	for len(out) < topSize {
 		now := c.now()
 		for i := range ol.forums {
@@ -206,11 +218,23 @@ func (c *Catalog) downloadsPortion(ctx context.Context, k orderKey, src source.S
 			rs, more, err := sp.SortedPage(ctx, []string{f.id}, k.ord, f.page)
 			if err != nil {
 				if ctx.Err() != nil {
-					return out, false, err
+					ol.carry = out
+					return nil, false, err
 				}
-				f.retry, lastErr = now.Add(forumRetry), err
-				c.log.Info("каталог: скачивания форума не пришли", "tracker", k.cat.Tracker, "forum", f.id, "err", err)
+				f.fails, f.err, f.retry = f.fails+1, err, now.Add(forumRetry)
+				if f.fails >= forumFails {
+					f.end = true
+					c.log.Warn("каталог: форум скачиваний не отвечает — без него", "tracker", k.cat.Tracker, "forum", f.id, "err", err)
+				} else {
+					c.log.Info("каталог: скачивания форума не пришли", "tracker", k.cat.Tracker, "forum", f.id, "err", err)
+				}
 				continue
+			}
+			f.fails, f.err = 0, nil
+			if len(rs) > 0 && rs[0].TopicID == f.lastFirst {
+				rs = nil // за концом форум повторяет страницу — конец
+			} else if len(rs) > 0 {
+				f.lastFirst = rs[0].TopicID
 			}
 			f.buf, f.page, f.end = rs, f.page+1, !more || len(rs) == 0
 		}
@@ -226,16 +250,20 @@ func (c *Catalog) downloadsPortion(ctx context.Context, k orderKey, src source.S
 		out = append(out, ol.forums[best].buf[0])
 		ol.forums[best].buf = ol.forums[best].buf[1:]
 	}
-	waiting := false
+	var waiting error
+	last := true
 	for _, f := range ol.forums {
 		if len(f.buf) > 0 || !f.end {
-			waiting = true
+			last = false
+		}
+		if !f.end && len(f.buf) == 0 && f.err != nil && waiting == nil {
+			waiting = f.err
 		}
 	}
-	if len(out) == 0 && lastErr != nil {
-		return nil, false, lastErr
+	if len(out) == 0 && waiting != nil {
+		return nil, false, waiting
 	}
-	return withSeeders(out), !waiting, nil
+	return withSeeders(out), last, nil
 }
 
 // mainForums — форумы раздела, где больше всего его раздач (по списку раздела): покрывающие 90 % раздач, не

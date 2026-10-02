@@ -505,3 +505,81 @@ func waitUntil(t *testing.T, ok func() bool) {
 		time.Sleep(10 * time.Millisecond)
 	}
 }
+
+// Ревью 15А, п. 2: отмена посреди порции (страница форума качается, раздачи других уже слиты) — слитое не
+// теряется: следующая порция начинается с него. Страница Rutracker — 50 строк: вторая страница верхнего форума
+// качается уже посреди первой порции.
+func TestDownloadsCancelMidPortionKeepsMerged(t *testing.T) {
+	rt, want := downloadsFixture(t)
+	rt.sortedPage = 50
+	c, _ := newCatalog(t, openDB(t), func(o *Options) { o.Sections = []Section{{"rutracker", "46", true}} }, rt)
+	refresh(t, c, true)
+	k := orderKey{CategoryRef{"rutracker", "46"}, source.OrderDownloads}
+	if _, err := c.ensureOrder(ctx, k); err != nil {
+		t.Fatal(err)
+	}
+	block := make(chan struct{})
+	rt.set(func() { rt.sortedBlock = map[string]chan struct{}{"56": block} })
+	cctx, cancel := context.WithTimeout(ctx, 300*time.Millisecond)
+	_, err := c.ensureOrder(cctx, k)
+	cancel()
+	if err == nil {
+		t.Fatal("отменённая порция без ошибки")
+	}
+	close(block)
+	rt.set(func() { rt.sortedBlock = nil })
+	mux := http.NewServeMux()
+	c.Register(muxRouter{mux})
+	if got := walkOrder(t, mux, "rutracker", "46", source.OrderDownloads); !slices.Equal(got, want) {
+		t.Fatalf("после отмены показано %d из %d", len(got), len(want))
+	}
+}
+
+// Ревью 15А, п. 3: форум не отвечает никогда — ни одной пустой порции с «ещё» (пульт крутил бы запросы): нечего
+// слить, а форум ждёт повтора — ошибка (пульт повторит по «вниз»); три неудачи подряд — форум без него, список
+// кончается.
+func TestDownloadsDeadForumEnds(t *testing.T) {
+	rt, _ := downloadsFixture(t)
+	rt.sortedDown = map[string]bool{"2076": true}
+	c, clk := newCatalog(t, openDB(t), func(o *Options) { o.Sections = []Section{{"rutracker", "46", true}} }, rt)
+	refresh(t, c, true)
+	mux := http.NewServeMux()
+	c.Register(muxRouter{mux})
+	shown, empties, errs := 0, 0, 0
+	after, more := -1, true
+	for i := 0; more && i < 40; i++ {
+		var v ListView
+		code := getJSONErr(t, mux, fmt.Sprintf("/api/v1/catalog?tracker=rutracker&section=46&after=%d&order=downloads", after), &v)
+		if code != 200 {
+			errs++
+			clk.add(2 * time.Minute)
+			continue
+		}
+		if len(v.Entries) == 0 && v.More {
+			empties++
+		}
+		shown += len(v.Entries)
+		after, more = v.Next, v.More
+		clk.add(2 * time.Minute)
+	}
+	if empties != 0 || more || shown != 150 {
+		t.Fatalf("пустых с «ещё» %d, ещё %v, показано %d (ошибок %d)", empties, more, shown, errs)
+	}
+}
+
+// Ревью 15А, п. 4: форум за концом повторяет страницу — его конец, а не бесконечные повторы.
+func TestDownloadsForumRepeatEnds(t *testing.T) {
+	rt, _ := downloadsFixture(t)
+	rt.sortedRepeat = true
+	rt.sortedPage = 50 // 56: три полные страницы — четвёртая повторяет третью
+	c, _ := newCatalog(t, openDB(t), func(o *Options) { o.Sections = []Section{{"rutracker", "46", true}} }, rt)
+	refresh(t, c, true)
+	mux := http.NewServeMux()
+	c.Register(muxRouter{mux})
+	if got := walkOrder(t, mux, "rutracker", "46", source.OrderDownloads); len(got) != 270 {
+		t.Fatalf("показано %d", len(got))
+	}
+	if n := rt.Calls("sorted:downloads"); n > 8 {
+		t.Fatalf("страниц спрошено %d — повторы не кончаются", n)
+	}
+}
