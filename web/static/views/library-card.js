@@ -5,6 +5,7 @@ import { h, fill, icon, keepFocus, rating, size, openPlayer, poll, ready, confir
 import { get, put, del } from '../api.js';
 import { whereStopped, resumeIndex } from './history.js';
 import { libPoster, continueLabel } from './library.js';
+import { skippedText } from './downloads.js';
 
 // deleteRequest — «Удалить» версии карточки (план 14В): скачанное — как в «Загрузках» (вся раздача), своё —
 // файл или папка с диска через медиатеку. {path, text} — запрос и вопрос подтверждения.
@@ -12,6 +13,15 @@ export function deleteRequest(v) {
   const name = (v.path || '').split(/[\\/]/).filter(Boolean).pop() || '';
   if (v.hash && !v.hash.startsWith('lib-')) return { path: `/downloads/${v.hash}`, text: `Удалить скачанное «${name}» с диска?` };
   return { path: `/library/units/${v.unit}`, text: `Удалить «${name}» с диска навсегда?`, safe: true };
+}
+
+// afterDelete — куда после «Удалить» версии unit карточки card (ответ res): серии, которые смотрят, остались —
+// на месте с подписью; у карточки есть другие версии — на месте; последняя — в «Медиатеку» (ревью 14В).
+export function afterDelete(card, unit, res) {
+  const note = skippedText(res);
+  if (note) return { go: null, note };
+  const left = (card.versions || []).filter((v) => v.unit !== unit).length;
+  return { go: left ? null : '#/library', note: '' };
 }
 
 // seasonsOf — серии по сезонам и разделам: без сезона — первыми (вступление курса), потом сезоны по
@@ -258,8 +268,9 @@ export function render(root, r, ctx) {
       const req = deleteRequest(v);
       if (!(await confirmDialog({ title: req.text, yes: 'Удалить', safe: !!req.safe }))) return;
       act(async () => {
-        await del(req.path);
-        ctx.go('#/library');
+        const step = afterDelete(c, v.unit, await del(req.path));
+        if (step.go) ctx.go(step.go);
+        else if (step.note) throw new Error(step.note);
       });
     } }, icon('delete'), 'Удалить'));
     out.push(toggle('move', 'Перенести в категорию', 'folder'));
