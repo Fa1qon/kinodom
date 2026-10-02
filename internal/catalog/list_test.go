@@ -29,6 +29,9 @@ func TestListRoutePagesBySection(t *testing.T) {
 	if e := v.Entries[0]; e.Name != "Фильм 0" || e.Year != 2020 || e.Quality != "WEB-DL" || e.Tracker != "rutor" {
 		t.Fatalf("карточка: %+v", e)
 	}
+	// Первая порция подкачивает следующую страницу трекера в фоне — ждём её: иначе вторая порция могла прийти раньше,
+	// чем стало известно, что у трекера список кончился («ещё» вместо конца; флейк под нагрузкой, 28 из 30 при -cpu 1).
+	c.deepWG.Wait()
 	getJSON(t, mux, fmt.Sprintf("/api/v1/catalog?tracker=rutor&section=12&after=%d", v.Next), &v)
 	if len(v.Entries) != 6 || v.Entries[0].Seeders != 76 || v.More {
 		t.Fatalf("вторая порция: %+v", v)
