@@ -4,7 +4,7 @@
 import { h, fill, icon, keepFocus, rating, size, openPlayer, poll, ready, confirmDialog } from '../ui.js';
 import { get, put, del } from '../api.js';
 import { whereStopped, resumeIndex } from './history.js';
-import { libPoster, continueLabel } from './library.js';
+import { libPoster, continueLabel } from './library-parts.js';
 
 // deleteRequest — «Удалить» версии карточки (план 14В): скачанное — как в «Загрузках» (вся раздача), своё —
 // файл или папка с диска через медиатеку. {path, text} — запрос и вопрос подтверждения.
