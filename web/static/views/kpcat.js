@@ -2,8 +2,9 @@
 // документальные) в четырёх порядках; карточка ведёт в поиск раздач по названию и году.
 import { h, ago, rating, store, keepFocus, poll, thumb } from '../ui.js';
 import { get } from '../api.js';
-import { orderLinks, oneAtATime, retryDue, trackerItems, filterSummary, firstColumn, filterButton, openFilters, takeReopen,
-  takeFocusGrid } from './catalog-parts.js';
+import { playSound } from '../nav.js';
+import { orderLinks, oneAtATime, retryDue, trackerItems, filterSummary, firstColumn, filterButton, openFilters,
+  takePending, focusFirstCard } from './catalog-parts.js';
 
 // KP_ORDER, KP_SECTION — выбор в памяти браузера.
 export const KP_ORDER = 'kpcat.order';
@@ -89,6 +90,8 @@ export function render(root, r, ctx) {
   const tail = h('div', { class: 'grid-tail' });
   root.append(h('div', { class: 'screen' }, h('div', { class: 'row fbar' }, fbtn, h('div', { class: 'grow' }), updated), grid, tail));
   let cat = { sections: [], orders: [] }; // разделы и порядки «Кинопоиска» (/kpcat)
+  // Что сделать после перехода из панели — забрать сразу (ревью 17А), сделать, когда экран загрузится.
+  const after = takePending(location.hash);
 
   // openPanel — панель слева: трекеры, разделы «Кинопоиска», его порядки.
   function openPanel() {
@@ -208,6 +211,7 @@ export function render(root, r, ctx) {
       && firstColumn(e.target.getBoundingClientRect(), first.getBoundingClientRect())) {
       e.preventDefault();
       e.stopPropagation();
+      playSound('select');
       openPanel();
     }
   });
@@ -224,16 +228,11 @@ export function render(root, r, ctx) {
     const text = filterSummary(['Кинопоиск', secName, ordName]);
     fbtn.title = text;
     fbtn.querySelector('.btn-label').textContent = text;
-    const reopen = takeReopen();
-    const toGrid = takeFocusGrid();
-    if (reopen) openPanel();
+    if (after === 'reopen') openPanel();
     if (watcher) watcher.observe(tail);
     await load();
     // Пришли из панели, выбрав раздел или порядок, — фокус на первую карточку.
-    if (alive && toGrid && !reopen) {
-      const firstCard = grid.querySelector('.entry');
-      if (firstCard) firstCard.focus({ preventScroll: true });
-    }
+    if (alive && after === 'grid') focusFirstCard();
     // Возврат с поиска фильма — столько же карточек, то же место и та же карточка.
     for (let i = 0; i < 40 && alive && more && offset < restore; i++) {
       const was = offset;

@@ -2,9 +2,10 @@
 // раздающим, порции (спека этапа 7, разделы 5.4 и 6.3).
 import { h, icon, ago, size, rating, store, plural, keepFocus, offWarn, poll, formatTag, altFormatTag, thumb } from '../ui.js';
 import { get } from '../api.js';
+import { playSound } from '../nav.js';
 import { render as renderKP } from './kpcat.js';
 import { TRACKERS, oneAtATime, retryDue, orderLinks, trackerItems, filterSummary, drawerSections, firstColumn, filterButton, openFilters,
-  takeReopen, takeFocusGrid } from './catalog-parts.js';
+  takePending, focusFirstCard } from './catalog-parts.js';
 
 export { TRACKERS, oneAtATime, retryDue, orderLinks } from './catalog-parts.js';
 
@@ -215,9 +216,11 @@ export function render(root, r, ctx) {
 
   // Над сеткой — одна строка: сводка «трекер · раздел · порядок» (OK — панель выбора слева) и «обновлён» (план 17А).
   const updated = h('div', { class: 'muted small' });
-  const fbtn = filterButton('', () => openPanel());
-  const warn = h('div', { class: 'note' }); // пустые — без места: сетка выше (план 17А)
-  const owarn = h('div', { class: 'note' });
+  const fbtn = filterButton((TRACKERS.find(([id]) => id === tracker) || [, ''])[1], () => openPanel());
+  const warn = h('div', { class: 'fnote' }); // пустые — без места: сетка выше (план 17А)
+  const owarn = h('div', { class: 'fnote' });
+  // Что сделать после перехода из панели — забрать сразу (ревью 17А), сделать, когда экран загрузится.
+  const after = takePending(location.hash);
   const grid = h('div', { class: 'grid' });
   const tail = h('div', { class: 'grid-tail' });
   root.append(h('div', { class: 'screen' }, h('div', { class: 'row fbar' }, fbtn, h('div', { class: 'grow' }), updated), warn, owarn, grid, tail));
@@ -381,6 +384,7 @@ export function render(root, r, ctx) {
       && firstColumn(e.target.getBoundingClientRect(), first.getBoundingClientRect())) {
       e.preventDefault();
       e.stopPropagation();
+      playSound('select');
       openPanel();
     }
   });
@@ -397,6 +401,8 @@ export function render(root, r, ctx) {
 
   get(`/catalog/sections?tracker=${tracker}`).then(async (sections) => {
     if (!alive) return;
+    sectionList = sections; // панель и сводка — с разделами сразу, не дожидаясь порции (ревью 17А)
+    drawSummary();
     await more(); // первая порция: в ней — раздел по умолчанию и время обновления
     if (!alive) return;
     if (watcher) watcher.observe(tail); // только теперь: пустая сетка не должна просить порцию сама
@@ -405,13 +411,8 @@ export function render(root, r, ctx) {
     drawSummary();
     if (shownSection) store.set('catalog', catalogMemory(tracker, shownSection, urlOrder));
     // Пришли из панели: выбрали трекер — она снова открыта на нём; раздел или порядок — фокус на первую карточку.
-    const reopen = takeReopen();
-    const toGrid = takeFocusGrid();
-    if (reopen) openPanel();
-    else if (toGrid) {
-      const firstCard = grid.querySelector('.entry');
-      if (firstCard) firstCard.focus({ preventScroll: true });
-    }
+    if (after === 'reopen') openPanel();
+    else if (after === 'grid') focusFirstCard();
     if (sections.length === 0) {
       // Трекер без адреса (этап 11a) не обновляется — об этом строка «Укажите адрес» выше.
       grid.replaceChildren(off ? '' : h('p', { class: 'muted' }, 'Каталог ещё пуст — идёт первое обновление'));
