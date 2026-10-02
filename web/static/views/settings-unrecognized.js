@@ -88,9 +88,10 @@ export function render(root, r, ctx) {
     keepFocus(root, () => {
       const rows = data.items.map((u) => {
         const row = h('div', { class: 'un' },
-          h('div', { class: 'row' },
+          h('div', { class: 'row un-top' },
             h('div', { class: 'grow un-name' }, h('span', { class: 'strong' }, u.sample),
               h('span', { class: 'muted small' }, [plural(u.streams, 'поток', 'потока', 'потоков'), `работают ${u.alive}`, u.playlists.join(', ')].join(' · '))),
+            h('div', { class: 'row wrap gap10 un-acts' },
             ctx.canEdit && u.watch ? h('button', { class: 'btn', type: 'button', 'data-key': `watch-${u.name}`,
               onclick: () => openPreview({ id: u.watch, url: u.watchUrl, kind: u.watchKind }, u.sample) }, icon('play_arrow'), 'Смотреть') : null,
             ctx.canEdit ? h('button', { class: 'btn', type: 'button', 'data-key': `new-${u.name}`, onclick: () => {
@@ -113,7 +114,7 @@ export function render(root, r, ctx) {
               if (open) pick.focus();
             } }, icon('swap_horiz'), 'Назначить') : null,
             ctx.canEdit ? h('button', { class: 'btn', type: 'button', 'data-key': `hide-${u.name}`, onclick: () => act(() => put('/iptv/names', { name: u.name, hidden: true })) },
-              icon('visibility_off'), 'Скрыть') : null));
+              icon('visibility_off'), 'Скрыть') : null)));
         if (open === u.name) {
           row.append(h('form', { class: 'row gap10', onsubmit: async (e) => {
             e.preventDefault();
