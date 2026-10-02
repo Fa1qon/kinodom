@@ -8,6 +8,8 @@ import (
 	"io/fs"
 	"maps"
 	"os"
+	"path/filepath"
+	"strings"
 )
 
 // Медиатека и загрузки — одна система (план 14В): скачанное Kinodom качается в папки стандартных «Фильмов» и
@@ -15,7 +17,7 @@ import (
 
 var (
 	ErrTorrentUnit = errors.New("скачанное удаляется как в «Загрузках»")
-	ErrOutside     = errors.New("путь единицы — не внутри папки её категории: удалять нечего")
+	ErrOutside     = errors.New("файлы не в папке медиатеки — Kinodom их не удаляет")
 	ErrNoWrite     = errors.New("нет права изменять папку")
 )
 
@@ -27,26 +29,49 @@ func (l *Library) TargetFolder(ctx context.Context, builtin string) (string, err
 		return "", err
 	}
 	for _, c := range cs {
-		if c.Builtin == builtin && len(c.Folders) > 0 {
-			return c.Folders[0].Path, nil
+		if c.Builtin != builtin {
+			continue
+		}
+		for _, f := range c.Folders {
+			// Папка, которая сама сериал («папка = сериал»), — не для чужого скачанного (ревью 14В).
+			own, err := l.folderIsUnit(ctx, f)
+			if err != nil {
+				return "", err
+			}
+			if !own {
+				return f.Path, nil
+			}
 		}
 	}
 	return "", nil
 }
 
-// Writable — служба может писать в папку: Options.Writable, по умолчанию — проба файлом.
+// folderIsUnit — папка категории сама единица медиатеки (сериал «папка = сериал»).
+func (l *Library) folderIsUnit(ctx context.Context, f Folder) (bool, error) {
+	rows, err := l.d.R.QueryContext(ctx, `SELECT key FROM lib_units WHERE folder = ? AND missing = 0`, f.ID)
+	if err != nil {
+		return false, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var k string
+		if err := rows.Scan(&k); err != nil {
+			return false, err
+		}
+		if pathKey(k) == pathKey(f.Path) {
+			return true, nil
+		}
+	}
+	return false, rows.Err()
+}
+
+// Writable — служба может писать в папку: Options.Writable, по умолчанию — проверка прав без записи (ревью 14В:
+// пробный файл менял время папки и будил диск).
 func (l *Library) Writable(dir string) bool {
 	if l.o.Writable != nil {
 		return l.o.Writable(dir)
 	}
-	f, err := os.CreateTemp(dir, ".kinodom-*.tmp")
-	if err != nil {
-		return false
-	}
-	name := f.Name()
-	f.Close()
-	os.Remove(name)
-	return true
+	return writable(dir)
 }
 
 // DeleteUnit — «Удалить» свою единицу медиатеки: её файл или папку с диска. Единица, чей ключ — сама папка
@@ -92,6 +117,7 @@ func (l *Library) DeleteUnit(ctx context.Context, id int64) error {
 		if err != nil {
 			return err
 		}
+		var gone []string
 		for _, p := range files {
 			if !within(p, root) || pathKey(p) == pathKey(root) {
 				continue
@@ -99,7 +125,11 @@ func (l *Library) DeleteUnit(ctx context.Context, id int64) error {
 			if err := remove(p); err != nil && !errors.Is(err, fs.ErrNotExist) {
 				return l.removeError(ctx, folder.Int64, root, err)
 			}
+			gone = append(gone, p)
 		}
+		// Субтитры удалённых серий и опустевшие папки сезонов — тоже (ревью 14В); папка единицы остаётся.
+		gone = append(gone, removeSidecars(key, gone, remove)...)
+		removeEmptyDirs(key, gone)
 	} else if err := remove(key); err != nil {
 		return l.removeError(ctx, folder.Int64, root, err)
 	}
@@ -185,11 +215,60 @@ func (l *Library) unitFiles(ctx context.Context, id int64) ([]string, error) {
 }
 
 func (l *Library) removeError(ctx context.Context, folder int64, root string, err error) error {
+	if busy(err) {
+		return errors.New("файл открыт в другой программе — закройте её и повторите")
+	}
 	if errors.Is(err, fs.ErrPermission) {
 		l.setNoWrite(ctx, folder, true)
 		return fmt.Errorf("%w %s — «Разрешить доступ» в настройках медиатеки", ErrNoWrite, root)
 	}
 	return fmt.Errorf("не удалось удалить: %w", err)
+}
+
+// subtitleExt — субтитры и их спутники: удаляются вместе с серией того же имени.
+var subtitleExt = map[string]bool{".srt": true, ".ass": true, ".ssa": true, ".sub": true, ".idx": true, ".vtt": true, ".smi": true, ".sup": true}
+
+// removeSidecars — субтитры удалённых видео videos внутри папки top: файлы, чьё имя начинается с имени видео
+// без расширения и точки («Сериал.S01E01.rus.srt»), в том числе в подпапках («Subs/…»). Удалённые — в ответе.
+func removeSidecars(top string, videos []string, remove func(string) error) []string {
+	if len(videos) == 0 {
+		return nil
+	}
+	stems := make([]string, 0, len(videos))
+	for _, v := range videos {
+		b := filepath.Base(v)
+		stems = append(stems, strings.ToLower(strings.TrimSuffix(b, filepath.Ext(b)))+".")
+	}
+	var out []string
+	filepath.WalkDir(top, func(p string, d fs.DirEntry, err error) error {
+		if err != nil || d.IsDir() || !subtitleExt[strings.ToLower(filepath.Ext(p))] {
+			return nil
+		}
+		name := strings.ToLower(d.Name())
+		for _, s := range stems {
+			if strings.HasPrefix(name, s) {
+				if remove(p) == nil {
+					out = append(out, p)
+				}
+				break
+			}
+		}
+		return nil
+	})
+	return out
+}
+
+// removeEmptyDirs — опустевшие папки удалённых файлов gone снизу вверх до папки top (её саму — нет).
+func removeEmptyDirs(top string, gone []string) {
+	seen := map[string]bool{}
+	for _, p := range gone {
+		for d := filepath.Dir(p); within(d, top) && pathKey(d) != pathKey(top) && !seen[pathKey(d)]; d = filepath.Dir(d) {
+			seen[pathKey(d)] = true
+			if os.Remove(d) != nil {
+				break // не пустая (или нет прав) — выше тоже не пустая
+			}
+		}
+	}
 }
 
 // allFolderPaths — пути всех папок категорий.

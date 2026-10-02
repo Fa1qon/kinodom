@@ -3,11 +3,14 @@ package library
 import (
 	"context"
 	"errors"
+	"io/fs"
 	"net/http"
 	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
+	"syscall"
 	"testing"
 )
 
@@ -340,5 +343,60 @@ func TestFoldersKeepInputOrder(t *testing.T) {
 		if got, _ := e.l.TargetFolder(ctx, "films"); got != dirs[0] {
 			t.Fatalf("первая папка %q, нужно %q", got, dirs[0])
 		}
+	}
+}
+
+// Ревью 14В: после удаления сериала «папка = сериал» оставались субтитры и пустые папки сезонов. Удаляются видео
+// сериала, их субтитры (то же имя) и опустевшие папки; посторонний файл человека и сама папка категории — нет
+// (Review Focus 1, 2).
+func TestDeleteSeriesFolderCleansUp(t *testing.T) {
+	e := newEnv(t)
+	show := e.folder(t, catSeries, "Сериал (2020)", "Сериал.S01E01.mkv", "Сериал.S01E01.rus.srt", "Сезон 2/Сериал.S02E01.mkv",
+		"Сезон 2/Сериал.S02E01.srt", "Subs/Сериал.S01E01.eng.srt", "заметки.txt")
+	e.scan(t)
+	ss := unitsOf(t, e, catSeries)
+	if ss[show] == 0 {
+		t.Fatalf("сериал «папка = сериал»: %v", ss)
+	}
+	if err := e.l.DeleteUnit(ctx, ss[show]); err != nil {
+		t.Fatal(err)
+	}
+	var left []string
+	filepath.WalkDir(show, func(p string, d fs.DirEntry, err error) error {
+		if err == nil && p != show {
+			rel, _ := filepath.Rel(show, p)
+			left = append(left, filepath.ToSlash(rel))
+		}
+		return nil
+	})
+	if !slices.Equal(left, []string{"заметки.txt"}) {
+		t.Fatalf("осталось: %v", left)
+	}
+}
+
+// Ревью 14В: тексты ошибок удаления — без внутренних слов; файл открыт другой программой — так и сказано.
+func TestDeleteErrorTexts(t *testing.T) {
+	if strings.Contains(ErrOutside.Error(), "единиц") {
+		t.Fatalf("ErrOutside: %q", ErrOutside)
+	}
+	e := newEnv(t)
+	busy := &fs.PathError{Op: "remove", Path: "x", Err: syscall.Errno(32)} // ERROR_SHARING_VIOLATION
+	if err := e.l.removeError(ctx, 0, `D:\Сериалы`, busy); !strings.Contains(err.Error(), "открыт в другой программе") {
+		t.Fatalf("занятый файл: %v", err)
+	}
+}
+
+// Ревью 14В: первая папка «Сериалов» — сама сериал («папка = сериал»): другие сериалы туда не качаются —
+// следующая папка категории, а нет её — папка загрузок (Review Focus 3).
+func TestTargetFolderSkipsSeriesFolder(t *testing.T) {
+	e := newEnv(t)
+	e.folder(t, catSeries, "Сериал (2020)", "Сериал.S01E01.mkv", "Сериал.S01E02.mkv")
+	e.scan(t)
+	if got, _ := e.l.TargetFolder(ctx, "series"); got != "" {
+		t.Fatalf("единственная папка — сериал: %q", got)
+	}
+	shows := e.folder(t, catSeries, "Shows")
+	if got, _ := e.l.TargetFolder(ctx, "series"); got != shows {
+		t.Fatalf("получено %q, нужно %q", got, shows)
 	}
 }
