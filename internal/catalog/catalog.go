@@ -326,6 +326,15 @@ func (c *Catalog) refreshCategory(ctx context.Context, cat CategoryRef, src sour
 		c.setProblem(ctx, problem, err.Error())
 		return err
 	}
+	// Подкачка порции раздела, начатая до обновления, — про прежний список: обновление ждёт её под замком
+	// раздела, иначе её курсор и «список кончился» легли бы поверх сброса и раздел оборвался бы на сотне.
+	l := c.deepLock(cat)
+	select {
+	case l <- struct{}{}:
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+	defer func() { <-l }()
 	if err := c.st.replaceTop(ctx, cat, rs, now); err != nil {
 		return dbError{err}
 	}
