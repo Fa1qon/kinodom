@@ -136,8 +136,10 @@ class PultActivity : Activity() {
 
     // back — открыто окно пульта («Скачать «…»?», выбор папки) — закрыть его: WebView не передаёт «Назад»
     // странице, а Escape пульт понимает (финальное ревью 13a); иначе — по BackDecision.
+    // «Назад» пульта ТВ странице не приходит — звук «Назад» (план 16В) играет здесь, когда шаг назад случился.
     private fun back() {
         if (custom != null) {
+            sounds?.play("back")
             leaveFullscreen()
             return
         }
@@ -145,19 +147,23 @@ class PultActivity : Activity() {
             backDecision()
             return
         }
-        web.evaluateJavascript(CLOSE_DIALOG) { closed -> if (closed != "true") backDecision() }
+        web.evaluateJavascript(CLOSE_DIALOG) { closed -> if (closed == "true") sounds?.play("back") else backDecision() }
     }
 
     private fun backDecision() {
         val canGoBack = ::web.isInitialized && web.canGoBack()
         when (BackDecision.onBack(canGoBack, overlay != null)) {
             Action.CloseOverlay -> if (overlayClosable) {
+                sounds?.play("back")
                 postponed = true
                 closeOverlay()
             } else {
                 moveTaskToBack(true) // «Kinodom не отвечает» поверх мёртвого пульта — назад некуда
             }
-            Action.GoBack -> web.goBack()
+            Action.GoBack -> {
+                sounds?.play("back")
+                web.goBack()
+            }
             Action.Minimize -> moveTaskToBack(true)
         }
     }

@@ -149,6 +149,30 @@ export function arrowMoves(dir, el, escaped) {
   return dir === 'left' ? el.selectionStart === 0 && el.selectionEnd === 0 : el.selectionEnd === el.value.length;
 }
 
+// navSound — звук клавиши key на элементе el (план 16В): шаг фокуса — move, упор — edge, OK — select, «Назад» — back.
+// outcome: moved — фокус сдвинулся; cursor — стрелка двигала курсор в поле; back — шаг назад случился. Ввод в поле —
+// без звука.
+export function navSound(key, el, outcome) {
+  const o = outcome || {};
+  if (DIRS[key]) return o.cursor ? null : o.moved ? 'move' : 'edge';
+  if (key === 'Enter') return el && !typing(el) ? 'select' : null;
+  if (key === 'Escape' || key === 'GoBack' || key === 'BrowserBack' || key === 'Backspace') return o.back ? 'back' : null;
+  return null;
+}
+
+// playSound — звук в приложении (мост KinodomApp.sound; «Назад» с пульта ТВ приложение озвучивает само); в браузере
+// моста нет — тишина.
+function playSound(name) {
+  if (!name) return;
+  const app = typeof window !== 'undefined' ? window.KinodomApp : null;
+  if (!app || typeof app.sound !== 'function') return;
+  try {
+    app.sound(name);
+  } catch {
+    // старое приложение или мост занят — без звука
+  }
+}
+
 // escaped — поле, из которого вышли Escape; ввод символа или уход фокуса возвращают стрелкам курсор.
 let escaped = null;
 
@@ -166,6 +190,7 @@ export function initNav() {
       return;
     }
     if (e.key === 'Enter' && el && el.tagName === 'SELECT') {
+      playSound('select');
       e.preventDefault(); // OK пульта открывает список
       try {
         el.showPicker();
@@ -178,17 +203,25 @@ export function initNav() {
       if (history.length > 1) {
         e.preventDefault();
         history.back();
+        playSound(navSound(e.key, el, { back: true }));
       }
       return;
     }
     if (e.key === 'Enter' && el && el.matches('input[type="checkbox"], input[type="radio"]')) {
+      playSound('select');
       e.preventDefault(); // OK пульта отмечает флажок, как пробел
       el.click();
+      return;
+    }
+    if (e.key === 'Enter') {
+      playSound(navSound('Enter', el, {})); // кнопка или ссылка — нажатие сделает браузер
       return;
     }
     const dir = DIRS[e.key];
     if (!dir) return;
     if (!arrowMoves(dir, el, escaped)) return; // курсор ещё двигается внутри поля
-    if (move(dir)) e.preventDefault();
+    const moved = move(dir);
+    playSound(navSound(e.key, el, { moved }));
+    if (moved) e.preventDefault();
   });
 }
