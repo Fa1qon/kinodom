@@ -2323,3 +2323,33 @@ for (const [got, want] of checks) {
 		t.Errorf("%v\n%s", err, out)
 	}
 }
+
+// План 16В: какой звук у клавиши — шаг фокуса, упор, OK, «Назад»; ввод в поле — без звука; моста нет — без звука.
+func TestPultNavSound(t *testing.T) {
+	node := lookNode(t)
+	script := `
+const { navSound } = await import('./nav.js');
+const btn = { tagName: 'BUTTON' };
+const input = { tagName: 'INPUT', type: 'text' };
+const checks = [
+  [navSound('ArrowDown', btn, { moved: true }), 'move'],
+  [navSound('ArrowDown', btn, { moved: false }), 'edge'],
+  [navSound('Enter', btn, {}), 'select'],
+  [navSound('Enter', { tagName: 'A' }, {}), 'select'],
+  [navSound('Enter', input, {}), null],
+  [navSound('ArrowLeft', input, { cursor: true }), null],
+  [navSound('Escape', input, { escaped: true }), null],
+  [navSound('Escape', btn, { back: true }), 'back'],
+  [navSound('GoBack', btn, { back: true }), 'back'],
+  [navSound('a', btn, {}), null],
+];
+for (const [got, want] of checks) {
+  if (JSON.stringify(got) !== JSON.stringify(want)) { console.error(JSON.stringify(got), '≠', JSON.stringify(want)); process.exitCode = 1; }
+}
+`
+	cmd := exec.Command(node, "--input-type=module", "--no-warnings", "-e", script)
+	cmd.Dir = "static"
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Errorf("%v\n%s", err, out)
+	}
+}
