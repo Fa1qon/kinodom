@@ -7,6 +7,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"kinodom/internal/source"
 )
@@ -246,6 +247,48 @@ func TestRefreshDropsDeepPortions(t *testing.T) {
 	if es := list(t, c, ListOptions{Tracker: "rutor", Category: "12", Limit: 1000}); len(es) != 100 {
 		t.Fatalf("после обновления — первая сотня: %d", len(es))
 	}
+	seen, _, more := walkSection(t, mux, "rutor", "12", -1, 10)
+	if more || len(seen) != 120 {
+		t.Fatalf("новый список: %d, ещё %v", len(seen), more)
+	}
+}
+
+// Флейк TestRefreshDropsDeepPortions (1 из 7 прогонов): подкачка следующей страницы раздела в фоне начата до
+// обновления и кончилась после — она записывала курсор и «список кончился» прежнего списка поверх сброса, и
+// после обновления раздел обрывался на первой сотне. Обновление ждёт идущую подкачку.
+func TestRefreshWaitsForDeepPrefetch(t *testing.T) {
+	c, rutor, mux := rutorSection(t, manyDesc("rutor", 250))
+	cat := CategoryRef{"rutor", "12"}
+	c.prefetchDeep(cat) // вторая сотня — в базе
+	c.deepWG.Wait()
+	block := make(chan struct{})
+	rutor.set(func() { rutor.pageBlock = block })
+	c.prefetchDeep(cat) // третья страница — повисла у трекера
+	for rutor.Calls("toppage") < 2 {
+		time.Sleep(time.Millisecond)
+	}
+	rutor.set(func() { rutor.top["12"] = manyDesc("rutor", 120) })
+	done := make(chan error, 1)
+	go func() {
+		_, err := c.refreshPass(ctx, true)
+		done <- err
+	}()
+	var err error
+	finished := false
+	select {
+	case err = <-done:
+		finished = true // обновление не ждало подкачку
+	case <-time.After(300 * time.Millisecond):
+	}
+	close(block)
+	rutor.set(func() { rutor.pageBlock = nil })
+	if !finished {
+		err = <-done
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+	c.deepWG.Wait()
 	seen, _, more := walkSection(t, mux, "rutor", "12", -1, 10)
 	if more || len(seen) != 120 {
 		t.Fatalf("новый список: %d, ещё %v", len(seen), more)
