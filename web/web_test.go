@@ -3,10 +3,12 @@ package web
 import (
 	"bytes"
 	"io/fs"
+	"maps"
 	"os"
 	"os/exec"
 	"path"
 	"regexp"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -21,7 +23,7 @@ var required = []string{
 	"views/catalog.js", "views/release.js", "views/search.js", "views/downloads.js",
 	"views/settings-layout.js", "views/settings-status.js", "views/settings-params.js", "views/settings-sections.js", "views/updates.js",
 	"views/channels.js", "views/channel.js", "views/channel-settings.js", "views/tvkit.js", "views/settings-iptv.js", "views/settings-unrecognized.js",
-	"views/history.js", "views/library.js", "views/library-card.js", "views/settings-library.js", "views/folders.js", "views/setup.js",
+	"views/history.js", "views/library.js", "views/library-card.js", "views/library-parts.js", "views/catalog-parts.js", "views/settings-library.js", "views/folders.js", "views/setup.js",
 }
 
 // scripts — все модули пульта.
@@ -2236,6 +2238,83 @@ for (const [name, got, want] of checks) {
     console.error(name, ':', got, '≠', want);
     process.exitCode = 1;
   }
+}
+`
+	cmd := exec.Command(node, "--input-type=module", "--no-warnings", "-e", script)
+	cmd.Dir = "static"
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Errorf("%v\n%s", err, out)
+	}
+}
+
+// Ревью 14Г: цикл импорта catalog.js ↔ kpcat.js (и library.js ↔ library-card.js) работал, но хрупко: модуль,
+// загруженный первым, видит соседа недогруженным. В пульте импорты без циклов.
+func TestPultNoImportCycles(t *testing.T) {
+	re := regexp.MustCompile(`(?m)^\s*(?:import|export)\s[^;]*?\sfrom\s+'(\.[^']+)'`)
+	graph := map[string][]string{}
+	err := fs.WalkDir(os.DirFS("static"), ".", func(p string, d fs.DirEntry, err error) error {
+		if err != nil || d.IsDir() || !strings.HasSuffix(p, ".js") || strings.HasPrefix(p, "vendor/") {
+			return err
+		}
+		b, err := os.ReadFile(path.Join("static", p))
+		if err != nil {
+			return err
+		}
+		for _, m := range re.FindAllStringSubmatch(string(b), -1) {
+			graph[p] = append(graph[p], path.Join(path.Dir(p), m[1]))
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(graph["views/kpcat.js"]) == 0 {
+		t.Fatalf("импорты не разобраны: %v", graph)
+	}
+	state := map[string]int{} // 1 — на пути, 2 — пройден
+	var stack []string
+	var visit func(string)
+	visit = func(n string) {
+		state[n] = 1
+		stack = append(stack, n)
+		for _, d := range graph[n] {
+			switch state[d] {
+			case 1:
+				t.Errorf("цикл импорта: %s → %s", strings.Join(stack[slices.Index(stack, d):], " → "), d)
+			case 0:
+				visit(d)
+			}
+		}
+		stack = stack[:len(stack)-1]
+		state[n] = 2
+	}
+	for _, n := range slices.Sorted(maps.Keys(graph)) {
+		if state[n] == 0 {
+			visit(n)
+		}
+	}
+}
+
+// Ревью 14Г: пустой раздел «Кинопоиска» — правда о нём (ошибка последней попытки или «идёт первое
+// обновление»), «обновлён» — по разделу; повторы при подгрузке отсеиваются; запомненный поиск — с фильмом.
+func TestPultKPState(t *testing.T) {
+	node := lookNode(t)
+	script := `
+const { kpEmpty, kpUpdatedAt, freshOnly } = await import('./views/kpcat.js');
+const { searchMemory } = await import('./views/search.js');
+const shown = new Set([1, 2]);
+const checks = [
+  [kpEmpty({ id: 'docs', count: 0, error: 'Кинопоиск не отвечает' }), { text: 'Кинопоиск не отвечает', error: true }],
+  [kpEmpty({ id: 'docs', count: 0 }), { text: 'Каталог ещё пуст — идёт первое обновление', error: false }],
+  [kpUpdatedAt({ sections: [{ id: 'a', updatedAt: '2026-10-01T00:00:00Z' }, { id: 'b', updatedAt: null }] }, 'b'), null],
+  [kpUpdatedAt({ sections: [{ id: 'a', updatedAt: '2026-10-01T00:00:00Z' }] }, 'a'), '2026-10-01T00:00:00Z'],
+  [freshOnly([{ id: 2 }, { id: 3 }, { id: 3 }], shown).map((f) => f.id), [3]],
+  [[...shown], [1, 2, 3]],
+  [searchMemory('Матрица 1999', 301), '#/search?q=' + encodeURIComponent('Матрица 1999') + '&kp=301'],
+  [searchMemory('x', 0), '#/search?q=x'],
+];
+for (const [got, want] of checks) {
+  if (JSON.stringify(got) !== JSON.stringify(want)) { console.error(JSON.stringify(got), '≠', JSON.stringify(want)); process.exitCode = 1; }
 }
 `
 	cmd := exec.Command(node, "--input-type=module", "--no-warnings", "-e", script)

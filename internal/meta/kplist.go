@@ -219,7 +219,10 @@ func (w *KPWeb) IMDb(ctx context.Context, id int) (rating float64, votes int, er
 	block := func() (float64, int, error) {
 		w.mu.Lock()
 		w.ratingBlocked = w.o.Now().Add(w.o.Pause)
+		until := w.ratingBlocked
 		w.mu.Unlock()
+		// Строка — у ворот, одна на паузу: каталог о паузах ворот молчит (ревью 15В, Important 2).
+		w.o.Log.Warn("Кинопоиск: оценки IMDb: пауза", "ответ", resp.StatusCode, "до", until.Format("15:04"))
 		return 0, 0, ErrKPBlocked
 	}
 	switch {
