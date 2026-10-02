@@ -89,13 +89,14 @@ export function render(root, r, ctx) {
 
   const head = h('div', { class: 'row wrap' });
   const filters = h('div', { class: 'filters', role: 'tablist', 'aria-label': 'Категории' });
+  const errBox = h('div'); // ошибка опроса — над списком, список не перестраивается (ревью 16А)
   const list = h('div', { class: 'ch-list' });
   const tail = h('div', { class: 'ch-tail' }); // низ построенного: подошёл к экрану — следующая порция
-  root.append(h('div', { class: 'screen channels' }, head, filters, list, tail));
+  root.append(h('div', { class: 'screen channels' }, head, filters, errBox, list, tail));
   let rows = []; // лента показанного списка (flatRows)
   let built = 0; // строк ленты построено
   let drawn = null; // каналы, по которым построен список: тот же набор — опрос меняет передачи на месте
-  let drawnError = '';
+  let latest = new Map(); // ключ → канал из последнего ответа: «Смотреть» и порции — по свежим данным (ревью 16А)
   const refs = new Map(); // ключ канала → узлы строки, которые меняет опрос
   let headSig = ''; // заголовок и вкладки на экране — опрос их не перерисовывает, если те же
 
@@ -183,24 +184,27 @@ export function render(root, r, ctx) {
     const hasFav = data.channels.some((c) => c.block === 'favorite');
     keepFocus(root, () => {
       drawHead(shown, hasFav);
+      fill(errBox, error ? h('p', { class: 'error' }, error) : null);
+      latest = new Map(shown.map((c) => [c.key, c]));
+      const same = drawn && sameKeys(shown, drawn);
+      // Лента — из свежих данных и при том же наборе: следующие порции строятся с текущими передачами (ревью 16А:
+      // строки, достроенные после опроса, показывали кончившиеся передачи).
+      rows = flatRows(sections(shown, f.tab));
       // Тот же набор каналов — передачи, полоски и оценки меняются на месте, и только где изменились: список не
       // перестраивается (раньше — раз в минуту целиком, заморозка на ТВ; план 16А).
-      if (drawn && sameKeys(shown, drawn) && error === drawnError) {
+      if (same) {
         for (const c of shown) patchRow(c);
         drawn = shown;
         return;
       }
-      rows = flatRows(sections(shown, f.tab));
       const want = Math.max(CH_FIRST, built); // набор сменился — построено не меньше, чем было: фокус не теряется
       built = 0;
       refs.clear();
       const out = [];
-      if (error) out.push(h('p', { class: 'error' }, error));
       if (!rows.length) out.push(h('p', { class: 'empty' }, data.channels.length ? 'Таких каналов нет' : 'Каналов пока нет'));
       out.push(...buildRows(0, portionEnd(rows.length, 0, want)));
       fill(list, ...out);
       drawn = shown;
-      drawnError = error;
       rewatch();
     });
   }
@@ -253,7 +257,7 @@ export function render(root, r, ctx) {
         h('span', { class: 'ch-text' }, h('span', { class: 'ch-name' }, c.name), r.now, r.track, r.next)),
       r.grade,
       h('button', { class: 'btn', type: 'button', 'data-key': `watch-${c.key}`, 'aria-label': `Смотреть ${c.name}`,
-        onclick: () => watch(c) }, icon('play_arrow'), h('span', { class: 'wide-only' }, 'Смотреть')));
+        onclick: () => watch(latest.get(c.key) || c) }, icon('play_arrow'), h('span', { class: 'wide-only' }, 'Смотреть')));
   }
 
   // fillRow — «сейчас», полоска и «следом» строки по данным канала c; узлы трогаются, только если изменилось.

@@ -1,10 +1,13 @@
 package meta
 
 import (
+	"context"
 	"image"
+	"image/color"
 	_ "image/gif" // постеры GIF — первый кадр
 	"image/jpeg"
 	_ "image/png"
+	"io"
 	"os"
 	"path/filepath"
 
@@ -19,12 +22,19 @@ const (
 	thumbSuffix  = ".w400.jpg" // {key}.w400.jpg
 	thumbQuality = 82
 	thumbAtOnce  = 2 // миниатюр делается одновременно: сетка просит до 40 сразу
+	// thumbMaxPixels — больше не разбирается (ревью 16А): картинка со страницы раздачи на 10 МБ может быть
+	// 12000 × 12000 — сотни МБ памяти при разборе; такой «постер» отдаётся как есть.
+	thumbMaxPixels = 40_000_000
 )
 
+// thumbBack — фон прозрачного в миниатюре: фон карточки постера в пульте (#1A1D21), а не чёрный JPEG (ревью 16А).
+var thumbBack = color.RGBA{0x1A, 0x1D, 0x21, 0xFF}
+
 // thumb — путь к миниатюре оригинала orig (ключ key): готовая — она, иначе делается сейчас. false — отдавать
-// оригинал: он не шире thumbWidth или не разбирается (битый, неизвестный формат); и то и другое запоминается —
-// оригинал не разбирается на каждый запрос, о битом — строка в журнал один раз.
-func (im *Images) thumb(key, orig string) (string, bool) {
+// оригинал: он не шире thumbWidth, слишком велик или не разбирается (битый, неизвестный формат); это запоминается —
+// оригинал не разбирается на каждый запрос, о битом — строка в журнал один раз. Очередь занята, а просьбу уже
+// отменили (листали дальше), — оригинал, не ждать (ревью 16А).
+func (im *Images) thumb(ctx context.Context, key, orig string) (string, bool) {
 	p := filepath.Join(im.o.Dir, key+thumbSuffix)
 	if _, err := os.Stat(p); err == nil {
 		return p, true
@@ -35,7 +45,11 @@ func (im *Images) thumb(key, orig string) (string, bool) {
 	if skip {
 		return "", false
 	}
-	im.thumbSem <- struct{}{}
+	select {
+	case im.thumbSem <- struct{}{}:
+	case <-ctx.Done():
+		return "", false
+	}
 	defer func() { <-im.thumbSem }()
 	if _, err := os.Stat(p); err == nil { // сделал соседний запрос, пока этот ждал
 		return p, true
@@ -67,24 +81,33 @@ func (im *Images) thumbFailures() int {
 }
 
 // makeThumb — уменьшенная копия orig шириной thumbWidth в JPEG по пути dst (через временный файл: оборванная
-// запись не оставит битую миниатюру). false без ошибки — оригинал и так не шире.
+// запись не оставит битую миниатюру). false без ошибки — оригинал и так не шире или слишком велик (размер — по
+// заголовку, без разбора).
 func makeThumb(orig, dst string) (bool, error) {
 	f, err := os.Open(orig)
 	if err != nil {
 		return false, err
 	}
+	defer f.Close()
+	cfg, _, err := image.DecodeConfig(f)
+	if err != nil {
+		return false, err
+	}
+	if cfg.Width <= thumbWidth || cfg.Width*cfg.Height > thumbMaxPixels {
+		return false, nil
+	}
+	if _, err := f.Seek(0, io.SeekStart); err != nil {
+		return false, err
+	}
 	src, _, err := image.Decode(f)
-	f.Close()
 	if err != nil {
 		return false, err
 	}
 	b := src.Bounds()
-	if b.Dx() <= thumbWidth {
-		return false, nil
-	}
 	h := max(1, b.Dy()*thumbWidth/b.Dx())
 	m := image.NewRGBA(image.Rect(0, 0, thumbWidth, h))
-	xdraw.CatmullRom.Scale(m, m.Bounds(), src, b, xdraw.Src, nil)
+	xdraw.Draw(m, m.Bounds(), image.NewUniform(thumbBack), image.Point{}, xdraw.Src)
+	xdraw.CatmullRom.Scale(m, m.Bounds(), src, b, xdraw.Over, nil)
 	tmp, err := os.CreateTemp(filepath.Dir(dst), filepath.Base(dst)+"-*.tmp")
 	if err != nil {
 		return false, err

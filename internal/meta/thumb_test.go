@@ -2,6 +2,7 @@ package meta
 
 import (
 	"bytes"
+	"context"
 	"image"
 	"image/color"
 	"image/gif"
@@ -11,6 +12,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -171,4 +173,71 @@ func getImg(t *testing.T, im *Images, url string) *httptest.ResponseRecorder {
 	rec := httptest.NewRecorder()
 	mux.ServeHTTP(rec, httptest.NewRequest("GET", url, nil))
 	return rec
+}
+
+// Ревью 16А, Important 2: «постер» огромного размера (12000 × 12000 PNG — 440 КБ на диске, ~700 МБ в памяти при
+// разборе) не разбирается целиком: размер — по заголовку, больше предела — отдаётся оригинал.
+func TestThumbnailHugeSkipsDecode(t *testing.T) {
+	im := newImages(t, "")
+	key := strings.Repeat("9", 40)
+	var b bytes.Buffer
+	if err := png.Encode(&b, image.NewGray(image.Rect(0, 0, 12000, 12000))); err != nil {
+		t.Fatal(err)
+	}
+	p := filepath.Join(im.o.Dir, key+".png")
+	os.WriteFile(p, b.Bytes(), 0o644)
+	var before, after runtime.MemStats
+	runtime.GC()
+	runtime.ReadMemStats(&before)
+	rec := getImg(t, im, "/img/"+key+"?w=400")
+	runtime.ReadMemStats(&after)
+	if rec.Code != 200 || rec.Body.Len() != b.Len() {
+		t.Fatalf("код %d, %d байт из %d — не оригинал", rec.Code, rec.Body.Len(), b.Len())
+	}
+	if grew := after.TotalAlloc - before.TotalAlloc; grew > 64<<20 {
+		t.Fatalf("разобран целиком: +%d МБ", grew>>20)
+	}
+}
+
+// Ревью 16А, Minor 4: обе очереди миниатюр заняты, а просьба уже отменена (листали дальше) — не ждать, отдать оригинал.
+func TestThumbnailQueueHonoursCancel(t *testing.T) {
+	im := newImages(t, "")
+	key := strings.Repeat("8", 40)
+	writeJPEG(t, filepath.Join(im.o.Dir, key+".jpg"), 1000, 1500)
+	for range thumbAtOnce {
+		im.thumbSem <- struct{}{}
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	mux := http.NewServeMux()
+	mux.Handle("GET /img/{key}", im.Handler())
+	done := make(chan int, 1)
+	go func() {
+		rec := httptest.NewRecorder()
+		mux.ServeHTTP(rec, httptest.NewRequest("GET", "/img/"+key+"?w=400", nil).WithContext(ctx))
+		done <- rec.Code
+	}()
+	select {
+	case <-done:
+	case <-time.After(3 * time.Second):
+		t.Fatal("ждёт занятую очередь, хотя просьба отменена")
+	}
+}
+
+// Ревью 16А, Minor 5: прозрачное в PNG — фоном постера (#1A1D21), а не чёрным.
+func TestThumbnailTransparentBackground(t *testing.T) {
+	im := newImages(t, "")
+	key := strings.Repeat("7", 40)
+	var b bytes.Buffer
+	png.Encode(&b, image.NewNRGBA(image.Rect(0, 0, 800, 1200))) // целиком прозрачная
+	os.WriteFile(filepath.Join(im.o.Dir, key+".png"), b.Bytes(), 0o644)
+	rec := getImg(t, im, "/img/"+key+"?w=400")
+	m, _, err := image.Decode(bytes.NewReader(rec.Body.Bytes()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	r, g, bl, _ := m.At(200, 300).RGBA()
+	if r>>8 < 0x10 || g>>8 < 0x14 || bl>>8 < 0x18 {
+		t.Fatalf("цвет прозрачного: %d,%d,%d", r>>8, g>>8, bl>>8)
+	}
 }
