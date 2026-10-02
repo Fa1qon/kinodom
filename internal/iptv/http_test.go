@@ -376,3 +376,23 @@ func TestHTTPFavoritesKeepsOffline(t *testing.T) {
 		t.Errorf("снаружи: %d", code)
 	}
 }
+
+// Найдено вживую (15Г): без каналов «categories» было null — экран «Настройки → Каналы» падал (.map по null) и
+// оставался пустым (ночью на ТВ). Пустые списки — [], а не null.
+func TestHTTPChannelsEmptyLists(t *testing.T) {
+	f := newFakeNet(t)
+	m, _ := startModule(t, f)
+	mux := http.NewServeMux()
+	m.Register(testRouter{mux}, nil)
+	for _, path := range []string{"/api/v1/channels", "/api/v1/channels?all=1"} {
+		req := httptest.NewRequest("GET", path, nil)
+		req.RemoteAddr = fromPhone
+		rec := httptest.NewRecorder()
+		mux.ServeHTTP(rec, req)
+		for _, k := range []string{`"channels":[]`, `"categories":[]`, `"countries":[]`, `"languages":[]`} {
+			if !strings.Contains(rec.Body.String(), k) {
+				t.Errorf("%s: нет %s в %s", path, k, rec.Body)
+			}
+		}
+	}
+}
