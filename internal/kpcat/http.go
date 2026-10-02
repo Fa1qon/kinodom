@@ -38,6 +38,7 @@ type ListView struct {
 	Entries []FilmView `json:"entries"`
 	Total   int        `json:"total"`
 	More    bool       `json:"more"`
+	Snap    string     `json:"snap"` // снимок порядка, который листают следующие порции
 }
 
 type SectionView struct {
@@ -105,12 +106,12 @@ func (m *Module) handleList(w http.ResponseWriter, r *http.Request) {
 	if err != nil || limit <= 0 || limit > 100 {
 		limit = PageSize
 	}
-	es, total, err := m.list(r.Context(), sec, q.Get("order"), offset, limit)
+	es, total, snap, err := m.page(r.Context(), sec, q.Get("order"), q.Get("snap"), offset, limit)
 	if err != nil {
 		httpx.WriteError(w, http.StatusInternalServerError, "каталог Кинопоиска не читается: "+err.Error())
 		return
 	}
-	httpx.WriteJSON(w, http.StatusOK, ListView{Entries: es, Total: total, More: offset+len(es) < total})
+	httpx.WriteJSON(w, http.StatusOK, ListView{Entries: es, Total: total, More: offset+len(es) < total, Snap: snap})
 }
 
 func (m *Module) filmOf(w http.ResponseWriter, r *http.Request) (film, bool) {
