@@ -3,6 +3,7 @@
 package rutrackertest
 
 import (
+	"bytes"
 	"embed"
 	"io"
 	"net/http"
@@ -33,6 +34,22 @@ func Page(t testing.TB, name string) []byte {
 
 // CP1251 — образец в windows-1251, как его отдаёт Rutracker: *.dom.html и *.src.html сняты
 // из браузера в UTF-8 — перекодируем; *.raw-cp1251.html — байты ответа как есть.
+// Номера раздач второй страницы поиска (Server.SecondPage).
+const (
+	SecondPageNew  = "9000001" // видео (раздел 2076) — должна попасть в выдачу
+	SecondPageBook = "9000002" // книги (раздел 2038) — отбор видео её отбрасывает
+)
+
+// secondPage — вторая страница поиска из первой: тема 4696135 становится новой видео-раздачей, тема 4215143 —
+// новой раздачей раздела 2038; остальные строки — повторы первой страницы.
+func secondPage(first []byte) []byte {
+	b := bytes.ReplaceAll(first, []byte("4696135"), []byte(SecondPageNew))
+	b = bytes.ReplaceAll(b, []byte("4215143"), []byte(SecondPageBook))
+	i := bytes.Index(b, []byte(`data-topic_id="`+SecondPageBook+`"`))
+	j := bytes.Index(b[i:], []byte("tracker.php?f=2076"))
+	return append(append(append([]byte{}, b[:i+j]...), []byte("tracker.php?f=2038")...), b[i+j+len("tracker.php?f=2076"):]...)
+}
+
 func CP1251(t testing.TB, name string) []byte {
 	t.Helper()
 	b := Page(t, name)
@@ -67,7 +84,10 @@ type Server struct {
 	BeforeLogin      func()      // если задан — вызывается на каждый POST входа до ответа (тесты гонок)
 	TopicNeedsLogin  bool        // viewtopic без действующей сессии — редирект на вход (раздача «только для вошедших»)
 	APIDown          atomic.Bool // API отвечает 502 (обновление дерева разделов не удаётся)
-	APIHang          atomic.Bool // API молчит, пока клиент не бросит запрос (пакеты теряются)
+	// SecondPage — tracker.php со start=50 отдаёт вторую страницу (SecondPageNew — новая видео-раздача,
+	// SecondPageBook — новая раздача из книжного раздела 2038, остальное — повторы первой); иначе — первую.
+	SecondPage bool
+	APIHang    atomic.Bool // API молчит, пока клиент не бросит запрос (пакеты теряются)
 
 	pages      map[string][]byte
 	mu         sync.Mutex
@@ -87,6 +107,7 @@ func NewServer(t testing.TB) *Server {
 		"search-f2076-seeds.raw-cp1251.html", "login-form.dom.html", "login-result.dom.html", "login-wrong.raw-cp1251.html"} {
 		s.pages[n] = CP1251(t, n)
 	}
+	s.pages["search-page2"] = secondPage(s.pages["search-f2076-seeds.raw-cp1251.html"])
 	s.Forum = httptest.NewServer(http.HandlerFunc(s.forum))
 	t.Cleanup(s.Forum.Close)
 	s.API = httptest.NewServer(http.HandlerFunc(s.api))
@@ -168,6 +189,10 @@ func (s *Server) forum(w http.ResponseWriter, r *http.Request) {
 		s.lastForums = r.URL.Query().Get("f")
 		s.lastParams = r.URL.Query()
 		s.mu.Unlock()
+		if s.SecondPage && r.URL.Query().Get("start") == "50" {
+			s.html(w, "search-page2")
+			return
+		}
 		s.html(w, "search-f2076-seeds.raw-cp1251.html")
 	case "/forum/login.php":
 		if r.Method != http.MethodPost {

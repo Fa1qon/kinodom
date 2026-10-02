@@ -86,7 +86,7 @@ func TestSearchMergesCategoriesWithoutDuplicates(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// Шесть запросов — по одному на видеокатегорию, запрос один и тот же.
+	// Одиннадцать запросов — по одному на видеокатегорию, запрос один и тот же.
 	var cats []string
 	for _, p := range s.Paths() {
 		rest, ok := strings.CutSuffix(p, "/100/2/Матрица 1999 24")
@@ -96,7 +96,7 @@ func TestSearchMergesCategoriesWithoutDuplicates(t *testing.T) {
 		cats = append(cats, strings.TrimPrefix(rest, "/search/0/"))
 	}
 	slices.Sort(cats)
-	if !slices.Equal(cats, []string{"1", "12", "16", "4", "5", "7"}) {
+	if !slices.Equal(cats, []string{"1", "10", "12", "13", "15", "16", "17", "4", "5", "6", "7"}) {
 		t.Fatalf("категории поиска %v", cats)
 	}
 	// Категории 1 и 5 отдают одну и ту же страницу: дубликаты схлопнуты, осталась категория 1.
@@ -166,8 +166,8 @@ func TestSearchPartialFailureKeepsResults(t *testing.T) {
 	}
 	// Найденное приходит вместе с ошибкой: каталог покажет его, но не сочтёт поиск полным.
 	var pe *source.PartialError
-	if !errors.As(err, &pe) || pe.Failed != 1 || pe.Total != 6 || !errors.Is(err, netx.ErrTrackerDown) {
-		t.Fatalf("ожидалась PartialError (1 из 6, трекер недоступен), получено %v", err)
+	if !errors.As(err, &pe) || pe.Failed != 1 || pe.Total != len(searchCategories) || !errors.Is(err, netx.ErrTrackerDown) {
+		t.Fatalf("ожидалась PartialError (1 из %d, трекер недоступен), получено %v", len(searchCategories), err)
 	}
 	for _, r := range rs {
 		if r.CategoryID == "12" {
@@ -318,7 +318,7 @@ func TestNotFoundKeepsMirror(t *testing.T) {
 func TestCategories(t *testing.T) {
 	s := rutortest.NewServer(t)
 	cats, err := newRutor(t, s).Categories(ctx)
-	if err != nil || len(cats) != 9 || cats[2].ID != "12" || cats[2].Name != "Научно-популярные фильмы" {
+	if err != nil || len(cats) != 11 || cats[2].ID != "12" || cats[2].Name != "Научно-популярные фильмы" {
 		t.Fatalf("категории %v, %v", cats, err)
 	}
 	if len(s.Paths()) != 0 {
@@ -504,6 +504,60 @@ func TestRutorSortedPage(t *testing.T) {
 	}{{[]string{"12"}, source.OrderDownloads}, {[]string{"12", "1"}, source.OrderNew}, {[]string{"x"}, source.OrderNew}} {
 		if _, _, err := r.SortedPage(ctx, bad.forums, bad.order, 0); err == nil {
 			t.Fatalf("%v %s принято", bad.forums, bad.order)
+		}
+	}
+}
+
+// Жалоба 2026-10-02: «ферма кларксона» — 8 из 9 раздач в «Телевизоре», поиск их не видел. Поиск — во всех
+// видеокатегориях, у каждой — название для выдачи.
+func TestSearchAllVideoCategories(t *testing.T) {
+	names := map[string]string{}
+	for _, c := range videoCategories {
+		names[c.ID] = c.Name
+	}
+	for _, id := range []string{"6", "10", "13", "15", "17"} {
+		if !slices.Contains(searchCategories, id) || names[id] == "" {
+			t.Errorf("категория %s: в поиске %v, название %q", id, slices.Contains(searchCategories, id), names[id])
+		}
+	}
+	if len(searchCategories) != len(videoCategories) {
+		t.Fatalf("поиск %v, видеокатегории %d", searchCategories, len(videoCategories))
+	}
+}
+
+// Ревью 15Д, п. 5: категории занимают места поиска по порядку важности — при медленном Rutor срок отрезает хвост
+// списка, а не случайные (под срез не должны попадать «Зарубежные фильмы»).
+func TestSearchCategoriesStartInOrder(t *testing.T) {
+	for range 5 {
+		s := rutortest.NewServer(t)
+		release := make(chan struct{})
+		var mu sync.Mutex
+		var arrived []string
+		s.Override = func(w http.ResponseWriter, r *http.Request) bool {
+			if !strings.HasPrefix(r.URL.Path, "/search/") {
+				return false
+			}
+			mu.Lock()
+			arrived = append(arrived, strings.Split(r.URL.Path, "/")[3])
+			n := len(arrived)
+			mu.Unlock()
+			if n == 3 {
+				time.AfterFunc(100*time.Millisecond, func() { close(release) })
+			}
+			<-release
+			return false
+		}
+		if _, err := newRutor(t, s).Search(ctx, "Матрица"); err != nil {
+			t.Fatal(err)
+		}
+		mu.Lock()
+		first := slices.Clone(arrived[:3])
+		mu.Unlock()
+		slices.Sort(first)
+		want := slices.Clone(searchCategories[:3])
+		slices.Sort(want)
+		if !slices.Equal(first, want) {
+			t.Fatalf("первыми пошли %v, нужно %v", first, want)
 		}
 	}
 }

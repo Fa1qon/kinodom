@@ -690,3 +690,61 @@ func TestNotTrackerError(t *testing.T) {
 		t.Fatalf("одно зеркало чужое, другое не отвечает: %v", err)
 	}
 }
+
+// Вживую 2026-10-02: Rutracker один раз отдал короткую страницу без каркаса (1,5 КБ вместо 96) — поиск написал
+// «недоступен». Заглушку проверяем ещё раз на том же зеркале, как обрыв.
+func TestStubIsRetriedOnSameMirror(t *testing.T) {
+	var calls atomic.Int32
+	m := newSite(t, func(w http.ResponseWriter, r *http.Request) {
+		if calls.Add(1) == 1 {
+			page("<html>обрезано</html>")(w, r)
+			return
+		}
+		page(trackerPage)(w, r)
+	})
+	next := newSite(t, page(trackerPage))
+	c := newTestClient(t, m.URL, next.URL)
+	p, err := c.Get(context.Background(), "/browse")
+	if err != nil || string(p.Body) != trackerPage || m.hits.Load() != 2 || next.hits.Load() != 0 {
+		t.Fatalf("%v; попыток %d/%d", err, m.hits.Load(), next.hits.Load())
+	}
+}
+
+// Review Focus 3 (15Д): заглушка и во второй раз — следующее зеркало, как раньше.
+func TestStubTwiceMovesOn(t *testing.T) {
+	m := newSite(t, page("<html>заглушка провайдера</html>"))
+	next := newSite(t, page(trackerPage))
+	if _, err := newTestClient(t, m.URL, next.URL).Get(context.Background(), "/browse"); err != nil {
+		t.Fatal(err)
+	}
+	if m.hits.Load() != 2 || next.hits.Load() != 1 {
+		t.Fatalf("попыток %d/%d", m.hits.Load(), next.hits.Load())
+	}
+}
+
+// Review Focus 4 (15Д): форму, получившую заглушку, не повторяем.
+func TestStubPostIsNotRepeated(t *testing.T) {
+	m := newSite(t, page("<html>заглушка</html>"))
+	if _, err := newTestClient(t, m.URL).Post(context.Background(), "/form", "a=1"); err == nil || m.hits.Load() != 1 {
+		t.Fatalf("%v; попыток %d", err, m.hits.Load())
+	}
+}
+
+// Ревью 15Д, п. 3: отмена во время повтора заглушки — это отмена, а не «заглушка».
+func TestStubRetryKeepsCancel(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	var calls atomic.Int32
+	m := newSite(t, func(w http.ResponseWriter, r *http.Request) {
+		if calls.Add(1) == 1 {
+			page("<html>обрезано</html>")(w, r)
+			return
+		}
+		cancel()
+		<-r.Context().Done()
+	})
+	_, err := newTestClient(t, m.URL).Get(ctx, "/browse")
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("%v", err)
+	}
+}

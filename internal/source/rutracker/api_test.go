@@ -117,3 +117,26 @@ func TestRecentFromAtom(t *testing.T) {
 		t.Fatalf("первая запись: %+v", first)
 	}
 }
+
+// Жалоба 2026-10-02: «ферма кларксона» — 15 раздач в форуме 1982 (категория «Авто и мото»), поиск Kinodom — 0.
+// Форумы поиска — и «Авто и мото» (передачи, Top Gear), «Спорт», «Музыкальное видео».
+func TestSearchForumsIncludeShows(t *testing.T) {
+	s := rutrackertest.NewServer(t)
+	tree, err := newRutracker(t, s, nil).forumTree(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	allowed := searchForums(tree)
+	for _, f := range []string{"46", "2076", "1202", "1982", "2151", "255"} {
+		if !allowed[f] {
+			t.Errorf("форума %s нет в поиске", f)
+		}
+	}
+	// Ревью 15Д, п. 1: из «Авто и мото» — только передачи (1202); каталоги запчастей, книги по ремонту, программы
+	// диагностики и журналы — не видео; книги (2038) — тоже.
+	for _, f := range []string{"1977", "1970", "1975", "1964", "2038"} {
+		if allowed[f] {
+			t.Errorf("не-видео %s в поиске", f)
+		}
+	}
+}

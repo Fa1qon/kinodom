@@ -5,6 +5,7 @@ import (
 	"errors"
 	"net/url"
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -84,6 +85,11 @@ func parseSearch(body []byte) ([]source.Release, error) {
 	})
 	if rows.Length() > 0 && len(out) == 0 {
 		return nil, parseErr("строки результатов (tr.hl-tr)")
+	}
+	// Строки есть, а раздела ни у одной — сменилась разметка ссылки на раздел: поиск отбирает видео по разделу и
+	// иначе молча стал бы пустым (ревью 15Д).
+	if len(out) > 0 && !slices.ContainsFunc(out, func(r source.Release) bool { return r.CategoryID != "" }) {
+		return nil, parseErr("раздел раздачи (td.f-name-col a.f)")
 	}
 	return out, nil
 }

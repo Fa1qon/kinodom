@@ -407,17 +407,29 @@ func TestSearchDoesNotWaitForHangingAPI(t *testing.T) {
 	}
 }
 
-// Поиск просит форум искать только в разделах видеокатегорий (f=…): без фильтра 15 из 50 строк
-// страницы уходили на не-видео (исследование, раздел 11).
-func TestSearchFiltersForumsOnServer(t *testing.T) {
+// Жалоба 2026-10-02: со списком разделов (f=…) форум отвечал «Результатов поиска: 0» там, где без него находил
+// (вживую: «ферма кларксона» с f из 596 разделов — 0 в 8 попытках из 8, без f — 15; итог зависел и от места
+// раздела в списке). Поиск — без фильтра разделов, по раздающим; видео отбирается у себя; первая страница
+// полная — берётся и вторая, чтобы после отбора не осталось мало.
+func TestSearchWithoutForumFilter(t *testing.T) {
 	s := rutrackertest.NewServer(t)
 	s.Login, s.Password = "user", "pass"
-	if _, err := newRutracker(t, s, withCreds("user", "pass")).Search(ctx, "космос"); err != nil {
+	r := newRutracker(t, s, withCreds("user", "pass"))
+	if err := r.Login(ctx); err != nil {
 		t.Fatal(err)
 	}
-	ids := strings.Split(s.LastForums(), ",")
-	if len(ids) < 300 || !slices.Contains(ids, "2076") || slices.Contains(ids, "") {
-		t.Fatalf("f=%.80q… (%d разделов)", s.LastForums(), len(ids))
+	before := s.Hits("/forum/tracker.php")
+	rs, err := r.Search(ctx, "космос")
+	if err != nil {
+		t.Fatal(err)
+	}
+	p := s.LastParams()
+	if p.Has("f") || p.Get("o") != "10" || p.Get("s") != "2" || p.Get("start") != "50" || s.Hits("/forum/tracker.php")-before != 2 {
+		t.Fatalf("параметры %v, запросов %d", p, s.Hits("/forum/tracker.php")-before)
+	}
+	// Образец отдаёт одну и ту же страницу: повторы второй страницы схлопнуты.
+	if len(rs) == 0 || len(rs) > 50 {
+		t.Fatalf("раздач %d", len(rs))
 	}
 }
 
@@ -544,5 +556,29 @@ func TestSortedPageNeedsLogin(t *testing.T) {
 	}
 	if _, _, err := r2.SortedPage(ctx, []string{"313"}, "bogus", 0); err == nil {
 		t.Fatal("неизвестный порядок принят")
+	}
+}
+
+// Ревью 15Д, п. 2: отбор видео и вторая страница закреплены: новая видео-раздача второй страницы — в выдаче,
+// раздача книжного раздела — нет, повторы первой страницы схлопнуты.
+func TestSearchFiltersAndMergesPages(t *testing.T) {
+	s := rutrackertest.NewServer(t)
+	s.Login, s.Password = "user", "pass"
+	s.SecondPage = true
+	rs, err := newRutracker(t, s, withCreds("user", "pass")).Search(ctx, "космос")
+	if err != nil {
+		t.Fatal(err)
+	}
+	ids := map[string]int{}
+	for _, r := range rs {
+		ids[r.TopicID]++
+	}
+	if ids[rutrackertest.SecondPageNew] != 1 || ids[rutrackertest.SecondPageBook] != 0 || len(rs) != 51 {
+		t.Fatalf("новая %d, книга %d, всего %d", ids[rutrackertest.SecondPageNew], ids[rutrackertest.SecondPageBook], len(rs))
+	}
+	for id, n := range ids {
+		if n > 1 {
+			t.Fatalf("повтор %s ×%d", id, n)
+		}
 	}
 }
