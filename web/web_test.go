@@ -1646,13 +1646,20 @@ for (const [name, got, want] of checks) {
 func TestPultBackStep(t *testing.T) {
 	node := lookNode(t)
 	script := `
-import { backStep } from './views/catalog.js';
+import { backStep, catalogMemory, catalogHome } from './views/catalog.js';
 const href = '#/catalog/t1/4';
 const place = { at: '#/catalog/t1/4', key: '#/catalog/t1/4', pages: 3, scrollY: 1800, focusKey: 'e-5' };
 const bare = { ...place, at: '#/catalog/t1' };
 const other = { ...place, at: '#/catalog/t1/12', key: '#/catalog/t1/12' };
 const checks = [
   ['пришли из раздела', backStep(href, href, place), { back: true, place: null }],
+  // Ревью 15А, п. 1: память раздела — с порядком («назад» в обход), а сравнение — без него: пришли прямо из
+  // раздела «Новые» — шаг назад по истории, как раньше.
+  ['с порядком — пришли из раздела', backStep(catalogMemory('t1', '12', 'new'), '#/catalog/t1/12', { ...place, key: '#/catalog/t1/12', at: '#/catalog/t1/12' }), { back: true, place: null }],
+  ['с порядком — переход, место без запроса', backStep(catalogMemory('t1', '12', 'new'), '#/release/77', { ...place, key: '#/catalog/t1/12', at: '#/catalog/t1/12' }), { back: false, place: { ...place, key: '#/catalog/t1/12', at: '#/catalog/t1/12' } }],
+  // Меню и запуск — без порядка из памяти раздела: действуют память устройства и умолчание из настроек.
+  ['меню', catalogHome('#/catalog/t1/12?order=new'), '#/catalog/t1/12'],
+  ['меню без памяти', catalogHome(null), '#/catalog/t1'],
   ['пришли из раздела по адресу без раздела', backStep(href, '#/catalog/t1', bare), { back: true, place: null }],
   ['из другой раздачи — переход с местом', backStep(href, '#/release/77', place), { back: false, place }],
   ['адрес без раздела — место по адресу ссылки', backStep(href, '#/release/77', bare), { back: false, place: { ...bare, at: href } }],
