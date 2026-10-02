@@ -3,7 +3,8 @@ package ru.kinodom.app.net
 import android.content.Context
 import ru.kinodom.app.core.PlayerMode
 
-// Prefs — запомненный адрес пульта (спека этапа 13, раздел 3.2) и плеер каналов (раздел 2 «Системный плеер»).
+// Prefs — запомненный адрес пульта (спека этапа 13, раздел 3.2), плеер каналов (раздел 2 «Системный плеер») и звуки
+// меню (план 16В).
 class Prefs(context: Context) {
     private val p = context.applicationContext.getSharedPreferences("kinodom", Context.MODE_PRIVATE)
 
@@ -14,4 +15,8 @@ class Prefs(context: Context) {
     var player: PlayerMode
         get() = PlayerMode.of(p.getString("player", null)) ?: PlayerMode.Builtin
         set(v) = p.edit().putString("player", v.id).apply()
+
+    var sounds: Boolean
+        get() = p.getBoolean("sounds", true)
+        set(v) = p.edit().putBoolean("sounds", v).apply()
 }
