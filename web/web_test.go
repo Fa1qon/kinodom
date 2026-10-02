@@ -2059,6 +2059,48 @@ for (const [got, want] of checks) {
 	}
 }
 
+// Замечено на ТВ (0.14): после перехода по вкладке «Каналы / Не распознано» фокус уходил в левое меню — экран
+// перерисовывается, нажатая ссылка пропадает. Ключ нажатого переносится на новый экран.
+func TestPultCarryFocus(t *testing.T) {
+	node := lookNode(t)
+	script := `
+globalThis.CSS = { escape: (s) => s };
+const body = { dataset: {} };
+globalThis.document = { body, activeElement: body };
+const { carryFocus, keepFocus } = await import('./ui.js');
+const el = (key) => ({ dataset: { key }, disabled: false, focus() { document.activeElement = this; } });
+const tab = el('tab-unrecognized');
+const main = { items: [tab], querySelector(s) { return this.items.find((x) => s === '[data-key="' + x.dataset.key + '"]') || null; }, contains: () => true };
+const checks = [];
+carryFocus(main, 'tab-unrecognized');
+checks.push(['сразу', document.activeElement === tab]);
+// Элемента ещё нет (вид дорисует после загрузки) — встанет при ближайшем keepFocus.
+document.activeElement = body;
+const late = el('watch-1');
+main.items = [];
+carryFocus(main, 'watch-1');
+checks.push(['пока нет', document.activeElement === body]);
+main.items = [late];
+keepFocus(main, () => {});
+checks.push(['после отрисовки', document.activeElement === late]);
+// Review Focus 3: ключа нет — фокус не трогаем.
+document.activeElement = body;
+carryFocus(main, null);
+checks.push(['без ключа', document.activeElement === body]);
+// Вид сам поставил фокус при отрисовке — его не перебиваем.
+const own = el('own');
+document.activeElement = own;
+carryFocus(main, 'watch-1');
+checks.push(['свой фокус вида', document.activeElement === own]);
+for (const [name, ok] of checks) if (!ok) { console.error(name); process.exitCode = 1; }
+`
+	cmd := exec.Command(node, "--input-type=module", "--no-warnings", "-e", script)
+	cmd.Dir = "static"
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Errorf("%v\n%s", err, out)
+	}
+}
+
 // План 14А, задача 3: на странице сериала крупно — какой сезон скачается.
 func TestPultSeasonLabel(t *testing.T) {
 	node := lookNode(t)

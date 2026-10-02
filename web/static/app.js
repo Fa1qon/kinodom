@@ -1,5 +1,5 @@
 // Пульт Kinodom: маршруты по адресу после «#», шапка, отметка проблем в меню (спека этапа 7, раздел 6).
-import { h, icon, clear, poll, store } from './ui.js';
+import { h, icon, clear, poll, store, carryFocus } from './ui.js';
 import { NAV } from './app-nav.js';
 import { get } from './api.js';
 import { initNav } from './nav.js';
@@ -146,6 +146,9 @@ function render() {
   if (cleanup) cleanup();
   cleanup = null;
   const main = document.getElementById('view');
+  // Ключ нажатого (вкладка, пункт меню) — на новый экран: на ТВ фокус не уходит в начало страницы.
+  const active = document.activeElement;
+  const key = active && main.contains(active) && active.dataset ? active.dataset.key : null;
   clear(main);
   if (!view) {
     main.append(h('p', { class: 'empty' }, 'Такой страницы нет'));
@@ -154,6 +157,7 @@ function render() {
   if (view !== lastView) window.scrollTo(0, 0);
   lastView = view;
   cleanup = view.render(main, r, ctx) || null;
+  carryFocus(main, key);
 }
 
 buildHeader();

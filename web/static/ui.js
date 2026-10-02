@@ -52,6 +52,18 @@ export function keepFocus(root, draw) {
   }
 }
 
+// carryFocus — после перехода фокус на элементе с ключом key на новом экране main (ТВ: нажатая вкладка или пункт
+// не теряют фокус); элемента ещё нет — его выделит ближайший keepFocus(main, …), когда вид дорисуется. Вид сам
+// поставил фокус — не перебиваем.
+export function carryFocus(main, key) {
+  if (!key) return;
+  const active = document.activeElement;
+  if (active && active !== document.body) return;
+  const el = main.querySelector(`[data-key="${CSS.escape(key)}"]`);
+  if (el && !el.disabled) el.focus({ preventScroll: true });
+  else pendingFocus.set(main, key);
+}
+
 // offWarn — трекер выключен: адрес не введён (этап 11a). Строка из «Состояния» и путь в «Параметры».
 export function offWarn(text) {
   return h('div', { class: 'warn' }, icon('warning'), h('span', { class: 'grow' }, text),
