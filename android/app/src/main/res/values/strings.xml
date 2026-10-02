@@ -22,5 +22,6 @@
     <string name="close">Закрыть</string>
     <string name="no_signal">Канал сейчас не показывает</string>
     <string name="no_channel">Нет канала %1$s</string>
+    <string name="voice_prompt">Скажите, что найти</string>
     <string name="channel_list">Список</string>
 </resources>
