@@ -70,6 +70,7 @@ class PlayerActivity : Activity() {
     private lateinit var corner: TextView
     private lateinit var plate: InfoPlate
     private lateinit var panel: ChannelPanel
+    private var sounds: Sounds? = null // звуки списка каналов (план 16В)
     private lateinit var logos: Logos
     private var player: ExoPlayer? = null
     private val scope = MainScope()
@@ -101,6 +102,7 @@ class PlayerActivity : Activity() {
     @SuppressLint("ClickableViewAccessibility")
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        sounds = Sounds(this)
         val b = intent.getStringExtra(EXTRA_BASE)
         val l = Lineup.parse(intent.getStringExtra(EXTRA_LINEUP).orEmpty())
         if (b == null || l == null) {
@@ -148,7 +150,7 @@ class PlayerActivity : Activity() {
             !packageManager.hasSystemFeature(PackageManager.FEATURE_LEANBACK)
         plate = InfoPlate(this, logos, touch) { openPanel() }
         root.addView(plate.view)
-        panel = ChannelPanel(this, l.items, logos) { i ->
+        panel = ChannelPanel(this, l.items, logos, { sounds?.play(it) }) { i ->
             panel.hide()
             root.requestFocus()
             tuner.jump(i)
@@ -228,6 +230,8 @@ class PlayerActivity : Activity() {
     }
 
     override fun onDestroy() {
+        sounds?.release()
+        sounds = null
         scope.cancel()
         super.onDestroy()
     }
@@ -326,6 +330,7 @@ class PlayerActivity : Activity() {
     }
 
     private fun closePanel() {
+        sounds?.play("back")
         panel.hide()
         root.requestFocus()
     }
