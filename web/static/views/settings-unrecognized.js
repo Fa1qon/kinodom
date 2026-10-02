@@ -6,6 +6,18 @@ import { get, put, post } from '../api.js';
 import { layout, remoteNote, channelTabs } from './settings-layout.js';
 import { openPreview } from './preview.js';
 import { CATEGORIES, pickLabel } from './channel-settings.js';
+import { appBridge } from './tvkit.js';
+
+// fileFieldShown — поле «Файл логотипа»: в браузере — да; в приложении — если оно умеет выбирать файлы и на
+// устройстве есть чем (на ТВ часто нечем; старое приложение не умеет) (ревью 14Д, п. 12).
+export function fileFieldShown(app) {
+  if (!app) return true;
+  try {
+    return typeof app.canPickFiles === 'function' && !!app.canPickFiles();
+  } catch {
+    return false;
+  }
+}
 
 // logoFileError — файл логотипа больше 1 МБ: отказ до отправки (фото с телефона; ревью 14Д, п. 10).
 export function logoFileError(f) {
@@ -151,7 +163,7 @@ export function render(root, r, ctx) {
               if (alive) draw();
             }
           } }, h('div', { class: 'row gap10 wrap' }, h('div', { class: 'grow' }, nName), nCat, nCountry),
-          h('div', { class: 'row gap10 wrap' }, h('div', { class: 'grow' }, nLogo), nFile),
+          h('div', { class: 'row gap10 wrap' }, h('div', { class: 'grow' }, nLogo), fileFieldShown(appBridge()) ? nFile : null),
           formError ? h('p', { class: 'error' }, formError) : null,
           h('div', { class: 'row gap10' }, h('button', { class: 'btn inv', type: 'submit', disabled: saving, 'data-key': 'new-save' },
             icon('save'), saving ? 'Создаётся…' : 'Создать канал'))));
