@@ -4,6 +4,7 @@ import (
 	"context"
 	"runtime/debug"
 	"slices"
+	"time"
 
 	"kinodom/internal/source"
 )
@@ -108,74 +109,133 @@ type orderKey struct {
 // (из списка API); pos — курсор порций у трекера (место в src или страница сайта); end — список кончился;
 // empty — порций подряд без новых раздач.
 type orderList struct {
-	ids   []int64
-	in    map[int64]bool
-	src   []source.Release
-	pos   int
-	end   bool
-	empty int
+	ids       []int64
+	in        map[int64]bool
+	src       []source.Release
+	pos       int
+	end       bool
+	empty     int
+	forums    []forumCursor // «Скачивания» Rutracker: форумы раздела в слиянии; nil — ещё не начато (план 15А)
+	lastFirst string        // первая раздача прошлой страницы сайта: Rutor за концом повторяет страницу (план 15А)
 }
 
-// wholeList — весь список порядка собирается сразу (Rutracker): качающие и новизна — из списка раздела API в
-// памяти, скачивания — из первых страниц поиска форумов раздела.
+// forumCursor — форум в слиянии «Скачиваний»: следующая страница поиска, ещё не отданные раздачи, конец, не
+// раньше какого времени спрашивать снова после сбоя.
+type forumCursor struct {
+	id    string
+	page  int
+	buf   []source.Release
+	end   bool
+	retry time.Time
+}
+
+// forumRetry — через сколько спросить снова форум «Скачиваний», который не ответил (раньше сбой помнился до
+// обновления раздела, до 6 ч — ревью 14Б).
+const forumRetry = time.Minute
+
+// wholeList — весь список порядка собирается сразу из списка раздела API в памяти: качающие и новизна Rutracker.
+// «Скачивания» — ленивое слияние форумов (downloadsPortion).
 func wholeList(k orderKey) bool {
-	return k.cat.Tracker == "rutracker" && k.ord != source.OrderSeeders
+	return k.cat.Tracker == "rutracker" && (k.ord == source.OrderLeechers || k.ord == source.OrderNew)
+}
+
+// mergedDownloads — «Скачивания» Rutracker: ленивое слияние страниц поиска форумов раздела (план 15А).
+func mergedDownloads(k orderKey) bool {
+	return k.cat.Tracker == "rutracker" && k.ord == source.OrderDownloads
 }
 
 // maxOrderForums — сколько форумов раздела спрашивать для «Скачиваний» (запрос к форуму — раз в секунду).
 const maxOrderForums = 8
 
-// orderSource — весь список раздела Rutracker в порядке k: качающие и новизна — список раздела API по полю;
-// скачивания — первые страницы поиска его крупных форумов, слитые по числу скачиваний: форум без поискового
-// запроса сортирует только сам по себе, а со списком форумов отдаёт новые (вживую 2026-10-01).
+// orderSource — весь список раздела Rutracker в порядке k (качающие, новизна) — список раздела API по полю.
 func (c *Catalog) orderSource(ctx context.Context, k orderKey, src source.Source) ([]source.Release, error) {
+	d, err := c.sectionList(ctx, k.cat, src)
+	if err != nil {
+		return nil, err
+	}
+	return sortedBy(d.rs, k.ord), nil
+}
+
+// sectionList — список раздела Rutracker в памяти (порции глубже сотни); нет — качается.
+func (c *Catalog) sectionList(ctx context.Context, cat CategoryRef, src source.Source) (deepList, error) {
 	c.mu.Lock()
-	d, have := c.deep[k.cat]
+	d, have := c.deep[cat]
 	c.mu.Unlock()
-	if !have {
-		if _, err := c.sectionTop(ctx, k.cat, src); err != nil {
-			return nil, err
-		}
-		c.mu.Lock()
-		d = c.deep[k.cat]
-		c.mu.Unlock()
+	if have {
+		return d, nil
 	}
-	if k.ord != source.OrderDownloads {
-		return sortedBy(d.rs, k.ord), nil
+	if _, err := c.sectionTop(ctx, cat, src); err != nil {
+		return deepList{}, err
 	}
+	c.mu.Lock()
+	d = c.deep[cat]
+	c.mu.Unlock()
+	return d, nil
+}
+
+// downloadsPortion — следующие topSize раздач «Скачиваний» Rutracker: ленивое слияние страниц поиска крупных
+// форумов раздела по числу скачиваний — страница форума качается, когда его раздачи кончились (форум сортирует
+// только внутри себя — вживую 2026-10-01). Не ответивший форум пропускается и спрашивается снова через
+// forumRetry. Курсоры живут в списке порядка: отмена запроса бросает только недокачанную страницу (ревью 14Б).
+// Порции идут по одной (orderLock), поэтому курсоры без c.mu.
+func (c *Catalog) downloadsPortion(ctx context.Context, k orderKey, src source.Source, ol *orderList) ([]source.Release, bool, error) {
 	sp, ok := src.(sortedPager)
 	if !ok {
-		return nil, nil
+		return nil, true, nil
 	}
-	var all []source.Release
-	var firstErr error
-	for _, f := range mainForums(c.sectionForums(ctx, k.cat), d.rs) {
-		rs, _, err := sp.SortedPage(ctx, []string{f}, k.ord, 0)
+	if ol.forums == nil {
+		d, err := c.sectionList(ctx, k.cat, src)
 		if err != nil {
-			if ctx.Err() != nil {
-				return nil, err
-			}
-			if firstErr == nil {
-				firstErr = err
-			}
-			c.log.Info("каталог: скачивания форума не пришли", "tracker", k.cat.Tracker, "forum", f, "err", err)
-			continue
+			return nil, false, err
 		}
-		all = append(all, rs...)
-	}
-	if len(all) == 0 && firstErr != nil {
-		return nil, firstErr
-	}
-	seen := map[string]bool{}
-	out := make([]source.Release, 0, len(all))
-	for _, r := range withSeeders(all) {
-		if !seen[r.TopicID] {
-			seen[r.TopicID] = true
-			out = append(out, r)
+		fs := mainForums(c.sectionForums(ctx, k.cat), d.rs)
+		ol.forums = make([]forumCursor, len(fs))
+		for i, f := range fs {
+			ol.forums[i] = forumCursor{id: f}
 		}
 	}
-	slices.SortStableFunc(out, func(a, b source.Release) int { return b.Downloads - a.Downloads })
-	return out, nil
+	var out []source.Release
+	var lastErr error
+	for len(out) < topSize {
+		now := c.now()
+		for i := range ol.forums {
+			f := &ol.forums[i]
+			if len(f.buf) > 0 || f.end || now.Before(f.retry) {
+				continue
+			}
+			rs, more, err := sp.SortedPage(ctx, []string{f.id}, k.ord, f.page)
+			if err != nil {
+				if ctx.Err() != nil {
+					return out, false, err
+				}
+				f.retry, lastErr = now.Add(forumRetry), err
+				c.log.Info("каталог: скачивания форума не пришли", "tracker", k.cat.Tracker, "forum", f.id, "err", err)
+				continue
+			}
+			f.buf, f.page, f.end = rs, f.page+1, !more || len(rs) == 0
+		}
+		best := -1
+		for i, f := range ol.forums {
+			if len(f.buf) > 0 && (best < 0 || f.buf[0].Downloads > ol.forums[best].buf[0].Downloads) {
+				best = i
+			}
+		}
+		if best < 0 {
+			break // все кончились или ждут повтора
+		}
+		out = append(out, ol.forums[best].buf[0])
+		ol.forums[best].buf = ol.forums[best].buf[1:]
+	}
+	waiting := false
+	for _, f := range ol.forums {
+		if len(f.buf) > 0 || !f.end {
+			waiting = true
+		}
+	}
+	if len(out) == 0 && lastErr != nil {
+		return nil, false, lastErr
+	}
+	return withSeeders(out), !waiting, nil
 }
 
 // mainForums — форумы раздела, где больше всего его раздач (по списку раздела): покрывающие 90 % раздач, не
@@ -240,7 +300,7 @@ func (c *Catalog) ensureOrder(ctx context.Context, k orderKey) (more bool, err e
 		ol = &orderList{in: map[int64]bool{}}
 		c.orders[k] = ol
 	}
-	end, pos, list := ol.end, ol.pos, ol.src
+	end, pos, list, lastFirst := ol.end, ol.pos, ol.src, ol.lastFirst
 	c.mu.Unlock()
 	if end {
 		return false, nil
@@ -248,6 +308,10 @@ func (c *Catalog) ensureOrder(ctx context.Context, k orderKey) (more bool, err e
 	var rs []source.Release
 	last := false
 	switch sp, paged := src.(sortedPager); {
+	case mergedDownloads(k):
+		if rs, last, err = c.downloadsPortion(ctx, k, src, ol); err != nil {
+			return true, err
+		}
 	case wholeList(k):
 		if list == nil {
 			if list, err = c.orderSource(ctx, k, src); err != nil {
@@ -264,6 +328,11 @@ func (c *Catalog) ensureOrder(ctx context.Context, k orderKey) (more bool, err e
 		got, more, err := sp.SortedPage(ctx, c.sectionForums(ctx, k.cat), k.ord, pos)
 		if err != nil {
 			return true, err
+		}
+		if len(got) > 0 && got[0].TopicID == lastFirst {
+			got = nil // за концом сайт повторяет последнюю страницу — список кончился (ревью 14Б: было три лишних запроса)
+		} else if len(got) > 0 {
+			lastFirst = got[0].TopicID
 		}
 		rs = withSeeders(slices.Clone(got))
 		last = !more || len(got) == 0
@@ -284,13 +353,15 @@ func (c *Catalog) ensureOrder(ctx context.Context, k orderKey) (more bool, err e
 			added++
 		}
 	}
-	ol.pos = pos
+	ol.pos, ol.lastFirst = pos, lastFirst
 	if added == 0 {
 		ol.empty++
 	} else {
 		ol.empty = 0
 	}
-	if last || ol.empty >= 3 {
+	// Три порции подряд без новых — конец (сайт повторяет страницу); у «Скачиваний» конец знает само слияние:
+	// пустая порция там — форум ждёт повтора (план 15А).
+	if last || (ol.empty >= 3 && !mergedDownloads(k)) {
 		ol.end, last = true, true
 	}
 	c.mu.Unlock()
