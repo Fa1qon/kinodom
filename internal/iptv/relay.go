@@ -51,6 +51,11 @@ func (m *Module) relayLink(id int64, abs string) string {
 
 var reURIAttr = regexp.MustCompile(`URI="([^"]*)"`)
 
+// webURL — адрес, который пересылка может открыть: http(s). Ключи skd://, data: и прочее — как были.
+func webURL(s string) bool {
+	return strings.HasPrefix(s, "http://") || strings.HasPrefix(s, "https://")
+}
+
 // rewritePlaylist — список HLS со ссылками через link: строки-адреса (сегменты, вложенные списки) и атрибуты
 // URI="…" (ключи, карты, дорожки); относительные — от base. Остальные строки — как были.
 func rewritePlaylist(body []byte, base *url.URL, link func(abs string) string) []byte {
@@ -61,7 +66,7 @@ func rewritePlaylist(body []byte, base *url.URL, link func(abs string) string) [
 		}
 		return u.String()
 	}
-	lines := strings.Split(string(body), "\n")
+	lines := strings.Split(strings.TrimPrefix(string(body), "\ufeff"), "\n") // BOM — не строка-адрес
 	for i, l := range lines {
 		t := strings.TrimRight(l, "\r")
 		switch {
@@ -69,11 +74,17 @@ func rewritePlaylist(body []byte, base *url.URL, link func(abs string) string) [
 		case strings.HasPrefix(t, "#"):
 			if strings.Contains(t, `URI="`) {
 				lines[i] = reURIAttr.ReplaceAllStringFunc(t, func(a string) string {
-					return `URI="` + link(resolve(reURIAttr.FindStringSubmatch(a)[1])) + `"`
+					abs := resolve(reURIAttr.FindStringSubmatch(a)[1])
+					if !webURL(abs) {
+						return a
+					}
+					return `URI="` + link(abs) + `"`
 				})
 			}
 		default:
-			lines[i] = link(resolve(t))
+			if abs := resolve(t); webURL(abs) {
+				lines[i] = link(abs)
+			}
 		}
 	}
 	return []byte(strings.Join(lines, "\n"))
@@ -185,6 +196,9 @@ func (m *Module) relay(w http.ResponseWriter, r *http.Request, id int64, u strin
 		ua = probe.UserAgent
 	}
 	req.Header.Set("User-Agent", ua)
+	if rg := r.Header.Get("Range"); rg != "" {
+		req.Header.Set("Range", rg) // #EXT-X-BYTERANGE, перемотка в плеере
+	}
 	if h.Referrer != "" {
 		req.Header.Set("Referer", h.Referrer)
 	}
@@ -216,10 +230,10 @@ func (m *Module) relay(w http.ResponseWriter, r *http.Request, id int64, u strin
 		return
 	}
 	br := bufio.NewReaderSize(resp.Body, 64<<10)
-	head, _ := br.Peek(7)
+	head, _ := br.Peek(10)
 	final := resp.Request.URL // после переадресаций — относительные ссылки от него
 	if strings.Contains(strings.ToLower(resp.Header.Get("Content-Type")), "mpegurl") ||
-		strings.HasSuffix(strings.ToLower(final.Path), ".m3u8") || bytes.Equal(head, []byte("#EXTM3U")) {
+		strings.HasSuffix(strings.ToLower(final.Path), ".m3u8") || bytes.HasPrefix(bytes.TrimPrefix(head, []byte("\xef\xbb\xbf")), []byte("#EXTM3U")) {
 		body, err := io.ReadAll(io.LimitReader(br, 4<<20))
 		if err != nil {
 			httpx.WriteError(w, http.StatusBadGateway, "список источника оборвался")
@@ -232,7 +246,17 @@ func (m *Module) relay(w http.ResponseWriter, r *http.Request, id int64, u strin
 	}
 	w.Header().Set("Content-Type", relayType(resp.Header.Get("Content-Type")))
 	w.Header().Set("Cache-Control", "no-store")
-	w.WriteHeader(http.StatusOK)
+	status := http.StatusOK
+	if resp.StatusCode == http.StatusPartialContent {
+		status = http.StatusPartialContent
+		w.Header().Set("Content-Range", resp.Header.Get("Content-Range"))
+	}
+	for _, k := range []string{"Content-Length", "Accept-Ranges"} {
+		if v := resp.Header.Get(k); v != "" {
+			w.Header().Set(k, v)
+		}
+	}
+	w.WriteHeader(status)
 	fl, _ := w.(http.Flusher)
 	buf := make([]byte, 32<<10)
 	for {
