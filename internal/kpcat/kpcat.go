@@ -152,10 +152,43 @@ func (m *Module) Run(ctx context.Context) error {
 	}
 }
 
-// paused — отказ ворот Кинопоиска (пауза или суточный предел): строку в журнал о нём уже написали ворота —
-// каталог её не повторяет на каждую попытку (ревью 14Г).
+// paused — все ошибки прохода — отказы ворот Кинопоиска (пауза или суточный предел): строку о них пишут сами
+// ворота — каталог её не повторяет на каждую попытку (ревью 14Г). Есть другая ошибка — не пауза: в журнал
+// (ревью 15В, Important 2).
 func paused(err error) bool {
+	if j, ok := err.(interface{ Unwrap() []error }); ok {
+		for _, e := range j.Unwrap() {
+			if !paused(e) {
+				return false
+			}
+		}
+		return len(j.Unwrap()) > 0
+	}
 	return errors.Is(err, meta.ErrKPBlocked) || errors.Is(err, meta.ErrKPDailyLimit)
+}
+
+// shortSection — сайт обещал больше, чем отдал (пустая страница посреди раздела).
+type shortSection struct {
+	name      string
+	got, want int
+}
+
+func (e shortSection) Error() string {
+	return fmt.Sprintf("Кинопоиск: в разделе «%s» пришло %d из %d", e.name, e.got, e.want)
+}
+
+// humanErr — почему раздел не обновился, для пульта: суточный предел и «пришло N из M» — как есть, остальное
+// (пауза, сеть, ответы сайта) — «Кинопоиск не отвечает»; подробности — в журнале (ревью 15В, Important 1: в
+// пульт шёл сырой текст сетевой ошибки по-английски, с адресом).
+func humanErr(err error) string {
+	var short shortSection
+	switch {
+	case errors.Is(err, meta.ErrKPDailyLimit):
+		return meta.ErrKPDailyLimit.Error()
+	case errors.As(err, &short):
+		return short.Error()
+	}
+	return meta.ErrKPBlocked.Error()
 }
 
 // sectionErr — почему не удалась последняя попытка обновить раздел; "" — удалась или не было.
@@ -171,7 +204,7 @@ func (m *Module) setSectionErr(sec string, err error) {
 	if err == nil {
 		delete(m.errs, sec)
 	} else {
-		m.errs[sec] = err.Error()
+		m.errs[sec] = humanErr(err)
 	}
 }
 
@@ -214,7 +247,7 @@ func (m *Module) refresh(ctx context.Context, secs []section) error {
 		}
 		if err == nil && len(all)*10 < min(total, s.max)*9 {
 			// Сайт обещал больше, чем отдал (пустая страница посреди раздела) — раздел не обрезается.
-			err = fmt.Errorf("Кинопоиск: в разделе «%s» пришло %d из %d", s.name, len(all), min(total, s.max))
+			err = shortSection{s.name, len(all), min(total, s.max)}
 		}
 		if err != nil {
 			errs = append(errs, err)
@@ -286,17 +319,24 @@ func orderOf(o string) string {
 	return "popular"
 }
 
-// list — фильмы раздела в порядке order со смещения offset, не больше limit; total — всего в разделе.
+// list — фильмы раздела в живом порядке order со смещения offset, не больше limit; total — всего в разделе. Тот
+// же запрос, что у снимков порядка (orderIDs), — тесты порядков проверяют его (ревью 15В, Minor 2).
 func (m *Module) list(ctx context.Context, sec, order string, offset, limit int) ([]FilmView, int, error) {
-	rows, total, err := m.st.list(ctx, sec, orderOf(order), offset, limit, m.now())
+	ids, err := m.st.orderIDs(ctx, sec, orderOf(order), m.now())
 	if err != nil {
 		return nil, 0, err
 	}
-	out := make([]FilmView, len(rows))
-	for i, r := range rows {
-		out[i] = r.view()
+	from := min(offset, len(ids))
+	to := min(from+limit, len(ids))
+	fs, err := m.st.filmsByIDs(ctx, ids[from:to])
+	if err != nil {
+		return nil, 0, err
 	}
-	return out, total, nil
+	out := make([]FilmView, len(fs))
+	for i, f := range fs {
+		out[i] = f.view()
+	}
+	return out, len(ids), nil
 }
 
 // page — порция раздела из снимка порядка token; нет его (первая порция, снимок устарел, сервер перезапущен) —

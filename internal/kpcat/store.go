@@ -136,33 +136,6 @@ var orderBy = map[string]string{
 	"new": `(` + newKey + ` = 0 OR ` + newKey + ` > ?), ` + newKey + ` DESC, e.position`,
 }
 
-func (d db) list(ctx context.Context, sec, order string, offset, limit int, now time.Time) ([]film, int, error) {
-	var total int
-	if err := d.R.QueryRowContext(ctx, `SELECT COUNT(*) FROM kpcat_entries WHERE section = ?`, sec).Scan(&total); err != nil {
-		return nil, 0, err
-	}
-	args := []any{sec}
-	if order == "new" {
-		args = append(args, ms(now))
-	}
-	rows, err := d.R.QueryContext(ctx,
-		`SELECT `+filmColumns+` FROM kpcat_entries e JOIN kpcat_films f ON f.kp_id = e.kp_id
-		 WHERE e.section = ? ORDER BY `+orderBy[order]+` LIMIT ? OFFSET ?`, append(args, limit, offset)...)
-	if err != nil {
-		return nil, 0, err
-	}
-	defer rows.Close()
-	var out []film
-	for rows.Next() {
-		f, err := scanFilm(rows)
-		if err != nil {
-			return nil, 0, err
-		}
-		out = append(out, f)
-	}
-	return out, total, rows.Err()
-}
-
 // orderIDs — номера фильмов раздела в порядке order: снимок для порций (ревью 14Г).
 func (d db) orderIDs(ctx context.Context, sec, order string, now time.Time) ([]int, error) {
 	args := []any{sec}
