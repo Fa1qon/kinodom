@@ -8,12 +8,13 @@ import { openPreview } from './preview.js';
 import { CATEGORIES, pickLabel } from './channel-settings.js';
 import { appBridge } from './tvkit.js';
 
-// fileFieldShown — поле «Файл логотипа»: в браузере — да; в приложении — если оно умеет выбирать файлы и на
-// устройстве есть чем (на ТВ часто нечем; старое приложение не умеет) (ревью 14Д, п. 12).
-export function fileFieldShown(app) {
+// fileFieldShown — поле выбора файла типа type («image/*» — логотип, «*/*» — плейлист): в браузере — да; в
+// приложении — если оно умеет выбирать файлы и на устройстве есть чем (на ТВ часто нечем; старое приложение не
+// умеет) (ревью 14Д, п. 12; 15Г, п. 8).
+export function fileFieldShown(app, type = 'image/*') {
   if (!app) return true;
   try {
-    return typeof app.canPickFiles === 'function' && !!app.canPickFiles();
+    return typeof app.canPickFiles === 'function' && !!app.canPickFiles(type);
   } catch {
     return false;
   }

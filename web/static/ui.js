@@ -56,12 +56,21 @@ export function keepFocus(root, draw) {
 // не теряют фокус); элемента ещё нет — его выделит ближайший keepFocus(main, …), когда вид дорисуется. Вид сам
 // поставил фокус — не перебиваем.
 export function carryFocus(main, key) {
+  pendingFocus.delete(main); // отложенный ключ — только до следующего перехода (ревью 15Г)
   if (!key) return;
   const active = document.activeElement;
   if (active && active !== document.body) return;
   const el = main.querySelector(`[data-key="${CSS.escape(key)}"]`);
+  if (el && typing(el)) return; // поле ввода — на ТВ снова выскочила бы клавиатура (ревью 15Г)
   if (el && !el.disabled) el.focus({ preventScroll: true });
-  else pendingFocus.set(main, key);
+  else if (!el) pendingFocus.set(main, key);
+}
+
+// typing — элемент, в фокусе которого ТВ показывает клавиатуру.
+function typing(el) {
+  const t = String(el.tagName || '').toUpperCase();
+  if (t === 'TEXTAREA') return true;
+  return t === 'INPUT' && !['button', 'checkbox', 'radio', 'submit', 'reset', 'file', 'range', 'color'].includes(String(el.type || 'text').toLowerCase());
 }
 
 // offWarn — трекер выключен: адрес не введён (этап 11a). Строка из «Состояния» и путь в «Параметры».
