@@ -84,6 +84,7 @@ class PultActivity : Activity() {
     private var filePick: ValueCallback<Array<Uri>>? = null // <input type=file> ждёт выбранный файл
     private var custom: View? = null // видео во весь экран (кнопка «полный экран» у <video>)
     private var customDone: WebChromeClient.CustomViewCallback? = null
+    private var searchDown = false // «Поиск» пульта нажата в этом окне
     private var picking = false // открыт выбор файла: возврат из него — не вход в приложение (ревью 15Г)
 
     @SuppressLint("SetJavaScriptEnabled")
@@ -271,7 +272,6 @@ class PultActivity : Activity() {
         web.requestFocus()
     }
 
-    @Deprecated("startActivityForResult — у android.app.Activity другого пути нет")
     // voiceIntent — системное распознавание речи (план 17В): русский, свободная речь. Разрешения на микрофон
     // приложению не нужно — слушает системная служба.
     private fun voiceIntent() = Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH)
@@ -283,7 +283,9 @@ class PultActivity : Activity() {
 
     // startVoice — окно распознавания; возврат из него — не вход в приложение (picking, как у выбора файла).
     private fun startVoice() {
-        if (!::web.isInitialized || web.url?.startsWith(base) != true) return
+        // Поверх пульта своё окно («Kinodom не отвечает», обновление) — сказанное некуда показать; окно распознавания
+        // уже открыто — второе не открываем (ревью 17В).
+        if (picking || overlay != null || !::web.isInitialized || web.url?.startsWith(base) != true) return
         try {
             picking = true
             @Suppress("DEPRECATION")
@@ -302,19 +304,28 @@ class PultActivity : Activity() {
     }
 
     // dispatchKeyEvent — «Поиск» пульта доходил до WebView и терялся там (эмулятор ТВ): перехват до страницы.
+    // Окно — по отпусканию той же нажатой здесь кнопки (не отменённому системой).
     override fun dispatchKeyEvent(event: KeyEvent): Boolean {
         if (event.keyCode == KeyEvent.KEYCODE_SEARCH && canVoice()) {
-            if (event.action == KeyEvent.ACTION_UP) startVoice()
+            when (event.action) {
+                KeyEvent.ACTION_DOWN -> if (event.repeatCount == 0) searchDown = true
+                KeyEvent.ACTION_UP -> {
+                    if (searchDown && !event.isCanceled) startVoice()
+                    searchDown = false
+                }
+            }
             return true
         }
         return super.dispatchKeyEvent(event)
     }
 
+    @Deprecated("startActivityForResult — у android.app.Activity другого пути нет")
     override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
         if (requestCode == VOICE) {
             picking = false
             val q = if (resultCode == RESULT_OK) Voice.query(data?.getStringArrayListExtra(RecognizerIntent.EXTRA_RESULTS)) else null
-            if (q != null && ::web.isInitialized && web.url?.startsWith(base) == true) web.evaluateJavascript(Voice.hashJs(q), null)
+            // Окна пульта (подтверждения, выбор папки) при смене адреса не закрываются — сначала они (ревью 17В).
+            if (q != null && ::web.isInitialized && web.url?.startsWith(base) == true) web.evaluateJavascript(CLOSE_DIALOGS + Voice.hashJs(q), null)
             return
         }
         if (requestCode == PICK_FILE) {
@@ -632,6 +643,10 @@ class PultActivity : Activity() {
         private const val WATCH_MS = 60L * 1000
         private const val PICK_FILE = 41
         private const val VOICE = 42
+
+        // CLOSE_DIALOGS — закрыть все окна пульта (Escape каждому), перед переходом по голосовому поиску.
+        private const val CLOSE_DIALOGS = "document.querySelectorAll('.dlg-back').forEach(function(b){" +
+            "b.dispatchEvent(new KeyboardEvent('keydown',{key:'Escape',bubbles:true,cancelable:true}))});"
 
         // CLOSE_DIALOG — закрыть верхнее окно пульта (openModal в ui.js закрывает его по Escape); true — было окно.
         private const val CLOSE_DIALOG = "(function(){var a=document.querySelectorAll('.dlg-back');if(!a.length)return false;" +

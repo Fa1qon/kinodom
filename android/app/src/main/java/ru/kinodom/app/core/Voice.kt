@@ -18,7 +18,7 @@ object Voice {
                 c == '\n' -> b.append("\\n")
                 c == '\r' -> b.append("\\r")
                 c == '\t' -> b.append("\\t")
-                c == '<' || c < ' ' || c == ' ' || c == ' ' -> b.append(String.format("\\u%04x", c.code))
+                c == '<' || c < ' ' || c == '\u2028' || c == '\u2029' -> b.append(String.format("\\u%04x", c.code))
                 else -> b.append(c)
             }
         }
