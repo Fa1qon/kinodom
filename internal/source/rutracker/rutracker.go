@@ -24,7 +24,10 @@ var ErrNoCredentials = errors.New("Rutracker: не заданы логин и п
 
 // searchCats — категории, в которых ищет поиск (спека, раздел 6): «Кино, Видео и ТВ»,
 // «Сериалы», «Документалистика и юмор», «Обучающие видео».
-var searchCats = []string{"2", "18", "20", "10"}
+var searchCats = []string{"2", "18", "20", "10", "24", "28", "39"}
+
+// searchForums — форумы поиска: все под категориями searchCats.
+func searchForums(tree *forumTree) map[string]bool { return tree.forumsUnder(searchCats...) }
 
 // SetCredentials — логин и пароль из настроек. Новая пара снимает запрет на вход после неудачи; те
 // же значения не меняют ничего — иначе пульт, сохраняя любые настройки, снимал бы запрет, и форум
@@ -283,7 +286,7 @@ func (r *Rutracker) Search(ctx context.Context, query string) ([]source.Release,
 	if err != nil {
 		return nil, err
 	}
-	allowed := tree.forumsUnder(searchCats...)
+	allowed := searchForums(tree)
 	// Разделы видеокатегорий — фильтром форума: без него 50 строк страницы тратятся и на не-видео
 	// (вживую 15 из 50; tracker.php понимает f=<номер,номер,…>, исследование, раздел 11). Номеров —
 	// около 380, это 2,5 КБ адреса. Свой фильтр ниже остаётся: форум может параметр не учесть.
