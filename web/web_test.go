@@ -2523,3 +2523,31 @@ for (const [got, want] of checks) {
 		t.Errorf("%v\n%s", err, out)
 	}
 }
+
+// План 17А: каталог одной кнопкой — сводка «трекер · раздел · порядок», разделы Rutracker с заголовками групп,
+// «влево» открывает панель только с первой колонки.
+func TestPultFilters(t *testing.T) {
+	node := lookNode(t)
+	script := `
+const { filterSummary, drawerSections, firstColumn } = await import('./views/catalog-parts.js');
+const s = (id, name, group, groupName) => ({ id, name, group, groupName });
+const checks = [
+  [filterSummary(['Rutor', 'Зарубежные фильмы', 'Раздающие']), 'Rutor · Зарубежные фильмы · Раздающие'],
+  [filterSummary(['Rutor', 'Зарубежные фильмы', '']), 'Rutor · Зарубежные фильмы'],
+  [filterSummary(['Кинопоиск', '', '']), 'Кинопоиск'],
+  [drawerSections([s('1', 'Без группы'), s('2', 'Фильмы', 'g1', 'Кино'), s('3', 'Мульты', 'g1', 'Кино'), s('4', 'Сериалы', 'g2', 'ТВ')])
+    .map((x) => x.head ? '#' + x.head : x.id), ['1', '#Кино', '2', '3', '#ТВ', '4']],
+  [firstColumn({ left: 24 }, { left: 24 }), true],
+  [firstColumn({ left: 24.5 }, { left: 24 }), true],
+  [firstColumn({ left: 250 }, { left: 24 }), false],
+];
+for (const [got, want] of checks) {
+  if (JSON.stringify(got) !== JSON.stringify(want)) { console.error(JSON.stringify(got), '≠', JSON.stringify(want)); process.exitCode = 1; }
+}
+`
+	cmd := exec.Command(node, "--input-type=module", "--no-warnings", "-e", script)
+	cmd.Dir = "static"
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Errorf("%v\n%s", err, out)
+	}
+}
