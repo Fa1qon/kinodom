@@ -4,6 +4,7 @@ import (
 	"errors"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 
 	"kinodom/internal/httpx"
@@ -154,5 +155,9 @@ func (m *Module) handlePoster(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.Header().Set("Cache-Control", "max-age=86400")
-	http.Redirect(w, r, "/img/"+key, http.StatusFound)
+	to := "/img/" + key
+	if width := r.URL.Query().Get("w"); width != "" && strings.Trim(width, "0123456789") == "" {
+		to += "?w=" + width // миниатюра для сетки (план 16А)
+	}
+	http.Redirect(w, r, to, http.StatusFound)
 }
