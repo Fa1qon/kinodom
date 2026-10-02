@@ -2459,3 +2459,67 @@ for (const [got, want] of checks) {
 		t.Errorf("%v\n%s", err, out)
 	}
 }
+
+// План 16В: какой звук у клавиши — шаг фокуса, упор, OK, «Назад»; ввод в поле — без звука; моста нет — без звука.
+func TestPultNavSound(t *testing.T) {
+	node := lookNode(t)
+	script := `
+const { navSound } = await import('./nav.js');
+const btn = { tagName: 'BUTTON' };
+const input = { tagName: 'INPUT', type: 'text' };
+const checks = [
+  [navSound('ArrowDown', btn, { moved: true }), 'move'],
+  [navSound('ArrowDown', btn, { moved: false }), 'edge'],
+  [navSound('Enter', btn, {}), 'select'],
+  [navSound('Enter', { tagName: 'A' }, {}), 'select'],
+  [navSound('Enter', input, {}), null],
+  [navSound('ArrowLeft', input, { cursor: true }), null],
+  [navSound('Escape', input, { escaped: true }), null],
+  [navSound('Escape', btn, { back: true }), 'back'],
+  [navSound('GoBack', btn, { back: true }), 'back'],
+  [navSound('a', btn, {}), null],
+  // Ревью 16В, Minor 4: OK без фокуса (body) — ничего не нажато, звука нет.
+  [navSound('Enter', { tagName: 'BODY' }, {}), null],
+];
+for (const [got, want] of checks) {
+  if (JSON.stringify(got) !== JSON.stringify(want)) { console.error(JSON.stringify(got), '≠', JSON.stringify(want)); process.exitCode = 1; }
+}
+`
+	cmd := exec.Command(node, "--input-type=module", "--no-warnings", "-e", script)
+	cmd.Dir = "static"
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Errorf("%v\n%s", err, out)
+	}
+}
+
+// Ревью 16В: стрелка на краю группы переключателей («Звуки меню», «Плеер каналов») — браузер сам переключал выбор;
+// пульт отменяет это действие. playSound — без моста и с мостом, который бросает, — тихо и без ошибки.
+func TestPultNavRadioAndBridge(t *testing.T) {
+	node := lookNode(t)
+	script := `
+const { keepArrowDefault, playSound } = await import('./nav.js');
+const checks = [
+  [keepArrowDefault(true, { tagName: 'BUTTON' }), false],
+  [keepArrowDefault(false, { tagName: 'BUTTON' }), true],
+  [keepArrowDefault(false, { tagName: 'INPUT', type: 'radio' }), false],
+  [keepArrowDefault(false, null), true],
+];
+const calls = [];
+globalThis.window = {};
+playSound('move');
+globalThis.window = { KinodomApp: { sound: (n) => calls.push(n) } };
+playSound('move');
+playSound(null);
+globalThis.window = { KinodomApp: { sound: () => { throw new Error('мост занят'); } } };
+playSound('edge');
+checks.push([calls, ['move']]);
+for (const [got, want] of checks) {
+  if (JSON.stringify(got) !== JSON.stringify(want)) { console.error(JSON.stringify(got), '≠', JSON.stringify(want)); process.exitCode = 1; }
+}
+`
+	cmd := exec.Command(node, "--input-type=module", "--no-warnings", "-e", script)
+	cmd.Dir = "static"
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Errorf("%v\n%s", err, out)
+	}
+}

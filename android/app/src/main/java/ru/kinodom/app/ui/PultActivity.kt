@@ -57,6 +57,7 @@ class PultActivity : Activity() {
     private lateinit var web: WebView
     private lateinit var root: FrameLayout
     private lateinit var updater: Updater
+    private var sounds: Sounds? = null
     private val scope = MainScope()
     private val handler = Handler(Looper.getMainLooper())
 
@@ -85,6 +86,7 @@ class PultActivity : Activity() {
     @SuppressLint("SetJavaScriptEnabled")
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        sounds = Sounds(this)
         base = savedInstanceState?.getString(EXTRA_BASE) ?: intent.getStringExtra(EXTRA_BASE) ?: run {
             startActivity(Intent(this, StartActivity::class.java))
             finish()
@@ -134,8 +136,10 @@ class PultActivity : Activity() {
 
     // back — открыто окно пульта («Скачать «…»?», выбор папки) — закрыть его: WebView не передаёт «Назад»
     // странице, а Escape пульт понимает (финальное ревью 13a); иначе — по BackDecision.
+    // «Назад» пульта ТВ странице не приходит — звук «Назад» (план 16В) играет здесь, когда шаг назад случился.
     private fun back() {
         if (custom != null) {
+            sounds?.play("back")
             leaveFullscreen()
             return
         }
@@ -143,19 +147,23 @@ class PultActivity : Activity() {
             backDecision()
             return
         }
-        web.evaluateJavascript(CLOSE_DIALOG) { closed -> if (closed != "true") backDecision() }
+        web.evaluateJavascript(CLOSE_DIALOG) { closed -> if (closed == "true") sounds?.play("back") else backDecision() }
     }
 
     private fun backDecision() {
         val canGoBack = ::web.isInitialized && web.canGoBack()
         when (BackDecision.onBack(canGoBack, overlay != null)) {
             Action.CloseOverlay -> if (overlayClosable) {
+                sounds?.play("back")
                 postponed = true
                 closeOverlay()
             } else {
                 moveTaskToBack(true) // «Kinodom не отвечает» поверх мёртвого пульта — назад некуда
             }
-            Action.GoBack -> web.goBack()
+            Action.GoBack -> {
+                sounds?.play("back")
+                web.goBack()
+            }
             Action.Minimize -> moveTaskToBack(true)
         }
     }
@@ -200,6 +208,8 @@ class PultActivity : Activity() {
 
     override fun onDestroy() {
         handler.removeCallbacks(tick)
+        sounds?.release()
+        sounds = null
         scope.cancel()
         if (::web.isInitialized) web.destroy()
         super.onDestroy()
@@ -538,6 +548,20 @@ class PultActivity : Activity() {
         @JavascriptInterface
         fun canPickFiles(type: String): Boolean = Intent(Intent.ACTION_GET_CONTENT).addCategory(Intent.CATEGORY_OPENABLE)
             .setType(type.ifBlank { "*/*" }).resolveActivity(packageManager) != null
+
+        // sound — звук меню (план 16В): шаг фокуса, OK, «Назад», упор; играет, если звуки включены.
+        @JavascriptInterface
+        fun sound(name: String) {
+            sounds?.play(name)
+        }
+
+        @JavascriptInterface
+        fun soundsOn(): Boolean = Prefs(this@PultActivity).sounds
+
+        @JavascriptInterface
+        fun setSoundsOn(on: Boolean) {
+            Prefs(this@PultActivity).sounds = on
+        }
 
         // update — «Обновить» в пульте: скачать и поставить новую версию с сервера сразу, без окна и «Позже».
         @JavascriptInterface
