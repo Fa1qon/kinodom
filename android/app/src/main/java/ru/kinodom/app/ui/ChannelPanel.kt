@@ -4,12 +4,14 @@ import android.app.Activity
 import android.graphics.Typeface
 import android.graphics.drawable.ColorDrawable
 import android.graphics.drawable.StateListDrawable
+import android.os.SystemClock
 import android.text.TextUtils
 import android.util.TypedValue
 import android.view.Gravity
 import android.view.View
 import android.view.ViewGroup
 import android.widget.AbsListView
+import android.widget.AdapterView
 import android.widget.BaseAdapter
 import android.widget.FrameLayout
 import android.widget.ImageView
@@ -23,9 +25,17 @@ import ru.kinodom.app.net.Logos
 
 // ChannelPanel — список поверх видео слева (спека этапа 13, 4.3): номер, логотип, имя, что идёт сейчас; стрелки —
 // по списку, OK или касание — включить.
-class ChannelPanel(private val a: Activity, private val items: List<Ch>, private val logos: Logos, onPick: (Int) -> Unit) {
+// sound — звук меню (план 16В): шаг по списку — move, выбор — select.
+class ChannelPanel(
+    private val a: Activity,
+    private val items: List<Ch>,
+    private val logos: Logos,
+    private val sound: (String) -> Unit = {},
+    onPick: (Int) -> Unit,
+) {
     private var titles: Map<String, String> = emptyMap()
     private var playing = -1
+    private var shownAt = 0L // выбор текущего канала при показе — не шаг: без звука
 
     private val adapter = object : BaseAdapter() {
         override fun getCount() = items.size
@@ -50,7 +60,18 @@ class ChannelPanel(private val a: Activity, private val items: List<Ch>, private
             addState(intArrayOf(android.R.attr.state_selected), ColorDrawable(a.getColor(R.color.raised)))
         }
         setBackgroundColor(0xE6111315.toInt())
-        setOnItemClickListener { _, _, i, _ -> onPick(i) }
+        isSoundEffectsEnabled = false // свой звук выбора — системный щелчок списка не двоит его
+        setOnItemClickListener { _, _, i, _ ->
+            sound("select")
+            onPick(i)
+        }
+        onItemSelectedListener = object : AdapterView.OnItemSelectedListener {
+            override fun onItemSelected(parent: AdapterView<*>?, v: View?, i: Int, id: Long) {
+                if (SystemClock.uptimeMillis() - shownAt > QUIET_MS) sound("move")
+            }
+
+            override fun onNothingSelected(parent: AdapterView<*>?) {}
+        }
         visibility = View.GONE
         layoutParams = FrameLayout.LayoutParams(Screens.dp(a, 440), FrameLayout.LayoutParams.MATCH_PARENT, Gravity.START)
     }
@@ -58,6 +79,7 @@ class ChannelPanel(private val a: Activity, private val items: List<Ch>, private
     val shown get() = view.visibility == View.VISIBLE
 
     fun show(current: Int) {
+        shownAt = SystemClock.uptimeMillis()
         playing = current
         adapter.notifyDataSetChanged()
         view.visibility = View.VISIBLE
@@ -117,5 +139,9 @@ class ChannelPanel(private val a: Activity, private val items: List<Ch>, private
             now.text = title
             now.visibility = if (title.isEmpty()) View.GONE else View.VISIBLE
         }
+    }
+
+    companion object {
+        private const val QUIET_MS = 150L
     }
 }
