@@ -47,6 +47,13 @@ export function sameIds(a, b) {
   return a.length === b.length && a.every((e, i) => e.id === b[i].id);
 }
 
+// rebuildCount — сколько строк строить при пересборке (набор сменился, поиск ещё идёт): не меньше первой порции и
+// построенного, и строку в фокусе (focusIndex, −1 — нет) с запасом — вставки выше могли сдвинуть её за построенное
+// (ревью 17Б: фокус терялся, следующая стрелка уводила на первую строку).
+export function rebuildCount(total, built, focusIndex) {
+  return Math.min(total, Math.max(RES_FIRST, built, focusIndex >= 0 ? focusIndex + 4 : 0));
+}
+
 // resSig — подпись того, что видно в строке результата: строка пересоздаётся, только если она изменилась.
 export function resSig(e) {
   return JSON.stringify([e.imageKey, e.name, e.title, e.tracker, e.quality, e.format, e.preferred, e.size, e.seeders]);
@@ -184,6 +191,8 @@ export function render(root, r, ctx) {
       res = await get('/search?q=' + encodeURIComponent(q) + (first ? '' : '&poll=1'));
     } catch (e) {
       search.stop();
+      resetRows(); // без этого под ошибкой достраивались старые строки с 21-й (ревью 17Б)
+      if (watcher) watcher.disconnect();
       table.replaceChildren(h('p', { class: 'error' }, e.message));
       return;
     }
@@ -203,10 +212,7 @@ export function render(root, r, ctx) {
     trackers.replaceChildren(...trackerTags(res.trackers, res.results));
     if (!res.results.length) {
       table.replaceChildren(res.complete ? h('p', { class: 'muted' }, 'Ничего не нашлось') : '');
-      rows = [];
-      built = 0;
-      drawn = null;
-      refs.clear();
+      resetRows();
       return;
     }
     rows = res.results;
@@ -222,8 +228,11 @@ export function render(root, r, ctx) {
       drawn = rows;
       return;
     }
-    // Набор или порядок сменился (поиск ещё идёт) — заново, не меньше построенного: фокус по data-key остаётся.
-    const want = Math.max(RES_FIRST, built);
+    // Набор или порядок сменился (поиск ещё идёт) — заново, не меньше построенного и со строкой в фокусе: фокус по
+    // data-key остаётся.
+    const a = document.activeElement;
+    const fk = a && table.contains(a) && a.dataset ? a.dataset.key : '';
+    const want = rebuildCount(rows.length, built, fk ? rows.findIndex((e) => `res-${e.id}` === fk) : -1);
     built = 0;
     refs.clear();
     table.replaceChildren(
@@ -231,6 +240,14 @@ export function render(root, r, ctx) {
       ...buildRows(portionEnd(rows.length, 0, want)));
     drawn = rows;
     rewatch();
+  }
+
+  // resetRows — таблица без строк: ни одна старая строка больше не достроится.
+  function resetRows() {
+    rows = [];
+    built = 0;
+    drawn = null;
+    refs.clear();
   }
 
   // buildRows — строки ленты с built до to.
