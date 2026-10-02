@@ -2164,6 +2164,8 @@ const checks = [
   [spaceLine({ freeBytes: 5e11, disks: [{ volume: 'D:', freeBytes: 5e11 }] }), { free: 'свободно 465,7 ГБ', warn: '' }],
   [spaceLine({ freeBytes: 1e9, lowSpace: true, disks: [{ volume: 'D:', freeBytes: 1e9, low: true }] }), { free: 'свободно 954 МБ', warn: 'Мало места на диске D:' }],
   [spaceLine({ freeBytes: 1e9, lowSpace: true }), { free: 'свободно 954 МБ', warn: 'Мало места на диске' }],
+  // Ревью 15Б, Minor 5: мало на двух — «на дисках».
+  [spaceLine({ freeBytes: 1e9, disks: [{ volume: 'D:', freeBytes: 1e9, low: true }, { volume: 'E:', freeBytes: 1e9, low: true }] }).warn, 'Мало места на дисках D:, E:'],
   [skippedText({ skipped: 2 }), 'Сейчас смотрят — 2 серии остались'],
   [skippedText({}), ''],
   [afterDelete(two, 1, {}), { go: null, note: '' }],

@@ -9,6 +9,7 @@ import (
 	"maps"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 )
 
@@ -21,8 +22,8 @@ var (
 	ErrNoWrite     = errors.New("нет права изменять папку")
 )
 
-// TargetFolder — папка для скачанного стандартной категории builtin («films», «series»): первая её папка;
-// папок нет — "".
+// TargetFolder — папка для скачанного стандартной категории builtin («films», «series»): первая её папка, которая
+// не сама сериал (targetIn); такой нет — "".
 func (l *Library) TargetFolder(ctx context.Context, builtin string) (string, error) {
 	cs, err := l.d.categories(ctx)
 	if err != nil {
@@ -32,18 +33,28 @@ func (l *Library) TargetFolder(ctx context.Context, builtin string) (string, err
 		if c.Builtin != builtin {
 			continue
 		}
-		for _, f := range c.Folders {
-			// Папка, которая сама сериал («папка = сериал»), — не для чужого скачанного (ревью 14В).
-			own, err := l.folderIsUnit(ctx, f)
-			if err != nil {
-				return "", err
-			}
-			if !own {
-				return f.Path, nil
-			}
+		f, ok, err := l.targetIn(ctx, c)
+		if err != nil || !ok {
+			return "", err
 		}
+		return f.Path, nil
 	}
 	return "", nil
+}
+
+// targetIn — куда качается скачанное категории c: первая её папка, которая не сама сериал («папка = сериал» — не
+// для чужого скачанного, ревью 14В). Ею же обход проверяет право записи (ревью 15Б, Important 2).
+func (l *Library) targetIn(ctx context.Context, c Category) (Folder, bool, error) {
+	for _, f := range c.Folders {
+		own, err := l.folderIsUnit(ctx, f)
+		if err != nil {
+			return Folder{}, false, err
+		}
+		if !own {
+			return f, true, nil
+		}
+	}
+	return Folder{}, false, nil
 }
 
 // folderIsUnit — папка категории сама единица медиатеки (сериал «папка = сериал»).
@@ -128,7 +139,7 @@ func (l *Library) DeleteUnit(ctx context.Context, id int64) error {
 			gone = append(gone, p)
 		}
 		// Субтитры удалённых серий и опустевшие папки сезонов — тоже (ревью 14В); папка единицы остаётся.
-		gone = append(gone, removeSidecars(key, gone, remove)...)
+		gone = append(gone, removeSidecars(gone, remove)...)
 		removeEmptyDirs(key, gone)
 	} else if err := remove(key); err != nil {
 		return l.removeError(ctx, folder.Int64, root, err)
@@ -216,7 +227,8 @@ func (l *Library) unitFiles(ctx context.Context, id int64) ([]string, error) {
 
 func (l *Library) removeError(ctx context.Context, folder int64, root string, err error) error {
 	if busy(err) {
-		return errors.New("файл открыт в другой программе — закройте её и повторите")
+		// Файл держит и сам Kinodom, пока серию смотрят на ТВ (ревью 15Б, Minor 1).
+		return errors.New("файл сейчас смотрят или он открыт в другой программе — закройте её и повторите")
 	}
 	if errors.Is(err, fs.ErrPermission) {
 		l.setNoWrite(ctx, folder, true)
@@ -228,46 +240,68 @@ func (l *Library) removeError(ctx context.Context, folder int64, root string, er
 // subtitleExt — субтитры и их спутники: удаляются вместе с серией того же имени.
 var subtitleExt = map[string]bool{".srt": true, ".ass": true, ".ssa": true, ".sub": true, ".idx": true, ".vtt": true, ".smi": true, ".sup": true}
 
-// removeSidecars — субтитры удалённых видео videos внутри папки top: файлы, чьё имя начинается с имени видео
-// без расширения и точки («Сериал.S01E01.rus.srt»), в том числе в подпапках («Subs/…»). Удалённые — в ответе.
-func removeSidecars(top string, videos []string, remove func(string) error) []string {
-	if len(videos) == 0 {
-		return nil
-	}
-	stems := make([]string, 0, len(videos))
+// subsDirs — папки субтитров рядом с видео.
+var subsDirs = map[string]bool{"subs": true, "subtitles": true, "sub": true, "субтитры": true}
+
+// removeSidecars — субтитры удалённых видео videos: файлы, чьё имя начинается с имени видео без расширения и
+// точки («Сериал.S01E01.rus.srt»), в папке видео и в её «Subs»/«Subtitles». Не по всей папке сериала: там
+// может лежать раздача Kinodom другого сериала или «Extras» с тем же именем серии (ревью 15Б, Important 1).
+// Удалённые — в ответе.
+func removeSidecars(videos []string, remove func(string) error) []string {
+	stems := map[string][]string{} // папка видео → основы имён его видео
+	dirs := map[string]string{}    // где искать → папка видео, чьи основы там ищутся
 	for _, v := range videos {
+		dir := filepath.Dir(v)
 		b := filepath.Base(v)
-		stems = append(stems, strings.ToLower(strings.TrimSuffix(b, filepath.Ext(b)))+".")
+		stems[pathKey(dir)] = append(stems[pathKey(dir)], strings.ToLower(strings.TrimSuffix(b, filepath.Ext(b)))+".")
+		dirs[dir] = dir
 	}
-	var out []string
-	filepath.WalkDir(top, func(p string, d fs.DirEntry, err error) error {
-		if err != nil || d.IsDir() || !subtitleExt[strings.ToLower(filepath.Ext(p))] {
-			return nil
-		}
-		name := strings.ToLower(d.Name())
-		for _, s := range stems {
-			if strings.HasPrefix(name, s) {
-				if remove(p) == nil {
-					out = append(out, p)
-				}
-				break
+	for dir := range maps.Clone(dirs) {
+		es, _ := os.ReadDir(dir)
+		for _, e := range es {
+			if e.IsDir() && subsDirs[strings.ToLower(e.Name())] {
+				dirs[filepath.Join(dir, e.Name())] = dir
 			}
 		}
-		return nil
-	})
+	}
+	var out []string
+	for at, owner := range dirs {
+		es, _ := os.ReadDir(at)
+		for _, e := range es {
+			if e.IsDir() || !subtitleExt[strings.ToLower(filepath.Ext(e.Name()))] {
+				continue
+			}
+			name := strings.ToLower(e.Name())
+			for _, s := range stems[pathKey(owner)] {
+				if strings.HasPrefix(name, s) {
+					p := filepath.Join(at, e.Name())
+					if remove(p) == nil {
+						out = append(out, p)
+					}
+					break
+				}
+			}
+		}
+	}
 	return out
 }
 
-// removeEmptyDirs — опустевшие папки удалённых файлов gone снизу вверх до папки top (её саму — нет).
+// removeEmptyDirs — опустевшие папки удалённых файлов gone до папки top (её саму — нет): все папки на пути,
+// глубокие первыми — папка сезона пустеет, только когда ушла её «Subtitles» (ревью 15Б). Не пустая — остаётся.
 func removeEmptyDirs(top string, gone []string) {
-	seen := map[string]bool{}
+	dirs := map[string]string{}
 	for _, p := range gone {
-		for d := filepath.Dir(p); within(d, top) && pathKey(d) != pathKey(top) && !seen[pathKey(d)]; d = filepath.Dir(d) {
-			seen[pathKey(d)] = true
-			if os.Remove(d) != nil {
-				break // не пустая (или нет прав) — выше тоже не пустая
+		for d := filepath.Dir(p); within(d, top) && pathKey(d) != pathKey(top); d = filepath.Dir(d) {
+			if _, ok := dirs[pathKey(d)]; ok {
+				break
 			}
+			dirs[pathKey(d)] = d
 		}
+	}
+	order := slices.Collect(maps.Values(dirs))
+	slices.SortFunc(order, func(a, b string) int { return len(b) - len(a) })
+	for _, d := range order {
+		os.Remove(d) // не пустая (или нет прав) — остаётся
 	}
 }
 
