@@ -123,40 +123,75 @@ func (d db) freshSections(ctx context.Context, since time.Time) (map[string]bool
 	return out, rows.Err()
 }
 
+// newKey — дата выхода для «Новых», мс: премьера, без неё — 1 января года (ревью 14Г: иначе фильм с годом, но без
+// даты — в самом хвосте), без года — 0.
+const newKey = `(CASE WHEN f.premiere > 0 THEN f.premiere WHEN f.year > 0 THEN CAST(strftime('%s', printf('%04d-01-01', f.year)) AS INTEGER) * 1000 ELSE 0 END)`
+
 // orderBy — ORDER BY порядка: IMDb без оценки и новизна без даты — в конце (Review Focus 2, 3); равные — по месту.
 var orderBy = map[string]string{
 	"popular": `e.position`,
 	"kp":      `f.rating DESC, e.position`,
 	"imdb":    `(f.imdb = 0), f.imdb DESC, e.position`,
-	// Новизна: ещё не вышедшие (премьера впереди) — в конце, как без даты (ревью 14Г); ? — сейчас.
-	"new": `(f.premiere = 0 OR f.premiere > ?), f.premiere DESC, f.year DESC, e.position`,
+	// Новизна: ещё не вышедшие (дата впереди) — в конце, как без даты (ревью 14Г); ? — сейчас.
+	"new": `(` + newKey + ` = 0 OR ` + newKey + ` > ?), ` + newKey + ` DESC, e.position`,
 }
 
-func (d db) list(ctx context.Context, sec, order string, offset, limit int, now time.Time) ([]film, int, error) {
-	var total int
-	if err := d.R.QueryRowContext(ctx, `SELECT COUNT(*) FROM kpcat_entries WHERE section = ?`, sec).Scan(&total); err != nil {
-		return nil, 0, err
-	}
+// orderIDs — номера фильмов раздела в порядке order: снимок для порций (ревью 14Г).
+func (d db) orderIDs(ctx context.Context, sec, order string, now time.Time) ([]int, error) {
 	args := []any{sec}
 	if order == "new" {
 		args = append(args, ms(now))
 	}
 	rows, err := d.R.QueryContext(ctx,
-		`SELECT `+filmColumns+` FROM kpcat_entries e JOIN kpcat_films f ON f.kp_id = e.kp_id
-		 WHERE e.section = ? ORDER BY `+orderBy[order]+` LIMIT ? OFFSET ?`, append(args, limit, offset)...)
+		`SELECT e.kp_id FROM kpcat_entries e JOIN kpcat_films f ON f.kp_id = e.kp_id WHERE e.section = ? ORDER BY `+orderBy[order], args...)
 	if err != nil {
-		return nil, 0, err
+		return nil, err
 	}
 	defer rows.Close()
-	var out []film
+	var out []int
+	for rows.Next() {
+		var id int
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		out = append(out, id)
+	}
+	return out, rows.Err()
+}
+
+// filmsByIDs — фильмы по номерам в их порядке (фильмы из базы не удаляются — нет только неизвестных).
+func (d db) filmsByIDs(ctx context.Context, ids []int) ([]film, error) {
+	if len(ids) == 0 {
+		return nil, nil
+	}
+	args := make([]any, len(ids))
+	for i, id := range ids {
+		args[i] = id
+	}
+	rows, err := d.R.QueryContext(ctx,
+		`SELECT `+filmColumns+` FROM kpcat_films f WHERE f.kp_id IN (`+strings.Repeat("?, ", len(ids)-1)+`?)`, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	by := make(map[int]film, len(ids))
 	for rows.Next() {
 		f, err := scanFilm(rows)
 		if err != nil {
-			return nil, 0, err
+			return nil, err
 		}
-		out = append(out, f)
+		by[f.ID] = f
 	}
-	return out, total, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	out := make([]film, 0, len(ids))
+	for _, id := range ids {
+		if f, ok := by[id]; ok {
+			out = append(out, f)
+		}
+	}
+	return out, nil
 }
 
 var errNoFilm = errors.New("такого фильма в каталоге Кинопоиска нет")
@@ -169,15 +204,21 @@ func (d db) film(ctx context.Context, id int) (film, error) {
 	return f, err
 }
 
-// counts — фильмов в разделах и последнее обновление.
-func (d db) counts(ctx context.Context) (map[string]int, time.Time, error) {
+// sectionState — фильмов в разделе и когда он обновлён (нулевое — ни разу).
+type sectionState struct {
+	count int
+	at    time.Time
+}
+
+// counts — состояние разделов и последнее обновление из всех.
+func (d db) counts(ctx context.Context) (map[string]sectionState, time.Time, error) {
 	rows, err := d.R.QueryContext(ctx, `SELECT section, total, refreshed_at FROM kpcat_state`)
 	if err != nil {
 		return nil, time.Time{}, err
 	}
 	defer rows.Close()
-	out := map[string]int{}
-	var last int64
+	out := map[string]sectionState{}
+	var last time.Time
 	for rows.Next() {
 		var s string
 		var n int
@@ -185,14 +226,16 @@ func (d db) counts(ctx context.Context) (map[string]int, time.Time, error) {
 		if err := rows.Scan(&s, &n, &at); err != nil {
 			return nil, time.Time{}, err
 		}
-		out[s] = n
-		last = max(last, at)
+		st := sectionState{count: n}
+		if at > 0 {
+			st.at = time.UnixMilli(at)
+		}
+		out[s] = st
+		if st.at.After(last) {
+			last = st.at
+		}
 	}
-	var t time.Time
-	if last > 0 {
-		t = time.UnixMilli(last)
-	}
-	return out, t, rows.Err()
+	return out, last, rows.Err()
 }
 
 // imdbDue — фильмы разделов, у которых IMDb не спрашивали или спрашивали раньше before: ближе к началу — первыми.

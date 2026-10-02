@@ -467,7 +467,7 @@ a.res-row:hover { background: var(--hover); }
 
   /* Каталог */
   .tabs { display: flex; flex-basis: 100%; }
-  .tabs a { flex: 1; justify-content: center; }
+  .tabs a { flex: 1; justify-content: center; padding: 0 10px; }
   .grid { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px 12px; }
   .poster { padding: 12px; }
   .ptitle { font-size: 14px; }
@@ -552,4 +552,9 @@ a.res-row:hover { background: var(--hover); }
 /* Планшет стоя: каталог в 3 колонки, а не в 2, как на телефоне. */
 @media (min-width: 560px) and (max-width: 900px) {
   .grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+}
+
+/* Телефон 320 px: три вкладки каталога («Rutracker · Rutor · Кинопоиск») — в ширину экрана (ревью 14Г) */
+@media (max-width: 359px) {
+  .tabs a { padding: 0 6px; gap: 4px; }
 }

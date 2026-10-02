@@ -94,6 +94,7 @@ type KPWeb struct {
 	ratingClient  *http.Client         // оценки IMDb: без переходов (переход — капча)
 	ratingNext    time.Time            // оценки IMDb: не раньше — следующий запрос
 	ratingBlocked time.Time            // оценки IMDb: отказ — пауза до
+	limitLogged   bool                 // о суточном пределе сегодня уже написано в журнал
 }
 
 func NewKPWeb(o KPWebOptions) *KPWeb {
@@ -166,7 +167,7 @@ func (w *KPWeb) Status() KPWebStatus {
 
 func (w *KPWeb) rollDay(now time.Time) {
 	if d := now.Format("2006-01-02"); d != w.day {
-		w.day, w.today = d, 0
+		w.day, w.today, w.limitLogged = d, 0, false
 	}
 }
 
@@ -192,7 +193,12 @@ func (w *KPWeb) acquire(ctx context.Context, class KPClass) error {
 		w.mu.Lock()
 		w.rollDay(w.o.Now())
 		if w.today >= limit {
+			first := !w.limitLogged
+			w.limitLogged = true
 			w.mu.Unlock()
+			if first { // одна строка в сутки: каталог о пределе молчит (ревью 15В, Important 2)
+				w.o.Log.Warn("Кинопоиск без токена: суточный предел запросов исчерпан — до полуночи")
+			}
 			return ErrKPDailyLimit
 		}
 		t := time.Now()

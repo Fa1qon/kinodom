@@ -1,10 +1,12 @@
 package kpcat
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
@@ -25,6 +27,7 @@ type fakeKP struct {
 	mu      sync.Mutex
 	lists   map[string][]meta.ListFilm
 	failAt  map[string]int // ключ списка → смещение, на котором ответ — ошибка
+	failErr error          // какая ошибка на failAt; nil — «Кинопоиск не отвечает» без паузы ворот
 	imdb    map[int]float64
 	imdbErr map[int]error // номер → ошибка оценки (сбой одного фильма)
 	classes map[meta.KPClass]int
@@ -46,6 +49,9 @@ func (f *fakeKP) List(_ context.Context, class meta.KPClass, q meta.ListQuery) (
 	}
 	f.classes[class]++
 	if at, ok := f.failAt[k]; ok && q.Offset >= at {
+		if f.failErr != nil {
+			return nil, 0, f.failErr
+		}
 		return nil, 0, errors.New("Кинопоиск не отвечает")
 	}
 	all := f.lists[k]
@@ -428,5 +434,199 @@ func TestImageKeys(t *testing.T) {
 	keys, err := m.ImageKeys(ctx)
 	if err != nil || len(keys) != 700 || !keys[meta.ImageKey("https://avatars.example/1001/300x450")] {
 		t.Fatalf("ключи: %d, %v", len(keys), err)
+	}
+}
+
+// Ревью 14Г: «Каталог ещё пуст — идёт первое обновление» висел и при неудачном обновлении, а «обновлён» был
+// максимумом по разделам. У раздела — своё время обновления и ошибка последней попытки; удачная её снимает.
+func TestCatalogSectionState(t *testing.T) {
+	kp := fullKP()
+	kp.failAt = map[string]int{"|released|documentary|VOTES_COUNT_DESC": 0}
+	m := newModule(t, kp)
+	h := mux{http.NewServeMux()}
+	m.Register(h)
+	m.Refresh(ctx)
+	by := sectionsOf(t, h)
+	if d := by["docs"]; d.UpdatedAt != nil || d.Error == "" || d.Count != 0 {
+		t.Fatalf("документальные: %+v", d)
+	}
+	if f := by["films-ru"]; f.UpdatedAt == nil || f.Error != "" {
+		t.Fatalf("русские фильмы: %+v", f)
+	}
+	kp.mu.Lock()
+	kp.failAt = map[string]int{}
+	kp.mu.Unlock()
+	if err := m.Refresh(ctx); err != nil {
+		t.Fatal(err)
+	}
+	for id, s := range sectionsOf(t, h) {
+		if s.Error != "" || s.UpdatedAt == nil {
+			t.Fatalf("после удачного %s: %+v", id, s)
+		}
+	}
+}
+
+// Review Focus 2 (15В): ворота на паузе — у всех несделанных разделов её текст, а не «идёт первое обновление» на 6 ч.
+func TestCatalogPausedSections(t *testing.T) {
+	kp := fullKP()
+	kp.failAt, kp.failErr = map[string]int{"popular-films|russian||POSITION_ASC": 0}, meta.ErrKPBlocked
+	m := newModule(t, kp)
+	h := mux{http.NewServeMux()}
+	m.Register(h)
+	if err := m.Refresh(ctx); !errors.Is(err, meta.ErrKPBlocked) {
+		t.Fatalf("обновление: %v", err)
+	}
+	for id, s := range sectionsOf(t, h) {
+		if s.Error != meta.ErrKPBlocked.Error() {
+			t.Fatalf("%s: %+v", id, s)
+		}
+	}
+}
+
+// Ревью 14Г: пауза ворот — уже строка в журнале у ворот; каталог не пишет «не удалось» на каждую попытку.
+func TestRunQuietWhilePaused(t *testing.T) {
+	kp := fullKP()
+	kp.failAt, kp.failErr = map[string]int{"popular-films|russian||POSITION_ASC": 0}, meta.ErrKPBlocked
+	m := newModule(t, kp)
+	var buf bytes.Buffer
+	m.log = slog.New(slog.NewTextHandler(&buf, nil))
+	m.o.FirstDelay = 10 * time.Millisecond
+	runCtx, cancel := context.WithTimeout(ctx, 300*time.Millisecond)
+	defer cancel()
+	m.Run(runCtx)
+	kp.mu.Lock()
+	n := len(kp.calls)
+	kp.mu.Unlock()
+	if n == 0 {
+		t.Fatal("обновления не было")
+	}
+	if buf.Len() > 0 {
+		t.Fatalf("журнал: %s", buf.String())
+	}
+}
+
+// sectionsOf — разделы /api/v1/kpcat по номеру.
+func sectionsOf(t *testing.T, h http.Handler) map[string]SectionView {
+	t.Helper()
+	var cv CatalogView
+	if code := getJSON(t, h, "/api/v1/kpcat", &cv); code != 200 {
+		t.Fatalf("каталог: %d", code)
+	}
+	out := map[string]SectionView{}
+	for _, s := range cv.Sections {
+		out[s.ID] = s
+	}
+	return out
+}
+
+// Ревью 14Г: без даты выхода, но с годом — в «Новых» по году (1 января), а не в самом хвосте; год впереди — к
+// анонсам в конец.
+func TestNewByYearWithoutDate(t *testing.T) {
+	kp := fullKP()
+	now := time.Now()
+	y := now.Year()
+	fs := films(100, 4)
+	fs[0].Year = y - 1 // без даты, прошлый год
+	fs[1].Premiere, fs[1].Year = now.AddDate(0, 0, -10), y
+	fs[2].Year = y + 1 // без даты, следующий год — анонс
+	fs[3].Premiere, fs[3].Year = time.Date(y-3, 6, 1, 0, 0, 0, 0, time.UTC), y-3
+	kp.lists["popular-series|russian||POSITION_ASC"] = fs
+	m := newModule(t, kp)
+	if err := m.Refresh(ctx); err != nil {
+		t.Fatal(err)
+	}
+	vs, _, _ := m.list(ctx, "series-ru", "new", 0, 10)
+	if !slices.Equal(ids(vs), []int{101, 100, 103, 102}) {
+		t.Fatalf("новые: %v", ids(vs))
+	}
+}
+
+// Ревью 14Г: подгрузка по смещению повторяла и пропускала фильмы, когда порядок менялся на ходу (пришли
+// оценки IMDb, суточное обновление). Порции листают порядок, снятый первой порцией (snap); неизвестный snap
+// (сервер перезапущен) — живой порядок под новым снимком, без ошибки (Review Focus 1, 15В).
+func TestListSnapshotKeepsOrder(t *testing.T) {
+	m := newModule(t, fullKP())
+	if err := m.Refresh(ctx); err != nil {
+		t.Fatal(err)
+	}
+	h := mux{http.NewServeMux()}
+	m.Register(h)
+	var first ListView
+	if code := getJSON(t, h, "/api/v1/kpcat/list?section=films-ru&order=imdb&limit=24", &first); code != 200 || first.Snap == "" {
+		t.Fatalf("первая порция: %d, snap %q", code, first.Snap)
+	}
+	// Пока человек смотрит первую порцию, у фильмов из хвоста пришли оценки IMDb — в живом порядке они первые.
+	for id := 1040; id < 1060; id++ {
+		if err := m.st.saveIMDb(ctx, id, 9.9, 100, m.now()); err != nil {
+			t.Fatal(err)
+		}
+	}
+	seen := map[int]int{}
+	for _, f := range first.Entries {
+		seen[f.ID]++
+	}
+	offset := len(first.Entries)
+	for more := first.More; more; {
+		var v ListView
+		getJSON(t, h, fmt.Sprintf("/api/v1/kpcat/list?section=films-ru&order=imdb&limit=24&offset=%d&snap=%s", offset, first.Snap), &v)
+		for _, f := range v.Entries {
+			seen[f.ID]++
+		}
+		offset += len(v.Entries)
+		more = v.More && len(v.Entries) > 0
+	}
+	if len(seen) != 60 {
+		t.Fatalf("показано %d из 60", len(seen))
+	}
+	for id, n := range seen {
+		if n > 1 {
+			t.Fatalf("фильм %d показан %d раза", id, n)
+		}
+	}
+	var lost ListView
+	if code := getJSON(t, h, "/api/v1/kpcat/list?section=films-ru&order=imdb&limit=24&offset=24&snap=nope", &lost); code != 200 ||
+		len(lost.Entries) != 24 || lost.Snap == "" || lost.Snap == "nope" {
+		t.Fatalf("неизвестный снимок: %d, %d, %q", code, len(lost.Entries), lost.Snap)
+	}
+}
+
+// Ревью 15В, Important 1: в пустом разделе — текст для человека: сетевая ошибка (по-английски, с адресом) —
+// «Кинопоиск не отвечает», подробности — в журнале; суточный предел — как есть.
+func TestCatalogSectionHumanError(t *testing.T) {
+	kp := fullKP()
+	kp.failAt = map[string]int{"popular-films|russian||POSITION_ASC": 0}
+	kp.failErr = errors.New("Кинопоиск: dial tcp 127.0.0.1:1: connectex: No connection could be made because the target machine actively refused it.")
+	m := newModule(t, kp)
+	h := mux{http.NewServeMux()}
+	m.Register(h)
+	m.Refresh(ctx)
+	if e := sectionsOf(t, h)["films-ru"].Error; e != meta.ErrKPBlocked.Error() {
+		t.Fatalf("сетевая ошибка: %q", e)
+	}
+	kp.mu.Lock()
+	kp.failErr = meta.ErrKPDailyLimit
+	kp.mu.Unlock()
+	m.Refresh(ctx)
+	if e := sectionsOf(t, h)["films-ru"].Error; e != meta.ErrKPDailyLimit.Error() {
+		t.Fatalf("суточный предел: %q", e)
+	}
+}
+
+// Ревью 15В, Important 2: каталог молчит только о паузах ворот (их пишут сами ворота); проход, где кроме паузы
+// есть другая ошибка, — в журнал.
+func TestPausedOnlyWhenAllPauses(t *testing.T) {
+	for _, c := range []struct {
+		err  error
+		want bool
+	}{
+		{meta.ErrKPBlocked, true},
+		{meta.ErrKPDailyLimit, true},
+		{errors.Join(meta.ErrKPBlocked, meta.ErrKPBlocked), true},
+		{errors.Join(errors.New("Кинопоиск: в разделе «Х» пришло 400 из 500"), meta.ErrKPBlocked), false},
+		{errors.New("Кинопоиск: dial tcp"), false},
+	} {
+		if got := paused(c.err); got != c.want {
+			t.Errorf("%v: %v, нужно %v", c.err, got, c.want)
+		}
 	}
 }

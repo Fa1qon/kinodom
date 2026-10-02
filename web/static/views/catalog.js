@@ -3,8 +3,9 @@
 import { h, icon, ago, size, rating, store, plural, keepFocus, offWarn, poll, formatTag, altFormatTag } from '../ui.js';
 import { get } from '../api.js';
 import { render as renderKP } from './kpcat.js';
+import { TRACKERS, oneAtATime, retryDue, orderLinks, trackerTabs } from './catalog-parts.js';
 
-export const TRACKERS = [['rutracker', 'Rutracker'], ['rutor', 'Rutor']];
+export { TRACKERS, oneAtATime, retryDue, orderLinks, trackerTabs } from './catalog-parts.js';
 
 // portions — подгрузка каталога порциями (замечание № 9 этапа 11b): {loaded, page, next, more, loading,
 // error}; page — сколько порций пришло, next — курсор (место последней карточки раздела, -1 — с начала;
@@ -26,16 +27,6 @@ export function portions(state, action) {
   }
 }
 
-// oneAtATime — пока вызов fn идёт, повторный возвращает тот же промис: вторая просьба порции ждёт идущую
-// загрузку, а не возвращается сразу (иначе экран считал список пустым — найдено вживую, 11b-А).
-export function oneAtATime(fn) {
-  let running = null;
-  return () => {
-    if (!running) running = Promise.resolve(fn()).finally(() => { running = null; });
-    return running;
-  };
-}
-
 // restoreDepth — возврат со страницы раздачи: догрузить столько порций, сколько было (pages), но не
 // больше, чем есть у сервера сейчас, и не просить снова порцию, которая не пришла — каталог мог стать
 // короче (склейка карточек, новый топ), иначе цикл без конца вешает пульт (ревью 11b-А).
@@ -46,12 +37,6 @@ export async function restoreDepth(more, getState, pages) {
     await more();
     if (getState().page === s.page) return;
   }
-}
-
-// retryDue — порция не пришла, а низ сетки на экране или рядом: прокрутка или «вниз» просят её снова
-// (наблюдатель пересечения второй раз не срабатывает, пока низ не ушёл из зоны — ревью 11b-А).
-export function retryDue(state, tailTop, viewportH) {
-  return !!state.error && !state.loading && state.more && tailTop < viewportH + 600;
 }
 
 // fillDue — порция пришла, а низ сетки всё ещё рядом: следующую — сразу, не дожидаясь наблюдателя
@@ -203,11 +188,6 @@ export function orderParams(urlOrder, mem, shown) {
   return {};
 }
 
-// orderLinks — переключатель порядка над разделом: ссылки на тот же раздел в каждом порядке.
-export function orderLinks(orders, current, base) {
-  return (orders || []).map((o) => ({ id: o.id, name: o.name, on: o.id === current, href: `${base}?order=${o.id}` }));
-}
-
 // groupDigits — число с неразрывными пробелами между разрядами: «23 992».
 function groupDigits(n) {
   return String(n).replace(/\B(?=(\d{3})+(?!\d))/g, '\u00a0');
@@ -226,15 +206,6 @@ export function orderStat(e, order) {
     }
   }
   return null;
-}
-
-// trackerTabs — вкладки каталога: трекеры (со значком, если у трекера проблемы) и «Кинопоиск» (план 14Г).
-export function trackerTabs(current, trackers = {}) {
-  return [...TRACKERS, ['kinopoisk', 'Кинопоиск']].map(([id, title]) => {
-    const bad = trackers[id] && trackers[id].state !== 'ok';
-    return h('a', { href: `#/catalog/${id}`, class: id === current ? 'on' : null, 'aria-current': id === current ? 'page' : null, 'data-key': `tab-${id}` },
-      title, bad ? icon('warning', 18, 'Есть проблемы') : null);
-  });
 }
 
 export function render(root, r, ctx) {

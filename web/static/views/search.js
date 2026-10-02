@@ -30,9 +30,16 @@ export function backTo(rel, savedCatalog, savedSearch) {
   return { href, text: [trackerLabel(rel.tracker), rel.category].filter(Boolean).join(' · ') };
 }
 
+// searchMemory — запомненный поиск для «назад» с раздачи: пришли с фильма «Кинопоиска» — с ним, шапка фильма
+// вернётся (ревью 14Г).
+export function searchMemory(q, kp) {
+  return '#/search?q=' + encodeURIComponent(q) + (kp > 0 ? `&kp=${kp}` : '');
+}
+
 export function render(root, r, ctx) {
   const q = (r.query.get('q') || '').trim();
-  if (q) store.set('search', '#/search?q=' + encodeURIComponent(q));
+  const kp = Number(r.query.get('kp')) || 0;
+  if (q) store.set('search', searchMemory(q, kp));
   let alive = true;
   const history = h('div', { class: 'history' });
   const trackers = h('div', { class: 'tags' });
@@ -47,7 +54,6 @@ export function render(root, r, ctx) {
   } }, h('label', { class: 'field' }, icon('search'), field));
   // Пришли с карточки «Кинопоиска» (план 14Г) — над результатами шапка фильма.
   const film = h('div');
-  const kp = Number(r.query.get('kp')) || 0;
   if (kp > 0) {
     get(`/kpcat/films/${kp}`).then((f) => {
       if (alive) film.replaceChildren(filmHeader(f));
