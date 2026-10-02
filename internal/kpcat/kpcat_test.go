@@ -589,3 +589,44 @@ func TestListSnapshotKeepsOrder(t *testing.T) {
 		t.Fatalf("неизвестный снимок: %d, %d, %q", code, len(lost.Entries), lost.Snap)
 	}
 }
+
+// Ревью 15В, Important 1: в пустом разделе — текст для человека: сетевая ошибка (по-английски, с адресом) —
+// «Кинопоиск не отвечает», подробности — в журнале; суточный предел — как есть.
+func TestCatalogSectionHumanError(t *testing.T) {
+	kp := fullKP()
+	kp.failAt = map[string]int{"popular-films|russian||POSITION_ASC": 0}
+	kp.failErr = errors.New("Кинопоиск: dial tcp 127.0.0.1:1: connectex: No connection could be made because the target machine actively refused it.")
+	m := newModule(t, kp)
+	h := mux{http.NewServeMux()}
+	m.Register(h)
+	m.Refresh(ctx)
+	if e := sectionsOf(t, h)["films-ru"].Error; e != meta.ErrKPBlocked.Error() {
+		t.Fatalf("сетевая ошибка: %q", e)
+	}
+	kp.mu.Lock()
+	kp.failErr = meta.ErrKPDailyLimit
+	kp.mu.Unlock()
+	m.Refresh(ctx)
+	if e := sectionsOf(t, h)["films-ru"].Error; e != meta.ErrKPDailyLimit.Error() {
+		t.Fatalf("суточный предел: %q", e)
+	}
+}
+
+// Ревью 15В, Important 2: каталог молчит только о паузах ворот (их пишут сами ворота); проход, где кроме паузы
+// есть другая ошибка, — в журнал.
+func TestPausedOnlyWhenAllPauses(t *testing.T) {
+	for _, c := range []struct {
+		err  error
+		want bool
+	}{
+		{meta.ErrKPBlocked, true},
+		{meta.ErrKPDailyLimit, true},
+		{errors.Join(meta.ErrKPBlocked, meta.ErrKPBlocked), true},
+		{errors.Join(errors.New("Кинопоиск: в разделе «Х» пришло 400 из 500"), meta.ErrKPBlocked), false},
+		{errors.New("Кинопоиск: dial tcp"), false},
+	} {
+		if got := paused(c.err); got != c.want {
+			t.Errorf("%v: %v, нужно %v", c.err, got, c.want)
+		}
+	}
+}

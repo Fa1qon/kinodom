@@ -1,9 +1,11 @@
 package meta
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -216,5 +218,42 @@ func TestKPListFilms(t *testing.T) {
 	}
 	if dated == 0 {
 		t.Fatalf("ни у одного фильма нет даты выхода: %+v", items)
+	}
+}
+
+// Ревью 15В, Important 2: пауза оценок IMDb (капча, 403/429) — строка в журнале у самих ворот оценок, одна на
+// паузу: каталог о паузах ворот молчит.
+func TestKPIMDbPauseLogged(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusForbidden)
+	}))
+	defer srv.Close()
+	var buf bytes.Buffer
+	w := NewKPWeb(KPWebOptions{RatingBase: srv.URL, Every: time.Millisecond, RatingEvery: time.Millisecond,
+		Log: slog.New(slog.NewTextHandler(&buf, nil))})
+	for id := range 3 {
+		if _, _, err := w.IMDb(context.Background(), id+1); !errors.Is(err, ErrKPBlocked) {
+			t.Fatalf("%d: %v", id+1, err)
+		}
+	}
+	if n := strings.Count(buf.String(), "оценки IMDb: пауза"); n != 1 {
+		t.Fatalf("строк о паузе %d: %s", n, buf.String())
+	}
+}
+
+// Ревью 15В, Important 2: суточный предел исчерпан — строка в журнале, одна в сутки.
+func TestKPDailyLimitLoggedOnce(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Write([]byte(sample(t, "kp_list_series.json")))
+	}))
+	defer srv.Close()
+	var buf bytes.Buffer
+	w := NewKPWeb(KPWebOptions{GraphQL: srv.URL + "/graphql/", Site: srv.URL, Every: time.Millisecond, DailyLimit: 2, Reserve: -1,
+		Log: slog.New(slog.NewTextHandler(&buf, nil))})
+	for range 4 {
+		w.List(context.Background(), KPList, ListQuery{Limit: 50})
+	}
+	if n := strings.Count(buf.String(), "суточный предел"); n != 1 {
+		t.Fatalf("строк о пределе %d: %s", n, buf.String())
 	}
 }
