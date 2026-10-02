@@ -28,16 +28,24 @@ import (
 // userAgent — обычный браузер: с ним снимались образцы страниц (spikes/misc/cmd/fetch).
 const userAgent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/140.0 Safari/537.36"
 
-// searchCategories — где ищет поиск (спека, раздел 6). У Rutor одна категория за запрос.
-var searchCategories = []string{"1", "5", "12", "4", "16", "7"}
-
 // videoCategories — разделы Rutor с видео, для настроек каталога.
 var videoCategories = []source.Category{
 	{ID: "1", Name: "Зарубежные фильмы"}, {ID: "5", Name: "Наши фильмы"},
 	{ID: "12", Name: "Научно-популярные фильмы"}, {ID: "4", Name: "Зарубежные сериалы"},
 	{ID: "16", Name: "Наши сериалы"}, {ID: "6", Name: "Телевизор"},
 	{ID: "7", Name: "Мультипликация"}, {ID: "10", Name: "Аниме"}, {ID: "15", Name: "Юмор"},
+	{ID: "13", Name: "Спорт и здоровье"}, {ID: "17", Name: "Иностранные релизы"},
 }
+
+// searchCategories — где ищет поиск, по категории за запрос: во всех видеокатегориях (жалоба 2026-10-02:
+// «Телевизор» с шоу и телепередачами выпадал — из 9 раздач «Фермы Кларксона» находилась одна).
+var searchCategories = func() []string {
+	out := make([]string, len(videoCategories))
+	for i, c := range videoCategories {
+		out[i] = c.ID
+	}
+	return out
+}()
 
 // Адресов Rutor в программе нет: адрес сайта или зеркала вводит пользователь, адрес .torrent —
 // по правилу из него (спека этапа 11a, раздел 6). Без адреса источник выключен.

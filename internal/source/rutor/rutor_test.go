@@ -86,7 +86,7 @@ func TestSearchMergesCategoriesWithoutDuplicates(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// Шесть запросов — по одному на видеокатегорию, запрос один и тот же.
+	// Одиннадцать запросов — по одному на видеокатегорию, запрос один и тот же.
 	var cats []string
 	for _, p := range s.Paths() {
 		rest, ok := strings.CutSuffix(p, "/100/2/Матрица 1999 24")
@@ -96,7 +96,7 @@ func TestSearchMergesCategoriesWithoutDuplicates(t *testing.T) {
 		cats = append(cats, strings.TrimPrefix(rest, "/search/0/"))
 	}
 	slices.Sort(cats)
-	if !slices.Equal(cats, []string{"1", "12", "16", "4", "5", "7"}) {
+	if !slices.Equal(cats, []string{"1", "10", "12", "13", "15", "16", "17", "4", "5", "6", "7"}) {
 		t.Fatalf("категории поиска %v", cats)
 	}
 	// Категории 1 и 5 отдают одну и ту же страницу: дубликаты схлопнуты, осталась категория 1.
@@ -166,8 +166,8 @@ func TestSearchPartialFailureKeepsResults(t *testing.T) {
 	}
 	// Найденное приходит вместе с ошибкой: каталог покажет его, но не сочтёт поиск полным.
 	var pe *source.PartialError
-	if !errors.As(err, &pe) || pe.Failed != 1 || pe.Total != 6 || !errors.Is(err, netx.ErrTrackerDown) {
-		t.Fatalf("ожидалась PartialError (1 из 6, трекер недоступен), получено %v", err)
+	if !errors.As(err, &pe) || pe.Failed != 1 || pe.Total != len(searchCategories) || !errors.Is(err, netx.ErrTrackerDown) {
+		t.Fatalf("ожидалась PartialError (1 из %d, трекер недоступен), получено %v", len(searchCategories), err)
 	}
 	for _, r := range rs {
 		if r.CategoryID == "12" {
@@ -318,7 +318,7 @@ func TestNotFoundKeepsMirror(t *testing.T) {
 func TestCategories(t *testing.T) {
 	s := rutortest.NewServer(t)
 	cats, err := newRutor(t, s).Categories(ctx)
-	if err != nil || len(cats) != 9 || cats[2].ID != "12" || cats[2].Name != "Научно-популярные фильмы" {
+	if err != nil || len(cats) != 11 || cats[2].ID != "12" || cats[2].Name != "Научно-популярные фильмы" {
 		t.Fatalf("категории %v, %v", cats, err)
 	}
 	if len(s.Paths()) != 0 {
@@ -505,5 +505,22 @@ func TestRutorSortedPage(t *testing.T) {
 		if _, _, err := r.SortedPage(ctx, bad.forums, bad.order, 0); err == nil {
 			t.Fatalf("%v %s принято", bad.forums, bad.order)
 		}
+	}
+}
+
+// Жалоба 2026-10-02: «ферма кларксона» — 8 из 9 раздач в «Телевизоре», поиск их не видел. Поиск — во всех
+// видеокатегориях, у каждой — название для выдачи.
+func TestSearchAllVideoCategories(t *testing.T) {
+	names := map[string]string{}
+	for _, c := range videoCategories {
+		names[c.ID] = c.Name
+	}
+	for _, id := range []string{"6", "10", "13", "15", "17"} {
+		if !slices.Contains(searchCategories, id) || names[id] == "" {
+			t.Errorf("категория %s: в поиске %v, название %q", id, slices.Contains(searchCategories, id), names[id])
+		}
+	}
+	if len(searchCategories) != len(videoCategories) {
+		t.Fatalf("поиск %v, видеокатегории %d", searchCategories, len(videoCategories))
 	}
 }
