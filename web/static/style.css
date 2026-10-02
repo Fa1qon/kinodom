@@ -261,6 +261,20 @@ a.res-row:hover { background: var(--hover); }
 
 /* Окно поверх экрана: обзор папок (этап 11a). */
 .dlg-back { position: fixed; inset: 0; z-index: 50; display: flex; align-items: center; justify-content: center; padding: 16px; background: rgba(0, 0, 0, .6); }
+/* Панель каталога слева (план 17А): трекер, раздел, порядок — списками сверху вниз */
+.dlg-back:has(> .drawer) { justify-content: flex-start; align-items: stretch; padding: 0; }
+.drawer { width: min(360px, 85vw); height: 100%; overflow-y: auto; display: flex; flex-direction: column; gap: 2px; padding: 16px 12px 24px; background: var(--bg-raised); border-right: 1px solid var(--line-strong); }
+.dtitle { margin: 14px 8px 6px; font-size: 13px; font-weight: 600; letter-spacing: .04em; text-transform: uppercase; color: var(--muted); }
+.dtitle:first-child { margin-top: 4px; }
+.dhead { margin: 10px 8px 2px; font-size: 13px; color: var(--dim); }
+.drow { display: flex; align-items: center; gap: 10px; min-height: 44px; padding: 0 12px; color: var(--soft); flex-shrink: 0; }
+.drow.on { background: var(--inv-bg); color: var(--inv-text); font-weight: 600; }
+.drow:focus-visible { position: relative; z-index: 1; } /* рамка фокуса — поверх фона выбранной строки (ревью 17А) */
+.drow .ic { color: var(--yellow); flex-shrink: 0; }
+/* Кнопка-сводка над сеткой каталога */
+.fbtn { min-width: 0; max-width: 100%; gap: 10px; }
+.fnote:empty { display: none; } /* предупреждения над сеткой каталога: пустые — без места (план 17А) */
+.fbtn .btn-label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
 .dlg { width: 100%; max-width: 560px; max-height: calc(100vh - 32px); background: var(--bg-raised); }
 .dlg-path { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; min-height: 24px; }
 .dlg-list { flex: 1 1 auto; min-height: 120px; overflow-y: auto; gap: 2px; }
@@ -289,8 +303,6 @@ a.res-row:hover { background: var(--hover); }
 .mod:last-child { border-bottom: 0; }
 .mod-name { width: 130px; flex-shrink: 0; font-weight: 600; }
 /* Порядок раздела (план 14Б): ряд под разделами, мельче. */
-.filters.orders { margin-top: -4px; }
-.filters.orders .fil { height: 30px; padding: 0 10px; font-size: 13px; }
 /* Просмотр источника и кадры (план 14Д). */
 .dlg.preview { width: min(860px, 94vw); }
 .preview-video { width: 100%; max-height: 60vh; background: #000; margin: 8px 0; }
@@ -548,7 +560,6 @@ a.res-row:hover { background: var(--hover); }
 /* Телефон стоя: в строках модулей и трекеров пояснение — под именем, во всю ширину; время проблемы — под
    текстом (было узкой колонкой в 3–4 строки; заказчик 2026-10-01). */
 @media (max-width: 600px) {
-  .filters.orders .fil { height: 44px; }
   .mod { flex-wrap: wrap; row-gap: 4px; }
   .mod.long .mod-name { width: auto; }
   .mod.long .mod-text, .mod-when { flex-basis: 100%; padding-left: 24px; }
