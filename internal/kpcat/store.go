@@ -169,15 +169,21 @@ func (d db) film(ctx context.Context, id int) (film, error) {
 	return f, err
 }
 
-// counts — фильмов в разделах и последнее обновление.
-func (d db) counts(ctx context.Context) (map[string]int, time.Time, error) {
+// sectionState — фильмов в разделе и когда он обновлён (нулевое — ни разу).
+type sectionState struct {
+	count int
+	at    time.Time
+}
+
+// counts — состояние разделов и последнее обновление из всех.
+func (d db) counts(ctx context.Context) (map[string]sectionState, time.Time, error) {
 	rows, err := d.R.QueryContext(ctx, `SELECT section, total, refreshed_at FROM kpcat_state`)
 	if err != nil {
 		return nil, time.Time{}, err
 	}
 	defer rows.Close()
-	out := map[string]int{}
-	var last int64
+	out := map[string]sectionState{}
+	var last time.Time
 	for rows.Next() {
 		var s string
 		var n int
@@ -185,14 +191,16 @@ func (d db) counts(ctx context.Context) (map[string]int, time.Time, error) {
 		if err := rows.Scan(&s, &n, &at); err != nil {
 			return nil, time.Time{}, err
 		}
-		out[s] = n
-		last = max(last, at)
+		st := sectionState{count: n}
+		if at > 0 {
+			st.at = time.UnixMilli(at)
+		}
+		out[s] = st
+		if st.at.After(last) {
+			last = st.at
+		}
 	}
-	var t time.Time
-	if last > 0 {
-		t = time.UnixMilli(last)
-	}
-	return out, t, rows.Err()
+	return out, last, rows.Err()
 }
 
 // imdbDue — фильмы разделов, у которых IMDb не спрашивали или спрашивали раньше before: ближе к началу — первыми.
