@@ -6,6 +6,8 @@ package kpcat
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -72,7 +74,21 @@ type Module struct {
 	mu   sync.Mutex
 	errs map[string]string // раздел → почему не удалась последняя попытка обновления (ревью 14Г: пустой раздел
 	// иначе вечно «идёт первое обновление»)
+	snaps map[string]*snapshot // токен → снимок порядка
 }
+
+// snapshot — порядок раздела, снятый первой порцией: следующие порции листают его (ревью 14Г: по смещению в
+// живом порядке фильмы повторялись и пропадали, когда приходили оценки IMDb или суточное обновление).
+type snapshot struct {
+	sec, order string
+	ids        []int
+	used       time.Time
+}
+
+const (
+	snapFor = time.Hour // снимок живёт после последнего обращения
+	snapMax = 64        // снимков всего; лишний — давний
+)
 
 func New(o Options) *Module {
 	if o.Log == nil {
@@ -84,7 +100,7 @@ func New(o Options) *Module {
 	if o.Every == 0 {
 		o.Every = 24 * time.Hour
 	}
-	return &Module{o: o, st: db{o.DB}, log: o.Log, now: o.Now, errs: map[string]string{}}
+	return &Module{o: o, st: db{o.DB}, log: o.Log, now: o.Now, errs: map[string]string{}, snaps: map[string]*snapshot{}}
 }
 
 func (m *Module) Name() string { return "kpcat" }
@@ -281,6 +297,64 @@ func (m *Module) list(ctx context.Context, sec, order string, offset, limit int)
 		out[i] = r.view()
 	}
 	return out, total, nil
+}
+
+// page — порция раздела из снимка порядка token; нет его (первая порция, снимок устарел, сервер перезапущен) —
+// из живого порядка под новым снимком (Review Focus 1, 15В). total — фильмов в снимке.
+func (m *Module) page(ctx context.Context, sec, order, token string, offset, limit int) (out []FilmView, total int, snap string, err error) {
+	order = orderOf(order)
+	now := m.now()
+	m.mu.Lock()
+	s := m.snaps[token]
+	if s != nil && offset > 0 && s.sec == sec && s.order == order {
+		s.used = now
+	} else {
+		s = nil
+	}
+	m.mu.Unlock()
+	if s == nil {
+		ids, err := m.st.orderIDs(ctx, sec, order, now)
+		if err != nil {
+			return nil, 0, "", err
+		}
+		var b [8]byte
+		rand.Read(b[:])
+		token = hex.EncodeToString(b[:])
+		s = &snapshot{sec: sec, order: order, ids: ids, used: now}
+		m.mu.Lock()
+		m.dropSnaps(now)
+		m.snaps[token] = s
+		m.mu.Unlock()
+	}
+	from := min(offset, len(s.ids))
+	to := min(from+limit, len(s.ids))
+	fs, err := m.st.filmsByIDs(ctx, s.ids[from:to])
+	if err != nil {
+		return nil, 0, "", err
+	}
+	out = make([]FilmView, len(fs))
+	for i, f := range fs {
+		out[i] = f.view()
+	}
+	return out, len(s.ids), token, nil
+}
+
+// dropSnaps — снимки, к которым не обращались snapFor, и лишние сверх snapMax (давние первыми). Под m.mu.
+func (m *Module) dropSnaps(now time.Time) {
+	for k, s := range m.snaps {
+		if now.Sub(s.used) > snapFor {
+			delete(m.snaps, k)
+		}
+	}
+	for len(m.snaps) >= snapMax {
+		old := ""
+		for k, s := range m.snaps {
+			if old == "" || s.used.Before(m.snaps[old].used) {
+				old = k
+			}
+		}
+		delete(m.snaps, old)
+	}
 }
 
 // ImageKeys — ключи постеров каталога в кэше картинок: чистка кэша их не удаляет (ревью 14Г).

@@ -518,3 +518,74 @@ func sectionsOf(t *testing.T, h http.Handler) map[string]SectionView {
 	}
 	return out
 }
+
+// Ревью 14Г: без даты выхода, но с годом — в «Новых» по году (1 января), а не в самом хвосте; год впереди — к
+// анонсам в конец.
+func TestNewByYearWithoutDate(t *testing.T) {
+	kp := fullKP()
+	now := time.Now()
+	y := now.Year()
+	fs := films(100, 4)
+	fs[0].Year = y - 1 // без даты, прошлый год
+	fs[1].Premiere, fs[1].Year = now.AddDate(0, 0, -10), y
+	fs[2].Year = y + 1 // без даты, следующий год — анонс
+	fs[3].Premiere, fs[3].Year = time.Date(y-3, 6, 1, 0, 0, 0, 0, time.UTC), y-3
+	kp.lists["popular-series|russian||POSITION_ASC"] = fs
+	m := newModule(t, kp)
+	if err := m.Refresh(ctx); err != nil {
+		t.Fatal(err)
+	}
+	vs, _, _ := m.list(ctx, "series-ru", "new", 0, 10)
+	if !slices.Equal(ids(vs), []int{101, 100, 103, 102}) {
+		t.Fatalf("новые: %v", ids(vs))
+	}
+}
+
+// Ревью 14Г: подгрузка по смещению повторяла и пропускала фильмы, когда порядок менялся на ходу (пришли
+// оценки IMDb, суточное обновление). Порции листают порядок, снятый первой порцией (snap); неизвестный snap
+// (сервер перезапущен) — живой порядок под новым снимком, без ошибки (Review Focus 1, 15В).
+func TestListSnapshotKeepsOrder(t *testing.T) {
+	m := newModule(t, fullKP())
+	if err := m.Refresh(ctx); err != nil {
+		t.Fatal(err)
+	}
+	h := mux{http.NewServeMux()}
+	m.Register(h)
+	var first ListView
+	if code := getJSON(t, h, "/api/v1/kpcat/list?section=films-ru&order=imdb&limit=24", &first); code != 200 || first.Snap == "" {
+		t.Fatalf("первая порция: %d, snap %q", code, first.Snap)
+	}
+	// Пока человек смотрит первую порцию, у фильмов из хвоста пришли оценки IMDb — в живом порядке они первые.
+	for id := 1040; id < 1060; id++ {
+		if err := m.st.saveIMDb(ctx, id, 9.9, 100, m.now()); err != nil {
+			t.Fatal(err)
+		}
+	}
+	seen := map[int]int{}
+	for _, f := range first.Entries {
+		seen[f.ID]++
+	}
+	offset := len(first.Entries)
+	for more := first.More; more; {
+		var v ListView
+		getJSON(t, h, fmt.Sprintf("/api/v1/kpcat/list?section=films-ru&order=imdb&limit=24&offset=%d&snap=%s", offset, first.Snap), &v)
+		for _, f := range v.Entries {
+			seen[f.ID]++
+		}
+		offset += len(v.Entries)
+		more = v.More && len(v.Entries) > 0
+	}
+	if len(seen) != 60 {
+		t.Fatalf("показано %d из 60", len(seen))
+	}
+	for id, n := range seen {
+		if n > 1 {
+			t.Fatalf("фильм %d показан %d раза", id, n)
+		}
+	}
+	var lost ListView
+	if code := getJSON(t, h, "/api/v1/kpcat/list?section=films-ru&order=imdb&limit=24&offset=24&snap=nope", &lost); code != 200 ||
+		len(lost.Entries) != 24 || lost.Snap == "" || lost.Snap == "nope" {
+		t.Fatalf("неизвестный снимок: %d, %d, %q", code, len(lost.Entries), lost.Snap)
+	}
+}
