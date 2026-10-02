@@ -2353,3 +2353,26 @@ for (const [got, want] of checks) {
 		t.Errorf("%v\n%s", err, out)
 	}
 }
+
+// План 16А: в сетках — миниатюры (?w=400), крупный постер — оригинал.
+func TestPultThumb(t *testing.T) {
+	node := lookNode(t)
+	script := `
+const { thumb } = await import('./ui.js');
+const checks = [
+  [thumb('/img/abc'), '/img/abc?w=400'],
+  [thumb('/api/v1/kpcat/films/5/poster'), '/api/v1/kpcat/films/5/poster?w=400'],
+  [thumb('/img/abc?x=1'), '/img/abc?x=1&w=400'],
+  [thumb(''), ''],
+  [thumb('https://elsewhere/p.jpg'), 'https://elsewhere/p.jpg'],
+];
+for (const [got, want] of checks) {
+  if (JSON.stringify(got) !== JSON.stringify(want)) { console.error(JSON.stringify(got), '≠', JSON.stringify(want)); process.exitCode = 1; }
+}
+`
+	cmd := exec.Command(node, "--input-type=module", "--no-warnings", "-e", script)
+	cmd.Dir = "static"
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Errorf("%v\n%s", err, out)
+	}
+}

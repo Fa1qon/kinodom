@@ -1,7 +1,7 @@
 // «История» (спека этапа 8, раздел 7.5): раздачи, которые смотрели на этом устройстве, по времени
 // последнего просмотра; последняя серия и где остановились; строка ведёт на экран раздачи; крестик
 // убирает раздачу из истории (из домашней сети).
-import { h, fill, icon, poll, keepFocus, day, baseName } from '../ui.js';
+import { h, fill, icon, poll, keepFocus, day, baseName, thumb as thumbOf } from '../ui.js';
 import { get, del } from '../api.js';
 
 // duration — «52 мин», «1 ч 58 мин».
@@ -81,7 +81,7 @@ export function render(root, r, ctx) {
     const lib = it.library; // карточка медиатеки (спека этапа 9, раздел 5.7)
     const title = lib ? lib.title : rel ? rel.title : it.hash.slice(0, 8);
     const thumb = h('div', { class: 'thumb' });
-    const img = lib ? lib.poster : rel && rel.imageKey ? `/img/${rel.imageKey}` : '';
+    const img = thumbOf(lib ? lib.poster : rel && rel.imageKey ? `/img/${rel.imageKey}` : '');
     if (img) thumb.append(h('img', { src: img, alt: '', loading: 'lazy' }));
     const file = it.file ? baseName(it.file) : `файл ${it.last.index + 1}`;
     const lines = [
