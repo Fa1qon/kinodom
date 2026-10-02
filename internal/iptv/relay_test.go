@@ -342,7 +342,8 @@ func TestRelayRange(t *testing.T) {
 		http.ServeContent(w, r, "x.ts", time.Time{}, bytes.NewReader(data))
 	})
 	rec := getRange(t, mux, fmt.Sprintf("/api/v1/iptv/streams/%d/watch", id), "bytes=10-19")
-	if rec.Code != http.StatusPartialContent || rec.Body.String() != "0123456789" || rec.Header().Get("Content-Range") != "bytes 10-19/1000" {
+	if rec.Code != http.StatusPartialContent || rec.Body.String() != "0123456789" || rec.Header().Get("Content-Range") != "bytes 10-19/1000" ||
+		rec.Header().Get("Content-Length") != "10" || rec.Header().Get("Accept-Ranges") != "bytes" {
 		t.Fatalf("%d %q %v", rec.Code, rec.Body, rec.Header())
 	}
 }
@@ -368,4 +369,54 @@ func getRange(t *testing.T, h http.Handler, path, rg string) *httptest.ResponseR
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, req)
 	return rec
+}
+
+// Ревью 15Г, п. 3: список HLS под Range — источник ответил частью (206), переписывать нечего: список берётся
+// целиком и отдаётся 200 без длины и Content-Range источника.
+func TestRelayPlaylistUnderRange(t *testing.T) {
+	pl := "#EXTM3U\n#EXT-X-TARGETDURATION:6\n#EXTINF:6,\nseg1.ts\n"
+	mux, id := relayOne(t, func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/vnd.apple.mpegurl")
+		http.ServeContent(w, r, "x.m3u8", time.Time{}, strings.NewReader(pl))
+	})
+	rec := getRange(t, mux, fmt.Sprintf("/api/v1/iptv/streams/%d/watch", id), "bytes=10-")
+	body := rec.Body.String()
+	if rec.Code != 200 || !strings.HasPrefix(body, "#EXTM3U") || len(relayLinks(body)) != 1 || rec.Header().Get("Content-Range") != "" {
+		t.Fatalf("%d %q %v", rec.Code, body, rec.Header())
+	}
+}
+
+// Ревью 15Г, п. 4: перемотка за конец — 416 источника плееру как есть, с Content-Range, а не 502.
+func TestRelayRangeNotSatisfiable(t *testing.T) {
+	data := bytes.Repeat([]byte("x"), 100)
+	mux, id := relayOne(t, func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "video/mp2t")
+		http.ServeContent(w, r, "x.ts", time.Time{}, bytes.NewReader(data))
+	})
+	rec := getRange(t, mux, fmt.Sprintf("/api/v1/iptv/streams/%d/watch", id), "bytes=500-")
+	if rec.Code != http.StatusRequestedRangeNotSatisfiable || rec.Header().Get("Content-Range") != "bytes */100" {
+		t.Fatalf("%d %v", rec.Code, rec.Header())
+	}
+}
+
+// Ревью 15Г, п. 5: BOM в середине склеенного списка — строка-тег остаётся тегом.
+func TestRewritePlaylistMidBOM(t *testing.T) {
+	base, _ := url.Parse("https://cdn.example/live/index.m3u8")
+	got := string(rewritePlaylist([]byte("#EXTM3U\n#EXTINF:6,\na.ts\n\ufeff#EXTINF:6,\nb.ts\n"), base, func(abs string) string { return "R(" + abs + ")" }))
+	if strings.Contains(got, "%EF%BB%BF") || strings.Contains(got, "\ufeff") || strings.Count(got, "R(") != 2 {
+		t.Fatalf("%q", got)
+	}
+}
+
+// Ревью 15Г, п. 9: DASH по виду источника (а не по .mpd в адресе) — 409; с тихой проверкой вид ставит сам тест.
+func TestRelayDASHByKind(t *testing.T) {
+	src := newRelaySrc(t)
+	m, mux, ids := relayModule(t, src)
+	id := ids["/live.ts"]
+	m.mu.Lock()
+	m.pool.streams[id].Kind = "dash"
+	m.mu.Unlock()
+	if rec := get(t, mux, fmt.Sprintf("/api/v1/iptv/streams/%d/watch", id)); rec.Code != http.StatusConflict {
+		t.Fatalf("DASH по виду: %d", rec.Code)
+	}
 }

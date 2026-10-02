@@ -5,6 +5,8 @@ import { h, fill, icon, poll, keepFocus, fileBase64 } from '../ui.js';
 import { get, put, post } from '../api.js';
 import { remoteNote } from './settings-layout.js';
 import { pickFolder, grantControl } from './folders.js';
+import { fileFieldShown } from './settings-unrecognized.js';
+import { appBridge } from './tvkit.js';
 
 export const STEPS = [
   { id: 'trackers', title: 'Раздачи' },
@@ -176,7 +178,7 @@ export function render(root, r, ctx) {
           e.preventDefault();
           if (url.value.trim()) add({});
         } }, h('div', { class: 'grow' }, url), h('button', { class: 'btn inv', type: 'submit', 'data-key': 'pl-add' }, icon('add'), 'Добавить'),
-        h('button', { class: 'btn', type: 'button', 'data-key': 'pl-file', onclick: () => file.click() }, icon('upload'), 'Файлом'), file) : null);
+        fileFieldShown(appBridge(), '*/*') ? h('button', { class: 'btn', type: 'button', 'data-key': 'pl-file', onclick: () => file.click() }, icon('upload'), 'Файлом') : null, file) : null);
     },
 
     // Медиатека: папки с фильмами и сериалами (обзор кликами или путь), «Найти» — обход и сверка с

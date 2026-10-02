@@ -2039,6 +2039,9 @@ const checks = [
   [fileFieldShown({}), false],
   [fileFieldShown({ canPickFiles: () => false }), false],
   [fileFieldShown({ canPickFiles: () => true }), true],
+  // Ревью 15Г, п. 8: файл плейлиста — любой тип: на ТВ, где выбрать можно только картинку, кнопки «Файлом» нет.
+  [fileFieldShown({ canPickFiles: (t) => t === 'image/*' }, '*/*'), false],
+  [fileFieldShown({ canPickFiles: (t) => t === 'image/*' }), true],
   [playerKind({ kind: 'hls', url: 'http://x/a' }), 'hls'],
   [playerKind({ kind: 'live', url: 'http://x/a' }), 'ts'],
   [playerKind({ kind: 'dash', url: 'http://x/a' }), 'dash'],
@@ -2092,6 +2095,19 @@ checks.push(['после отрисовки', document.activeElement === late]);
 document.activeElement = body;
 carryFocus(main, null);
 checks.push(['без ключа', document.activeElement === body]);
+// Ревью 15Г, п. 1: поле ввода не получает фокус после перехода — на ТВ снова выскочила бы клавиатура.
+document.activeElement = body;
+const field = Object.assign(el('q'), { tagName: 'INPUT', type: 'text' });
+main.items = [field];
+carryFocus(main, 'q');
+checks.push(['поле ввода', document.activeElement === body]);
+// Ревью 15Г, п. 2: отложенный ключ живёт до следующего перехода — переход без ключа его сбрасывает.
+main.items = [];
+carryFocus(main, 'gone');
+carryFocus(main, null);
+main.items = [el('gone')];
+keepFocus(main, () => {});
+checks.push(['сброс отложенного', document.activeElement === body]);
 // Вид сам поставил фокус при отрисовке — его не перебиваем.
 const own = el('own');
 document.activeElement = own;

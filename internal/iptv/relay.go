@@ -66,7 +66,8 @@ func rewritePlaylist(body []byte, base *url.URL, link func(abs string) string) [
 		}
 		return u.String()
 	}
-	lines := strings.Split(strings.TrimPrefix(string(body), "\ufeff"), "\n") // BOM — не строка-адрес
+	// BOM в начале и в начале строк склеенных списков — не часть строки (ревью 14Д, 15Г).
+	lines := strings.Split(strings.ReplaceAll(strings.TrimPrefix(string(body), "\ufeff"), "\n\ufeff", "\n"), "\n")
 	for i, l := range lines {
 		t := strings.TrimRight(l, "\r")
 		switch {
@@ -225,6 +226,12 @@ func (m *Module) relay(w http.ResponseWriter, r *http.Request, id int64, u strin
 	defer resp.Body.Close()
 	w.Header().Set("X-Content-Type-Options", "nosniff")
 	w.Header().Set("Content-Security-Policy", "sandbox")
+	if resp.StatusCode == http.StatusRequestedRangeNotSatisfiable {
+		// Перемотка за конец — плееру «конец файла», а не «источник не отвечает» (ревью 15Г).
+		w.Header().Set("Content-Range", resp.Header.Get("Content-Range"))
+		w.WriteHeader(resp.StatusCode)
+		return
+	}
 	if resp.StatusCode >= 400 {
 		httpx.WriteError(w, http.StatusBadGateway, fmt.Sprintf("источник ответил %d", resp.StatusCode))
 		return
@@ -234,6 +241,15 @@ func (m *Module) relay(w http.ResponseWriter, r *http.Request, id int64, u strin
 	final := resp.Request.URL // после переадресаций — относительные ссылки от него
 	if strings.Contains(strings.ToLower(resp.Header.Get("Content-Type")), "mpegurl") ||
 		strings.HasSuffix(strings.ToLower(final.Path), ".m3u8") || bytes.HasPrefix(bytes.TrimPrefix(head, []byte("\xef\xbb\xbf")), []byte("#EXTM3U")) {
+		if resp.StatusCode == http.StatusPartialContent {
+			// Часть списка переписывать нечего — список целиком (ревью 15Г: Chromium просит середину при
+			// переподключении).
+			resp.Body.Close()
+			whole := r.Clone(r.Context())
+			whole.Header.Del("Range")
+			m.relay(w, whole, id, u, h)
+			return
+		}
 		body, err := io.ReadAll(io.LimitReader(br, 4<<20))
 		if err != nil {
 			httpx.WriteError(w, http.StatusBadGateway, "список источника оборвался")
