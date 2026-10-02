@@ -15,7 +15,10 @@ android {
     compileSdk = 36
 
     defaultConfig {
-        applicationId = "ru.kinodom.app"
+        // Имя зарегистрировано в Android Developer Console (2026-10-02, аккаунт ограниченного распространения) — без
+        // предупреждения Play Защиты. Прежнее ru.kinodom.app Google уже видел на устройствах, такой аккаунт его не берёт.
+        // Пакеты кода (namespace) остались ru.kinodom.app.
+        applicationId = "ru.kinodom.home"
         minSdk = 24
         targetSdk = 36
         // Версия — та же, что у сервера; номер сборки — число коммитов (build.ps1 передаёт оба).
