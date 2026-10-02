@@ -19,6 +19,21 @@ const NOTE_FOR = 10000; // «Сейчас смотрят — …» после у
 
 // stateLabel — подпись метки состояния: «смотрят» — поток открыт, «смотрели» — смотрели за последние 6
 // часов, а плеер закрыт — удалить уже можно (замечание № 19).
+// skippedText — после удаления раздачи: серии, которые сейчас смотрят, остались.
+export function skippedText(res) {
+  return res && res.skipped ? `Сейчас смотрят — ${plural(res.skipped, 'серия осталась', 'серии остались', 'серий осталось')}` : '';
+}
+
+// spaceLine — место в «Загрузках»: по дискам, если качается на несколько (папки медиатеки — ревью 14В);
+// предупреждение — у диска, где мало.
+export function spaceLine(view) {
+  const disks = view.disks || [];
+  const free = disks.length > 1 ? 'свободно ' + disks.map((d) => `${d.volume} ${size(d.freeBytes)}`).join(' · ') : `свободно ${size(view.freeBytes)}`;
+  const low = disks.filter((d) => d.low).map((d) => d.volume);
+  const warn = low.length ? `Мало места на диске ${low.join(', ')}` : view.lowSpace ? 'Мало места на диске' : '';
+  return { free, warn };
+}
+
 export function stateLabel(d) {
   if (d.state === 'watching' && !d.streaming) return 'смотрели';
   return (STATE[d.state] || STATE.queued)[0];
@@ -65,8 +80,9 @@ export function render(root, r, ctx) {
   ctx.listeners.add(onStatus);
 
   function draw() {
-    warn.replaceChildren(view.lowSpace ? h('div', { class: 'warn' }, icon('warning'), 'Мало места в папке загрузок') : '');
-    total.replaceChildren(size(view.usedBytes), h('span', { class: 'muted' }, ` · свободно ${size(view.freeBytes)}`));
+    const sp = spaceLine(view);
+    warn.replaceChildren(sp.warn ? h('div', { class: 'warn' }, icon('warning'), sp.warn) : '');
+    total.replaceChildren(size(view.usedBytes), h('span', { class: 'muted' }, ` · ${sp.free}`));
     const groups = groupDownloads(view.items);
     keepFocus(list, () => {
       list.replaceChildren(...(groups.length ? groups.flatMap(group) : [h('p', { class: 'muted' }, 'Пока ничего не скачано')]));
@@ -203,8 +219,7 @@ export function render(root, r, ctx) {
   }
 
   async function removeRelease(g) {
-    const res = await del(`/downloads/${g.hash}`);
-    return res && res.skipped ? `Сейчас смотрят — ${plural(res.skipped, 'серия осталась', 'серии остались', 'серий осталось')}` : '';
+    return skippedText(await del(`/downloads/${g.hash}`));
   }
 
   return () => {

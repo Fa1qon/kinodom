@@ -286,7 +286,7 @@ func (s *Service) checkSpace(ctx context.Context) error {
 		return nil
 	}
 	// Коротко: подробности заказчик в интерфейсе видеть не хочет (спека этапа 7, раздел 2).
-	s.reg.setProblem(ctx, "torrents.space", "Мало места в папке загрузок: "+strings.Join(low, ", ")+" — удалите лишнее в «Загрузках»")
+	s.reg.setProblem(ctx, "torrents.space", "Мало места: "+strings.Join(low, ", ")+" — удалите лишнее в «Загрузках»")
 	return nil
 }
 
