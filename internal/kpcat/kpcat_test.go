@@ -630,3 +630,23 @@ func TestPausedOnlyWhenAllPauses(t *testing.T) {
 		}
 	}
 }
+
+// План 16А: постер «Кинопоиска» в сетке — миниатюрой: ?w= уходит в переход на /img/{key}.
+func TestPosterRouteThumb(t *testing.T) {
+	m := newModule(t, fullKP())
+	if err := m.Refresh(ctx); err != nil {
+		t.Fatal(err)
+	}
+	h := mux{http.NewServeMux()}
+	m.Register(h)
+	for url, want := range map[string]string{
+		"/api/v1/kpcat/films/1001/poster?w=400": "/img/key-1001?w=400",
+		"/api/v1/kpcat/films/1001/poster?w=x":   "/img/key-1001",
+	} {
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, httptest.NewRequest("GET", url, nil))
+		if rec.Code != http.StatusFound || rec.Header().Get("Location") != want {
+			t.Errorf("%s: %d %q", url, rec.Code, rec.Header().Get("Location"))
+		}
+	}
+}

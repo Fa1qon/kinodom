@@ -77,6 +77,9 @@ type Images struct {
 	stubs   map[string]bool            // sha256 заглушек (помнятся в stubs.txt)
 	keyHash map[string]string          // ключ → sha256 содержимого (скачанные и проверенные)
 	dropped []string                   // ключи, удалённые как заглушки: каталог снимает их с раздач
+
+	thumbSem  chan struct{}   // миниатюры делаются не больше thumbAtOnce сразу (план 16А)
+	thumbSkip map[string]bool // ключ → миниатюры не будет: true — оригинал не разобрался, false — он не шире
 }
 
 // KnownStub — заглушка хостинга, известная заранее: содержимое (sha256) и размер — по размеру отбираются
@@ -166,7 +169,7 @@ func NewImages(o ImagesOptions) (*Images, error) {
 	}
 	im := &Images{o: o, proxied: proxied, direct: direct, lim: rate.NewLimiter(o.Rate, 1),
 		noImage: map[string]time.Time{}, failed: map[string]failure{}, seen: map[string]map[string]bool{},
-		stubs: stubs, keyHash: map[string]string{}}
+		stubs: stubs, keyHash: map[string]string{}, thumbSem: make(chan struct{}, thumbAtOnce), thumbSkip: map[string]bool{}}
 	if o.StubSources > 0 {
 		im.dropKnownStubs(known)
 	}
@@ -476,6 +479,12 @@ func (im *Images) ServeKey(w http.ResponseWriter, r *http.Request, key string, i
 		http.NotFound(w, r)
 		return
 	}
+	// ?w= — миниатюра для сеток пульта (план 16А); ширина одна — thumbWidth, другие значения — она же.
+	if immutable && r.URL.Query().Get("w") != "" {
+		if t, ok := im.thumb(r.Context(), key, p); ok {
+			p = t
+		}
+	}
 	if immutable {
 		w.Header().Set("Cache-Control", "public, max-age=31536000, immutable")
 	} else {
@@ -493,6 +502,7 @@ func (im *Images) Sweep(keep func(key string) bool, now time.Time) ([]string, er
 		return nil, err
 	}
 	var removed []string
+	var thumbs []thumbFile
 	for _, e := range entries {
 		info, err := e.Info()
 		if err != nil || e.IsDir() {
@@ -505,6 +515,10 @@ func (im *Images) Sweep(keep func(key string) bool, now time.Time) ([]string, er
 			}
 			continue
 		}
+		if strings.HasSuffix(name, thumbSuffix) {
+			thumbs = append(thumbs, thumbFile{name, age})
+			continue
+		}
 		key := strings.TrimSuffix(name, filepath.Ext(name))
 		if !reImageKey.MatchString(key) || age < 24*time.Hour || keep(key) {
 			continue
@@ -513,5 +527,22 @@ func (im *Images) Sweep(keep func(key string) bool, now time.Time) ([]string, er
 			removed = append(removed, key)
 		}
 	}
+	// Миниатюры (план 16А): уходят вместе с оригиналом; оригинала нет, а миниатюре больше суток, — тоже.
+	gone := map[string]bool{}
+	for _, k := range removed {
+		gone[k] = true
+	}
+	for _, t := range thumbs {
+		key := strings.TrimSuffix(t.name, thumbSuffix)
+		if gone[key] || (t.age >= 24*time.Hour && im.find(key) == "") {
+			os.Remove(filepath.Join(im.o.Dir, t.name))
+		}
+	}
 	return removed, nil
+}
+
+// thumbFile — миниатюра в кэше: имя и возраст (для Sweep).
+type thumbFile struct {
+	name string
+	age  time.Duration
 }

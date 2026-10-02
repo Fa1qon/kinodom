@@ -1,6 +1,6 @@
 // «Новые серии» (спека 11b, 6.1): раздачи, за которыми следят, — что вышло; «Смотреть» — первая новая
 // серия, «Убрать» — строка уходит. Общие для семьи; строка уходит и сама, когда серии досмотрели.
-import { h, fill, icon, poll, keepFocus, day, openPlayer } from '../ui.js';
+import { h, fill, icon, poll, keepFocus, day, openPlayer, thumb as thumbOf } from '../ui.js';
 import { get, post, del } from '../api.js';
 import { playerLink } from './release.js';
 
@@ -76,7 +76,7 @@ export function render(root, r, ctx) {
 
   function row(u) {
     const thumb = h('div', { class: 'thumb' });
-    if (u.imageKey) thumb.append(h('img', { src: `/img/${u.imageKey}`, alt: '', loading: 'lazy' }));
+    if (u.imageKey) thumb.append(h('img', { src: thumbOf(`/img/${u.imageKey}`), alt: '', loading: 'lazy' }));
     const main = h('span', { class: 'dl-name' }, h('span', { class: 'strong ellipsis', title: u.title }, updateLabel(u)),
       h('span', { class: 'muted small' }, day(u.at)));
     return h('div', { class: 'dl' },
