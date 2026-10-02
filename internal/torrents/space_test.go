@@ -285,7 +285,7 @@ func TestLowSpacePausesBackgroundDownloads(t *testing.T) {
 	if p := tt.Files()[ep[1]].Priority(); p != torrent.PiecePriorityNormal {
 		t.Fatalf("серию, которую смотрят, поставили на паузу: приоритет %v", p)
 	}
-	if p := problemText(t, s.reg.db, "torrents.space"); !strings.Contains(p, "Мало места в папке загрузок") {
+	if p := problemText(t, s.reg.db, "torrents.space"); !strings.Contains(p, "Мало места: на диске") {
 		t.Fatalf("проблема %q", p)
 	}
 	if got := stored(t, s, ih); len(got) != 2 {

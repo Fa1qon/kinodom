@@ -45,7 +45,7 @@ func TestInstallerScript(t *testing.T) {
 		"procedure CurUninstallStepChanged", "CurUninstallStep <> usUninstall",
 		"Abort;",
 		"'uninstall --purge'",
-		"Удалить также скачанное и настройки?",
+		"Удалить также всё скачанное Kinodom (и в папках медиатеки) и настройки?", // ревью 14В
 		"MB_DEFBUTTON2",
 		"Kinodom.url",
 		"Открыть Kinodom",

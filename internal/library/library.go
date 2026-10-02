@@ -296,7 +296,7 @@ func (l *Library) scanNow(ctx context.Context) error {
 	}
 	for _, c := range cats {
 		target := c.Builtin == "films" || c.Builtin == "series"
-		for j, f := range c.Folders {
+		for _, f := range c.Folders {
 			if tfErr != nil && target {
 				// Папки раздач не прочитались, а сюда качает Kinodom: без пропуска скачанное стало бы своим
 				// файлом, а «папка = сериал» пересоздалась бы с новой историей — до следующего обхода как было
@@ -328,8 +328,16 @@ func (l *Library) scanNow(ctx context.Context) error {
 			if err := l.d.syncFolder(ctx, f.ID, c, units, now); err != nil {
 				return err
 			}
-			if target && j == 0 && !l.Writable(f.Path) {
-				problems[f.ID] = "no_write" // сюда качается скачанное (план 14В); в остальные папки — нет (ревью 14В)
+		}
+		if target {
+			// Право записи — у папки, куда качается скачанное (план 14В): первая, которая не сама сериал
+			// (ревью 15Б, Important 2); в остальные папки Kinodom не пишет (ревью 14В).
+			f, ok, err := l.targetIn(ctx, c)
+			if err != nil {
+				return err
+			}
+			if ok && problems[f.ID] == "" && !l.Writable(f.Path) {
+				problems[f.ID] = "no_write"
 			}
 		}
 	}
