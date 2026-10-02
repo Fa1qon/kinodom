@@ -10,6 +10,7 @@ import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
 import android.os.SystemClock
+import android.speech.RecognizerIntent
 import android.view.View
 import android.view.ViewGroup
 import android.webkit.JavascriptInterface
@@ -43,6 +44,7 @@ import ru.kinodom.app.core.Recovery
 import ru.kinodom.app.core.Route
 import ru.kinodom.app.core.ServerApp
 import ru.kinodom.app.core.UpdateDecision
+import ru.kinodom.app.core.Voice
 import ru.kinodom.app.core.WebViewVersion
 import ru.kinodom.app.net.Prefs
 import ru.kinodom.app.net.ServerFinder
@@ -269,7 +271,42 @@ class PultActivity : Activity() {
     }
 
     @Deprecated("startActivityForResult — у android.app.Activity другого пути нет")
+    // voiceIntent — системное распознавание речи (план 17В): русский, свободная речь. Разрешения на микрофон
+    // приложению не нужно — слушает системная служба.
+    private fun voiceIntent() = Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH)
+        .putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
+        .putExtra(RecognizerIntent.EXTRA_LANGUAGE, "ru-RU")
+        .putExtra(RecognizerIntent.EXTRA_PROMPT, getString(R.string.voice_prompt))
+
+    private fun canVoice() = voiceIntent().resolveActivity(packageManager) != null
+
+    // startVoice — окно распознавания; возврат из него — не вход в приложение (picking, как у выбора файла).
+    private fun startVoice() {
+        if (!::web.isInitialized || web.url?.startsWith(base) != true) return
+        try {
+            picking = true
+            @Suppress("DEPRECATION")
+            startActivityForResult(voiceIntent(), VOICE)
+        } catch (e: ActivityNotFoundException) {
+            picking = false
+        }
+    }
+
+    // onSearchRequested — кнопка «Поиск» пульта (у части пультов): голосовой поиск, если он есть. Ассистента на пульте
+    // Google TV забирает система.
+    override fun onSearchRequested(): Boolean {
+        if (!canVoice()) return super.onSearchRequested()
+        startVoice()
+        return true
+    }
+
     override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
+        if (requestCode == VOICE) {
+            picking = false
+            val q = if (resultCode == RESULT_OK) Voice.query(data?.getStringArrayListExtra(RecognizerIntent.EXTRA_RESULTS)) else null
+            if (q != null && ::web.isInitialized && web.url?.startsWith(base) == true) web.evaluateJavascript(Voice.hashJs(q), null)
+            return
+        }
         if (requestCode == PICK_FILE) {
             picking = false
             filePick?.onReceiveValue(WebChromeClient.FileChooserParams.parseResult(resultCode, data))
@@ -563,6 +600,15 @@ class PultActivity : Activity() {
             Prefs(this@PultActivity).sounds = on
         }
 
+        // voiceAvailable, voice — голосовой поиск (план 17В): есть ли распознавание; открыть его.
+        @JavascriptInterface
+        fun voiceAvailable(): Boolean = canVoice()
+
+        @JavascriptInterface
+        fun voice() {
+            handler.post { startVoice() }
+        }
+
         // update — «Обновить» в пульте: скачать и поставить новую версию с сервера сразу, без окна и «Позже».
         @JavascriptInterface
         fun update() {
@@ -575,6 +621,7 @@ class PultActivity : Activity() {
         private const val DAY_MS = 24L * 60 * 60 * 1000
         private const val WATCH_MS = 60L * 1000
         private const val PICK_FILE = 41
+        private const val VOICE = 42
 
         // CLOSE_DIALOG — закрыть верхнее окно пульта (openModal в ui.js закрывает его по Escape); true — было окно.
         private const val CLOSE_DIALOG = "(function(){var a=document.querySelectorAll('.dlg-back');if(!a.length)return false;" +
