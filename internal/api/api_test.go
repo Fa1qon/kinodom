@@ -206,6 +206,16 @@ func TestModuleGuard(t *testing.T) {
 	}
 }
 
+// Ревью 14Г: модуль «kpcat» стоит — человеку его название, а не внутреннее имя.
+func TestModuleGuardKinopoisk(t *testing.T) {
+	s, _ := newTestServer(t, idleModule{"kpcat"})
+	s.Handle("GET /api/v1/kpmod", "kpcat", okHandler())
+	rec := do(s.Handler(), httptest.NewRequest("GET", "/api/v1/kpmod", nil))
+	if rec.Code != http.StatusServiceUnavailable || !strings.Contains(rec.Body.String(), "«Кинопоиск» временно недоступен") {
+		t.Fatalf("код %d: %s", rec.Code, rec.Body)
+	}
+}
+
 func TestPanicBecomes500(t *testing.T) {
 	s, _ := newTestServer(t)
 	s.Handle("GET /api/v1/boom", "", http.HandlerFunc(func(http.ResponseWriter, *http.Request) { panic("бум") }))

@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"sync"
 	"time"
 
 	"kinodom/internal/meta"
@@ -67,6 +68,10 @@ type Module struct {
 	st  db
 	log *slog.Logger
 	now func() time.Time
+
+	mu   sync.Mutex
+	errs map[string]string // раздел → почему не удалась последняя попытка обновления (ревью 14Г: пустой раздел
+	// иначе вечно «идёт первое обновление»)
 }
 
 func New(o Options) *Module {
@@ -79,7 +84,7 @@ func New(o Options) *Module {
 	if o.Every == 0 {
 		o.Every = 24 * time.Hour
 	}
-	return &Module{o: o, st: db{o.DB}, log: o.Log, now: o.Now}
+	return &Module{o: o, st: db{o.DB}, log: o.Log, now: o.Now, errs: map[string]string{}}
 }
 
 func (m *Module) Name() string { return "kpcat" }
@@ -106,14 +111,18 @@ func (m *Module) Run(ctx context.Context) error {
 		if !now.Before(refreshAt) {
 			refreshAt = now.Add(time.Hour)
 			if err := m.refreshDue(ctx); err != nil && ctx.Err() == nil {
-				m.log.Info("каталог Кинопоиска: обновление не удалось", "err", err)
+				if !paused(err) {
+					m.log.Info("каталог Кинопоиска: обновление не удалось", "err", err)
+				}
 				refreshAt = now.Add(30 * time.Minute)
 			}
 		}
 		if !now.Before(imdbAt) {
 			imdbAt = now.Add(time.Hour)
 			if did, err := m.fillIMDb(ctx, 20); err != nil && ctx.Err() == nil {
-				m.log.Info("каталог Кинопоиска: оценки IMDb не пришли", "err", err)
+				if !paused(err) {
+					m.log.Info("каталог Кинопоиска: оценки IMDb не пришли", "err", err)
+				}
 				imdbAt = now.Add(30 * time.Minute)
 			} else if did > 0 {
 				imdbAt = now.Add(time.Second)
@@ -124,6 +133,29 @@ func (m *Module) Run(ctx context.Context) error {
 			next = imdbAt
 		}
 		timer.Reset(max(time.Second, next.Sub(m.now())))
+	}
+}
+
+// paused — отказ ворот Кинопоиска (пауза или суточный предел): строку в журнал о нём уже написали ворота —
+// каталог её не повторяет на каждую попытку (ревью 14Г).
+func paused(err error) bool {
+	return errors.Is(err, meta.ErrKPBlocked) || errors.Is(err, meta.ErrKPDailyLimit)
+}
+
+// sectionErr — почему не удалась последняя попытка обновить раздел; "" — удалась или не было.
+func (m *Module) sectionErr(sec string) string {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.errs[sec]
+}
+
+func (m *Module) setSectionErr(sec string, err error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if err == nil {
+		delete(m.errs, sec)
+	} else {
+		m.errs[sec] = err.Error()
 	}
 }
 
@@ -148,7 +180,7 @@ func (m *Module) Refresh(ctx context.Context) error { return m.refresh(ctx, sect
 
 func (m *Module) refresh(ctx context.Context, secs []section) error {
 	var errs []error
-	for _, s := range secs {
+	for i, s := range secs {
 		var all []meta.ListFilm
 		var err error
 		total := 0
@@ -170,7 +202,15 @@ func (m *Module) refresh(ctx context.Context, secs []section) error {
 		}
 		if err != nil {
 			errs = append(errs, err)
-			if ctx.Err() != nil || errors.Is(err, meta.ErrKPBlocked) {
+			if ctx.Err() != nil {
+				break
+			}
+			m.setSectionErr(s.id, err)
+			if errors.Is(err, meta.ErrKPBlocked) {
+				// Пауза ворот: остальные разделы не спрашивались — у них та же причина (Review Focus 2, 15В).
+				for _, rest := range secs[i+1:] {
+					m.setSectionErr(rest.id, err)
+				}
 				break
 			}
 			continue
@@ -178,6 +218,7 @@ func (m *Module) refresh(ctx context.Context, secs []section) error {
 		if err := m.st.replaceSection(ctx, s.id, all, m.now()); err != nil {
 			return err
 		}
+		m.setSectionErr(s.id, nil)
 	}
 	return errors.Join(errs...)
 }

@@ -41,9 +41,11 @@ type ListView struct {
 }
 
 type SectionView struct {
-	ID    string `json:"id"`
-	Name  string `json:"name"`
-	Count int    `json:"count"`
+	ID        string     `json:"id"`
+	Name      string     `json:"name"`
+	Count     int        `json:"count"`
+	UpdatedAt *time.Time `json:"updatedAt"` // nil — раздел ещё не обновлялся
+	Error     string     `json:"error"`     // последняя попытка обновления не удалась — почему; "" — удалась
 }
 
 type OrderView struct {
@@ -51,7 +53,7 @@ type OrderView struct {
 	Name string `json:"name"`
 }
 
-// CatalogView — разделы, порядки и последнее обновление.
+// CatalogView — разделы, порядки и последнее обновление (из всех разделов; у раздела — своё).
 type CatalogView struct {
 	Sections  []SectionView `json:"sections"`
 	Orders    []OrderView   `json:"orders"`
@@ -67,14 +69,19 @@ func (m *Module) Register(r Router) {
 }
 
 func (m *Module) handleCatalog(w http.ResponseWriter, r *http.Request) {
-	counts, at, err := m.st.counts(r.Context())
+	states, at, err := m.st.counts(r.Context())
 	if err != nil {
 		httpx.WriteError(w, http.StatusInternalServerError, "каталог Кинопоиска не читается: "+err.Error())
 		return
 	}
 	out := CatalogView{Sections: []SectionView{}, Orders: []OrderView{}}
 	for _, s := range sections {
-		out.Sections = append(out.Sections, SectionView{ID: s.id, Name: s.name, Count: counts[s.id]})
+		st := states[s.id]
+		sv := SectionView{ID: s.id, Name: s.name, Count: st.count, Error: m.sectionErr(s.id)}
+		if !st.at.IsZero() {
+			sv.UpdatedAt = &st.at
+		}
+		out.Sections = append(out.Sections, sv)
 	}
 	for _, o := range orders {
 		out.Orders = append(out.Orders, OrderView{ID: o.id, Name: o.name})
