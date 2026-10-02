@@ -111,12 +111,18 @@ function focusOn(el) {
   el.scrollIntoView({ block: 'nearest', inline: 'nearest' });
 }
 
+// firstFocus — куда первая стрелка, когда фокуса нет: первый элемент экрана, но не поле ввода (ревью 16Б: на странице
+// поиска первая стрелка попадала в поле, и на ТВ выскакивала клавиатура); на экране только поле — оно (или шапка).
+export function firstFocus(all) {
+  return all.find((el) => el.closest('main') && !typing(el)) || all[0];
+}
+
 // move — фокус в сторону dir; фокуса ещё нет — на первый элемент экрана. false — идти некуда.
 export function move(dir) {
   const all = focusables();
   const active = document.activeElement;
   if (!active || !all.includes(active)) {
-    const first = all.find((el) => el.closest('main')) || all[0];
+    const first = firstFocus(all);
     if (first) focusOn(first);
     return !!first;
   }
