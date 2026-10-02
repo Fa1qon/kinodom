@@ -17,6 +17,8 @@ require (
 	modernc.org/sqlite v1.59.0
 )
 
+require golang.org/x/image v0.33.0
+
 require (
 	github.com/RoaringBitmap/roaring v1.2.3 // indirect
 	github.com/alecthomas/atomic v0.1.0-alpha2 // indirect
