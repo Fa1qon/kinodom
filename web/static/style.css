@@ -261,6 +261,18 @@ a.res-row:hover { background: var(--hover); }
 
 /* Окно поверх экрана: обзор папок (этап 11a). */
 .dlg-back { position: fixed; inset: 0; z-index: 50; display: flex; align-items: center; justify-content: center; padding: 16px; background: rgba(0, 0, 0, .6); }
+/* Панель каталога слева (план 17А): трекер, раздел, порядок — списками сверху вниз */
+.dlg-back:has(> .drawer) { justify-content: flex-start; align-items: stretch; padding: 0; }
+.drawer { width: min(360px, 85vw); height: 100%; overflow-y: auto; display: flex; flex-direction: column; gap: 2px; padding: 16px 12px 24px; background: var(--bg-raised); border-right: 1px solid var(--line-strong); }
+.dtitle { margin: 14px 8px 6px; font-size: 13px; font-weight: 600; letter-spacing: .04em; text-transform: uppercase; color: var(--muted); }
+.dtitle:first-child { margin-top: 4px; }
+.dhead { margin: 10px 8px 2px; font-size: 13px; color: var(--dim); }
+.drow { display: flex; align-items: center; gap: 10px; min-height: 44px; padding: 0 12px; color: var(--soft); flex-shrink: 0; }
+.drow.on { background: var(--inv-bg); color: var(--inv-text); font-weight: 600; }
+.drow .ic { color: var(--yellow); flex-shrink: 0; }
+/* Кнопка-сводка над сеткой каталога */
+.fbtn { min-width: 0; max-width: 100%; gap: 10px; }
+.fbtn .btn-label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
 .dlg { width: 100%; max-width: 560px; max-height: calc(100vh - 32px); background: var(--bg-raised); }
 .dlg-path { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; min-height: 24px; }
 .dlg-list { flex: 1 1 auto; min-height: 120px; overflow-y: auto; gap: 2px; }
