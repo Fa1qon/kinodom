@@ -2329,11 +2329,13 @@ for (const [got, want] of checks) {
 func TestPultChannelsPortions(t *testing.T) {
 	node := lookNode(t)
 	script := `
-const { flatRows, portionEnd, sameKeys, CH_PORTION } = await import('./views/channels.js');
+const { flatRows, portionEnd, sameKeys, CH_PORTION, CH_FIRST } = await import('./views/channels.js');
 const ch = (key, block, categoryName) => ({ key, block, categoryName });
 const rows = flatRows([{ title: 'Избранные', items: [ch('a', 'favorite')] }, { title: 'Кино', items: [ch('b', ''), ch('c', '')] }]);
 const checks = [
   [CH_PORTION, 40],
+  // Первая порция меньше (замер 16А: 40 строк сразу — 1,2 с при ×20): экран открывается быстрее.
+  [CH_FIRST, 20],
   [rows.map((r) => r.sec || r.ch.key), ['Избранные', 'a', 'Кино', 'b', 'c']],
   [flatRows([{ title: '', items: [ch('a')] }]).map((r) => r.sec === undefined ? r.ch.key : '#'), ['a']],
   [portionEnd(100, 0, 40), 40],
