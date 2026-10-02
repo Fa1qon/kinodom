@@ -5,7 +5,7 @@ import { h, fill, icon, keepFocus, plural } from '../ui.js';
 import { get, put, post } from '../api.js';
 import { layout, remoteNote, channelTabs } from './settings-layout.js';
 import { openPreview } from './preview.js';
-import { CATEGORIES } from './channel-settings.js';
+import { CATEGORIES, pickLabel } from './channel-settings.js';
 
 // logoFileError — файл логотипа больше 1 МБ: отказ до отправки (фото с телефона; ревью 14Д, п. 10).
 export function logoFileError(f) {
@@ -127,7 +127,7 @@ export function render(root, r, ctx) {
             if (first) first.focus();
           } }, h('div', { class: 'grow' }, pick), h('button', { class: 'btn', type: 'submit', 'data-key': 'pick-find' }, icon('search'), 'Найти')),
           h('div', { class: 'picks' }, found.map((c) => h('button', { class: 'btn', type: 'button', 'data-key': `to-${c.key}`,
-            onclick: () => act(() => put('/iptv/names', { name: u.name, channel: c.key })) }, c.name))));
+            onclick: () => act(() => put('/iptv/names', { name: u.name, channel: c.key })) }, pickLabel(c)))));
         }
         if (making === u.name) {
           row.append(h('form', { class: 'new-channel col gap10', onsubmit: async (e) => {

@@ -1981,6 +1981,7 @@ func TestPultPreview(t *testing.T) {
 	script := `
 const { playerKind, previewStats, playerError, frameNote, playerSession, nativeError, hlsWay } = await import('./views/preview.js');
 const { logoFileError } = await import('./views/settings-unrecognized.js');
+const { pickLabel } = await import('./views/channel-settings.js');
 const text = (e) => (e ? e.what + ': ' + e.text : null);
 const binary = { get responseText() { throw new Error('responseType arraybuffer'); } };
 // Ревью 14Д, п. 3: окно закрыли, пока грузилась библиотека, — плеер разбирается, как только подключится.
@@ -2030,6 +2031,9 @@ const checks = [
   [logoFileError({ size: 3 << 20 }), 'логотип больше 1 МБ'],
   [logoFileError({ size: 50000 }), ''],
   [logoFileError(undefined), ''],
+  // Ревью 14Д, п. 16: свой канал в поиске «Назначить» помечен.
+  [pickLabel({ key: 'my-1', name: 'НТВ', own: true }), 'НТВ · свой'],
+  [pickLabel({ key: 'ntv', name: 'НТВ' }), 'НТВ'],
   [playerKind({ kind: 'hls', url: 'http://x/a' }), 'hls'],
   [playerKind({ kind: 'live', url: 'http://x/a' }), 'ts'],
   [playerKind({ kind: 'dash', url: 'http://x/a' }), 'dash'],
