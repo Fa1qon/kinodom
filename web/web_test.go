@@ -2492,7 +2492,7 @@ for (const [got, want] of checks) {
 func TestPultFilters(t *testing.T) {
 	node := lookNode(t)
 	script := `
-const { filterSummary, drawerSections, firstColumn } = await import('./views/catalog-parts.js');
+const { filterSummary, drawerSections, firstColumn, setPending, takePending, samePlace } = await import('./views/catalog-parts.js');
 const s = (id, name, group, groupName) => ({ id, name, group, groupName });
 const checks = [
   [filterSummary(['Rutor', 'Зарубежные фильмы', 'Раздающие']), 'Rutor · Зарубежные фильмы · Раздающие'],
@@ -2503,6 +2503,15 @@ const checks = [
   [firstColumn({ left: 24 }, { left: 24 }), true],
   [firstColumn({ left: 24.5 }, { left: 24 }), true],
   [firstColumn({ left: 250 }, { left: 24 }), false],
+  // Ревью 17А, Minor 6: разделы без группы после групп — под своим заголовком, а не под последней группой.
+  [drawerSections([s('2', 'Фильмы', 'g1', 'Кино'), s('5', 'Прочее')]).map((x) => x.head ? '#' + x.head : x.id), ['#Кино', '2', '#Другие разделы', '5']],
+  // Ревью 17А, Important 1: что сделать после перехода из панели — только на том адресе, куда переходили, и один раз.
+  [(setPending('#/catalog/rutor/1', 'grid'), takePending('#/downloads')), null],
+  [takePending('#/catalog/rutor/1'), null],
+  [(setPending('#/catalog/rutor', 'reopen'), takePending('#/catalog/rutor')), 'reopen'],
+  [takePending('#/catalog/rutor'), null],
+  [samePlace('#/catalog/rutor/1', '#/catalog/rutor/1'), true],
+  [samePlace('#/catalog/rutor/1?order=new', '#/catalog/rutor/1'), false],
 ];
 for (const [got, want] of checks) {
   if (JSON.stringify(got) !== JSON.stringify(want)) { console.error(JSON.stringify(got), '≠', JSON.stringify(want)); process.exitCode = 1; }
