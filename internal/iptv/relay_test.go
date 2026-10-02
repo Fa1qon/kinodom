@@ -104,7 +104,7 @@ func newRelaySrc(t *testing.T) *relaySrc {
 func relayModule(t *testing.T, src *relaySrc) (*Module, *http.ServeMux, map[string]int64) {
 	t.Helper()
 	f := newFakeNet(t)
-	m, _ := startModule(t, f)
+	m, _ := startModuleWith(t, f, quietProber())
 	u := src.srv.URL
 	f.setPlaylist("#EXTM3U\n#EXTINF:-1,Канал HLS\n#EXTVLCOPT:http-user-agent=TestUA/1\n#EXTVLCOPT:http-referrer=https://ref.example/\n" + u + "/hls/master.m3u8\n" +
 		"#EXTINF:-1,Канал TS\n" + u + "/live.ts\n#EXTINF:-1,Канал DASH\n" + u + "/dash.mpd\n")
@@ -245,7 +245,7 @@ func relayOne(t *testing.T, handler http.HandlerFunc) (*http.ServeMux, int64) {
 	srv := httptest.NewServer(handler)
 	t.Cleanup(srv.Close)
 	f := newFakeNet(t)
-	m, _ := startModule(t, f)
+	m, _ := startModuleWith(t, f, quietProber())
 	f.setPlaylist("#EXTM3U\n#EXTINF:-1,Канал\n" + srv.URL + "/x\n")
 	if _, err := m.AddPlaylist(context.Background(), PlaylistInput{URL: f.srv.URL + "/pl.m3u"}); err != nil {
 		t.Fatal(err)
