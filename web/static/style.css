@@ -345,7 +345,8 @@ a.res-row:hover { background: var(--hover); }
 .count { margin-left: auto; padding-right: 10px; font-size: 13px; color: var(--dim); white-space: nowrap; }
 .list { display: flex; flex-direction: column; }
 .list .check { min-height: 36px; }
-.search-here { display: block; }
+.search-here { display: flex; align-items: center; gap: 8px; max-width: 700px; }
+.search-here .voice { flex-shrink: 0; width: 44px; height: 44px; }
 .search-here .field { width: 100%; max-width: 640px; }
 /* История поиска — списком (план 16Б): строка — запрос и крестик; на ТВ — «вниз-вниз» */
 .hist-list { display: flex; flex-direction: column; align-items: flex-start; gap: 4px; max-width: 640px; }
