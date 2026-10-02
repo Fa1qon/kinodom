@@ -29,13 +29,20 @@ class Sounds(context: Context) {
         "edge" to pool.load(context, R.raw.nav_edge, 1),
     )
     private val gate = SoundGate(ids.keys)
+    private var released = false
 
-    // play — звук name, если звуки включены и он не звучал только что. Можно звать с любого потока.
+    // play — звук name, если звуки включены и он не звучал только что. Можно звать с любого потока: мост зовёт с
+    // своего, release — с главного; замок — чтобы не играть на освобождённом пуле (ревью 16В).
+    @Synchronized
     fun play(name: String) {
-        if (!gate.allow(name, prefs.sounds, SystemClock.uptimeMillis())) return
+        if (released || !gate.allow(name, prefs.sounds, SystemClock.uptimeMillis())) return
         val id = ids[name] ?: return
         pool.play(id, 1f, 1f, 1, 0, 1f)
     }
 
-    fun release() = pool.release()
+    @Synchronized
+    fun release() {
+        released = true
+        pool.release()
+    }
 }
