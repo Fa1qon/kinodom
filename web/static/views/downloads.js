@@ -17,8 +17,6 @@ const ORDER = ['watching', 'downloading', 'paused', 'queued', 'done'];
 const CONFIRM_FOR = 3000; // «Удалить?» ждёт второго нажатия 3 с
 const NOTE_FOR = 10000; // «Сейчас смотрят — …» после удаления раздачи видно 10 с (хвост Х27)
 
-// stateLabel — подпись метки состояния: «смотрят» — поток открыт, «смотрели» — смотрели за последние 6
-// часов, а плеер закрыт — удалить уже можно (замечание № 19).
 // skippedText — после удаления раздачи: серии, которые сейчас смотрят, остались.
 export function skippedText(res) {
   return res && res.skipped ? `Сейчас смотрят — ${plural(res.skipped, 'серия осталась', 'серии остались', 'серий осталось')}` : '';
@@ -30,10 +28,12 @@ export function spaceLine(view) {
   const disks = view.disks || [];
   const free = disks.length > 1 ? 'свободно ' + disks.map((d) => `${d.volume} ${size(d.freeBytes)}`).join(' · ') : `свободно ${size(view.freeBytes)}`;
   const low = disks.filter((d) => d.low).map((d) => d.volume);
-  const warn = low.length ? `Мало места на диске ${low.join(', ')}` : view.lowSpace ? 'Мало места на диске' : '';
+  const warn = low.length ? `Мало места на ${low.length > 1 ? 'дисках' : 'диске'} ${low.join(', ')}` : view.lowSpace ? 'Мало места на диске' : '';
   return { free, warn };
 }
 
+// stateLabel — подпись метки состояния: «смотрят» — поток открыт, «смотрели» — смотрели за последние 6
+// часов, а плеер закрыт — удалить уже можно (замечание № 19).
 export function stateLabel(d) {
   if (d.state === 'watching' && !d.streaming) return 'смотрели';
   return (STATE[d.state] || STATE.queued)[0];

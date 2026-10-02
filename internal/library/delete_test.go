@@ -381,7 +381,9 @@ func TestDeleteErrorTexts(t *testing.T) {
 	}
 	e := newEnv(t)
 	busy := &fs.PathError{Op: "remove", Path: "x", Err: syscall.Errno(32)} // ERROR_SHARING_VIOLATION
-	if err := e.l.removeError(ctx, 0, `D:\Сериалы`, busy); !strings.Contains(err.Error(), "открыт в другой программе") {
+	// Ревью 15Б, Minor 1: файл держит и сам Kinodom, когда серию смотрят на ТВ, — текст про обе причины.
+	if err := e.l.removeError(ctx, 0, `D:\Сериалы`, busy); !strings.Contains(err.Error(), "открыт в другой программе") ||
+		!strings.Contains(err.Error(), "смотрят") {
 		t.Fatalf("занятый файл: %v", err)
 	}
 }
@@ -398,5 +400,70 @@ func TestTargetFolderSkipsSeriesFolder(t *testing.T) {
 	shows := e.folder(t, catSeries, "Shows")
 	if got, _ := e.l.TargetFolder(ctx, "series"); got != shows {
 		t.Fatalf("получено %q, нужно %q", got, shows)
+	}
+}
+
+// Ревью 15Б, Important 1: субтитры удалённых серий ищутся только рядом с ними и в их «Subs»/«Subtitles» — не по
+// всей папке сериала: раздача Kinodom другого сериала внутри неё и «Extras» не трогаются, даже если имена совпали.
+func TestDeleteSeriesKeepsForeignSubtitles(t *testing.T) {
+	e := newEnv(t)
+	show := e.folder(t, catSeries, "Сериал (2020)", "Сериал.S01E01.mkv", "Сериал.S01E02.mkv", "Subs/Сериал.S01E02.eng.srt",
+		"Сезон 2/Сериал.S02E01.mkv", "Сезон 2/Subtitles/Сериал.S02E01.rus.srt",
+		"Другой [abcdef12]/Сериал.S01E01.rus.srt", // раздача Kinodom другого сериала с тем же именем серии
+		"Extras/Сериал.S01E01.Making.of.mkv", "Extras/Сериал.S01E01.Making.of.srt")
+	torrent := filepath.Join(show, "Другой [abcdef12]")
+	e.l.o.TorrentFolders = func(context.Context) ([]string, error) { return []string{torrent}, nil }
+	e.scan(t)
+	ss := unitsOf(t, e, catSeries)
+	if ss[show] == 0 {
+		t.Fatalf("сериал «папка = сериал»: %v", ss)
+	}
+	if err := e.l.DeleteUnit(ctx, ss[show]); err != nil {
+		t.Fatal(err)
+	}
+	var left []string
+	filepath.WalkDir(show, func(p string, d fs.DirEntry, err error) error {
+		if err == nil && !d.IsDir() {
+			rel, _ := filepath.Rel(show, p)
+			left = append(left, filepath.ToSlash(rel))
+		}
+		return nil
+	})
+	slices.Sort(left)
+	want := []string{"Extras/Сериал.S01E01.Making.of.mkv", "Extras/Сериал.S01E01.Making.of.srt", "Другой [abcdef12]/Сериал.S01E01.rus.srt"}
+	if !slices.Equal(left, want) {
+		t.Fatalf("осталось: %v", left)
+	}
+	for _, gone := range []string{"Subs", "Сезон 2"} {
+		if _, err := os.Stat(filepath.Join(show, gone)); !errors.Is(err, fs.ErrNotExist) {
+			t.Errorf("папка %s осталась: %v", gone, err)
+		}
+	}
+}
+
+// Ревью 15Б, Important 2: первая папка «Сериалов» — сама сериал, скачанное идёт во вторую — право записи
+// проверяется у второй: закрыта она — «нет права записи» у неё; закрыта папка-сериал — проблемы нет.
+func TestNoWriteChecksTargetFolder(t *testing.T) {
+	for _, closed := range []string{"Shows", "Сериал (2020)"} {
+		t.Run(closed, func(t *testing.T) {
+			e := newEnv(t)
+			show := e.folder(t, catSeries, "Сериал (2020)", "Сериал.S01E01.mkv", "Сериал.S01E02.mkv")
+			shows := e.folder(t, catSeries, "Shows")
+			e.scan(t) // единица «папка = сериал» — в базе
+			e.l.o.Writable = func(dir string) bool { return filepath.Base(dir) != closed }
+			e.scan(t)
+			want := map[string]string{show: "", shows: ""}
+			if closed == "Shows" {
+				want[shows] = "no_write"
+			}
+			cs, _ := e.l.Categories(ctx, "")
+			for _, c := range cs {
+				for _, f := range c.Folders {
+					if w, ok := want[f.Path]; ok && f.Problem != w {
+						t.Errorf("%s: %q, нужно %q", filepath.Base(f.Path), f.Problem, w)
+					}
+				}
+			}
+		})
 	}
 }
