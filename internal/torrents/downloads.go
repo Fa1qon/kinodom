@@ -46,7 +46,35 @@ type DownloadsView struct {
 	Items     []DownloadItem `json:"items"`
 	UsedBytes int64          `json:"usedBytes"` // сколько занимает скачанное
 	FreeBytes int64          `json:"freeBytes"` // свободно на диске папки загрузок
-	LowSpace  bool           `json:"lowSpace"`  // места меньше запаса: докачки на паузе
+	LowSpace  bool           `json:"lowSpace"`  // места меньше запаса: докачки на паузе (на любом диске)
+	Disks     []DiskFree     `json:"disks"`     // по дискам, куда качается: папка загрузок и папки медиатеки (ревью 14В)
+}
+
+// DiskFree — свободное место на диске, куда качается.
+type DiskFree struct {
+	Volume    string `json:"volume"` // «D:»
+	FreeBytes int64  `json:"freeBytes"`
+	Low       bool   `json:"low"` // места меньше запаса
+	dir       string
+}
+
+// diskList — по диску на каждый том папок dirs (в порядке первого появления) со свободным местом.
+func (s *Service) diskList(dirs []string) []DiskFree {
+	var out []DiskFree
+	seen := map[string]bool{}
+	for _, d := range dirs {
+		v := volumeOf(d)
+		if d == "" || seen[v] {
+			continue
+		}
+		seen[v] = true
+		free, err := s.freeSpace(d)
+		if err != nil {
+			continue
+		}
+		out = append(out, DiskFree{Volume: v, FreeBytes: free, dir: d})
+	}
+	return out
 }
 
 var stateOrder = []DownloadState{DownloadWatching, DownloadDownloading, DownloadQueued, DownloadPaused, DownloadDone}
@@ -140,10 +168,17 @@ func (s *Service) Downloads(ctx context.Context) (DownloadsView, error) {
 		return cmp.Or(cmp.Compare(slices.Index(stateOrder, a.State), slices.Index(stateOrder, b.State)),
 			b.LastOpenedAt.Compare(a.LastOpenedAt))
 	})
+	out.Disks = []DiskFree{}
 	if eng := s.Engine(); eng != nil {
 		dir := eng.DownloadsDir()
 		if short, free, err := s.queueShortfall(dir); err == nil {
 			out.FreeBytes, out.LowSpace = free, short > 0
+		}
+		for _, d := range s.diskList(append([]string{dir}, s.downloadDirs()...)) {
+			if short, _, err := s.queueShortfall(d.dir); err == nil && short > 0 {
+				d.Low, out.LowSpace = true, true
+			}
+			out.Disks = append(out.Disks, d)
 		}
 	}
 	return out, nil

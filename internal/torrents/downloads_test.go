@@ -104,3 +104,19 @@ func TestDownloadsStreaming(t *testing.T) {
 		t.Fatalf("смотрят сейчас: %+v", d)
 	}
 }
+
+// Ревью 14В: скачанное идёт и в папки медиатеки на других дисках — место показывается по каждому диску, где лежат
+// докачки, и по диску папки загрузок.
+func TestDiskListPerVolume(t *testing.T) {
+	s := &Service{}
+	s.freeSpace = func(dir string) (int64, error) {
+		if strings.HasPrefix(strings.ToUpper(dir), "E:") {
+			return 1 << 30, nil
+		}
+		return 500 << 30, nil
+	}
+	got := s.diskList([]string{`D:\Kinodom`, `E:\Сериалы\Шоу`, `D:\Фильмы`})
+	if len(got) != 2 || got[0].Volume != "D:" || got[1].Volume != "E:" || got[1].FreeBytes != 1<<30 || got[0].FreeBytes != 500<<30 {
+		t.Fatalf("%+v", got)
+	}
+}

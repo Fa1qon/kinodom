@@ -2149,6 +2149,40 @@ for (const [got, want] of checks) if (got !== want) { console.error(got, '≠', 
 	}
 }
 
+// Ревью 14В: место в «Загрузках» — по каждому диску, куда качается; после «Удалить» в медиатеке карточка остаётся,
+// если у неё другие версии, а «сейчас смотрят» видно.
+func TestPultDisksAndAfterDelete(t *testing.T) {
+	node := lookNode(t)
+	script := `
+const { spaceLine, skippedText } = await import('./views/downloads.js');
+const { afterDelete } = await import('./views/library-card.js');
+const two = { versions: [{ unit: 1 }, { unit: 2 }] };
+const one = { versions: [{ unit: 1 }] };
+const checks = [
+  [spaceLine({ freeBytes: 5e11, disks: [{ volume: 'D:', freeBytes: 5e11 }, { volume: 'E:', freeBytes: 1e9, low: true }] }),
+    { free: 'свободно D: 465,7 ГБ · E: 954 МБ', warn: 'Мало места на диске E:' }],
+  [spaceLine({ freeBytes: 5e11, disks: [{ volume: 'D:', freeBytes: 5e11 }] }), { free: 'свободно 465,7 ГБ', warn: '' }],
+  [spaceLine({ freeBytes: 1e9, lowSpace: true, disks: [{ volume: 'D:', freeBytes: 1e9, low: true }] }), { free: 'свободно 954 МБ', warn: 'Мало места на диске D:' }],
+  [spaceLine({ freeBytes: 1e9, lowSpace: true }), { free: 'свободно 954 МБ', warn: 'Мало места на диске' }],
+  // Ревью 15Б, Minor 5: мало на двух — «на дисках».
+  [spaceLine({ freeBytes: 1e9, disks: [{ volume: 'D:', freeBytes: 1e9, low: true }, { volume: 'E:', freeBytes: 1e9, low: true }] }).warn, 'Мало места на дисках D:, E:'],
+  [skippedText({ skipped: 2 }), 'Сейчас смотрят — 2 серии остались'],
+  [skippedText({}), ''],
+  [afterDelete(two, 1, {}), { go: null, note: '' }],
+  [afterDelete(one, 1, {}), { go: '#/library', note: '' }],
+  [afterDelete(one, 1, { skipped: 2 }), { go: null, note: 'Сейчас смотрят — 2 серии остались' }],
+];
+for (const [got, want] of checks) {
+  if (JSON.stringify(got) !== JSON.stringify(want)) { console.error(JSON.stringify(got), '≠', JSON.stringify(want)); process.exitCode = 1; }
+}
+`
+	cmd := exec.Command(node, "--input-type=module", "--no-warnings", "-e", script)
+	cmd.Dir = "static"
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Errorf("%v\n%s", err, out)
+	}
+}
+
 // План 14А, задача 3: на странице сериала крупно — какой сезон скачается.
 func TestPultSeasonLabel(t *testing.T) {
 	node := lookNode(t)
