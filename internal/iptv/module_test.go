@@ -2,6 +2,7 @@ package iptv
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -79,6 +80,27 @@ func (f *fakeNet) setPlaylist(s string) {
 // startModule — модуль под сторожем, как в приложении.
 func startModule(t *testing.T, f *fakeNet) (*Module, *store.DB) {
 	t.Helper()
+	return startModuleWith(t, f, nil)
+}
+
+// failTransport — транспорт проверки источников в тестах пересылки: к источнику не ходит, и запросы источника
+// считаются только пересылкой (ревью 14Д, п. 18: фоновая проверка ходила к тем же адресам).
+type failTransport struct{}
+
+func (failTransport) RoundTrip(*http.Request) (*http.Response, error) {
+	return nil, errors.New("проверка источников выключена в тесте")
+}
+
+func quietProber() *probe.Prober {
+	return &probe.Prober{Client: &http.Client{Transport: failTransport{}}}
+}
+
+// startModuleWith — startModule с проверкой источников p; nil — настоящая с коротким ожиданием.
+func startModuleWith(t *testing.T, f *fakeNet, p *probe.Prober) (*Module, *store.DB) {
+	t.Helper()
+	if p == nil {
+		p = &probe.Prober{Client: &http.Client{}, Timeout: 2 * time.Second, LiveFor: 200 * time.Millisecond}
+	}
 	dir := t.TempDir()
 	d, err := store.Open(context.Background(), filepath.Join(dir, "k.db"))
 	if err != nil {
@@ -86,7 +108,7 @@ func startModule(t *testing.T, f *fakeNet) (*Module, *store.DB) {
 	}
 	t.Cleanup(func() { d.Close() })
 	m := New(Options{DB: d, Dir: dir, EPGURL: f.srv.URL + "/epg.xml", OrgBase: f.srv.URL + "/api",
-		Prober: &probe.Prober{Client: &http.Client{}, Timeout: 2 * time.Second, LiveFor: 200 * time.Millisecond}})
+		Prober: p})
 	sup := supervisor.New(slog.New(slog.DiscardHandler))
 	sup.Add(m, true)
 	ctx, cancel := context.WithCancel(context.Background())
