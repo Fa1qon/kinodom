@@ -273,7 +273,7 @@ begin
     Exit;
   Params := 'uninstall';
   if not UninstallSilent and
-     (MsgBox('Удалить также скачанное и настройки?', mbConfirmation, MB_YESNO or MB_DEFBUTTON2) = IDYES) then
+     (MsgBox('Удалить также всё скачанное Kinodom (и в папках медиатеки) и настройки?', mbConfirmation, MB_YESNO or MB_DEFBUTTON2) = IDYES) then
     Params := 'uninstall --purge';
   ResultFile := AddBackslash(GetTempDir) + 'kinodom-uninstall-result.txt';
   DeleteFile(ResultFile);

@@ -87,7 +87,7 @@ func folderKind(base, path string) (string, error) {
 func cmdGrant(args []string, stdout, stderr io.Writer) int {
 	fs := flag.NewFlagSet("grant", flag.ContinueOnError)
 	fs.SetOutput(stderr)
-	write := fs.Bool("write", false, "право на изменение (папка загрузок)")
+	write := fs.Bool("write", false, "право на изменение (папки загрузок и медиатеки)")
 	if err := fs.Parse(args); err != nil || fs.NArg() != 1 {
 		fmt.Fprintln(stderr, "использование: kinodom grant [--write] ПАПКА")
 		return 2
