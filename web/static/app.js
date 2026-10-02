@@ -61,13 +61,13 @@ function defaultRoute() {
 
 const top = document.getElementById('top');
 const navLinks = {};
-let searchInput;
 let menuButton;
+let searchBtn; // «Поиск» в шапке (план 16Б)
 let bell; // колокольчик «Новые серии» (спека 11b, 6.1)
 let bellCount;
 
-// buildHeader — шапка: логотип, меню, поиск; на узком экране — значки поиска и меню. Строится один раз: опрос «Состояния» не должен сбивать то, что человек
-// вводит в поиск.
+// buildHeader — шапка: логотип, меню, кнопка «Поиск» (на узком экране — значок) и значок меню. Поля поиска в шапке
+// нет (план 16Б): на ТВ стрелки попадали в него и вызывали клавиатуру; поле — на странице поиска. Строится один раз.
 function buildHeader() {
   const nav = h('nav', { class: 'nav', id: 'nav', 'aria-label': 'Разделы' },
     NAV.map(([id, title, soon]) => {
@@ -75,12 +75,8 @@ function buildHeader() {
       navLinks[id] = h('a', { href: id === 'settings' ? '#/settings/status' : '#/' + id }, title);
       return navLinks[id];
     }));
-  searchInput = h('input', { name: 'q', placeholder: 'Поиск', 'aria-label': 'Поиск', autocomplete: 'off', enterkeyhint: 'search' });
-  const search = h('form', { class: 'search', role: 'search', onsubmit: (e) => {
-    e.preventDefault();
-    const q = searchInput.value.trim();
-    if (q) ctx.go('#/search?q=' + encodeURIComponent(q));
-  } }, h('label', { class: 'field' }, icon('search'), searchInput));
+  searchBtn = h('a', { class: 'btn search-btn', href: '#/search', 'aria-label': 'Поиск', 'data-key': 'search' },
+    icon('search'), h('span', { class: 'wide-only' }, 'Поиск'));
   menuButton = h('button', { class: 'sq narrow-only', type: 'button', 'aria-label': 'Меню', 'aria-controls': 'nav', 'aria-expanded': 'false',
     onclick: () => setMenu(!top.classList.contains('open')) }, icon('menu'));
   bellCount = h('span', { class: 'bell-n' });
@@ -92,8 +88,7 @@ function buildHeader() {
     nav,
     h('div', { class: 'grow' }),
     bell,
-    search,
-    h('a', { class: 'sq narrow-only', href: '#/search', 'aria-label': 'Поиск' }, icon('search')),
+    searchBtn,
     menuButton,
   );
 }
@@ -119,6 +114,7 @@ function updateHeader(r) {
   const n = updates.bellText(ctx.status && ctx.status.updates);
   bellCount.textContent = n;
   bell.classList.toggle('on', r.parts[0] === 'updates');
+  searchBtn.classList.toggle('on', r.parts[0] === 'search');
   bell.setAttribute('aria-label', n ? `Новые серии: ${n}` : 'Новые серии');
 }
 
@@ -143,7 +139,6 @@ function render() {
     view = settingsViews[sr.view];
   }
   updateHeader(r);
-  searchInput.value = first === 'search' ? r.query.get('q') || '' : '';
   if (cleanup) cleanup();
   cleanup = null;
   const main = document.getElementById('view');
