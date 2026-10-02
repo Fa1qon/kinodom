@@ -393,6 +393,10 @@ func (r *Rutracker) SortedPage(ctx context.Context, forums []string, order strin
 	if len(forums) == 0 || page < 0 || slices.ContainsFunc(forums, func(f string) bool { return !isNumber(f) }) {
 		return nil, false, fmt.Errorf("Rutracker: разделы %q — не номера форумов", forums)
 	}
+	if len(forums) != 1 {
+		// Форум сортирует только внутри одного форума; со списком отдаёт не тот порядок (вживую 2026-10-01, 15Д).
+		return nil, false, fmt.Errorf("Rutracker: порядок раздела — по одному форуму, а не %d", len(forums))
+	}
 	if err := r.notConfigured(); err != nil {
 		return nil, false, err
 	}

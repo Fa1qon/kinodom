@@ -98,7 +98,7 @@ func parseListDate(s string) time.Time {
 	if err1 != nil || err2 != nil || !ok {
 		return time.Time{}
 	}
-	return time.Date(2000+y, m, d, 0, 0, 0, 0, msk)
+	return time.Date(2000+y, m, d, 12, 0, 0, 0, msk) // полдень: день тот же в поясах от −9 до +12 (ревью 14Б)
 }
 
 // parseSize — «3.87 GB» → байты. Rutor считает в двоичных единицах: у раздачи 1077013

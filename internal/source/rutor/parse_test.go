@@ -51,7 +51,7 @@ func TestParseListFirstRow(t *testing.T) {
 		Seeders: 103, Leechers: 5, Size: int64(3.87 * gib),
 		InfoHash: "58cc11266c861f44df75f6f24328cd9ae3778218",
 	}
-	if wantDate := time.Date(2026, 3, 15, 0, 0, 0, 0, msk); !got.Added.Equal(wantDate) {
+	if wantDate := time.Date(2026, 3, 15, 12, 0, 0, 0, msk); !got.Added.Equal(wantDate) { // полдень по Москве (план 15А)
 		t.Errorf("дата %v, нужно %v", got.Added, wantDate)
 	}
 	got.Added = time.Time{}
@@ -102,8 +102,16 @@ func TestParseSize(t *testing.T) {
 }
 
 func TestParseListDate(t *testing.T) {
-	if got, want := parseListDate("28 Сен 26"), time.Date(2026, 9, 28, 0, 0, 0, 0, msk); !got.Equal(want) {
+	// Ревью 14Б: дата списка — день по Москве; полдень, а не полночь — западнее Москвы не «вчера», восточнее — не
+	// «завтра».
+	got := parseListDate("28 Сен 26")
+	if want := time.Date(2026, 9, 28, 12, 0, 0, 0, msk); !got.Equal(want) {
 		t.Errorf("28 Сен 26 → %v", got)
+	}
+	for _, zone := range []int{-8, -5, 0, 5, 12} {
+		if d := got.In(time.FixedZone("z", zone*3600)).Day(); d != 28 {
+			t.Errorf("в поясе %+d — %d число", zone, d)
+		}
 	}
 	for _, bad := range []string{"", "28 Sep 26", "вчера"} {
 		if got := parseListDate(bad); !got.IsZero() {
