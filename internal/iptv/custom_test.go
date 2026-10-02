@@ -293,3 +293,20 @@ func TestDeleteCustomChannel(t *testing.T) {
 		t.Fatalf("неизвестный: %d", code)
 	}
 }
+
+// Ревью 14Д, п. 16: свой канал в поиске помечен — не спутать с одноимённым каналом телепрограммы.
+func TestSearchMarksOwn(t *testing.T) {
+	m, group := customModule(t)
+	key, err := m.CreateCustom(context.Background(), CustomInput{Name: "НТВ", Group: group})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var own, epg bool
+	for _, h := range m.SearchEPG("НТВ", 10) {
+		own = own || (h.Key == key && h.Own)
+		epg = epg || (h.Key == "ntv" && !h.Own)
+	}
+	if !own || !epg {
+		t.Fatalf("%+v", m.SearchEPG("НТВ", 10))
+	}
+}

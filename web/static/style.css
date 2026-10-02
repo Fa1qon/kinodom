@@ -402,6 +402,10 @@ a.res-row:hover { background: var(--hover); }
 .un-list { display: flex; flex-direction: column; }
 .un { display: flex; flex-direction: column; gap: 10px; padding: 12px 0; border-bottom: 1px solid var(--line-soft); }
 .un-name { min-width: 0; display: flex; flex-direction: column; gap: 3px; }
+/* Кнопки не помещаются рядом с названием — уходят строкой ниже, название не сжимается (замечено на ТВ, 0.14). */
+.un-top { flex-wrap: wrap; }
+.un-top .un-name { flex: 1 1 260px; }
+.un-acts { flex: 0 1 auto; }
 
 /* Медиатека (спека этапа 9, раздел 6) */
 .library .cont-row:empty { display: none; }

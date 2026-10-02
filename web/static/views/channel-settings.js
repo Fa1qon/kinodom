@@ -7,6 +7,11 @@ import { get, put, post, del } from '../api.js';
 import { gradeMark } from './tvkit.js';
 import { openPreview, grabFrame, frameNote } from './preview.js';
 
+// pickLabel — подпись канала в поиске «Назначить» / «Это другой канал»: свой канал помечен (ревью 14Д, п. 16).
+export function pickLabel(c) {
+  return c.own ? `${c.name} · свой` : c.name;
+}
+
 // CATEGORIES — постоянный набор категорий (спека этапа 8, раздел 5.4), как у сервера.
 export const CATEGORIES = [
   ['movies', 'Фильмы и сериалы'], ['sports', 'Спорт'], ['science', 'Познавательные'], ['news', 'Новости'], ['kids', 'Детские'],
@@ -247,7 +252,7 @@ export function render(root, r, ctx) {
     const results = h('div', { class: 'picks' }, found.map((c) => h('button', { class: 'btn', type: 'button', 'data-key': `pick-${c.key}`, onclick: () => act(async () => {
       await put(`/iptv/streams/${s.id}`, { channel: c.key });
       reassign = 0;
-    }) }, c.name)));
+    }) }, pickLabel(c))));
     const form = h('form', { class: 'row gap10', onsubmit: async (e) => {
       e.preventDefault();
       try {

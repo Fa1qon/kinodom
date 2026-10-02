@@ -68,8 +68,8 @@ func (m *Module) CreateCustom(ctx context.Context, in CustomInput) (string, erro
 		return "", &FieldError{"неизвестная категория"}
 	}
 	country := strings.ToUpper(strings.TrimSpace(in.Country))
-	if country != "" && (len(country) != 2 || strings.Trim(country, "ABCDEFGHIJKLMNOPQRSTUVWXYZ") != "") {
-		return "", &FieldError{"страна — двухбуквенный код (RU)"}
+	if err := CheckCountry(country); err != nil {
+		return "", err
 	}
 	group := m3u.Norm(in.Group)
 	m.plMu.Lock()
@@ -178,15 +178,14 @@ func (m *Module) customKeys() []string {
 	return out
 }
 
-// customMatches — свои каналы, чьё название подходит под нормализованный запрос q: ранг 0 — совпало, 1 —
-// начинается с, 2 — содержит; -1 — нет.
+// customMatches — свои каналы, в названии которых есть нормализованный запрос q, — по алфавиту.
 func (m *Module) customMatches(q string) []EPGChannel {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	var out []EPGChannel
 	for _, c := range m.pool.custom {
 		if n := m3u.Norm(c.Name); strings.Contains(n, q) {
-			out = append(out, EPGChannel{Key: c.Key, Name: c.Name})
+			out = append(out, EPGChannel{Key: c.Key, Name: c.Name, Own: true})
 		}
 	}
 	slices.SortFunc(out, func(a, b EPGChannel) int { return strings.Compare(a.Name, b.Name) })

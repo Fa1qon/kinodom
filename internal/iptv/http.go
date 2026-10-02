@@ -201,7 +201,7 @@ func (m *Module) handleChannels(w http.ResponseWriter, r *http.Request) {
 		Countries  []Facet       `json:"countries"`
 		Languages  []Facet       `json:"languages"`
 		UTCOffset  int           `json:"utcOffset"`
-	}{Channels: []ChannelView{}, UTCOffset: m.utcOffset()}
+	}{Channels: []ChannelView{}, Categories: []Facet{}, UTCOffset: m.utcOffset()} // пустые — [], не null: пульт делает .map
 	cats, countries, langs := map[string]int{}, map[string]int{}, map[string]int{}
 	for _, c := range l.WithFavorites(favs, all) {
 		v := m.view(l, c, g, at, isFav[l.FamilyOf[c.Key]])
