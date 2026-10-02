@@ -24,6 +24,11 @@ export function afterDelete(card, unit, res) {
   return { go: left ? null : '#/library', note: '' };
 }
 
+// panelOrder — что в панели карточки под постером и в каком порядке: «Смотреть» (или «Файлов нет»), версии, правка.
+export function panelOrder(card, hasFiles) {
+  return [hasFiles ? 'watch' : 'empty', 'versions', 'edits'];
+}
+
 // seasonsOf — серии по сезонам и разделам: без сезона — первыми (вступление курса), потом сезоны по
 // номеру, потом разделы (главы) в порядке сервера.
 export function seasonsOf(episodes) {
@@ -82,6 +87,9 @@ const kpOf = (link) => {
 
 export function render(root, r, ctx) {
   const key = r.parts[1];
+  // Карточка — новый экран, хотя вид тот же, что у «Медиатеки» (app.js не прокручивает наверх): иначе она
+  // открывалась с прокруткой списка, и постер уезжал за край (найдено вживую 16Б).
+  window.scrollTo(0, 0);
   let alive = true;
   let c = null;
   let error = ''; // карточка не загрузилась
@@ -134,6 +142,7 @@ export function render(root, r, ctx) {
   }
 
   const version = () => c.versions.find((v) => v.unit === unit) || c.versions[0];
+  let focusPlaced = false; // фокус при входе ставится один раз
 
   function draw() {
     const v = version();
@@ -147,7 +156,7 @@ export function render(root, r, ctx) {
           c.ratingImdb > 0 ? h('span', { class: 'tag' }, 'IMDb ' + rating(c.ratingImdb)) : null,
           c.dupes ? h('span', { class: 'tag' }, 'Есть дубли') : null,
           c.deleteInDays !== null && c.deleteInDays !== undefined ? h('span', { class: 'tag' }, `удалится через ${c.deleteInDays} дн.`) : null),
-        desc, watchBlock(v), error || failed ? h('p', { class: 'error' }, failed || error) : null);
+        desc);
       if (desc && !descOpen) {
         requestAnimationFrame(() => {
           if (desc.isConnected && desc.scrollHeight > desc.clientHeight + 2) {
@@ -159,8 +168,24 @@ export function render(root, r, ctx) {
         });
       }
       fill(eps, v.episodes.length > 1 ? episodes(v) : null);
-      fill(side, ...versions(), ...edits(v));
+      // Панель под постером (на широком экране — справа): первым «Смотреть», как «Скачать» у раздачи (план 16Б:
+      // на ТВ «вниз-вниз-вниз», а потом «вправо» к кнопке было неудобно).
+      const blocks = { watch: () => [watchBlock(v), error || failed ? h('p', { class: 'error' }, failed || error) : null],
+        empty: () => [watchBlock(v)], versions, edits: () => edits(v) };
+      fill(side, ...panelOrder(c, v.episodes.length > 0).flatMap((b) => blocks[b]()));
     });
+    // Пришли из «Медиатеки» — фокуса на экране нет: он встаёт на «Смотреть» (OK — и пошло).
+    if (!focusPlaced) {
+      focusPlaced = true;
+      const a = document.activeElement;
+      if (!a || a === document.body || !root.contains(a)) {
+        const w = side.querySelector('[data-nav-main]');
+        if (w) {
+          w.focus({ preventScroll: true });
+          w.scrollIntoView({ block: 'nearest' }); // на ТВ (540 CSS px) кнопка под постером — чуть ниже экрана
+        }
+      }
+    }
   }
 
   // resumeEp — серия, которую продолжать на этом устройстве (правило 8c), иначе первая.
@@ -179,7 +204,7 @@ export function render(root, r, ctx) {
     const label = film ? (at > 0 ? `Продолжить ${continueLabel({ positionSec: at })}` : 'Смотреть')
       : resumed ? `Продолжить: ${continueLabel({ season: ep.season, episode: ep.episode, positionSec: at })}` : `Смотреть: ${episodeLabel(ep)}`;
     return h('div', { class: 'row wrap gap10' },
-      h('button', { class: 'btn inv big', type: 'button', 'data-key': 'watch', onclick: () => act(() => playFile(ep.file, ctx, false, !film)) }, icon('play_arrow'), label),
+      h('button', { class: 'btn inv big', type: 'button', 'data-key': 'watch', 'data-nav-main': true, onclick: () => act(() => playFile(ep.file, ctx, false, !film)) }, icon('play_arrow'), label),
       at > 0 ? h('button', { class: 'btn big', type: 'button', 'data-key': 'from-start', onclick: () => act(() => playFile(ep.file, ctx, true, !film)) },
         icon('history'), 'С начала') : null);
   }

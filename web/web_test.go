@@ -2323,3 +2323,46 @@ for (const [got, want] of checks) {
 		t.Errorf("%v\n%s", err, out)
 	}
 }
+
+// План 16Б: «Смотреть» в карточке медиатеки — первым в панели под постером (как «Скачать» у раздачи), фокус —
+// на нём. panelOrder — что в панели и в каком порядке.
+func TestPultCardPanelOrder(t *testing.T) {
+	node := lookNode(t)
+	script := `
+const { panelOrder } = await import('./views/library-card.js');
+const checks = [
+  [panelOrder({ versions: [{}, {}] }, true), ['watch', 'versions', 'edits']],
+  [panelOrder({ versions: [{}] }, false), ['empty', 'versions', 'edits']],
+];
+for (const [got, want] of checks) {
+  if (JSON.stringify(got) !== JSON.stringify(want)) { console.error(JSON.stringify(got), '≠', JSON.stringify(want)); process.exitCode = 1; }
+}
+`
+	cmd := exec.Command(node, "--input-type=module", "--no-warnings", "-e", script)
+	cmd.Dir = "static"
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Errorf("%v\n%s", err, out)
+	}
+}
+
+// План 16Б: поиск — кнопкой в шапке; страница без запроса — поле и история списком, с запросом — без истории.
+func TestPultSearchHome(t *testing.T) {
+	node := lookNode(t)
+	script := `
+const { searchParts } = await import('./views/search.js');
+const hist = [{ query: 'матрица' }, { query: 'дюна' }];
+const checks = [
+  [searchParts('', hist), { field: true, history: ['матрица', 'дюна'], clear: true, results: false }],
+  [searchParts('', []), { field: true, history: [], clear: false, results: false }],
+  [searchParts('дюна', hist), { field: true, history: [], clear: false, results: true }],
+];
+for (const [got, want] of checks) {
+  if (JSON.stringify(got) !== JSON.stringify(want)) { console.error(JSON.stringify(got), '≠', JSON.stringify(want)); process.exitCode = 1; }
+}
+`
+	cmd := exec.Command(node, "--input-type=module", "--no-warnings", "-e", script)
+	cmd.Dir = "static"
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Errorf("%v\n%s", err, out)
+	}
+}
