@@ -1,0 +1,728 @@
+{
+ "data": {
+  "movieListBySlug": {
+   "compositeName": {
+    "parts": [
+     {
+      "name": "Популярные фильмы",
+      "__typename": "StaticMovieListNamePart"
+     }
+    ],
+    "__typename": "MovieListCompositeName"
+   },
+   "__typename": "MovieListMeta",
+   "availableFilters": {
+    "items": [
+     {
+      "id": "films",
+      "enabled": true,
+      "name": {
+       "russian": "Фильмы",
+       "__typename": "FilterName"
+      },
+      "__typename": "BooleanFilter"
+     },
+     {
+      "id": "series",
+      "enabled": false,
+      "name": {
+       "russian": "Сериалы",
+       "__typename": "FilterName"
+      },
+      "__typename": "BooleanFilter"
+     },
+     {
+      "id": "high_rated",
+      "enabled": true,
+      "name": {
+       "russian": "С высоким рейтингом",
+       "__typename": "FilterName"
+      },
+      "__typename": "BooleanFilter"
+     },
+     {
+      "id": "russian",
+      "enabled": false,
+      "name": {
+       "russian": "Российские",
+       "__typename": "FilterName"
+      },
+      "__typename": "BooleanFilter"
+     },
+     {
+      "id": "foreign",
+      "enabled": true,
+      "name": {
+       "russian": "Зарубежные",
+       "__typename": "FilterName"
+      },
+      "__typename": "BooleanFilter"
+     },
+     {
+      "id": "released",
+      "enabled": true,
+      "name": {
+       "russian": "Вышедшие",
+       "__typename": "FilterName"
+      },
+      "__typename": "BooleanFilter"
+     },
+     {
+      "id": "exclude_viewed",
+      "enabled": false,
+      "name": {
+       "russian": "Скрыть просмотренные",
+       "__typename": "FilterName"
+      },
+      "__typename": "BooleanFilter"
+     },
+     {
+      "id": "top",
+      "enabled": false,
+      "name": {
+       "russian": "Лучшие",
+       "__typename": "FilterName"
+      },
+      "__typename": "BooleanFilter"
+     },
+     {
+      "id": "download_available",
+      "enabled": true,
+      "name": {
+       "russian": "Загрузить на смартфоне",
+       "__typename": "FilterName"
+      },
+      "__typename": "BooleanFilter"
+     },
+     {
+      "id": "country",
+      "name": {
+       "russian": "Страны",
+       "__typename": "FilterName"
+      },
+      "hint": {
+       "russian": "Все страны",
+       "__typename": "FilterHint"
+      },
+      "values": {
+       "items": [
+        {
+         "name": {
+          "russian": "Россия",
+          "__typename": "FilterName"
+         },
+         "selectable": true,
+         "value": "2",
+         "__typename": "SelectFilterOption"
+        }
+       ],
+       "__typename": "PagingList_SelectFilterOption"
+      },
+      "__typename": "SingleSelectFilter"
+     },
+     {
+      "id": "genre",
+      "name": {
+       "russian": "Жанры",
+       "__typename": "FilterName"
+      },
+      "hint": {
+       "russian": "Все жанры",
+       "__typename": "FilterHint"
+      },
+      "values": {
+       "items": [
+        {
+         "name": {
+          "russian": "Аниме",
+          "__typename": "FilterName"
+         },
+         "selectable": true,
+         "value": "anime",
+         "__typename": "SelectFilterOption"
+        }
+       ],
+       "__typename": "PagingList_SelectFilterOption"
+      },
+      "__typename": "SingleSelectFilter"
+     },
+     {
+      "id": "year",
+      "name": {
+       "russian": "Годы",
+       "__typename": "FilterName"
+      },
+      "hint": {
+       "russian": "Все годы",
+       "__typename": "FilterHint"
+      },
+      "values": {
+       "items": [
+        {
+         "name": {
+          "russian": "2029",
+          "__typename": "FilterName"
+         },
+         "selectable": true,
+         "value": "2029",
+         "__typename": "SelectFilterOption"
+        }
+       ],
+       "__typename": "PagingList_SelectFilterOption"
+      },
+      "__typename": "SingleSelectFilter"
+     }
+    ],
+    "__typename": "PagingList_Filter"
+   },
+   "id": 1148,
+   "name": "Популярные фильмы",
+   "description": "Рейтинг составлен на основе посещаемости страниц фильмов, а также запросов к поисковой системе сайта. Список обновляется один раз в сутки.",
+   "cover": {
+    "avatarsUrl": "//avatars.mds.yandex.net/get-kinopoisk-image/10812607/66108e72-75a9-4479-b8ac-649227b1a2d4",
+    "__typename": "Image"
+   },
+   "movies": {
+    "total": 854,
+    "items": [
+     {
+      "movie": {
+       "id": 7378605,
+       "contentId": null,
+       "title": {
+        "russian": "Обитель зла",
+        "original": "Resident Evil",
+        "__typename": "Title"
+       },
+       "gallery": {
+        "posters": {
+         "vertical": {
+          "avatarsUrl": "//avatars.mds.yandex.net/get-kinopoisk-image/10809116/3fd06fd1-3942-451a-8ec7-e52d8e88ed3d",
+          "__typename": "Image"
+         },
+         "__typename": "MoviePosters"
+        },
+        "logos": {
+         "rightholderForPoster": null,
+         "__typename": "MovieLogos"
+        },
+        "__typename": "MovieGallery"
+       },
+       "__typename": "Film",
+       "countries": [
+        {
+         "id": 3,
+         "name": "Германия",
+         "__typename": "Country"
+        },
+        {
+         "id": 1,
+         "name": "США",
+         "__typename": "Country"
+        },
+        {
+         "id": 34,
+         "name": "Чехия",
+         "__typename": "Country"
+        },
+        {
+         "id": 6,
+         "name": "Канада",
+         "__typename": "Country"
+        },
+        {
+         "id": 25,
+         "name": "Австралия",
+         "__typename": "Country"
+        },
+        {
+         "id": 35,
+         "name": "Новая Зеландия",
+         "__typename": "Country"
+        },
+        {
+         "id": 8,
+         "name": "Франция",
+         "__typename": "Country"
+        }
+       ],
+       "genres": [
+        {
+         "id": 1,
+         "name": "ужасы",
+         "__typename": "Genre"
+        },
+        {
+         "id": 3,
+         "name": "боевик",
+         "__typename": "Genre"
+        }
+       ],
+       "cast": {
+        "items": [
+         {
+          "details": "Bryan",
+          "person": {
+           "name": "Остин Абрамс",
+           "originalName": "Austin Abrams",
+           "__typename": "Person"
+          },
+          "__typename": "FilmCrewMember"
+         },
+         {
+          "details": "Carl",
+          "person": {
+           "name": "Зак Черри",
+           "originalName": "Zach Cherry",
+           "__typename": "Person"
+          },
+          "__typename": "FilmCrewMember"
+         },
+         {
+          "details": "Maxine",
+          "person": {
+           "name": "Кали Реис",
+           "originalName": "Kali Reis",
+           "__typename": "Person"
+          },
+          "__typename": "FilmCrewMember"
+         }
+        ],
+        "__typename": "PagingList_FilmCrewMember"
+       },
+       "directors": {
+        "items": [
+         {
+          "details": null,
+          "person": {
+           "name": "Зак Креггер",
+           "originalName": "Zach Cregger",
+           "__typename": "Person"
+          },
+          "__typename": "FilmCrewMember"
+         }
+        ],
+        "__typename": "PagingList_FilmCrewMember"
+       },
+       "url": "https://www.kinopoisk.ru/film/7378605/",
+       "rating": {
+        "kinopoisk": {
+         "value": 7.345,
+         "isActive": true,
+         "count": 24338,
+         "__typename": "RatingValue"
+        },
+        "plannedToWatch": null,
+        "__typename": "Rating"
+       },
+       "mainTrailer": {
+        "id": 213429,
+        "isEmbedded": false,
+        "__typename": "Trailer"
+       },
+       "viewOption": null,
+       "ticketOption": {
+        "purchasable": false,
+        "__typename": "TicketOption"
+       },
+       "distribution": {
+        "rusRelease": {
+         "items": [],
+         "__typename": "PagingList_Release"
+        },
+        "worldPremiere": {
+         "incompleteDate": {
+          "date": "2026-09-16",
+          "accuracy": "DAY",
+          "__typename": "IncompleteDate"
+         },
+         "__typename": "Premiere"
+        },
+        "allReleases": {
+         "items": [],
+         "__typename": "PagingList_Release"
+        },
+        "__typename": "Distribution"
+       },
+       "productionYear": 2026,
+       "duration": 94,
+       "isShortFilm": false,
+       "ratingLists": {
+        "top250": null,
+        "__typename": "MovieRatingLists"
+       }
+      },
+      "__typename": "PopularMovieListItem",
+      "positionDiff": 0
+     },
+     {
+      "movie": {
+       "id": 5494049,
+       "contentId": "9a86170d02314d5589c33163ea45dd5e",
+       "title": {
+        "russian": "Человек-паук: Новый день",
+        "original": "Spider-Man: Brand New Day",
+        "__typename": "Title"
+       },
+       "gallery": {
+        "posters": {
+         "vertical": {
+          "avatarsUrl": "//avatars.mds.yandex.net/get-kinopoisk-image/9784475/9d8f64fc-dc63-43c5-9279-b6fb527426e2",
+          "__typename": "Image"
+         },
+         "__typename": "MoviePosters"
+        },
+        "logos": {
+         "rightholderForPoster": null,
+         "__typename": "MovieLogos"
+        },
+        "__typename": "MovieGallery"
+       },
+       "__typename": "Film",
+       "countries": [
+        {
+         "id": 1,
+         "name": "США",
+         "__typename": "Country"
+        },
+        {
+         "id": 6,
+         "name": "Канада",
+         "__typename": "Country"
+        },
+        {
+         "id": 11,
+         "name": "Великобритания",
+         "__typename": "Country"
+        },
+        {
+         "id": 3,
+         "name": "Германия",
+         "__typename": "Country"
+        }
+       ],
+       "genres": [
+        {
+         "id": 2,
+         "name": "фантастика",
+         "__typename": "Genre"
+        },
+        {
+         "id": 3,
+         "name": "боевик",
+         "__typename": "Genre"
+        },
+        {
+         "id": 10,
+         "name": "приключения",
+         "__typename": "Genre"
+        }
+       ],
+       "cast": {
+        "items": [
+         {
+          "details": "Peter Parker / Spider-Man",
+          "person": {
+           "name": "Том Холланд",
+           "originalName": "Tom Holland",
+           "__typename": "Person"
+          },
+          "__typename": "FilmCrewMember"
+         },
+         {
+          "details": "MJ",
+          "person": {
+           "name": "Зендея",
+           "originalName": "Zendaya",
+           "__typename": "Person"
+          },
+          "__typename": "FilmCrewMember"
+         },
+         {
+          "details": "Jean Grey",
+          "person": {
+           "name": "Сэди Синк",
+           "originalName": "Sadie Sink",
+           "__typename": "Person"
+          },
+          "__typename": "FilmCrewMember"
+         }
+        ],
+        "__typename": "PagingList_FilmCrewMember"
+       },
+       "directors": {
+        "items": [
+         {
+          "details": null,
+          "person": {
+           "name": "Дестин Дэниел Креттон",
+           "originalName": "Destin Daniel Cretton",
+           "__typename": "Person"
+          },
+          "__typename": "FilmCrewMember"
+         }
+        ],
+        "__typename": "PagingList_FilmCrewMember"
+       },
+       "url": "https://www.kinopoisk.ru/film/5494049/",
+       "rating": {
+        "kinopoisk": {
+         "value": 7.982,
+         "isActive": true,
+         "count": 440617,
+         "__typename": "RatingValue"
+        },
+        "plannedToWatch": null,
+        "__typename": "Rating"
+       },
+       "mainTrailer": {
+        "id": 213359,
+        "isEmbedded": false,
+        "__typename": "Trailer"
+       },
+       "viewOption": {
+        "buttonText": null,
+        "originalButtonText": null,
+        "promotionIcons": null,
+        "isAvailableOnline": false,
+        "purchasabilityStatus": "UNPURCHASABLE",
+        "type": null,
+        "rightholderLogoUrlForPoster": null,
+        "availabilityAnnounce": null,
+        "__typename": "ViewOption"
+       },
+       "ticketOption": {
+        "purchasable": false,
+        "__typename": "TicketOption"
+       },
+       "distribution": {
+        "rusRelease": {
+         "items": [],
+         "__typename": "PagingList_Release"
+        },
+        "worldPremiere": {
+         "incompleteDate": {
+          "date": "2026-07-27",
+          "accuracy": "DAY",
+          "__typename": "IncompleteDate"
+         },
+         "__typename": "Premiere"
+        },
+        "allReleases": {
+         "items": [],
+         "__typename": "PagingList_Release"
+        },
+        "__typename": "Distribution"
+       },
+       "productionYear": 2026,
+       "duration": 145,
+       "isShortFilm": false,
+       "ratingLists": {
+        "top250": null,
+        "__typename": "MovieRatingLists"
+       }
+      },
+      "__typename": "PopularMovieListItem",
+      "positionDiff": -1
+     },
+     {
+      "movie": {
+       "id": 5610132,
+       "contentId": "be2f65c511a94ca8ba1bdd299892fbdb",
+       "title": {
+        "russian": "Вышка 2",
+        "original": "Fall 2: Deadpoint",
+        "__typename": "Title"
+       },
+       "gallery": {
+        "posters": {
+         "vertical": {
+          "avatarsUrl": "//avatars.mds.yandex.net/get-kinopoisk-image/4486454/b5e50522-757e-47de-8ca9-5a903175429d",
+          "__typename": "Image"
+         },
+         "__typename": "MoviePosters"
+        },
+        "logos": {
+         "rightholderForPoster": null,
+         "__typename": "MovieLogos"
+        },
+        "__typename": "MovieGallery"
+       },
+       "__typename": "Film",
+       "countries": [
+        {
+         "id": 1,
+         "name": "США",
+         "__typename": "Country"
+        },
+        {
+         "id": 11,
+         "name": "Великобритания",
+         "__typename": "Country"
+        },
+        {
+         "id": 44,
+         "name": "Таиланд",
+         "__typename": "Country"
+        }
+       ],
+       "genres": [
+        {
+         "id": 4,
+         "name": "триллер",
+         "__typename": "Genre"
+        },
+        {
+         "id": 8,
+         "name": "драма",
+         "__typename": "Genre"
+        }
+       ],
+       "cast": {
+        "items": [
+         {
+          "details": "Jax Hunter",
+          "person": {
+           "name": "Харриет Слейтер",
+           "originalName": "Harriet Slater",
+           "__typename": "Person"
+          },
+          "__typename": "FilmCrewMember"
+         },
+         {
+          "details": "Luce",
+          "person": {
+           "name": "Арсема Томас",
+           "originalName": "Arsema Thomas",
+           "__typename": "Person"
+          },
+          "__typename": "FilmCrewMember"
+         },
+         {
+          "details": "John",
+          "person": {
+           "name": "Том Бриттни",
+           "originalName": "Tom Brittney",
+           "__typename": "Person"
+          },
+          "__typename": "FilmCrewMember"
+         }
+        ],
+        "__typename": "PagingList_FilmCrewMember"
+       },
+       "directors": {
+        "items": [
+         {
+          "details": null,
+          "person": {
+           "name": "Майкл Спириг",
+           "originalName": "Michael Spierig",
+           "__typename": "Person"
+          },
+          "__typename": "FilmCrewMember"
+         }
+        ],
+        "__typename": "PagingList_FilmCrewMember"
+       },
+       "url": "https://www.kinopoisk.ru/film/5610132/",
+       "rating": {
+        "kinopoisk": {
+         "value": 6.024,
+         "isActive": true,
+         "count": 16148,
+         "__typename": "RatingValue"
+        },
+        "plannedToWatch": null,
+        "__typename": "Rating"
+       },
+       "mainTrailer": {
+        "id": 213770,
+        "isEmbedded": false,
+        "__typename": "Trailer"
+       },
+       "viewOption": {
+        "buttonText": null,
+        "originalButtonText": null,
+        "promotionIcons": null,
+        "isAvailableOnline": false,
+        "purchasabilityStatus": "UNPURCHASABLE",
+        "type": null,
+        "rightholderLogoUrlForPoster": null,
+        "availabilityAnnounce": null,
+        "__typename": "ViewOption"
+       },
+       "ticketOption": {
+        "purchasable": true,
+        "__typename": "TicketOption"
+       },
+       "distribution": {
+        "rusRelease": {
+         "items": [
+          {
+           "date": {
+            "date": "2026-09-24",
+            "accuracy": "DAY",
+            "__typename": "IncompleteDate"
+           },
+           "__typename": "Release"
+          }
+         ],
+         "__typename": "PagingList_Release"
+        },
+        "worldPremiere": {
+         "incompleteDate": {
+          "date": "2026-08-07",
+          "accuracy": "DAY",
+          "__typename": "IncompleteDate"
+         },
+         "__typename": "Premiere"
+        },
+        "allReleases": {
+         "items": [
+          {
+           "date": {
+            "date": "2026-09-24",
+            "accuracy": "DAY",
+            "__typename": "IncompleteDate"
+           },
+           "__typename": "Release"
+          }
+         ],
+         "__typename": "PagingList_Release"
+        },
+        "__typename": "Distribution"
+       },
+       "productionYear": 2026,
+       "duration": 98,
+       "isShortFilm": false,
+       "ratingLists": {
+        "top250": null,
+        "__typename": "MovieRatingLists"
+       }
+      },
+      "__typename": "PopularMovieListItem",
+      "positionDiff": -2
+     }
+    ],
+    "__typename": "FilteredMovieList"
+   },
+   "descriptionLink": null
+  },
+  "webPage": {
+   "kpMovieListPage": {
+    "htmlMeta": {
+     "openGraph": {
+      "image": {
+       "avatarsUrl": "//avatars.mds.yandex.net/get-kinopoisk-image/10900341/4758bb3b-c94b-485e-a057-eb0ccb665f41",
+       "__typename": "Image"
+      },
+      "__typename": "OpenGraphMeta"
+     },
+     "__typename": "HtmlMeta"
+    },
+    "__typename": "WebPageConfiguration_KpMovieListPage"
+   },
+   "__typename": "WebPageContext"
+  }
+ }
+}
