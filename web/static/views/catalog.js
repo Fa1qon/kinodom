@@ -1,11 +1,12 @@
-// Каталог трекера: вкладки Rutracker и Rutor, раздел, сетка постеров по раздающим, страницы
-// (спека этапа 7, разделы 5.4 и 6.3).
+// Каталог трекера: сводка «трекер · раздел · порядок» с панелью выбора слева (план 17А), сетка постеров по
+// раздающим, порции (спека этапа 7, разделы 5.4 и 6.3).
 import { h, icon, ago, size, rating, store, plural, keepFocus, offWarn, poll, formatTag, altFormatTag, thumb } from '../ui.js';
 import { get } from '../api.js';
 import { render as renderKP } from './kpcat.js';
-import { TRACKERS, oneAtATime, retryDue, orderLinks, trackerTabs } from './catalog-parts.js';
+import { TRACKERS, oneAtATime, retryDue, orderLinks, trackerItems, filterSummary, drawerSections, firstColumn, filterButton, openFilters,
+  takeReopen, takeFocusGrid } from './catalog-parts.js';
 
-export { TRACKERS, oneAtATime, retryDue, orderLinks, trackerTabs } from './catalog-parts.js';
+export { TRACKERS, oneAtATime, retryDue, orderLinks } from './catalog-parts.js';
 
 // portions — подгрузка каталога порциями (замечание № 9 этапа 11b): {loaded, page, next, more, loading,
 // error}; page — сколько порций пришло, next — курсор (место последней карточки раздела, -1 — с начала;
@@ -130,20 +131,6 @@ export function returnTo(href, prev) {
   }
 }
 
-// groupBar — ряды над сеткой (спека 11b, 7.1): у Rutracker — группы («Кино · Сериалы · Документалистика»,
-// только где что-то выбрано; выбранная — по разделу, ссылка — на первый её подраздел) и подразделы
-// выбранной группы; раздел без группы — в ряду всегда. У Rutor групп нет — один ряд, как раньше.
-export function groupBar(sections, current) {
-  const groups = [];
-  for (const s of sections) {
-    if (s.group && !groups.some((g) => g.id === s.group)) groups.push({ id: s.group, name: s.groupName, first: s.id, on: false });
-  }
-  const cur = sections.find((s) => s.id === current);
-  const on = cur && cur.group ? cur.group : groups.length > 0 && !(cur && !cur.group) ? groups[0].id : '';
-  for (const g of groups) g.on = g.id === on;
-  return { groups, sections: sections.filter((s) => !s.group || s.group === on) };
-}
-
 // dotted — части строки через « · » (строки и элементы), пустые пропускаются.
 export function dotted(parts) {
   const out = [];
@@ -158,8 +145,6 @@ export function dotted(parts) {
 // при котором его выбрали; умолчание сменили — сервер память не слушает (ревью 14Б). Нет — умолчание.
 export const ORDER = 'catalog.order';
 
-// focusOrderNext — порядок выбрали с пульта ТВ: после перехода фокус — снова на ряд порядков (ревью 14Б).
-let focusOrderNext = false;
 
 // readOrderMemory — память выбора: {o, d}; прежняя память — просто строка порядка.
 export function readOrderMemory(raw) {
@@ -228,20 +213,43 @@ export function render(root, r, ctx) {
   // Незаконченные карточки (без страницы или постера; спека 11b, 14.1): номер → {el, e, tries}.
   const live = new Map();
 
-  const tabs = h('nav', { class: 'tabs', 'aria-label': 'Трекер' });
+  // Над сеткой — одна строка: сводка «трекер · раздел · порядок» (OK — панель выбора слева) и «обновлён» (план 17А).
   const updated = h('div', { class: 'muted small' });
-  const warn = h('div');
-  const bar = h('nav', { class: 'filters', 'aria-label': 'Разделы' });
-  const obar = h('nav', { class: 'filters orders', 'aria-label': 'Порядок' });
-  const owarn = h('div');
+  const fbtn = filterButton('', () => openPanel());
+  const warn = h('div', { class: 'note' }); // пустые — без места: сетка выше (план 17А)
+  const owarn = h('div', { class: 'note' });
   const grid = h('div', { class: 'grid' });
   const tail = h('div', { class: 'grid-tail' });
-  root.append(h('div', { class: 'screen' }, h('div', { class: 'row' }, tabs, h('div', { class: 'grow' }), updated), warn, bar, obar, owarn, grid, tail));
+  root.append(h('div', { class: 'screen' }, h('div', { class: 'row fbar' }, fbtn, h('div', { class: 'grow' }), updated), warn, owarn, grid, tail));
+  let statusTrackers = {}; // состояние трекеров — значок у трекера с проблемами в панели
+  let sectionList = []; // разделы трекера (/catalog/sections)
+  let orderList = []; // порядки раздела (из первой порции)
 
-  // Вкладки и предупреждение трекера — из «Состояния»: у вкладки со значком есть проблемы.
+  // drawSummary — текст сводки.
+  function drawSummary() {
+    const sec = sectionList.find((s) => s.id === shownSection);
+    const ord = orderList.length > 1 ? orderList.find((o) => o.id === shownOrder) : null;
+    const text = filterSummary([(TRACKERS.find(([id]) => id === tracker) || [, ''])[1], sec ? sec.name : '', ord ? ord.name : '']);
+    fbtn.title = text;
+    fbtn.querySelector('.btn-label').textContent = text;
+  }
+
+  // openPanel — панель слева: трекеры, разделы (у Rutracker — с заголовками групп), порядки.
+  function openPanel() {
+    const base = `#/catalog/${tracker}/${encodeURIComponent(shownSection)}`;
+    openFilters({
+      trackers: trackerItems(tracker, statusTrackers),
+      sections: drawerSections(sectionList).map((s) => (s.head !== undefined ? s
+        : { id: s.id, name: s.name, href: `#/catalog/${tracker}/${encodeURIComponent(s.id)}`, on: s.id === shownSection })),
+      orders: shownSection ? orderLinks(orderList, shownOrder, base).map((o) => ({ ...o,
+        onPick: () => store.set(ORDER, JSON.stringify({ o: o.id, d: defaultOrder })) })) : [],
+    });
+  }
+
+  // Предупреждение трекера и значки в панели — из «Состояния».
   const onStatus = (status) => {
     const trackers = (status && status.trackers) || {};
-    keepFocus(tabs, () => tabs.replaceChildren(...trackerTabs(tracker, trackers)));
+    statusTrackers = trackers;
     const t = trackers[tracker];
     keepFocus(warn, () => warn.replaceChildren(t && t.state === 'off' ? offWarn(t.text)
       : t && t.state !== 'ok' && t.text ? h('div', { class: 'warn' }, icon('warning'), t.text) : ''));
@@ -290,7 +298,8 @@ export function render(root, r, ctx) {
       shownOrder = firstOrder = list.order || '';
       defaultOrder = list.defaultOrder || '';
       owarn.replaceChildren(list.orderError ? h('div', { class: 'warn' }, icon('warning'), list.orderError) : '');
-      drawOrders(list.orders);
+      orderList = list.orders || [];
+      drawSummary();
     }
     const was = state.loaded.length;
     state = portions(state, { type: 'loaded', list });
@@ -300,29 +309,6 @@ export function render(root, r, ctx) {
     setTimeout(() => {
       if (alive && fillDue(state, tail.getBoundingClientRect().top, window.innerHeight)) more();
     }, 0);
-  }
-
-  // drawOrders — ряд порядков над сеткой (у раздела, где их больше одного); выбор запоминается.
-  function drawOrders(orders) {
-    if (!shownSection || !orders || orders.length < 2) {
-      obar.replaceChildren();
-      return;
-    }
-    const base = `#/catalog/${tracker}/${encodeURIComponent(shownSection)}`;
-    obar.replaceChildren(...orderLinks(orders, shownOrder, base).map((o) => h('a', {
-      class: o.on ? 'fil on' : 'fil',
-      href: o.href,
-      'aria-current': o.on ? 'true' : null,
-      'data-key': `ord-${o.id}`,
-      onclick: () => {
-        store.set(ORDER, JSON.stringify({ o: o.id, d: defaultOrder }));
-        focusOrderNext = true;
-      },
-    }, o.name)));
-    const on = obar.querySelector('.on');
-    if (on) on.scrollIntoView({ block: 'nearest', inline: 'nearest' });
-    if (focusOrderNext && on) on.focus({ preventScroll: true });
-    focusOrderNext = false;
   }
 
   // card — карточка порции; незаконченная — под присмотром опроса.
@@ -386,9 +372,17 @@ export function render(root, r, ctx) {
     if (inLastRow(e.target)) more();
     remember();
   });
-  // «Вниз» из последнего ряда: идти некуда, а порция не пришла — попросить снова (пульт ТВ).
+  // «Вниз» из последнего ряда: идти некуда, а порция не пришла — попросить снова (пульт ТВ). «Влево» с первой колонки —
+  // панель выбора (план 17А).
   grid.addEventListener('keydown', (e) => {
     if (e.key === 'ArrowDown' && inLastRow(e.target) && retryDue(state, tail.getBoundingClientRect().top, window.innerHeight)) more();
+    const first = grid.firstElementChild;
+    if (e.key === 'ArrowLeft' && e.target.closest && e.target.closest('.entry') && first
+      && firstColumn(e.target.getBoundingClientRect(), first.getBoundingClientRect())) {
+      e.preventDefault();
+      e.stopPropagation();
+      openPanel();
+    }
   });
   let scrollTimer = 0;
   // Прокрутка сама проверяет, близко ли низ: наблюдатель пересечения сообщает только смену «в зоне / вне
@@ -407,24 +401,17 @@ export function render(root, r, ctx) {
     if (!alive) return;
     if (watcher) watcher.observe(tail); // только теперь: пустая сетка не должна просить порцию сама
     const off = ctx.status && ctx.status.trackers && ctx.status.trackers[tracker] && ctx.status.trackers[tracker].state === 'off';
-    const gb = groupBar(sections, shownSection);
-    if (gb.groups.length > 0) {
-      const groups = h('nav', { class: 'filters', 'aria-label': 'Группы' }, ...gb.groups.map((g) => h('a', {
-        class: g.on ? 'fil on' : 'fil',
-        href: `#/catalog/${tracker}/${encodeURIComponent(g.first)}`,
-        'aria-current': g.on ? 'true' : null,
-        'data-key': `grp-${g.id}`,
-      }, g.name)));
-      bar.before(groups);
-    }
-    bar.replaceChildren(...gb.sections.map((s) => h('a', {
-      class: s.id === shownSection ? 'fil on' : 'fil',
-      href: `#/catalog/${tracker}/${encodeURIComponent(s.id)}`,
-      'aria-current': s.id === shownSection ? 'page' : null,
-      'data-key': `sec-${s.id}`,
-    }, s.name)));
-    bar.querySelector('.on')?.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+    sectionList = sections;
+    drawSummary();
     if (shownSection) store.set('catalog', catalogMemory(tracker, shownSection, urlOrder));
+    // Пришли из панели: выбрали трекер — она снова открыта на нём; раздел или порядок — фокус на первую карточку.
+    const reopen = takeReopen();
+    const toGrid = takeFocusGrid();
+    if (reopen) openPanel();
+    else if (toGrid) {
+      const firstCard = grid.querySelector('.entry');
+      if (firstCard) firstCard.focus({ preventScroll: true });
+    }
     if (sections.length === 0) {
       // Трекер без адреса (этап 11a) не обновляется — об этом строка «Укажите адрес» выше.
       grid.replaceChildren(off ? '' : h('p', { class: 'muted' }, 'Каталог ещё пуст — идёт первое обновление'));

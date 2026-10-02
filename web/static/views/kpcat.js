@@ -2,7 +2,8 @@
 // документальные) в четырёх порядках; карточка ведёт в поиск раздач по названию и году.
 import { h, ago, rating, store, keepFocus, poll, thumb } from '../ui.js';
 import { get } from '../api.js';
-import { orderLinks, oneAtATime, trackerTabs, retryDue } from './catalog-parts.js';
+import { orderLinks, oneAtATime, retryDue, trackerItems, filterSummary, firstColumn, filterButton, openFilters, takeReopen,
+  takeFocusGrid } from './catalog-parts.js';
 
 // KP_ORDER, KP_SECTION — выбор в памяти браузера.
 export const KP_ORDER = 'kpcat.order';
@@ -10,8 +11,6 @@ const KP_SECTION = 'kpcat.section';
 
 const SERIES = ['TV_SERIES', 'MINI_SERIES', 'TV_SHOW'];
 
-// kpFocusOrder — порядок выбрали с пульта ТВ: после перехода фокус — снова на ряд порядков (ревью 14Г).
-let kpFocusOrder = false;
 
 // filmSearchHref — поиск раздач фильма: название и год; у сериала — без года: идущий сезон новее первого, а
 // трекерам нужны все слова запроса (ревью 14Г). kp — шапка фильма над результатами.
@@ -83,13 +82,23 @@ export function render(root, r, ctx) {
   const restore = kpRestoreCount(saved, here);
   const section = r.parts[2] || store.get(KP_SECTION) || '';
   const order = r.query.get('order') || store.get(KP_ORDER) || 'popular';
-  const tabs = h('nav', { class: 'tabs', 'aria-label': 'Трекер' }, trackerTabs('kinopoisk'));
+  // Над сеткой — сводка «Кинопоиск · раздел · порядок» (OK — панель выбора слева) и «обновлён» (план 17А).
   const updated = h('div', { class: 'muted small' });
-  const bar = h('nav', { class: 'filters', 'aria-label': 'Разделы' });
-  const obar = h('nav', { class: 'filters orders', 'aria-label': 'Порядок' });
+  const fbtn = filterButton('Кинопоиск', () => openPanel());
   const grid = h('div', { class: 'grid' });
   const tail = h('div', { class: 'grid-tail' });
-  root.append(h('div', { class: 'screen' }, h('div', { class: 'row' }, tabs, h('div', { class: 'grow' }), updated), bar, obar, grid, tail));
+  root.append(h('div', { class: 'screen' }, h('div', { class: 'row fbar' }, fbtn, h('div', { class: 'grow' }), updated), grid, tail));
+  let cat = { sections: [], orders: [] }; // разделы и порядки «Кинопоиска» (/kpcat)
+
+  // openPanel — панель слева: трекеры, разделы «Кинопоиска», его порядки.
+  function openPanel() {
+    const base = `#/catalog/kinopoisk/${encodeURIComponent(sec)}`;
+    openFilters({
+      trackers: trackerItems('kinopoisk', (ctx.status && ctx.status.trackers) || {}),
+      sections: cat.sections.map((s) => ({ id: s.id, name: s.name, href: `#/catalog/kinopoisk/${encodeURIComponent(s.id)}`, on: s.id === sec })),
+      orders: orderLinks(cat.orders, order, base).map((o) => ({ ...o, onPick: () => store.set(KP_ORDER, o.id) })),
+    });
+  }
 
   let sec = '';
   let offset = 0;
@@ -193,6 +202,14 @@ export function render(root, r, ctx) {
   // «Вниз» из последнего ряда: идти некуда, а порция не пришла — попросить снова (пульт ТВ; ревью 14Г).
   grid.addEventListener('keydown', (e) => {
     if (e.key === 'ArrowDown' && inLastRow(e.target) && retryDue({ error: failed, loading: busy, more }, tail.getBoundingClientRect().top, window.innerHeight)) load();
+    // «Влево» с первой колонки — панель выбора (план 17А).
+    const first = grid.firstElementChild;
+    if (e.key === 'ArrowLeft' && e.target.closest && e.target.closest('.entry') && first
+      && firstColumn(e.target.getBoundingClientRect(), first.getBoundingClientRect())) {
+      e.preventDefault();
+      e.stopPropagation();
+      openPanel();
+    }
   });
 
   get('/kpcat').then(async (c) => {
@@ -201,29 +218,22 @@ export function render(root, r, ctx) {
     updatedLine(c);
     store.set('catalog', `#/catalog/kinopoisk/${encodeURIComponent(sec)}`);
     store.set(KP_SECTION, sec);
-    keepFocus(bar, () => bar.replaceChildren(...c.sections.map((s) => h('a', {
-      class: s.id === sec ? 'fil on' : 'fil',
-      href: `#/catalog/kinopoisk/${encodeURIComponent(s.id)}`,
-      'aria-current': s.id === sec ? 'page' : null,
-      'data-key': `sec-${s.id}`,
-    }, s.name))));
-    const base = `#/catalog/kinopoisk/${encodeURIComponent(sec)}`;
-    obar.replaceChildren(...orderLinks(c.orders, order, base).map((o) => h('a', {
-      class: o.on ? 'fil on' : 'fil',
-      href: o.href,
-      'aria-current': o.on ? 'true' : null,
-      'data-key': `ord-${o.id}`,
-      onclick: () => {
-        store.set(KP_ORDER, o.id);
-        kpFocusOrder = true;
-      },
-    }, o.name)));
-    bar.querySelector('.on')?.scrollIntoView({ block: 'nearest', inline: 'nearest' });
-    const on = obar.querySelector('.on');
-    if (kpFocusOrder && on) on.focus({ preventScroll: true });
-    kpFocusOrder = false;
+    cat = c;
+    const secName = (c.sections.find((s) => s.id === sec) || {}).name || '';
+    const ordName = (c.orders.find((o) => o.id === order) || {}).name || '';
+    const text = filterSummary(['Кинопоиск', secName, ordName]);
+    fbtn.title = text;
+    fbtn.querySelector('.btn-label').textContent = text;
+    const reopen = takeReopen();
+    const toGrid = takeFocusGrid();
+    if (reopen) openPanel();
     if (watcher) watcher.observe(tail);
     await load();
+    // Пришли из панели, выбрав раздел или порядок, — фокус на первую карточку.
+    if (alive && toGrid && !reopen) {
+      const firstCard = grid.querySelector('.entry');
+      if (firstCard) firstCard.focus({ preventScroll: true });
+    }
     // Возврат с поиска фильма — столько же карточек, то же место и та же карточка.
     for (let i = 0; i < 40 && alive && more && offset < restore; i++) {
       const was = offset;

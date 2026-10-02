@@ -26,13 +26,11 @@ export function orderLinks(orders, current, base) {
   return (orders || []).map((o) => ({ id: o.id, name: o.name, on: o.id === current, href: `${base}?order=${o.id}` }));
 }
 
-// trackerTabs — вкладки каталога: трекеры (со значком, если у трекера проблемы) и «Кинопоиск» (план 14Г).
-export function trackerTabs(current, trackers = {}) {
-  return [...TRACKERS, ['kinopoisk', 'Кинопоиск']].map(([id, title]) => {
-    const bad = trackers[id] && trackers[id].state !== 'ok';
-    return h('a', { href: `#/catalog/${id}`, class: id === current ? 'on' : null, 'aria-current': id === current ? 'page' : null, 'data-key': `tab-${id}` },
-      title, bad ? icon('warning', 18, 'Есть проблемы') : null);
-  });
+// trackerItems — трекеры для панели каталога (план 17А): Rutracker, Rutor, «Кинопоиск»; у трекера с проблемами — значок.
+export function trackerItems(current, trackers = {}) {
+  return [...TRACKERS, ['kinopoisk', 'Кинопоиск']].map(([id, name]) => ({
+    id, name, href: `#/catalog/${id}`, on: id === current, bad: !!(trackers[id] && trackers[id].state !== 'ok'),
+  }));
 }
 
 // Каталог одной кнопкой (план 17А): над сеткой — сводка «трекер · раздел · порядок», выбор — в панели слева. Раньше
