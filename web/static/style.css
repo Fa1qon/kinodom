@@ -380,6 +380,9 @@ a.res-row:hover { background: var(--hover); }
 .ch-logo.big { width: 112px; height: 80px; font-size: 28px; }
 .ch-num { width: 22px; flex-shrink: 0; text-align: right; color: var(--muted); font-size: 14px; }
 .ch-text { min-width: 0; display: flex; flex-direction: column; gap: 3px; }
+/* Полоска передачи — масштабом, не шириной: раз в минуту меняются сотни полосок, и ширина раскладывала весь список
+   заново (замер 16А: 1,3 с при ×20); масштаб только перерисовывается */
+.ch-track > div { width: 100%; transform-origin: 0 50%; }
 .ch-name { font-size: 16px; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .ch-now, .ch-next { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .ch-track { width: 220px; max-width: 100%; }

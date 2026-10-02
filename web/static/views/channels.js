@@ -46,6 +46,11 @@ export function sections(channels, tab) {
 // CH_PORTION — строк списка за раз (план 16А): 460 каналов разом — 4,5 с заморозки на телевизоре.
 export const CH_PORTION = 40;
 
+// CH_FIRST — первая порция меньше: ~2,5 экрана ТВ; 40 строк сразу — 1,2 с при ×20 (замер 16А). Ускорять первый показ
+// через content-visibility нельзя: навигация пульта меряет все кнопки и заставляет раскладывать скрытые строки
+// (шаг стрелкой до 0,85 с при ×20).
+export const CH_FIRST = 20;
+
 // flatRows — разделы списка одной лентой: заголовок раздела ({sec}) перед его каналами ({ch}); раздел без
 // заголовка — только каналы.
 export function flatRows(secs) {
@@ -92,6 +97,7 @@ export function render(root, r, ctx) {
   let drawn = null; // каналы, по которым построен список: тот же набор — опрос меняет передачи на месте
   let drawnError = '';
   const refs = new Map(); // ключ канала → узлы строки, которые меняет опрос
+  let headSig = ''; // заголовок и вкладки на экране — опрос их не перерисовывает, если те же
 
   const go = (patch) => {
     const n = { ...f, ...patch };
@@ -104,16 +110,36 @@ export function render(root, r, ctx) {
   const more = () => {
     if (!alive || built >= rows.length) return;
     list.append(...buildRows(built, portionEnd(rows.length, built)));
+    rewatch();
   };
+  // rewatch — наблюдатель сообщает только смену «в зоне / вне зоны»: прокрутили вниз раньше, чем он заметил, что низ
+  // ушёл из зоны после порции, — смены для него нет, и список вставал (найдено вживую 16А). Переподписка — сразу
+  // текущее состояние: низ ещё рядом — следующая порция.
+  function rewatch() {
+    if (watcher) {
+      watcher.unobserve(tail);
+      watcher.observe(tail);
+    } else if (near()) {
+      more();
+    }
+  }
   const near = () => tail.getBoundingClientRect().top < window.innerHeight + 600;
+  // Порция — 40 строк, низ уходит далеко за экран: наблюдателю хватает входа низа в зону. Обработчик прокрутки
+  // с getBoundingClientRect заставлял браузер раскладывать страницу на каждом шаге (трасса 16А: 0,7 с при ×20) —
+  // он только там, где наблюдателя нет.
   const watcher = typeof IntersectionObserver === 'function'
     ? new IntersectionObserver((es) => {
       if (es.some((e) => e.isIntersecting)) more();
     }, { rootMargin: '600px 0px' })
     : null;
   if (watcher) watcher.observe(tail);
+  let scrollTimer = 0;
   const onScroll = () => {
-    if (near()) more();
+    if (watcher || scrollTimer) return;
+    scrollTimer = setTimeout(() => {
+      scrollTimer = 0;
+      if (near()) more();
+    }, 150);
   };
   window.addEventListener('scroll', onScroll, { passive: true });
   list.addEventListener('focusin', (e) => {
@@ -156,28 +182,16 @@ export function render(root, r, ctx) {
     const shown = filterChannels(data.channels, f);
     const hasFav = data.channels.some((c) => c.block === 'favorite');
     keepFocus(root, () => {
-      fill(head, h('h1', { class: 'grow' }, 'Каналы'),
-        h('span', { class: 'muted' }, plural(shown.length, 'канал', 'канала', 'каналов')),
-        select('Все страны', f.country, data.countries, 'country'),
-        select('Все языки', f.lang, data.languages, 'lang'));
-      const hasFed = data.channels.some((c) => c.number > 0);
-      const tabs = [['all', 'Все'], ...(hasFav ? [['fav', 'Избранные']] : []), ...(hasFed ? [['federal', 'Федеральные']] : []),
-        ...data.categories.map((c) => [c.id, c.name])];
-      shownNow = { list: shown, listName: (tabs.find(([id]) => id === f.tab) || [, 'Все'])[1] };
-      fill(filters, ...tabs.map(([id, t]) => h('a', { class: id === f.tab ? 'fil on' : 'fil', role: 'tab', 'aria-selected': String(id === f.tab),
-        href: '#', 'data-key': `tab-${id || 'none'}`, onclick: (e) => {
-          e.preventDefault();
-          go({ tab: id });
-        } }, t)));
-      // Тот же набор каналов — передачи, полоски и оценки меняются на месте: список не перестраивается
-      // (раньше — раз в минуту целиком, заморозка на ТВ; план 16А).
+      drawHead(shown, hasFav);
+      // Тот же набор каналов — передачи, полоски и оценки меняются на месте, и только где изменились: список не
+      // перестраивается (раньше — раз в минуту целиком, заморозка на ТВ; план 16А).
       if (drawn && sameKeys(shown, drawn) && error === drawnError) {
         for (const c of shown) patchRow(c);
         drawn = shown;
         return;
       }
       rows = flatRows(sections(shown, f.tab));
-      const want = Math.max(CH_PORTION, built); // набор сменился — построено не меньше, чем было: фокус не теряется
+      const want = Math.max(CH_FIRST, built); // набор сменился — построено не меньше, чем было: фокус не теряется
       built = 0;
       refs.clear();
       const out = [];
@@ -187,8 +201,28 @@ export function render(root, r, ctx) {
       fill(list, ...out);
       drawn = shown;
       drawnError = error;
+      rewatch();
     });
-    if (near()) more();
+  }
+
+  // drawHead — заголовок, переключатели и вкладки; те же, что на экране, — не перерисовываются (опрос раз в минуту).
+  function drawHead(shown, hasFav) {
+    const hasFed = data.channels.some((c) => c.number > 0);
+    const tabs = [['all', 'Все'], ...(hasFav ? [['fav', 'Избранные']] : []), ...(hasFed ? [['federal', 'Федеральные']] : []),
+      ...data.categories.map((c) => [c.id, c.name])];
+    shownNow = { list: shown, listName: (tabs.find(([id]) => id === f.tab) || [, 'Все'])[1] };
+    const sig = JSON.stringify([shown.length, tabs, data.countries, data.languages]);
+    if (sig === headSig) return;
+    headSig = sig;
+    fill(head, h('h1', { class: 'grow' }, 'Каналы'),
+      h('span', { class: 'muted' }, plural(shown.length, 'канал', 'канала', 'каналов')),
+      select('Все страны', f.country, data.countries, 'country'),
+      select('Все языки', f.lang, data.languages, 'lang'));
+    fill(filters, ...tabs.map(([id, t]) => h('a', { class: id === f.tab ? 'fil on' : 'fil', role: 'tab', 'aria-selected': String(id === f.tab),
+      href: '#', 'data-key': `tab-${id || 'none'}`, onclick: (e) => {
+        e.preventDefault();
+        go({ tab: id });
+      } }, t)));
   }
 
   // buildRows — строки ленты с from до to (заголовки разделов и каналы); built — до to.
@@ -202,9 +236,13 @@ export function render(root, r, ctx) {
   function row(c) {
     const r = {
       now: h('span', { class: 'ch-now' }),
-      track: h('div', { class: 'track ch-track' }, h('div', { style: { background: 'var(--buffer)' } })),
+      track: h('div', { class: 'track ch-track' }, h('div', { style: { background: 'var(--buffer)' } })), // полоска — transform: опрос не раскладывает список
       next: h('span', { class: 'ch-next muted small' }),
       grade: gradeMark(c.grade),
+      gradeValue: c.grade,
+      nowSig: null,
+      pct: null,
+      nextText: null,
     };
     refs.set(c.key, r);
     fillRow(r, c);
@@ -218,16 +256,28 @@ export function render(root, r, ctx) {
         onclick: () => watch(c) }, icon('play_arrow'), h('span', { class: 'wide-only' }, 'Смотреть')));
   }
 
-  // fillRow — «сейчас», полоска и «следом» строки по данным канала c.
+  // fillRow — «сейчас», полоска и «следом» строки по данным канала c; узлы трогаются, только если изменилось.
   function fillRow(r, c) {
     const now = c.now;
     const next = c.next;
-    r.now.className = now ? 'ch-now' : 'ch-now muted';
-    r.now.replaceChildren(...(now ? [h('span', { class: 'muted' }, hhmm(now.start, data.utcOffset)), ' ', now.title] : ['—']));
-    r.track.hidden = !now;
-    if (now) r.track.firstChild.style.width = `${progressOf(now)}%`;
-    r.next.hidden = !next;
-    r.next.textContent = next ? `${hhmm(next.start, data.utcOffset)} ${next.title}` : '';
+    const nowSig = now ? `${now.start}|${now.title}` : '';
+    if (nowSig !== r.nowSig) {
+      r.nowSig = nowSig;
+      r.now.className = now ? 'ch-now' : 'ch-now muted';
+      r.now.replaceChildren(...(now ? [h('span', { class: 'muted' }, hhmm(now.start, data.utcOffset)), ' ', now.title] : ['—']));
+      r.track.hidden = !now;
+    }
+    const pct = now ? progressOf(now) : -1;
+    if (pct !== r.pct) {
+      r.pct = pct;
+      if (now) r.track.firstChild.style.transform = `scaleX(${pct / 100})`;
+    }
+    const nextText = next ? `${hhmm(next.start, data.utcOffset)} ${next.title}` : '';
+    if (nextText !== r.nextText) {
+      r.nextText = nextText;
+      r.next.hidden = !next;
+      r.next.textContent = nextText;
+    }
   }
 
   // patchRow — опрос: у построенной строки — новые передачи и оценка; не построена — ничего.
@@ -235,10 +285,11 @@ export function render(root, r, ctx) {
     const r = refs.get(c.key);
     if (!r) return;
     fillRow(r, c);
-    const g = gradeMark(c.grade);
-    if (g.className !== r.grade.className || g.title !== r.grade.title) {
+    if (c.grade !== r.gradeValue) {
+      const g = gradeMark(c.grade);
       r.grade.replaceWith(g);
       r.grade = g;
+      r.gradeValue = c.grade;
     }
   }
 
@@ -247,5 +298,6 @@ export function render(root, r, ctx) {
     pollList.stop();
     if (watcher) watcher.disconnect();
     window.removeEventListener('scroll', onScroll);
+    clearTimeout(scrollTimer);
   };
 }
