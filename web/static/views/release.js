@@ -131,7 +131,7 @@ export function render(root, r, ctx) {
     }
     if (!alive) return;
     const key = JSON.stringify([rel.name, rel.title, rel.imageKey, rel.description, rel.original, rel.year, rel.kinopoisk,
-      rel.seeders, rel.quality, rel.format, rel.size, rel.trackerUrl, rel.detailsPending, rel.category]);
+      rel.seeders, rel.quality, rel.format, rel.preferred, rel.size, rel.trackerUrl, rel.detailsPending, rel.category]);
     if (key !== headKey) {
       headKey = key;
       drawHead();
