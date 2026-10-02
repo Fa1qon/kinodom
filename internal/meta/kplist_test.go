@@ -191,3 +191,30 @@ func TestKPIMDbCaptcha(t *testing.T) {
 		}
 	}
 }
+
+// Ревью 14Г: образец списка фильмов с настоящего сайта — разбор фильма (productionYear, премьера), а не только
+// сериала (releaseYears).
+func TestKPListFilms(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.Write([]byte(sample(t, "kp_list_films.json")))
+	}))
+	defer srv.Close()
+	w := NewKPWeb(KPWebOptions{GraphQL: srv.URL + "/graphql/", Site: srv.URL, Every: time.Millisecond})
+	items, _, err := w.List(context.Background(), KPBackground, ListQuery{Slug: "popular-films", Bool: []string{"foreign"}, Order: "POSITION_ASC", Limit: 3})
+	if err != nil || len(items) == 0 {
+		t.Fatalf("список: %d, %v", len(items), err)
+	}
+	dated := 0
+	for _, f := range items {
+		if f.Type != "FILM" || f.Year < 1900 || f.NameRu == "" || f.Poster == "" {
+			t.Fatalf("фильм: %+v", f)
+		}
+		if !f.Premiere.IsZero() {
+			dated++
+		}
+	}
+	if dated == 0 {
+		t.Fatalf("ни у одного фильма нет даты выхода: %+v", items)
+	}
+}
