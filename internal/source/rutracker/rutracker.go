@@ -287,16 +287,25 @@ func (r *Rutracker) Search(ctx context.Context, query string) ([]source.Release,
 		return nil, err
 	}
 	allowed := searchForums(tree)
-	// Разделы видеокатегорий — фильтром форума: без него 50 строк страницы тратятся и на не-видео
-	// (вживую 15 из 50; tracker.php понимает f=<номер,номер,…>, исследование, раздел 11). Номеров —
-	// около 380, это 2,5 КБ адреса. Свой фильтр ниже остаётся: форум может параметр не учесть.
-	rs, err := r.trackerPage(ctx, url.Values{"nm": {q}, "o": {"10"}, "s": {"2"}, "f": {strings.Join(sortedIDs(allowed), ",")}})
+	// Без фильтра разделов (f=…): со списком разделов форум отвечал «Результатов поиска: 0» там, где без
+	// него находил (жалоба 2026-10-02: «ферма кларксона» — 0 с f, 15 без). Видео отбираем у себя; первая
+	// страница полная — берём и вторую, чтобы после отбора не осталось мало. Сбой второй — без неё.
+	params := url.Values{"nm": {q}, "o": {"10"}, "s": {"2"}}
+	rs, err := r.trackerPage(ctx, params)
 	if err != nil {
 		return nil, err
 	}
+	if len(rs) >= searchPage {
+		params.Set("start", strconv.Itoa(searchPage))
+		if more, err := r.trackerPage(ctx, params); err == nil {
+			rs = append(rs, more...)
+		}
+	}
+	seen := map[string]bool{}
 	out := rs[:0]
 	for _, x := range rs {
-		if allowed[x.CategoryID] {
+		if allowed[x.CategoryID] && !seen[x.TopicID] {
+			seen[x.TopicID] = true
 			out = append(out, x)
 		}
 	}
