@@ -48,6 +48,11 @@ type fakeSource struct {
 	sortOrders   []string                               // порядки раздела, которые отдаёт сам трекер (план 14Б)
 	sorted       map[string]map[string][]source.Release // порядок → раздел (первый форум) → список
 	sortedErr    error                                  // ошибка страницы порядка (трекер не ответил)
+	sortedErrs   map[string]error                       // форум → ошибка его страницы порядка, один раз (план 15А)
+	sortedBlock  map[string]chan struct{}               // форум → страница порядка ждёт закрытия (или отмены)
+	sortedRepeat bool                                   // за концом списка — повтор последней полной страницы (как Rutor)
+	sortedPage   int                                    // строк на странице порядка; 0 — 100 (у Rutracker — 50)
+	sortedDown   map[string]bool                        // форум → его страница порядка не приходит никогда
 }
 
 func (f *fakeSource) SortOrders() []string {
@@ -57,21 +62,53 @@ func (f *fakeSource) SortOrders() []string {
 }
 
 // SortedPage — страница раздела в порядке order по 100 (как Rutor); forums — раздел или форумы подраздела.
-func (f *fakeSource) SortedPage(_ context.Context, forums []string, order string, page int) ([]source.Release, bool, error) {
+func (f *fakeSource) SortedPage(ctx context.Context, forums []string, order string, page int) ([]source.Release, bool, error) {
 	f.mu.Lock()
-	defer f.mu.Unlock()
 	f.calls["sorted:"+order]++
 	f.calls["sortedForums:"+strings.Join(forums, ",")]++
+	var block chan struct{}
+	var snapshot []source.Release // данные на момент запроса: ответ, пришедший позже, — про них (ревью 15А)
+	if len(forums) > 0 {
+		block = f.sortedBlock[forums[0]]
+		snapshot = slices.Clone(f.sorted[order][forums[0]])
+	}
+	f.mu.Unlock()
+	if block != nil {
+		select {
+		case <-block:
+		case <-ctx.Done():
+			return nil, false, ctx.Err()
+		}
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	if f.sortedErr != nil {
 		return nil, false, f.sortedErr
+	}
+	if len(forums) > 0 {
+		if err, ok := f.sortedErrs[forums[0]]; ok {
+			delete(f.sortedErrs, forums[0])
+			return nil, false, err
+		}
+		if f.sortedDown[forums[0]] {
+			return nil, false, errors.New("форум не отвечает")
+		}
 	}
 	if !slices.Contains(f.sortOrders, order) || len(forums) == 0 {
 		return nil, false, fmt.Errorf("порядок %s не поддерживается", order)
 	}
-	all := f.sorted[order][forums[0]]
-	from := min(page*100, len(all))
-	to := min(from+100, len(all))
-	return slices.Clone(all[from:to]), to-from == 100, nil
+	all := snapshot
+	size := f.sortedPage
+	if size == 0 {
+		size = 100
+	}
+	if f.sortedRepeat && page*size >= len(all) && len(all) >= size {
+		last := (len(all)/size - 1) * size
+		return slices.Clone(all[last : last+size]), true, nil
+	}
+	from := min(page*size, len(all))
+	to := min(from+size, len(all))
+	return slices.Clone(all[from:to]), to-from == size, nil
 }
 
 func (f *fakeSource) DetailsAtOnce() int { f.mu.Lock(); defer f.mu.Unlock(); return f.atOnce }

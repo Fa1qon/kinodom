@@ -529,12 +529,12 @@ func TestSortedPageDownloads(t *testing.T) {
 	if got := r.SortOrders(); !slices.Equal(got, []string{source.OrderDownloads}) {
 		t.Fatalf("порядки со входом: %v", got)
 	}
-	rs, more, err := r.SortedPage(ctx, []string{"313", "2076"}, source.OrderDownloads, 1)
+	rs, more, err := r.SortedPage(ctx, []string{"313"}, source.OrderDownloads, 1)
 	if err != nil || len(rs) != 50 || !more || rs[0].Downloads == 0 {
 		t.Fatalf("страница: %d, ещё %v, %v", len(rs), more, err)
 	}
 	p := s.LastParams()
-	if p.Get("o") != "4" || p.Get("s") != "2" || p.Get("f") != "313,2076" || p.Get("start") != "50" || p.Get("nm") != "" {
+	if p.Get("o") != "4" || p.Get("s") != "2" || p.Get("f") != "313" || p.Get("start") != "50" || p.Get("nm") != "" {
 		t.Fatalf("параметры: %v", p)
 	}
 }
@@ -549,7 +549,8 @@ func TestSortedPageNeedsLogin(t *testing.T) {
 		t.Fatalf("без входа: %v", err)
 	}
 	r2 := newRutracker(t, s, withCreds("user", "pass"))
-	for _, bad := range [][]string{nil, {"c2"}, {"313;drop"}} {
+	// Ревью 14Б, 15Д: форум сортирует только внутри одного форума — список форумов не принимается.
+	for _, bad := range [][]string{nil, {"c2"}, {"313;drop"}, {"313", "2076"}} {
 		if _, _, err := r2.SortedPage(ctx, bad, source.OrderDownloads, 0); err == nil {
 			t.Fatalf("форумы %q приняты", bad)
 		}
@@ -580,5 +581,31 @@ func TestSearchFiltersAndMergesPages(t *testing.T) {
 		if n > 1 {
 			t.Fatalf("повтор %s ×%d", id, n)
 		}
+	}
+}
+
+// Ревью 14Б, 15Д: форум сортирует только внутри одного форума; список форумов — ошибка, а не тихо неверный порядок.
+func TestSortedPageOneForum(t *testing.T) {
+	s := rutrackertest.NewServer(t)
+	s.Login, s.Password = "user", "pass"
+	r := newRutracker(t, s, withCreds("user", "pass"))
+	if _, _, err := r.SortedPage(ctx, []string{"313", "2076"}, source.OrderDownloads, 0); err == nil {
+		t.Fatal("список форумов принят")
+	}
+	if _, _, err := r.SortedPage(ctx, []string{"313"}, source.OrderDownloads, 0); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// Ревью 15А, п. 4: поиск форума отдаёт не больше 500 строк — страница с 450-й строки последняя.
+func TestSortedPageStopsAt500(t *testing.T) {
+	s := rutrackertest.NewServer(t)
+	s.Login, s.Password = "user", "pass"
+	r := newRutracker(t, s, withCreds("user", "pass"))
+	if _, more, err := r.SortedPage(ctx, []string{"313"}, source.OrderDownloads, 8); err != nil || !more {
+		t.Fatalf("страница 8: ещё %v, %v", more, err)
+	}
+	if _, more, err := r.SortedPage(ctx, []string{"313"}, source.OrderDownloads, 9); err != nil || more {
+		t.Fatalf("страница 9: ещё %v, %v", more, err)
 	}
 }

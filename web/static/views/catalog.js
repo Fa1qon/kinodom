@@ -115,9 +115,18 @@ function lastPlace() {
 // вкладке). Пришли прямо из этого раздела — шаг назад по истории: место — в её записи, как у кнопки «назад»
 // браузера и Esc пульта ТВ. Иначе — переход, а место — запомненное, если оно этого раздела.
 export function backStep(href, prev, place) {
-  const mine = place && place.key === href ? place : null;
-  if (prev && (prev === href || (mine && prev === mine.at))) return { back: true, place: null };
-  return { back: false, place: mine ? { ...mine, at: href } : null };
+  // Сравнения — по адресу без запроса: память раздела хранит порядок (catalogMemory), а адрес до раздачи и место
+  // во вкладке — без него (ревью 15А).
+  const base = href.split('?')[0];
+  const mine = place && place.key === base ? place : null;
+  if (prev && (prev === base || (mine && prev === mine.at))) return { back: true, place: null };
+  return { back: false, place: mine ? { ...mine, at: base } : null };
+}
+
+// catalogHome — куда «Каталог» в меню и запуск: раздел из памяти без порядка — порядок решают память устройства
+// и умолчание из настроек (ревью 15А: иначе явный порядок обходил смену умолчания).
+export function catalogHome(saved) {
+  return (saved || '#/catalog/rutor').split('?')[0];
 }
 
 // returnTo — «назад» в раздел каталога href со страницы раздачи.
@@ -177,6 +186,12 @@ export function readOrderMemory(raw) {
     // прежняя память — строка
   }
   return { o: String(raw), d: '' };
+}
+
+// catalogMemory — адрес раздела для «назад» со страницы раздачи: с порядком из адреса (ревью 14Б: обходной
+// путь «назад» возвращал с порядком из памяти устройства).
+export function catalogMemory(tracker, section, order) {
+  return `#/catalog/${tracker}/${encodeURIComponent(section)}` + (order ? `?order=${encodeURIComponent(order)}` : '');
 }
 
 // orderParams — порядок в запросе порции: показанный (следующие порции — тем же, что первая), иначе из
@@ -438,7 +453,7 @@ export function render(root, r, ctx) {
       'data-key': `sec-${s.id}`,
     }, s.name)));
     bar.querySelector('.on')?.scrollIntoView({ block: 'nearest', inline: 'nearest' });
-    if (shownSection) store.set('catalog', `#/catalog/${tracker}/${encodeURIComponent(shownSection)}`);
+    if (shownSection) store.set('catalog', catalogMemory(tracker, shownSection, urlOrder));
     if (sections.length === 0) {
       // Трекер без адреса (этап 11a) не обновляется — об этом строка «Укажите адрес» выше.
       grid.replaceChildren(off ? '' : h('p', { class: 'muted' }, 'Каталог ещё пуст — идёт первое обновление'));

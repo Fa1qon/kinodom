@@ -4,6 +4,7 @@ import { NAV } from './app-nav.js';
 import { get } from './api.js';
 import { initNav } from './nav.js';
 import * as catalog from './views/catalog.js';
+import { catalogHome } from './views/catalog.js';
 import * as release from './views/release.js';
 import * as search from './views/search.js';
 import * as downloads from './views/downloads.js';
@@ -54,7 +55,7 @@ function route() {
 }
 
 function defaultRoute() {
-  return store.get('catalog') || '#/catalog/rutor';
+  return catalogHome(store.get('catalog'));
 }
 
 

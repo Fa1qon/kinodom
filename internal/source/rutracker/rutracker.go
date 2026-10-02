@@ -374,6 +374,9 @@ var sortParam = map[string]string{source.OrderDownloads: "4", source.OrderNew: "
 // searchPage — строк на странице поиска форума.
 const searchPage = 50
 
+// searchMax — больше строк поиск форума не отдаёт (спека сервера; опыт edge-cloudflare).
+const searchMax = 500
+
 // SortOrders — порядки раздела, которые каталог берёт у форума (план 14Б): число скачиваний есть только в
 // поиске форума, а он — со входом. Качающих и новизну каталог берёт из списка раздела API.
 func (r *Rutracker) SortOrders() []string {
@@ -383,8 +386,9 @@ func (r *Rutracker) SortOrders() []string {
 	return []string{source.OrderDownloads}
 }
 
-// SortedPage — страница раздела (его форумы forums) в порядке order по 50 строк, page 0 — первая: поиск
-// форума без запроса, по убыванию. more — страница полная.
+// SortedPage — страница форума forums[0] (ровно один: форум сортирует только внутри себя) в порядке order по
+// 50 строк, page 0 — первая: поиск форума без запроса, по убыванию. more — страница полная и не последняя из 500
+// строк, которые отдаёт поиск форума (ревью 15А).
 func (r *Rutracker) SortedPage(ctx context.Context, forums []string, order string, page int) (rs []source.Release, more bool, err error) {
 	o, ok := sortParam[order]
 	if !ok {
@@ -392,6 +396,10 @@ func (r *Rutracker) SortedPage(ctx context.Context, forums []string, order strin
 	}
 	if len(forums) == 0 || page < 0 || slices.ContainsFunc(forums, func(f string) bool { return !isNumber(f) }) {
 		return nil, false, fmt.Errorf("Rutracker: разделы %q — не номера форумов", forums)
+	}
+	if len(forums) != 1 {
+		// Форум сортирует только внутри одного форума; со списком отдаёт не тот порядок (вживую 2026-10-01, 15Д).
+		return nil, false, fmt.Errorf("Rutracker: порядок раздела — по одному форуму, а не %d", len(forums))
 	}
 	if err := r.notConfigured(); err != nil {
 		return nil, false, err
@@ -406,7 +414,7 @@ func (r *Rutracker) SortedPage(ctx context.Context, forums []string, order strin
 	if rs, err = r.trackerPage(ctx, params); err != nil {
 		return nil, false, err
 	}
-	return rs, len(rs) >= searchPage, nil
+	return rs, len(rs) >= searchPage && (page+1)*searchPage < searchMax, nil
 }
 
 // SearchRaw — страница поиска tracker.php с параметрами как есть, без фильтра по категориям:

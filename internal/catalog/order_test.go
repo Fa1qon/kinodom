@@ -1,6 +1,7 @@
 package catalog
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"net/http"
@@ -137,7 +138,8 @@ func TestOrderRutrackerFromSectionList(t *testing.T) {
 	mux := http.NewServeMux()
 	c.Register(muxRouter{mux})
 	got := walkOrder(t, mux, "rutracker", "2110", source.OrderLeechers)
-	if len(got) != 149 || got[0] != "000 (2020) WEB-DL" && got[0] != "000 (2020) BDRip" || got[1] != "148 (2020) WEB-DL" {
+	// Место 0 качающих — раздача 149 (BDRip): карточка фильма показывает раздачу своего места (ревью 14Б).
+	if len(got) != 149 || got[0] != "000 (2020) BDRip" || got[1] != "148 (2020) WEB-DL" {
 		t.Fatalf("качающие: %d, начало %v", len(got), got[:min(3, len(got))])
 	}
 	gotNew := walkOrder(t, mux, "rutracker", "2110", source.OrderNew)
@@ -300,5 +302,284 @@ func TestOrderSinceDefaultChanged(t *testing.T) {
 	getJSONErr(t, mux, "/api/v1/catalog?tracker=rutor&section=12&after=-1&order=new", &v)
 	if v.Order != source.OrderNew {
 		t.Fatalf("порядок из адреса (без since) — он: %q", v.Order)
+	}
+}
+
+// downloadsFixture — Rutracker, раздел 46 (форумы 56 и 2076): «Скачивания» — 56: 150 раздач (чётные числа от 1000
+// вниз), 2076: 120 (нечётные от 999 вниз); want — все 270 строго по убыванию скачиваний.
+func downloadsFixture(t *testing.T) (*fakeSource, []string) {
+	t.Helper()
+	rt := newFake("rutracker")
+	rt.tree = rutrackerTree()
+	forum := func(f string, n, base, top int) []source.Release {
+		var rs []source.Release
+		for i := range n {
+			r := rel("rutracker", fmt.Sprint(base+i), fmt.Sprintf("Кино %s-%03d (2020) WEB-DL", f, i), 10, 1, fmt.Sprintf("h%s-%d", f, i))
+			r.CategoryID, r.Downloads = f, top-2*i
+			rs = append(rs, r)
+		}
+		return rs
+	}
+	rt.top["56"] = forum("56", 5, 100, 0)
+	rt.top["2076"] = forum("2076", 5, 200, 0)
+	d56, d2076 := forum("56", 150, 1000, 1000), forum("2076", 120, 5000, 999)
+	rt.sortOrders = []string{source.OrderDownloads}
+	rt.sorted = map[string]map[string][]source.Release{source.OrderDownloads: {"56": d56, "2076": d2076}}
+	all := append(slices.Clone(d56), d2076...)
+	slices.SortFunc(all, func(a, b source.Release) int { return b.Downloads - a.Downloads })
+	var want []string
+	for _, r := range all {
+		want = append(want, strings.TrimPrefix(r.Title, "Кино "))
+	}
+	return rt, want
+}
+
+// Ревью 14Б: «Скачивания» — только первые страницы форумов, хвост слияния неточный. Ленивое слияние: страница
+// форума качается, когда его раздачи кончились; итог — все раздачи всех форумов строго по числу скачиваний.
+func TestDownloadsLazyMerge(t *testing.T) {
+	rt, want := downloadsFixture(t)
+	c, _ := newCatalog(t, openDB(t), func(o *Options) { o.Sections = []Section{{"rutracker", "46", true}} }, rt)
+	refresh(t, c, true)
+	mux := http.NewServeMux()
+	c.Register(muxRouter{mux})
+	got := walkOrder(t, mux, "rutracker", "46", source.OrderDownloads)
+	if !slices.Equal(got, want) {
+		t.Fatalf("показано %d из %d; начало %v", len(got), len(want), got[:min(4, len(got))])
+	}
+	if rt.Calls("sortedForums:56") != 2 || rt.Calls("sortedForums:2076") != 2 {
+		t.Fatalf("страниц: 56 — %d, 2076 — %d (нужно по две)", rt.Calls("sortedForums:56"), rt.Calls("sortedForums:2076"))
+	}
+}
+
+// Review Focus 1 (15А): форум не ответил — порция из остальных; через минуту его раздачи догоняют, список не
+// обрывается (раньше сбой помнился до обновления раздела — до 6 ч).
+func TestDownloadsForumRetried(t *testing.T) {
+	rt, want := downloadsFixture(t)
+	rt.sortedErrs = map[string]error{"2076": errors.New("форум не ответил")}
+	c, clk := newCatalog(t, openDB(t), func(o *Options) { o.Sections = []Section{{"rutracker", "46", true}} }, rt)
+	refresh(t, c, true)
+	mux := http.NewServeMux()
+	c.Register(muxRouter{mux})
+	first := listOrder(t, mux, "rutracker", "46", source.OrderDownloads, -1)
+	for _, e := range first.Entries {
+		if strings.Contains(e.Title, "2076-") {
+			t.Fatalf("раздача упавшего форума в первой порции: %s", e.Title)
+		}
+	}
+	if len(first.Entries) == 0 || !first.More {
+		t.Fatalf("первая порция: %d, more %v", len(first.Entries), first.More)
+	}
+	clk.add(2 * time.Minute)
+	got := walkOrder(t, mux, "rutracker", "46", source.OrderDownloads)
+	if len(got) != len(want) {
+		t.Fatalf("после повтора показано %d из %d", len(got), len(want))
+	}
+}
+
+// Review Focus 2 (15А): уход с экрана посреди сборки — уже скачанные страницы заново не качаются.
+func TestDownloadsStateSurvivesCancel(t *testing.T) {
+	rt, _ := downloadsFixture(t)
+	block := make(chan struct{})
+	rt.sortedBlock = map[string]chan struct{}{"2076": block}
+	c, _ := newCatalog(t, openDB(t), func(o *Options) { o.Sections = []Section{{"rutracker", "46", true}} }, rt)
+	refresh(t, c, true)
+	k := orderKey{CategoryRef{"rutracker", "46"}, source.OrderDownloads}
+	cctx, cancel := context.WithTimeout(ctx, 300*time.Millisecond)
+	_, err := c.ensureOrder(cctx, k)
+	cancel()
+	if err == nil {
+		t.Fatal("отменённая порция без ошибки")
+	}
+	close(block)
+	if _, err := c.ensureOrder(ctx, k); err != nil {
+		t.Fatal(err)
+	}
+	if n := rt.Calls("sortedForums:56"); n != 1 {
+		t.Fatalf("первая страница форума 56 спрошена %d раз", n)
+	}
+}
+
+// Ревью 14Б: конец списка Rutor — сайт повторяет последнюю страницу; было три лишних запроса, нужен один.
+func TestOrderRutorRepeatEndsAtOnce(t *testing.T) {
+	rutor := newFake("rutor")
+	rutor.top["12"] = manyDesc("rutor", 30)
+	rutor.sortOrders = []string{source.OrderNew}
+	var fresh []source.Release
+	for i := range 200 {
+		fresh = append(fresh, rel("rutor", fmt.Sprint(1000+i), fmt.Sprintf("Кино N%03d (2026) WEB-DL", i), 5, 1<<30, fmt.Sprintf("n%d", i)))
+	}
+	rutor.sorted = map[string]map[string][]source.Release{source.OrderNew: {"12": fresh}}
+	rutor.sortedRepeat = true
+	c, _ := newCatalog(t, openDB(t), func(o *Options) { o.Sections = []Section{{"rutor", "12", false}} }, rutor)
+	refresh(t, c, true)
+	mux := http.NewServeMux()
+	c.Register(muxRouter{mux})
+	if got := walkOrder(t, mux, "rutor", "12", source.OrderNew); len(got) != 200 {
+		t.Fatalf("показано %d", len(got))
+	}
+	if n := rutor.Calls("sorted:new"); n != 3 {
+		t.Fatalf("страниц сайта %d, нужно 3 (две и одна повторная)", n)
+	}
+}
+
+// Ревью 14Б: одинаковый infohash в порядке — остаётся раздача меньшего места, а не с большим числом раздающих.
+func TestOrderCollapseKeepsPlace(t *testing.T) {
+	rutor := newFake("rutor")
+	rutor.top["12"] = manyDesc("rutor", 30)
+	rutor.sortOrders = []string{source.OrderNew}
+	var fresh []source.Release
+	for i := range 10 {
+		fresh = append(fresh, rel("rutor", fmt.Sprint(1000+i), fmt.Sprintf("Кино N%03d (2026) WEB-DL", i), 5, 1<<30, fmt.Sprintf("n%d", i)))
+	}
+	// Место 7 — та же раздача по infohash, что место 0, у другой записи трекера и с большим числом раздающих.
+	fresh[7] = rel("rutor", "1007", "Кино Повтор (2026) WEB-DL", 50, 1<<30, "n0")
+	rutor.sorted = map[string]map[string][]source.Release{source.OrderNew: {"12": fresh}}
+	c, _ := newCatalog(t, openDB(t), func(o *Options) { o.Sections = []Section{{"rutor", "12", false}} }, rutor)
+	refresh(t, c, true)
+	mux := http.NewServeMux()
+	c.Register(muxRouter{mux})
+	if got := walkOrder(t, mux, "rutor", "12", source.OrderNew); len(got) == 0 || got[0] != "N000 (2026) WEB-DL" {
+		t.Fatalf("первая карточка %v", got[:min(3, len(got))])
+	}
+}
+
+// Review Focus 3 (15А): обновление раздела, пока порция качается, — старый список не возвращается.
+func TestOrderResetDuringFetch(t *testing.T) {
+	rutor := newFake("rutor")
+	rutor.top["12"] = manyDesc("rutor", 30)
+	rutor.sortOrders = []string{source.OrderNew}
+	rutor.sorted = map[string]map[string][]source.Release{source.OrderNew: {"12": manyDesc("rutor", 30)}}
+	block := make(chan struct{})
+	rutor.sortedBlock = map[string]chan struct{}{"12": block}
+	c, _ := newCatalog(t, openDB(t), func(o *Options) { o.Sections = []Section{{"rutor", "12", false}} }, rutor)
+	refresh(t, c, true)
+	k := orderKey{CategoryRef{"rutor", "12"}, source.OrderNew}
+	done := make(chan struct{})
+	go func() { c.ensureOrder(ctx, k); close(done) }()
+	waitUntil(t, func() bool { return rutor.Calls("sorted:new") == 1 })
+	c.resetOrders(k.cat)
+	rutor.set(func() {
+		rutor.sorted[source.OrderNew]["12"] = manyDesc("rutor", 12)
+		delete(rutor.sortedBlock, "12")
+	})
+	close(block)
+	<-done
+	mux := http.NewServeMux()
+	c.Register(muxRouter{mux})
+	if got := walkOrder(t, mux, "rutor", "12", source.OrderNew); len(got) != 12 {
+		t.Fatalf("после обновления — %d (старый список вернулся?)", len(got))
+	}
+}
+
+// Review Focus 4 (15А): первая страница Rutor целиком без раздающих — следующая качается, список не кончается.
+func TestOrderRutorPageWithoutSeeders(t *testing.T) {
+	rutor := newFake("rutor")
+	rutor.top["12"] = manyDesc("rutor", 30)
+	rutor.sortOrders = []string{source.OrderNew}
+	var fresh []source.Release
+	for i := range 130 {
+		seeders := 0
+		if i >= 100 {
+			seeders = 3
+		}
+		fresh = append(fresh, rel("rutor", fmt.Sprint(1000+i), fmt.Sprintf("Кино N%03d (2026) WEB-DL", i), seeders, 1<<30, fmt.Sprintf("n%d", i)))
+	}
+	rutor.sorted = map[string]map[string][]source.Release{source.OrderNew: {"12": fresh}}
+	c, _ := newCatalog(t, openDB(t), func(o *Options) { o.Sections = []Section{{"rutor", "12", false}} }, rutor)
+	refresh(t, c, true)
+	mux := http.NewServeMux()
+	c.Register(muxRouter{mux})
+	if got := walkOrder(t, mux, "rutor", "12", source.OrderNew); len(got) != 30 {
+		t.Fatalf("показано %d, нужно 30", len(got))
+	}
+}
+
+// waitUntil — условие стало верным за 5 с.
+func waitUntil(t *testing.T, ok func() bool) {
+	t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	for !ok() {
+		if time.Now().After(deadline) {
+			t.Fatal("не дождались")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+}
+
+// Ревью 15А, п. 2: отмена посреди порции (страница форума качается, раздачи других уже слиты) — слитое не
+// теряется: следующая порция начинается с него. Страница Rutracker — 50 строк: вторая страница верхнего форума
+// качается уже посреди первой порции.
+func TestDownloadsCancelMidPortionKeepsMerged(t *testing.T) {
+	rt, want := downloadsFixture(t)
+	rt.sortedPage = 50
+	c, _ := newCatalog(t, openDB(t), func(o *Options) { o.Sections = []Section{{"rutracker", "46", true}} }, rt)
+	refresh(t, c, true)
+	k := orderKey{CategoryRef{"rutracker", "46"}, source.OrderDownloads}
+	if _, err := c.ensureOrder(ctx, k); err != nil {
+		t.Fatal(err)
+	}
+	block := make(chan struct{})
+	rt.set(func() { rt.sortedBlock = map[string]chan struct{}{"56": block} })
+	cctx, cancel := context.WithTimeout(ctx, 300*time.Millisecond)
+	_, err := c.ensureOrder(cctx, k)
+	cancel()
+	if err == nil {
+		t.Fatal("отменённая порция без ошибки")
+	}
+	close(block)
+	rt.set(func() { rt.sortedBlock = nil })
+	mux := http.NewServeMux()
+	c.Register(muxRouter{mux})
+	if got := walkOrder(t, mux, "rutracker", "46", source.OrderDownloads); !slices.Equal(got, want) {
+		t.Fatalf("после отмены показано %d из %d", len(got), len(want))
+	}
+}
+
+// Ревью 15А, п. 3: форум не отвечает никогда — ни одной пустой порции с «ещё» (пульт крутил бы запросы): нечего
+// слить, а форум ждёт повтора — ошибка (пульт повторит по «вниз»); три неудачи подряд — форум без него, список
+// кончается.
+func TestDownloadsDeadForumEnds(t *testing.T) {
+	rt, _ := downloadsFixture(t)
+	rt.sortedDown = map[string]bool{"2076": true}
+	c, clk := newCatalog(t, openDB(t), func(o *Options) { o.Sections = []Section{{"rutracker", "46", true}} }, rt)
+	refresh(t, c, true)
+	mux := http.NewServeMux()
+	c.Register(muxRouter{mux})
+	shown, empties, errs := 0, 0, 0
+	after, more := -1, true
+	for i := 0; more && i < 40; i++ {
+		var v ListView
+		code := getJSONErr(t, mux, fmt.Sprintf("/api/v1/catalog?tracker=rutracker&section=46&after=%d&order=downloads", after), &v)
+		if code != 200 {
+			errs++
+			clk.add(2 * time.Minute)
+			continue
+		}
+		if len(v.Entries) == 0 && v.More {
+			empties++
+		}
+		shown += len(v.Entries)
+		after, more = v.Next, v.More
+		clk.add(2 * time.Minute)
+	}
+	if empties != 0 || more || shown != 150 {
+		t.Fatalf("пустых с «ещё» %d, ещё %v, показано %d (ошибок %d)", empties, more, shown, errs)
+	}
+}
+
+// Ревью 15А, п. 4: форум за концом повторяет страницу — его конец, а не бесконечные повторы.
+func TestDownloadsForumRepeatEnds(t *testing.T) {
+	rt, _ := downloadsFixture(t)
+	rt.sortedRepeat = true
+	rt.sortedPage = 50 // 56: три полные страницы — четвёртая повторяет третью
+	c, _ := newCatalog(t, openDB(t), func(o *Options) { o.Sections = []Section{{"rutracker", "46", true}} }, rt)
+	refresh(t, c, true)
+	mux := http.NewServeMux()
+	c.Register(muxRouter{mux})
+	if got := walkOrder(t, mux, "rutracker", "46", source.OrderDownloads); len(got) != 270 {
+		t.Fatalf("показано %d", len(got))
+	}
+	if n := rt.Calls("sorted:downloads"); n > 8 {
+		t.Fatalf("страниц спрошено %d — повторы не кончаются", n)
 	}
 }

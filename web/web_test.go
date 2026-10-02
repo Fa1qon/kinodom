@@ -1646,13 +1646,20 @@ for (const [name, got, want] of checks) {
 func TestPultBackStep(t *testing.T) {
 	node := lookNode(t)
 	script := `
-import { backStep } from './views/catalog.js';
+import { backStep, catalogMemory, catalogHome } from './views/catalog.js';
 const href = '#/catalog/rutor/4';
 const place = { at: '#/catalog/rutor/4', key: '#/catalog/rutor/4', pages: 3, scrollY: 1800, focusKey: 'e-5' };
 const bare = { ...place, at: '#/catalog/rutor' };
 const other = { ...place, at: '#/catalog/rutor/12', key: '#/catalog/rutor/12' };
 const checks = [
   ['пришли из раздела', backStep(href, href, place), { back: true, place: null }],
+  // Ревью 15А, п. 1: память раздела — с порядком («назад» в обход), а сравнение — без него: пришли прямо из
+  // раздела «Новые» — шаг назад по истории, как раньше.
+  ['с порядком — пришли из раздела', backStep(catalogMemory('rutor', '12', 'new'), '#/catalog/rutor/12', { ...place, key: '#/catalog/rutor/12', at: '#/catalog/rutor/12' }), { back: true, place: null }],
+  ['с порядком — переход, место без запроса', backStep(catalogMemory('rutor', '12', 'new'), '#/release/77', { ...place, key: '#/catalog/rutor/12', at: '#/catalog/rutor/12' }), { back: false, place: { ...place, key: '#/catalog/rutor/12', at: '#/catalog/rutor/12' } }],
+  // Меню и запуск — без порядка из памяти раздела: действуют память устройства и умолчание из настроек.
+  ['меню', catalogHome('#/catalog/rutor/12?order=new'), '#/catalog/rutor/12'],
+  ['меню без памяти', catalogHome(null), '#/catalog/rutor'],
   ['пришли из раздела по адресу без раздела', backStep(href, '#/catalog/rutor', bare), { back: true, place: null }],
   ['из другой раздачи — переход с местом', backStep(href, '#/release/77', place), { back: false, place }],
   ['адрес без раздела — место по адресу ссылки', backStep(href, '#/release/77', bare), { back: false, place: { ...bare, at: href } }],
@@ -2114,6 +2121,26 @@ document.activeElement = own;
 carryFocus(main, 'watch-1');
 checks.push(['свой фокус вида', document.activeElement === own]);
 for (const [name, ok] of checks) if (!ok) { console.error(name); process.exitCode = 1; }
+`
+	cmd := exec.Command(node, "--input-type=module", "--no-warnings", "-e", script)
+	cmd.Dir = "static"
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Errorf("%v\n%s", err, out)
+	}
+}
+
+// Ревью 14Б: обходной путь «назад» (другие раздачи → раздача → «назад») возвращал в раздел с порядком из памяти,
+// а не с тем, что был в адресе: память каталога — вместе с порядком.
+func TestPultCatalogMemory(t *testing.T) {
+	node := lookNode(t)
+	script := `
+const { catalogMemory } = await import('./views/catalog.js');
+const checks = [
+  [catalogMemory('rutor', '12', 'new'), '#/catalog/rutor/12?order=new'],
+  [catalogMemory('rutracker', 'c 2', ''), '#/catalog/rutracker/c%202'],
+  [catalogMemory('rutor', '12', null), '#/catalog/rutor/12'],
+];
+for (const [got, want] of checks) if (got !== want) { console.error(got, '≠', want); process.exitCode = 1; }
 `
 	cmd := exec.Command(node, "--input-type=module", "--no-warnings", "-e", script)
 	cmd.Dir = "static"
