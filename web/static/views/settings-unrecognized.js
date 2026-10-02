@@ -5,7 +5,20 @@ import { h, fill, icon, keepFocus, plural } from '../ui.js';
 import { get, put, post } from '../api.js';
 import { layout, remoteNote, channelTabs } from './settings-layout.js';
 import { openPreview } from './preview.js';
-import { CATEGORIES } from './channel-settings.js';
+import { CATEGORIES, pickLabel } from './channel-settings.js';
+import { appBridge } from './tvkit.js';
+
+// fileFieldShown — поле выбора файла типа type («image/*» — логотип, «*/*» — плейлист): в браузере — да; в
+// приложении — если оно умеет выбирать файлы и на устройстве есть чем (на ТВ часто нечем; старое приложение не
+// умеет) (ревью 14Д, п. 12; 15Г, п. 8).
+export function fileFieldShown(app, type = 'image/*') {
+  if (!app) return true;
+  try {
+    return typeof app.canPickFiles === 'function' && !!app.canPickFiles(type);
+  } catch {
+    return false;
+  }
+}
 
 // logoFileError — файл логотипа больше 1 МБ: отказ до отправки (фото с телефона; ревью 14Д, п. 10).
 export function logoFileError(f) {
@@ -88,9 +101,10 @@ export function render(root, r, ctx) {
     keepFocus(root, () => {
       const rows = data.items.map((u) => {
         const row = h('div', { class: 'un' },
-          h('div', { class: 'row' },
+          h('div', { class: 'row un-top' },
             h('div', { class: 'grow un-name' }, h('span', { class: 'strong' }, u.sample),
               h('span', { class: 'muted small' }, [plural(u.streams, 'поток', 'потока', 'потоков'), `работают ${u.alive}`, u.playlists.join(', ')].join(' · '))),
+            h('div', { class: 'row wrap gap10 un-acts' },
             ctx.canEdit && u.watch ? h('button', { class: 'btn', type: 'button', 'data-key': `watch-${u.name}`,
               onclick: () => openPreview({ id: u.watch, url: u.watchUrl, kind: u.watchKind }, u.sample) }, icon('play_arrow'), 'Смотреть') : null,
             ctx.canEdit ? h('button', { class: 'btn', type: 'button', 'data-key': `new-${u.name}`, onclick: () => {
@@ -113,7 +127,7 @@ export function render(root, r, ctx) {
               if (open) pick.focus();
             } }, icon('swap_horiz'), 'Назначить') : null,
             ctx.canEdit ? h('button', { class: 'btn', type: 'button', 'data-key': `hide-${u.name}`, onclick: () => act(() => put('/iptv/names', { name: u.name, hidden: true })) },
-              icon('visibility_off'), 'Скрыть') : null));
+              icon('visibility_off'), 'Скрыть') : null)));
         if (open === u.name) {
           row.append(h('form', { class: 'row gap10', onsubmit: async (e) => {
             e.preventDefault();
@@ -127,7 +141,7 @@ export function render(root, r, ctx) {
             if (first) first.focus();
           } }, h('div', { class: 'grow' }, pick), h('button', { class: 'btn', type: 'submit', 'data-key': 'pick-find' }, icon('search'), 'Найти')),
           h('div', { class: 'picks' }, found.map((c) => h('button', { class: 'btn', type: 'button', 'data-key': `to-${c.key}`,
-            onclick: () => act(() => put('/iptv/names', { name: u.name, channel: c.key })) }, c.name))));
+            onclick: () => act(() => put('/iptv/names', { name: u.name, channel: c.key })) }, pickLabel(c)))));
         }
         if (making === u.name) {
           row.append(h('form', { class: 'new-channel col gap10', onsubmit: async (e) => {
@@ -150,7 +164,7 @@ export function render(root, r, ctx) {
               if (alive) draw();
             }
           } }, h('div', { class: 'row gap10 wrap' }, h('div', { class: 'grow' }, nName), nCat, nCountry),
-          h('div', { class: 'row gap10 wrap' }, h('div', { class: 'grow' }, nLogo), nFile),
+          h('div', { class: 'row gap10 wrap' }, h('div', { class: 'grow' }, nLogo), fileFieldShown(appBridge()) ? nFile : null),
           formError ? h('p', { class: 'error' }, formError) : null,
           h('div', { class: 'row gap10' }, h('button', { class: 'btn inv', type: 'submit', disabled: saving, 'data-key': 'new-save' },
             icon('save'), saving ? 'Создаётся…' : 'Создать канал'))));

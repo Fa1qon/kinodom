@@ -13,6 +13,8 @@ import android.os.SystemClock
 import android.view.View
 import android.view.ViewGroup
 import android.webkit.JavascriptInterface
+import android.webkit.ValueCallback
+import android.webkit.WebChromeClient
 import android.webkit.WebResourceError
 import android.webkit.WebResourceRequest
 import android.webkit.WebSettings
@@ -21,6 +23,9 @@ import android.webkit.WebViewClient
 import android.widget.FrameLayout
 import android.widget.TextView
 import android.window.OnBackInvokedDispatcher
+import androidx.core.view.WindowCompat
+import androidx.core.view.WindowInsetsCompat
+import androidx.core.view.WindowInsetsControllerCompat
 import java.io.File
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.MainScope
@@ -72,6 +77,10 @@ class PultActivity : Activity() {
     private var forget = false // пульт открыт с нового адреса — история прежнего «Назад» не нужна
     private var pendingApk: File? = null // скачанное обновление ждёт разрешения «устанавливать из Kinodom»
     private var pendingApp: ServerApp? = null
+    private var filePick: ValueCallback<Array<Uri>>? = null // <input type=file> ждёт выбранный файл
+    private var custom: View? = null // видео во весь экран (кнопка «полный экран» у <video>)
+    private var customDone: WebChromeClient.CustomViewCallback? = null
+    private var picking = false // открыт выбор файла: возврат из него — не вход в приложение (ревью 15Г)
 
     @SuppressLint("SetJavaScriptEnabled")
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -97,6 +106,7 @@ class PultActivity : Activity() {
             settings.mediaPlaybackRequiresUserGesture = false
             addJavascriptInterface(Bridge(), "KinodomApp")
             webViewClient = Client()
+            webChromeClient = Chrome()
             // Кнопка «.m3u8» — ссылка с download: WebView делает из неё загрузку, а не переход — в плеер, как ссылку.
             setDownloadListener { url, _, _, _, _ -> openOutside(url) }
             isFocusable = true
@@ -125,6 +135,10 @@ class PultActivity : Activity() {
     // back — открыто окно пульта («Скачать «…»?», выбор папки) — закрыть его: WebView не передаёт «Назад»
     // странице, а Escape пульт понимает (финальное ревью 13a); иначе — по BackDecision.
     private fun back() {
+        if (custom != null) {
+            leaveFullscreen()
+            return
+        }
         if (!::web.isInitialized || overlay != null) {
             backDecision()
             return
@@ -150,7 +164,7 @@ class PultActivity : Activity() {
     // версию сразу, не дожидаясь суток; «Позже» — до следующего входа (заказчик 2026-10-01).
     override fun onStart() {
         super.onStart()
-        if (Foreground.app.start()) {
+        if (Foreground.app.start() && !picking) {
             postponed = false
             updateCheckedAt = null
         }
@@ -189,6 +203,71 @@ class PultActivity : Activity() {
         scope.cancel()
         if (::web.isInitialized) web.destroy()
         super.onDestroy()
+    }
+
+    // Chrome — выбор файла (<input type=file>: логотип своего канала) и видео во весь экран; без него WebView молча
+    // ничего не делает (ревью 14Д, п. 12).
+    private inner class Chrome : WebChromeClient() {
+        override fun onShowFileChooser(view: WebView, callback: ValueCallback<Array<Uri>>, params: FileChooserParams): Boolean {
+            filePick?.onReceiveValue(null)
+            filePick = callback
+            // Тип — один MIME из accept, иначе любой: «.m3u,…» createIntent передал бы как есть (ревью 15Г).
+            val mime = params.acceptTypes.singleOrNull()?.takeIf { '/' in it } ?: "*/*"
+            val pick = Intent(Intent.ACTION_GET_CONTENT).addCategory(Intent.CATEGORY_OPENABLE).setType(mime)
+            return try {
+                picking = true
+                @Suppress("DEPRECATION")
+                startActivityForResult(pick, PICK_FILE)
+                true
+            } catch (e: ActivityNotFoundException) {
+                picking = false
+                filePick = null
+                false
+            }
+        }
+
+        override fun onShowCustomView(view: View, callback: CustomViewCallback) {
+            if (custom != null) {
+                callback.onCustomViewHidden()
+                return
+            }
+            custom = view
+            customDone = callback
+            root.addView(view, FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT))
+            web.visibility = View.GONE
+            // Во весь экран — без системных панелей, как плеер каналов (ревью 15Г).
+            WindowCompat.getInsetsController(window, window.decorView).apply {
+                hide(WindowInsetsCompat.Type.systemBars())
+                systemBarsBehavior = WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
+            }
+        }
+
+        override fun onHideCustomView() = leaveFullscreen()
+    }
+
+    // leaveFullscreen — из полного экрана обратно в пульт («Назад» или кнопка видео).
+    private fun leaveFullscreen() {
+        val v = custom ?: return
+        custom = null
+        root.removeView(v)
+        web.visibility = View.VISIBLE
+        WindowCompat.getInsetsController(window, window.decorView).show(WindowInsetsCompat.Type.systemBars())
+        val done = customDone
+        customDone = null
+        done?.onCustomViewHidden()
+        web.requestFocus()
+    }
+
+    @Deprecated("startActivityForResult — у android.app.Activity другого пути нет")
+    override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
+        if (requestCode == PICK_FILE) {
+            picking = false
+            filePick?.onReceiveValue(WebChromeClient.FileChooserParams.parseResult(resultCode, data))
+            filePick = null
+            return
+        }
+        @Suppress("DEPRECATION")
+        super.onActivityResult(requestCode, resultCode, data)
     }
 
     private fun showOverlay(v: View, closable: Boolean, focus: View?) {
@@ -454,6 +533,12 @@ class PultActivity : Activity() {
         @JavascriptInterface
         fun versionCode(): Int = BuildConfig.VERSION_CODE
 
+        // canPickFiles — есть ли на устройстве чем выбрать файл типа type («image/*», «*/*»; на ТВ часто нечем):
+        // иначе пульт не показывает поле.
+        @JavascriptInterface
+        fun canPickFiles(type: String): Boolean = Intent(Intent.ACTION_GET_CONTENT).addCategory(Intent.CATEGORY_OPENABLE)
+            .setType(type.ifBlank { "*/*" }).resolveActivity(packageManager) != null
+
         // update — «Обновить» в пульте: скачать и поставить новую версию с сервера сразу, без окна и «Позже».
         @JavascriptInterface
         fun update() {
@@ -465,6 +550,7 @@ class PultActivity : Activity() {
         const val EXTRA_BASE = "base"
         private const val DAY_MS = 24L * 60 * 60 * 1000
         private const val WATCH_MS = 60L * 1000
+        private const val PICK_FILE = 41
 
         // CLOSE_DIALOG — закрыть верхнее окно пульта (openModal в ui.js закрывает его по Escape); true — было окно.
         private const val CLOSE_DIALOG = "(function(){var a=document.querySelectorAll('.dlg-back');if(!a.length)return false;" +

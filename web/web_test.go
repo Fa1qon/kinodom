@@ -1980,7 +1980,8 @@ func TestPultPreview(t *testing.T) {
 	node := lookNode(t)
 	script := `
 const { playerKind, previewStats, playerError, frameNote, playerSession, nativeError, hlsWay } = await import('./views/preview.js');
-const { logoFileError } = await import('./views/settings-unrecognized.js');
+const { logoFileError, fileFieldShown } = await import('./views/settings-unrecognized.js');
+const { pickLabel } = await import('./views/channel-settings.js');
 const text = (e) => (e ? e.what + ': ' + e.text : null);
 const binary = { get responseText() { throw new Error('responseType arraybuffer'); } };
 // Ревью 14Д, п. 3: окно закрыли, пока грузилась библиотека, — плеер разбирается, как только подключится.
@@ -2030,6 +2031,17 @@ const checks = [
   [logoFileError({ size: 3 << 20 }), 'логотип больше 1 МБ'],
   [logoFileError({ size: 50000 }), ''],
   [logoFileError(undefined), ''],
+  // Ревью 14Д, п. 16: свой канал в поиске «Назначить» помечен.
+  [pickLabel({ key: 'my-1', name: 'НТВ', own: true }), 'НТВ · свой'],
+  [pickLabel({ key: 'ntv', name: 'НТВ' }), 'НТВ'],
+  // Ревью 14Д, п. 12: в приложении поле файла — только если есть чем выбрать (старое приложение и ТВ без выбора файлов — нет).
+  [fileFieldShown(null), true],
+  [fileFieldShown({}), false],
+  [fileFieldShown({ canPickFiles: () => false }), false],
+  [fileFieldShown({ canPickFiles: () => true }), true],
+  // Ревью 15Г, п. 8: файл плейлиста — любой тип: на ТВ, где выбрать можно только картинку, кнопки «Файлом» нет.
+  [fileFieldShown({ canPickFiles: (t) => t === 'image/*' }, '*/*'), false],
+  [fileFieldShown({ canPickFiles: (t) => t === 'image/*' }), true],
   [playerKind({ kind: 'hls', url: 'http://x/a' }), 'hls'],
   [playerKind({ kind: 'live', url: 'http://x/a' }), 'ts'],
   [playerKind({ kind: 'dash', url: 'http://x/a' }), 'dash'],
@@ -2038,6 +2050,8 @@ const checks = [
   [playerKind({ kind: '', url: 'http://x/stream' }), 'ts'],
   [previewStats({ w: 1920, h: 1080, firstMs: 1200, stalls: 0 }), '1920×1080 · 1,2 с до кадра · подвисаний 0'],
   [previewStats({ w: 0, h: 0, firstMs: 0, stalls: 2, latency: 8.4 }), 'подвисаний 2 · задержка 8 с'],
+  // Ревью 14Д, п. 14: у потока (TS) — запас буфера, а не «задержка».
+  [previewStats({ w: 0, h: 0, firstMs: 0, stalls: 0, buffer: 3.4 }), 'подвисаний 0 · запас 3 с'],
 ];
 for (const [got, want] of checks) {
   if (got !== want) {
@@ -2045,6 +2059,61 @@ for (const [got, want] of checks) {
     process.exitCode = 1;
   }
 }
+`
+	cmd := exec.Command(node, "--input-type=module", "--no-warnings", "-e", script)
+	cmd.Dir = "static"
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Errorf("%v\n%s", err, out)
+	}
+}
+
+// Замечено на ТВ (0.14): после перехода по вкладке «Каналы / Не распознано» фокус уходил в левое меню — экран
+// перерисовывается, нажатая ссылка пропадает. Ключ нажатого переносится на новый экран.
+func TestPultCarryFocus(t *testing.T) {
+	node := lookNode(t)
+	script := `
+globalThis.CSS = { escape: (s) => s };
+const body = { dataset: {} };
+globalThis.document = { body, activeElement: body };
+const { carryFocus, keepFocus } = await import('./ui.js');
+const el = (key) => ({ dataset: { key }, disabled: false, focus() { document.activeElement = this; } });
+const tab = el('tab-unrecognized');
+const main = { items: [tab], querySelector(s) { return this.items.find((x) => s === '[data-key="' + x.dataset.key + '"]') || null; }, contains: () => true };
+const checks = [];
+carryFocus(main, 'tab-unrecognized');
+checks.push(['сразу', document.activeElement === tab]);
+// Элемента ещё нет (вид дорисует после загрузки) — встанет при ближайшем keepFocus.
+document.activeElement = body;
+const late = el('watch-1');
+main.items = [];
+carryFocus(main, 'watch-1');
+checks.push(['пока нет', document.activeElement === body]);
+main.items = [late];
+keepFocus(main, () => {});
+checks.push(['после отрисовки', document.activeElement === late]);
+// Review Focus 3: ключа нет — фокус не трогаем.
+document.activeElement = body;
+carryFocus(main, null);
+checks.push(['без ключа', document.activeElement === body]);
+// Ревью 15Г, п. 1: поле ввода не получает фокус после перехода — на ТВ снова выскочила бы клавиатура.
+document.activeElement = body;
+const field = Object.assign(el('q'), { tagName: 'INPUT', type: 'text' });
+main.items = [field];
+carryFocus(main, 'q');
+checks.push(['поле ввода', document.activeElement === body]);
+// Ревью 15Г, п. 2: отложенный ключ живёт до следующего перехода — переход без ключа его сбрасывает.
+main.items = [];
+carryFocus(main, 'gone');
+carryFocus(main, null);
+main.items = [el('gone')];
+keepFocus(main, () => {});
+checks.push(['сброс отложенного', document.activeElement === body]);
+// Вид сам поставил фокус при отрисовке — его не перебиваем.
+const own = el('own');
+document.activeElement = own;
+carryFocus(main, 'watch-1');
+checks.push(['свой фокус вида', document.activeElement === own]);
+for (const [name, ok] of checks) if (!ok) { console.error(name); process.exitCode = 1; }
 `
 	cmd := exec.Command(node, "--input-type=module", "--no-warnings", "-e", script)
 	cmd.Dir = "static"

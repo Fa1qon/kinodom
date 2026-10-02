@@ -4,6 +4,8 @@
 import { h, fill, icon, poll, keepFocus, ago, plural, fileBase64 } from '../ui.js';
 import { get, put, post, del } from '../api.js';
 import { layout, remoteNote, channelTabs } from './settings-layout.js';
+import { fileFieldShown } from './settings-unrecognized.js';
+import { appBridge } from './tvkit.js';
 import { CATEGORIES } from './channel-settings.js';
 
 // progressLine — «лёгкая: 1200 из 19 000» или «последняя — 2 ч назад».
@@ -37,8 +39,10 @@ export function hideCard(iv, all, draft, editable, onSave) {
 }
 
 export function render(root, r, ctx) {
-  const content = layout(root, 'iptv', 'Каналы');
-  content.append(channelTabs('iptv'));
+  // Вкладки — вне перерисовки: draw заменяет только тело (вживую 15Г: fill(content) стирал «Каналы / Не распознано»,
+  // и «Не распознано» с этого экрана было не открыть).
+  const content = h('div', { class: 'col' }); // отступы между карточками — как у .set-content
+  layout(root, 'iptv', 'Каналы').append(channelTabs('iptv'), content);
   let alive = true;
   let pls = null; // /iptv/playlists
   let settings = null; // /settings
@@ -161,7 +165,7 @@ export function render(root, r, ctx) {
         if (url.value.trim()) add({});
       } }, h('div', { class: 'grow' }, url),
       h('button', { class: 'btn inv', type: 'submit', disabled: adding, 'data-key': 'pl-add' }, icon('add'), adding ? 'Добавляется…' : 'Добавить'),
-      h('button', { class: 'btn', type: 'button', disabled: adding, 'data-key': 'pl-file', onclick: () => file.click() }, icon('upload'), 'Файлом'),
+      fileFieldShown(appBridge(), '*/*') ? h('button', { class: 'btn', type: 'button', disabled: adding, 'data-key': 'pl-file', onclick: () => file.click() }, icon('upload'), 'Файлом') : null,
       h('label', { class: 'check' }, limited, 'ограничено'), file) : null);
   }
 
