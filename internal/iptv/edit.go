@@ -226,6 +226,7 @@ func (m *Module) StreamURL(id int64) string {
 type EPGChannel struct {
 	Key  string `json:"key"`
 	Name string `json:"name"`
+	Own  bool   `json:"own,omitempty"` // свой канал (план 14Д): в поиске помечен, рядом может быть одноимённый
 }
 
 // SearchEPG — каналы телепрограммы, в названиях которых есть q (без учёта регистра и меток качества):
