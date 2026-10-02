@@ -1980,7 +1980,7 @@ func TestPultPreview(t *testing.T) {
 	node := lookNode(t)
 	script := `
 const { playerKind, previewStats, playerError, frameNote, playerSession, nativeError, hlsWay } = await import('./views/preview.js');
-const { logoFileError } = await import('./views/settings-unrecognized.js');
+const { logoFileError, fileFieldShown } = await import('./views/settings-unrecognized.js');
 const { pickLabel } = await import('./views/channel-settings.js');
 const text = (e) => (e ? e.what + ': ' + e.text : null);
 const binary = { get responseText() { throw new Error('responseType arraybuffer'); } };
@@ -2034,6 +2034,11 @@ const checks = [
   // Ревью 14Д, п. 16: свой канал в поиске «Назначить» помечен.
   [pickLabel({ key: 'my-1', name: 'НТВ', own: true }), 'НТВ · свой'],
   [pickLabel({ key: 'ntv', name: 'НТВ' }), 'НТВ'],
+  // Ревью 14Д, п. 12: в приложении поле файла — только если есть чем выбрать (старое приложение и ТВ без выбора файлов — нет).
+  [fileFieldShown(null), true],
+  [fileFieldShown({}), false],
+  [fileFieldShown({ canPickFiles: () => false }), false],
+  [fileFieldShown({ canPickFiles: () => true }), true],
   [playerKind({ kind: 'hls', url: 'http://x/a' }), 'hls'],
   [playerKind({ kind: 'live', url: 'http://x/a' }), 'ts'],
   [playerKind({ kind: 'dash', url: 'http://x/a' }), 'dash'],
