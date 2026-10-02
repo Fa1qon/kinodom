@@ -481,7 +481,7 @@ func (im *Images) ServeKey(w http.ResponseWriter, r *http.Request, key string, i
 	}
 	// ?w= — миниатюра для сеток пульта (план 16А); ширина одна — thumbWidth, другие значения — она же.
 	if immutable && r.URL.Query().Get("w") != "" {
-		if t, ok := im.thumb(key, p); ok {
+		if t, ok := im.thumb(r.Context(), key, p); ok {
 			p = t
 		}
 	}

@@ -19,7 +19,7 @@ var gzipTypes = map[string]bool{
 
 // gzipSkip — пути, которые не трогаются вовсе: потоки и пересылка (Flush, Range), файлы медиатеки, плейлисты
 // плееров, картинки, APK.
-var gzipSkip = []string{"/stream/", "/media/", "/m3u/", "/api/v1/iptv/relay", "/img/", "/logo/", "/app/"}
+var gzipSkip = []string{"/stream/", "/media/", "/m3u/", "/api/v1/iptv/relay", "/api/v1/iptv/streams/", "/img/", "/logo/", "/app/"}
 
 // gzipMin — меньше не сжимается: заголовки и сжатие дороже выигрыша.
 const gzipMin = 1024
@@ -96,6 +96,10 @@ func (g *gzipWriter) start() error {
 	h.Set("Content-Encoding", "gzip")
 	h.Add("Vary", "Accept-Encoding")
 	h.Del("Content-Length")
+	h.Del("Accept-Ranges") // части сжатого тела не отдаются (ревью 16А)
+	if tag := h.Get("ETag"); tag != "" && !strings.HasPrefix(tag, "W/") {
+		h.Set("ETag", "W/"+tag) // тело другое, чем у несжатого; If-None-Match сравнивает слабо — 304 остаётся
+	}
 	g.w.WriteHeader(g.code)
 	g.zw = gzip.NewWriter(g.w)
 	_, err := g.zw.Write(g.buf)

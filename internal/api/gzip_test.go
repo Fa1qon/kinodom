@@ -110,3 +110,29 @@ func TestPultETag(t *testing.T) {
 		t.Fatalf("повтор: код %d", rec.Code)
 	}
 }
+
+// Ревью 16А, Minor 6–7: сжатый ответ — без Accept-Ranges и со слабым ETag (тело другое); смотреть поток канала
+// (/api/v1/iptv/streams/{id}/watch — та же пересылка) — по пути без сжатия.
+func TestGzipHeadersAndWatchPath(t *testing.T) {
+	text := strings.Repeat("a", 4000)
+	h := gzipped(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/css")
+		w.Header().Set("Accept-Ranges", "bytes")
+		w.Header().Set("ETag", `"abc"`)
+		io.WriteString(w, text)
+	}))
+	req := httptest.NewRequest("GET", "/style.css", nil)
+	req.Header.Set("Accept-Encoding", "gzip")
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	if rec.Header().Get("Content-Encoding") != "gzip" || rec.Header().Get("Accept-Ranges") != "" || rec.Header().Get("ETag") != `W/"abc"` {
+		t.Fatalf("заголовки %v", rec.Header())
+	}
+	req = httptest.NewRequest("GET", "/api/v1/iptv/streams/5/watch", nil)
+	req.Header.Set("Accept-Encoding", "gzip")
+	rec = httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	if rec.Header().Get("Content-Encoding") != "" {
+		t.Fatal("поток канала сжат")
+	}
+}
