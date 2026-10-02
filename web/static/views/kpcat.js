@@ -1,6 +1,6 @@
 // Каталог «Кинопоиск» (план 14Г): популярные фильмы и сериалы сайта по разделам (русские и зарубежные,
 // документальные) в четырёх порядках; карточка ведёт в поиск раздач по названию и году.
-import { h, ago, rating, store, keepFocus, poll } from '../ui.js';
+import { h, ago, rating, store, keepFocus, poll, thumb } from '../ui.js';
 import { get } from '../api.js';
 import { orderLinks, oneAtATime, trackerTabs, retryDue } from './catalog-parts.js';
 
@@ -61,7 +61,7 @@ export function filmPoster(f, cls = 'poster') {
     f.kinopoisk > 0 ? h('span', { class: 'kp' }, 'КП ' + rating(f.kinopoisk)) : null,
     h('div', { class: 'ptitle' }, f.title || ''));
   if (f.poster) {
-    const img = h('img', { src: f.poster, alt: '', loading: 'lazy', decoding: 'async' });
+    const img = h('img', { src: cls.includes('big') ? f.poster : thumb(f.poster), alt: '', loading: 'lazy', decoding: 'async' });
     img.addEventListener('load', () => box.classList.add('has-img'));
     img.addEventListener('error', () => img.remove());
     box.prepend(img);

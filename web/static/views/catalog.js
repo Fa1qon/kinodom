@@ -1,6 +1,6 @@
 // Каталог трекера: вкладки Rutracker и Rutor, раздел, сетка постеров по раздающим, страницы
 // (спека этапа 7, разделы 5.4 и 6.3).
-import { h, icon, ago, size, rating, store, plural, keepFocus, offWarn, poll, formatTag, altFormatTag } from '../ui.js';
+import { h, icon, ago, size, rating, store, plural, keepFocus, offWarn, poll, formatTag, altFormatTag, thumb } from '../ui.js';
 import { get } from '../api.js';
 import { render as renderKP } from './kpcat.js';
 import { TRACKERS, oneAtATime, retryDue, orderLinks, trackerTabs } from './catalog-parts.js';
@@ -480,7 +480,8 @@ export function poster(e, title, cls = 'poster') {
     e.variants > 1 ? h('span', { class: 'vars' }, plural(e.variants, 'раздача', 'раздачи', 'раздач')) : null,
     h('div', { class: 'ptitle' }, title || ''));
   if (e.imageKey) {
-    const img = h('img', { src: `/img/${e.imageKey}`, alt: '', loading: 'lazy', decoding: 'async' });
+    const src = `/img/${e.imageKey}`;
+    const img = h('img', { src: cls.includes('big') ? src : thumb(src), alt: '', loading: 'lazy', decoding: 'async' });
     img.addEventListener('load', () => box.classList.add('has-img'));
     img.addEventListener('error', () => img.remove());
     box.prepend(img);

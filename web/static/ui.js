@@ -90,6 +90,13 @@ export function fileBase64(file) {
 }
 
 // clear — убрать всё содержимое элемента.
+// thumb — адрес миниатюры постера для сеток и списков (план 16А): сервер отдаёт копию шириной 400 px — на ТВ
+// большие постеры разжимались секундами. Чужие адреса — как есть.
+export function thumb(src) {
+  if (!src || !(src.startsWith('/img/') || /^\/api\/v1\/kpcat\/films\/\d+\/poster$/.test(src.split('?')[0]))) return src;
+  return src + (src.includes('?') ? '&' : '?') + 'w=400';
+}
+
 export function clear(el) {
   el.replaceChildren();
 }
