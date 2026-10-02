@@ -2331,8 +2331,11 @@ func TestPultCardPanelOrder(t *testing.T) {
 	script := `
 const { panelOrder } = await import('./views/library-card.js');
 const checks = [
-  [panelOrder({ versions: [{}, {}] }, true), ['watch', 'versions', 'edits']],
-  [panelOrder({ versions: [{}] }, false), ['empty', 'versions', 'edits']],
+  [panelOrder(true), ['watch', 'versions', 'edits']],
+  [panelOrder(false), ['empty', 'versions', 'edits']],
+  // Ревью 16Б, Important 4: ошибка видна и у карточки без файлов — сразу под первым блоком.
+  [panelOrder(false, true), ['empty', 'error', 'versions', 'edits']],
+  [panelOrder(true, true), ['watch', 'error', 'versions', 'edits']],
 ];
 for (const [got, want] of checks) {
   if (JSON.stringify(got) !== JSON.stringify(want)) { console.error(JSON.stringify(got), '≠', JSON.stringify(want)); process.exitCode = 1; }
@@ -2358,6 +2361,41 @@ const checks = [
 ];
 for (const [got, want] of checks) {
   if (JSON.stringify(got) !== JSON.stringify(want)) { console.error(JSON.stringify(got), '≠', JSON.stringify(want)); process.exitCode = 1; }
+}
+`
+	cmd := exec.Command(node, "--input-type=module", "--no-warnings", "-e", script)
+	cmd.Dir = "static"
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Errorf("%v\n%s", err, out)
+	}
+}
+
+// Ревью 16Б: на ТВ фокус на поле поиска после «Поиск» с пульта открывал клавиатуру поверх истории (эмулятор:
+// mInputShown=true) — поле в фокусе «только для чтения», клавиатуру открывает OK, первый символ — ввод. Первая
+// стрелка на странице — не в поле; «Назад» с результатов — на последний запрос; после крестика — соседняя строка.
+func TestPultSearchFocus(t *testing.T) {
+	node := lookNode(t)
+	script := `
+const { fieldKey, searchFocus, forgetFocus } = await import('./views/search.js');
+const { firstFocus } = await import('./nav.js');
+const el = (tag, inMain, type) => ({ tagName: tag, type, closest: (s) => (s === 'main' && inMain ? {} : null) });
+const field = el('INPUT', true, 'text'), link = el('A', true), head = el('A', false);
+const checks = [
+  [fieldKey('Enter', true), 'open'],
+  [fieldKey('а', true), 'type'],
+  [fieldKey('ArrowDown', true), null],
+  [fieldKey('Enter', false), null],
+  [firstFocus([head, field, link]), link],
+  [firstFocus([head, field]), head],
+  [searchFocus('#/search', ['дюна', 'матрица']), 'hist-дюна'],
+  [searchFocus('#/library', ['дюна']), 'search-field'],
+  [searchFocus('#/search', []), 'search-field'],
+  [forgetFocus(['a', 'b', 'c'], 1), 'hist-c'],
+  [forgetFocus(['a', 'b', 'c'], 2), 'hist-b'],
+  [forgetFocus(['a'], 0), 'search-field'],
+];
+for (const [got, want] of checks) {
+  if (got !== want && JSON.stringify(got) !== JSON.stringify(want)) { console.error(JSON.stringify(got), '≠', JSON.stringify(want)); process.exitCode = 1; }
 }
 `
 	cmd := exec.Command(node, "--input-type=module", "--no-warnings", "-e", script)

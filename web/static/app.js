@@ -62,6 +62,7 @@ function defaultRoute() {
 const top = document.getElementById('top');
 const navLinks = {};
 let menuButton;
+let searchBtn; // «Поиск» в шапке (план 16Б)
 let bell; // колокольчик «Новые серии» (спека 11b, 6.1)
 let bellCount;
 
@@ -74,7 +75,7 @@ function buildHeader() {
       navLinks[id] = h('a', { href: id === 'settings' ? '#/settings/status' : '#/' + id }, title);
       return navLinks[id];
     }));
-  const search = h('a', { class: 'btn search-btn', href: '#/search', 'aria-label': 'Поиск', 'data-key': 'search' },
+  searchBtn = h('a', { class: 'btn search-btn', href: '#/search', 'aria-label': 'Поиск', 'data-key': 'search' },
     icon('search'), h('span', { class: 'wide-only' }, 'Поиск'));
   menuButton = h('button', { class: 'sq narrow-only', type: 'button', 'aria-label': 'Меню', 'aria-controls': 'nav', 'aria-expanded': 'false',
     onclick: () => setMenu(!top.classList.contains('open')) }, icon('menu'));
@@ -87,7 +88,7 @@ function buildHeader() {
     nav,
     h('div', { class: 'grow' }),
     bell,
-    search,
+    searchBtn,
     menuButton,
   );
 }
@@ -113,6 +114,7 @@ function updateHeader(r) {
   const n = updates.bellText(ctx.status && ctx.status.updates);
   bellCount.textContent = n;
   bell.classList.toggle('on', r.parts[0] === 'updates');
+  searchBtn.classList.toggle('on', r.parts[0] === 'search');
   bell.setAttribute('aria-label', n ? `Новые серии: ${n}` : 'Новые серии');
 }
 

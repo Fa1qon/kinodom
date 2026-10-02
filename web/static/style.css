@@ -203,7 +203,6 @@ a.var-row:hover { background: var(--hover); }
 .pair { gap: 8px; }
 
 /* Поиск */
-.small-btn { height: 34px; margin-left: 6px; }
 .tag.ok-tag .ic { color: var(--green); }
 .tag.busy-tag .ic { color: var(--muted); }
 .tag.warn-tag { color: var(--warn-text); border-color: var(--warn-line); white-space: normal; height: auto; min-height: 28px; padding: 4px 10px; }
@@ -355,7 +354,11 @@ a.res-row:hover { background: var(--hover); }
 .hist-q span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .hist-q .ic { color: var(--dim); flex-shrink: 0; }
 .hist-list > .btn { margin-top: 10px; }
-.search-btn { gap: 8px; }
+.search-btn { gap: 8px; align-self: center; } /* шапка — stretch, кнопка — по центру, как колокольчик (ревью 16Б) */
+.search-btn.on { border-color: var(--text); color: var(--text); }
+/* «Смотреть: <длинное имя серии>» в узкой панели под постером — с многоточием, а не поверх колонки серий (ревью 16Б) */
+.watch-btn { max-width: 100%; min-width: 0; }
+.watch-btn .btn-label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
 
 /* Средние ширины — планшет, небольшой ноутбук, веб-вид телевизора (финальное ревью 7b): шапка
    поджимается, раздача — в две колонки (панель «Смотреть» под постером), каталог — в 4 колонки. */
@@ -441,15 +444,15 @@ a.res-row:hover { background: var(--hover); }
 }
 
 /* Телевизор 1080p с плотностью 2 (приложение и браузер ТВ, спека этапа 13): страница — 960 px. Шапка с меню,
-   колокольчиком и полем поиска на 901–1100 px не помещалась (вылезала на 118 px): надпись логотипа прячется,
-   промежутки и поле поиска — уже. */
+   колокольчиком и поиском на 901–1100 px не помещалась (вылезала на 118 px): надпись логотипа прячется,
+   промежутки — уже. */
 @media (min-width: 901px) and (max-width: 1100px) {
   .top { gap: 16px; }
   .logo .logo-text { display: none; }
 }
 
 /* Узкий экран — телефон и планшет стоя (спека этапа 7, раздел 6.4): до 900 px — спека называет 700,
-   но на 701–900 px шапка с меню и полем поиска не помещается (финальное ревью 7b). Кнопки и поля не
+   но на 701–900 px шапка с меню и поиском не помещается (финальное ревью 7b). Кнопки и поля не
    ниже 44 px, без горизонтальной прокрутки страницы. */
 @media (max-width: 900px) {
   :root { --pad: 16px; }
@@ -497,7 +500,6 @@ a.res-row:hover { background: var(--hover); }
   .ep .btn { width: auto; padding: 0 12px; }
 
   /* Поиск */
-  .search-here .field { width: 100%; }
   .res-head { display: none; }
   /* Под названием — трекер, качество, формат, размер, раздающие: качеством раздачи и различаются. */
   .res-row { grid-template-columns: 40px auto minmax(0, 1fr) auto auto auto; gap: 4px 10px; padding: 12px; }

@@ -42,6 +42,28 @@ export function searchParts(q, items) {
   return { field: true, history: q ? [] : items.map((it) => it.query), clear: !q && items.length > 0, results: !!q };
 }
 
+// fieldKey — клавиша key в поле поиска «только для чтения» (ro): OK — открыть ввод (клавиатура ТВ), символ — ввод с
+// клавиатуры ПК; остальное — как обычно (стрелки уводят фокус). Поле на ТВ встаёт в фокус без клавиатуры (ревью 16Б:
+// фокус на поле после «Поиск» с пульта открывал клавиатуру поверх истории).
+export function fieldKey(key, ro) {
+  if (!ro) return null;
+  if (key === 'Enter') return 'open';
+  return key.length === 1 ? 'type' : null;
+}
+
+// searchFocus — куда фокус на странице поиска без запроса: вернулись с результатов (prev — страница поиска) — на
+// последний запрос истории (он первый: поиск поднял его), иначе — на поле.
+export function searchFocus(prev, queries) {
+  return prev === '#/search' && queries.length ? `hist-${queries[0]}` : 'search-field';
+}
+
+// forgetFocus — после крестика у запроса i: на строку, вставшую на его место, иначе на предыдущую, истории нет — на поле.
+export function forgetFocus(queries, i) {
+  const rest = queries.filter((_, j) => j !== i);
+  if (!rest.length) return 'search-field';
+  return `hist-${rest[Math.min(i, rest.length - 1)]}`;
+}
+
 export function render(root, r, ctx) {
   const q = (r.query.get('q') || '').trim();
   const kp = Number(r.query.get('kp')) || 0;
@@ -58,6 +80,20 @@ export function render(root, r, ctx) {
     const v = field.value.trim();
     if (v) ctx.go('#/search?q=' + encodeURIComponent(v));
   } }, h('label', { class: 'field' }, icon('search'), field));
+  // Поле «только для чтения», пока его не открыли: фокус на нём не вызывает клавиатуру ТВ; OK, касание или символ —
+  // ввод. Ушли с поля — снова только для чтения (стрелками на него — без клавиатуры). OK — только снять «только для
+  // чтения»: клавиатуру показывает сам WebView по OK; preventDefault или перефокус её не открывали (эмулятор ТВ).
+  const openField = () => {
+    field.readOnly = false;
+  };
+  field.readOnly = true;
+  field.addEventListener('keydown', (e) => {
+    if (fieldKey(e.key, field.readOnly)) openField();
+  });
+  field.addEventListener('pointerdown', openField);
+  field.addEventListener('blur', () => {
+    if (document.activeElement !== field) field.readOnly = true;
+  });
   // Пришли с карточки «Кинопоиска» (план 14Г) — над результатами шапка фильма.
   const film = h('div');
   if (kp > 0) {
@@ -70,6 +106,7 @@ export function render(root, r, ctx) {
     const tr = (status && status.trackers) || {};
     keepFocus(off, () => off.replaceChildren(...OWN.filter((t) => tr[t] && tr[t].state === 'off').map((t) => offWarn(tr[t].text))));
   };
+  let shownQueries = []; // запросы истории на экране — для фокуса после крестика
   ctx.listeners.add(onStatus);
   onStatus(ctx.status);
 
@@ -83,6 +120,7 @@ export function render(root, r, ctx) {
     if (!alive) return;
     // История — списком сверху вниз (на ТВ — «вниз-вниз»), только на странице без запроса (план 16Б).
     const parts = searchParts(q, items);
+    shownQueries = parts.history;
     keepFocus(history, () => history.replaceChildren(
       ...parts.history.map((query) => h('div', { class: 'hist-row' },
         h('a', { class: 'hist-q', href: '#/search?q=' + encodeURIComponent(query), 'data-key': `hist-${query}` }, icon('history', 18), h('span', null, query)),
@@ -92,21 +130,30 @@ export function render(root, r, ctx) {
   };
 
   async function forget(query) {
+    // Фокус после крестика — на соседнюю строку, после «Очистить» — на поле (ревью 16Б: уходил в никуда).
+    const next = query ? forgetFocus(shownQueries, shownQueries.indexOf(query)) : 'search-field';
     try {
       await del('/search/history' + (query ? '?q=' + encodeURIComponent(query) : ''));
     } catch {
       // не удалось — список просто останется прежним
     }
-    loadHistory();
+    await loadHistory();
+    const el = root.querySelector(`[data-key="${CSS.escape(next)}"]`);
+    if (el) el.focus({ preventScroll: true });
   }
 
   if (!q) {
-    loadHistory();
-    // Пришли кнопкой «Поиск» — фокуса на экране нет: он на поле (OK — клавиатура, «вниз» — история).
-    const a = document.activeElement;
-    if (!a || a === document.body || !root.contains(a)) field.focus({ preventScroll: true });
+    // Пришли кнопкой «Поиск» — фокус на поле (OK — клавиатура, «вниз» — история); вернулись с результатов — на
+    // последний запрос истории.
+    loadHistory().then(() => {
+      const a = document.activeElement;
+      if (!alive || (a && a !== document.body && root.contains(a))) return;
+      const el = root.querySelector(`[data-key="${CSS.escape(searchFocus(ctx.prev, shownQueries))}"]`);
+      if (el) el.focus({ preventScroll: true });
+    });
     return () => {
       alive = false;
+      ctx.listeners.delete(onStatus);
     };
   }
 

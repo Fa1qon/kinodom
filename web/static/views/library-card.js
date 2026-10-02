@@ -24,9 +24,10 @@ export function afterDelete(card, unit, res) {
   return { go: left ? null : '#/library', note: '' };
 }
 
-// panelOrder — что в панели карточки под постером и в каком порядке: «Смотреть» (или «Файлов нет»), версии, правка.
-export function panelOrder(card, hasFiles) {
-  return [hasFiles ? 'watch' : 'empty', 'versions', 'edits'];
+// panelOrder — что в панели карточки под постером и в каком порядке: «Смотреть» (или «Файлов нет»), ошибка (если
+// есть — и у карточки без файлов, ревью 16Б), версии, правка.
+export function panelOrder(hasFiles, hasError) {
+  return [hasFiles ? 'watch' : 'empty', ...(hasError ? ['error'] : []), 'versions', 'edits'];
 }
 
 // seasonsOf — серии по сезонам и разделам: без сезона — первыми (вступление курса), потом сезоны по
@@ -170,9 +171,9 @@ export function render(root, r, ctx) {
       fill(eps, v.episodes.length > 1 ? episodes(v) : null);
       // Панель под постером (на широком экране — справа): первым «Смотреть», как «Скачать» у раздачи (план 16Б:
       // на ТВ «вниз-вниз-вниз», а потом «вправо» к кнопке было неудобно).
-      const blocks = { watch: () => [watchBlock(v), error || failed ? h('p', { class: 'error' }, failed || error) : null],
-        empty: () => [watchBlock(v)], versions, edits: () => edits(v) };
-      fill(side, ...panelOrder(c, v.episodes.length > 0).flatMap((b) => blocks[b]()));
+      const blocks = { watch: () => [watchBlock(v)], empty: () => [watchBlock(v)], error: () => [h('p', { class: 'error' }, failed || error)],
+        versions, edits: () => edits(v) };
+      fill(side, ...panelOrder(v.episodes.length > 0, !!(error || failed)).flatMap((b) => blocks[b]()));
     });
     // Пришли из «Медиатеки» — фокуса на экране нет: он встаёт на «Смотреть» (OK — и пошло).
     if (!focusPlaced) {
@@ -182,7 +183,8 @@ export function render(root, r, ctx) {
         const w = side.querySelector('[data-nav-main]');
         if (w) {
           w.focus({ preventScroll: true });
-          w.scrollIntoView({ block: 'nearest' }); // на ТВ (540 CSS px) кнопка под постером — чуть ниже экрана
+          // На ТВ (540 CSS px) кнопка под постером — чуть ниже экрана; на телефоне панель ниже описания — не листать.
+          if (window.matchMedia('(min-width: 901px)').matches) w.scrollIntoView({ block: 'nearest' });
         }
       }
     }
@@ -204,7 +206,8 @@ export function render(root, r, ctx) {
     const label = film ? (at > 0 ? `Продолжить ${continueLabel({ positionSec: at })}` : 'Смотреть')
       : resumed ? `Продолжить: ${continueLabel({ season: ep.season, episode: ep.episode, positionSec: at })}` : `Смотреть: ${episodeLabel(ep)}`;
     return h('div', { class: 'row wrap gap10' },
-      h('button', { class: 'btn inv big', type: 'button', 'data-key': 'watch', 'data-nav-main': true, onclick: () => act(() => playFile(ep.file, ctx, false, !film)) }, icon('play_arrow'), label),
+      h('button', { class: 'btn inv big watch-btn', type: 'button', 'data-key': 'watch', 'data-nav-main': true, title: label, onclick: () => act(() => playFile(ep.file, ctx, false, !film)) },
+        icon('play_arrow'), h('span', { class: 'btn-label' }, label)),
       at > 0 ? h('button', { class: 'btn big', type: 'button', 'data-key': 'from-start', onclick: () => act(() => playFile(ep.file, ctx, true, !film)) },
         icon('history'), 'С начала') : null);
   }
