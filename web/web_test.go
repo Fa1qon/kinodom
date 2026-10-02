@@ -2042,6 +2042,8 @@ const checks = [
   [playerKind({ kind: '', url: 'http://x/stream' }), 'ts'],
   [previewStats({ w: 1920, h: 1080, firstMs: 1200, stalls: 0 }), '1920×1080 · 1,2 с до кадра · подвисаний 0'],
   [previewStats({ w: 0, h: 0, firstMs: 0, stalls: 2, latency: 8.4 }), 'подвисаний 2 · задержка 8 с'],
+  // Ревью 14Д, п. 14: у потока (TS) — запас буфера, а не «задержка».
+  [previewStats({ w: 0, h: 0, firstMs: 0, stalls: 0, buffer: 3.4 }), 'подвисаний 0 · запас 3 с'],
 ];
 for (const [got, want] of checks) {
   if (got !== want) {
