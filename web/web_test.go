@@ -2523,3 +2523,37 @@ for (const [got, want] of checks) {
 		t.Errorf("%v\n%s", err, out)
 	}
 }
+
+// План 17Б: результаты поиска — порциями (700 строк раз в секунду — до 7,7 с заморозки на ТВ); тот же набор —
+// меняются только изменившиеся строки.
+func TestPultResults(t *testing.T) {
+	node := lookNode(t)
+	script := `
+const { RES_FIRST, RES_PORTION, sameIds, resSig, rebuildCount } = await import('./views/search.js');
+const e = (id, extra) => ({ id, title: 't' + id, name: 'n', seeders: 1, size: 1, quality: 'q', format: 'MKV', imageKey: '', ...extra });
+const checks = [
+  [RES_FIRST, 20],
+  [RES_PORTION, 40],
+  [sameIds([e(1), e(2)], [e(1), e(2)]), true],
+  [sameIds([e(1), e(2)], [e(2), e(1)]), false],
+  [sameIds([e(1)], [e(1), e(2)]), false],
+  [resSig(e(1)) === resSig(e(1)), true],
+  [resSig(e(1)) === resSig(e(1, { imageKey: 'abc' })), false],
+  [resSig(e(1)) === resSig(e(1, { seeders: 5 })), false],
+  [resSig(e(1)) === resSig(e(1, { detailsPending: true })), true],
+  // Ревью 17Б, Important 1: пересборка строит и строку в фокусе с запасом — её могли сдвинуть вставки выше.
+  [rebuildCount(700, 20, -1), 20],
+  [rebuildCount(700, 60, 10), 60],
+  [rebuildCount(700, 20, 50), 54],
+  [rebuildCount(30, 20, 28), 30],
+];
+for (const [got, want] of checks) {
+  if (JSON.stringify(got) !== JSON.stringify(want)) { console.error(JSON.stringify(got), '≠', JSON.stringify(want)); process.exitCode = 1; }
+}
+`
+	cmd := exec.Command(node, "--input-type=module", "--no-warnings", "-e", script)
+	cmd.Dir = "static"
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Errorf("%v\n%s", err, out)
+	}
+}

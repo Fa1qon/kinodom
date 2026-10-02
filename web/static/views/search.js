@@ -4,6 +4,7 @@ import { h, icon, size, poll, keepFocus, offWarn, store, formatTag } from '../ui
 import { get, del } from '../api.js';
 import { poster } from './catalog.js';
 import { filmHeader } from './kpcat.js';
+import { portionEnd } from './channels.js';
 
 // OWN — свои трекеры: страница раздачи, вкладка каталога; остальные — источник поиска Jacred / Jackett и
 // трекеры его раздач (11b-Д).
@@ -34,6 +35,28 @@ export function backTo(rel, savedCatalog, savedSearch) {
 // вернётся (ревью 14Г).
 export function searchMemory(q, kp) {
   return '#/search?q=' + encodeURIComponent(q) + (kp > 0 ? `&kp=${kp}` : '');
+}
+
+// Результаты — порциями (план 17Б): 700 строк перестраивались раз в секунду, пока догружаются постеры, — до 7,7 с
+// заморозки на ТВ. RES_FIRST — первая порция, RES_PORTION — следующие.
+export const RES_FIRST = 20;
+export const RES_PORTION = 40;
+
+// sameIds — тот же набор раздач в том же порядке: опрос меняет только изменившиеся строки.
+export function sameIds(a, b) {
+  return a.length === b.length && a.every((e, i) => e.id === b[i].id);
+}
+
+// rebuildCount — сколько строк строить при пересборке (набор сменился, поиск ещё идёт): не меньше первой порции и
+// построенного, и строку в фокусе (focusIndex, −1 — нет) с запасом — вставки выше могли сдвинуть её за построенное
+// (ревью 17Б: фокус терялся, следующая стрелка уводила на первую строку).
+export function rebuildCount(total, built, focusIndex) {
+  return Math.min(total, Math.max(RES_FIRST, built, focusIndex >= 0 ? focusIndex + 4 : 0));
+}
+
+// resSig — подпись того, что видно в строке результата: строка пересоздаётся, только если она изменилась.
+export function resSig(e) {
+  return JSON.stringify([e.imageKey, e.name, e.title, e.tracker, e.quality, e.format, e.preferred, e.size, e.seeders]);
 }
 
 // searchParts — что на странице поиска (план 16Б): поле всегда; без запроса — история списком и «Очистить
@@ -73,6 +96,7 @@ export function render(root, r, ctx) {
   const trackers = h('div', { class: 'tags' });
   const off = h('div'); // трекеры без адреса (этап 11a): поиск идёт только по остальным
   const table = h('div', { class: 'results' });
+  const resTail = h('div', { class: 'res-tail' }); // низ построенного: подошёл к экрану — следующая порция (план 17Б)
   // Поле поиска — здесь, на любой ширине (в шапке — только кнопка; план 16Б).
   const field = h('input', { name: 'q', value: q, placeholder: 'Поиск', 'aria-label': 'Поиск', autocomplete: 'off', enterkeyhint: 'search', 'data-key': 'search-field' });
   const form = h('form', { class: 'search-here', role: 'search', onsubmit: (e) => {
@@ -101,7 +125,7 @@ export function render(root, r, ctx) {
       if (alive) film.replaceChildren(filmHeader(f));
     }, () => {});
   }
-  root.append(h('div', { class: 'screen' }, form, h('h1', null, q ? `Поиск: «${q}»` : 'Поиск'), film, history, off, trackers, table));
+  root.append(h('div', { class: 'screen' }, form, h('h1', null, q ? `Поиск: «${q}»` : 'Поиск'), film, history, off, trackers, table, resTail));
   const onStatus = (status) => {
     const tr = (status && status.trackers) || {};
     keepFocus(off, () => off.replaceChildren(...OWN.filter((t) => tr[t] && tr[t].state === 'off').map((t) => offWarn(tr[t].text))));
@@ -167,6 +191,8 @@ export function render(root, r, ctx) {
       res = await get('/search?q=' + encodeURIComponent(q) + (first ? '' : '&poll=1'));
     } catch (e) {
       search.stop();
+      resetRows(); // без этого под ошибкой достраивались старые строки с 21-й (ревью 17Б)
+      if (watcher) watcher.disconnect();
       table.replaceChildren(h('p', { class: 'error' }, e.message));
       return;
     }
@@ -176,27 +202,105 @@ export function render(root, r, ctx) {
     if (!keepPolling(res, started, Date.now())) search.stop();
   }, 1000);
 
+  // Лента результатов (план 17Б): построено built строк; refs — id → строка и её подпись (resSig).
+  let rows = [];
+  let built = 0;
+  let drawn = null; // набор, по которому построена таблица: тот же — опрос меняет строки на месте
+  const refs = new Map();
+
   function draw(res) {
     trackers.replaceChildren(...trackerTags(res.trackers, res.results));
     if (!res.results.length) {
       table.replaceChildren(res.complete ? h('p', { class: 'muted' }, 'Ничего не нашлось') : '');
+      resetRows();
       return;
     }
+    rows = res.results;
+    if (drawn && sameIds(rows, drawn)) {
+      for (const e of rows.slice(0, built)) {
+        const r = refs.get(e.id);
+        const sig = resSig(e);
+        if (!r || r.sig === sig) continue;
+        const el = resRow(e);
+        r.el.replaceWith(el);
+        refs.set(e.id, { el, sig });
+      }
+      drawn = rows;
+      return;
+    }
+    // Набор или порядок сменился (поиск ещё идёт) — заново, не меньше построенного и со строкой в фокусе: фокус по
+    // data-key остаётся.
+    const a = document.activeElement;
+    const fk = a && table.contains(a) && a.dataset ? a.dataset.key : '';
+    const want = rebuildCount(rows.length, built, fk ? rows.findIndex((e) => `res-${e.id}` === fk) : -1);
+    built = 0;
+    refs.clear();
     table.replaceChildren(
       h('div', { class: 'res-row res-head', 'aria-hidden': 'true' }, h('span', null, ''), h('span', null, 'Раздача'), h('span', null, 'Трекер'), h('span', null, 'Качество'), h('span', null, 'Формат'), h('span', null, 'Размер'), h('span', null, 'Раздают')),
-      ...res.results.map((e) => h('a', { class: 'res-row', href: `#/release/${e.id}`, 'data-key': `res-${e.id}` },
-        poster(e, e.name || e.title, 'poster thumb'),
-        h('span', { class: 'res-title' }, h('span', { class: 'strong ellipsis' }, e.name || e.title), h('span', { class: 'muted small ellipsis' }, e.title)),
-        h('span', { class: 'muted' }, trackerLabel(e.tracker)),
-        h('span', { class: 'muted' }, e.quality || ''),
-        h('span', { class: 'muted' }, formatTag(e.format, e.preferred) || ''),
-        h('span', null, size(e.size)),
-        h('span', { class: 'seeders' }, icon('arrow_upward', 16), String(e.seeders)))));
+      ...buildRows(portionEnd(rows.length, 0, want)));
+    drawn = rows;
+    rewatch();
   }
+
+  // resetRows — таблица без строк: ни одна старая строка больше не достроится.
+  function resetRows() {
+    rows = [];
+    built = 0;
+    drawn = null;
+    refs.clear();
+  }
+
+  // buildRows — строки ленты с built до to.
+  function buildRows(to) {
+    const out = rows.slice(built, to).map((e) => {
+      const el = resRow(e);
+      refs.set(e.id, { el, sig: resSig(e) });
+      return el;
+    });
+    built = to;
+    return out;
+  }
+
+  function resRow(e) {
+    return h('a', { class: 'res-row', href: `#/release/${e.id}`, 'data-key': `res-${e.id}` },
+      poster(e, e.name || e.title, 'poster thumb'),
+      h('span', { class: 'res-title' }, h('span', { class: 'strong ellipsis' }, e.name || e.title), h('span', { class: 'muted small ellipsis' }, e.title)),
+      h('span', { class: 'muted' }, trackerLabel(e.tracker)),
+      h('span', { class: 'muted' }, e.quality || ''),
+      h('span', { class: 'muted' }, formatTag(e.format, e.preferred) || ''),
+      h('span', null, size(e.size)),
+      h('span', { class: 'seeders' }, icon('arrow_upward', 16), String(e.seeders)));
+  }
+
+  // Следующая порция — низ построенного подошёл к экрану или фокус в одной из трёх последних строк.
+  const moreRows = () => {
+    if (!alive || built >= rows.length) return;
+    table.append(...buildRows(portionEnd(rows.length, built, RES_PORTION)));
+    rewatch();
+  };
+  const watcher = typeof IntersectionObserver === 'function'
+    ? new IntersectionObserver((es) => {
+      if (es.some((x) => x.isIntersecting)) moreRows();
+    }, { rootMargin: '600px 0px' })
+    : null;
+  // rewatch — наблюдатель сообщает только смену «в зоне / вне зоны»: после порции — переподписка (как в «Каналах»).
+  function rewatch() {
+    if (watcher) {
+      watcher.unobserve(resTail);
+      watcher.observe(resTail);
+    } else if (resTail.getBoundingClientRect().top < window.innerHeight + 600) {
+      moreRows();
+    }
+  }
+  table.addEventListener('focusin', (e) => {
+    const row = e.target.closest && e.target.closest('a.res-row');
+    if (row && [...table.querySelectorAll('a.res-row')].slice(-3).includes(row)) moreRows();
+  });
 
   return () => {
     alive = false;
     search.stop();
+    if (watcher) watcher.disconnect();
     ctx.listeners.delete(onStatus);
   };
 }
