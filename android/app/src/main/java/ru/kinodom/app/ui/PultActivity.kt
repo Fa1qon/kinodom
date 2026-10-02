@@ -11,6 +11,7 @@ import android.os.Handler
 import android.os.Looper
 import android.os.SystemClock
 import android.speech.RecognizerIntent
+import android.view.KeyEvent
 import android.view.View
 import android.view.ViewGroup
 import android.webkit.JavascriptInterface
@@ -298,6 +299,15 @@ class PultActivity : Activity() {
         if (!canVoice()) return super.onSearchRequested()
         startVoice()
         return true
+    }
+
+    // dispatchKeyEvent — «Поиск» пульта доходил до WebView и терялся там (эмулятор ТВ): перехват до страницы.
+    override fun dispatchKeyEvent(event: KeyEvent): Boolean {
+        if (event.keyCode == KeyEvent.KEYCODE_SEARCH && canVoice()) {
+            if (event.action == KeyEvent.ACTION_UP) startVoice()
+            return true
+        }
+        return super.dispatchKeyEvent(event)
     }
 
     override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
