@@ -36,6 +36,7 @@ class ChannelPanel(
     private var titles: Map<String, String> = emptyMap()
     private var playing = -1
     private var shownAt = 0L // выбор текущего канала при показе — не шаг: без звука
+    private var quietAt = -1 // строка, которую выбирает сам показ (ревью 16В: тишина по месту, а не только по времени)
 
     private val adapter = object : BaseAdapter() {
         override fun getCount() = items.size
@@ -67,7 +68,13 @@ class ChannelPanel(
         }
         onItemSelectedListener = object : AdapterView.OnItemSelectedListener {
             override fun onItemSelected(parent: AdapterView<*>?, v: View?, i: Int, id: Long) {
-                if (SystemClock.uptimeMillis() - shownAt > QUIET_MS) sound("move")
+                // Выбор показом — та строка и вскоре после показа (на слабом ТВ разметка дольше 150 мс): без звука.
+                if (i == quietAt && SystemClock.uptimeMillis() - shownAt < QUIET_MS) {
+                    quietAt = -1
+                    return
+                }
+                quietAt = -1
+                sound("move")
             }
 
             override fun onNothingSelected(parent: AdapterView<*>?) {}
@@ -80,6 +87,7 @@ class ChannelPanel(
 
     fun show(current: Int) {
         shownAt = SystemClock.uptimeMillis()
+        quietAt = current
         playing = current
         adapter.notifyDataSetChanged()
         view.visibility = View.VISIBLE
@@ -142,6 +150,6 @@ class ChannelPanel(
     }
 
     companion object {
-        private const val QUIET_MS = 150L
+        private const val QUIET_MS = 1000L
     }
 }

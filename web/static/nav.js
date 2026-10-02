@@ -155,14 +155,21 @@ export function arrowMoves(dir, el, escaped) {
 export function navSound(key, el, outcome) {
   const o = outcome || {};
   if (DIRS[key]) return o.cursor ? null : o.moved ? 'move' : 'edge';
-  if (key === 'Enter') return el && !typing(el) ? 'select' : null;
+  if (key === 'Enter') return el && el.tagName !== 'BODY' && !typing(el) ? 'select' : null; // без фокуса нажимать нечего
   if (key === 'Escape' || key === 'GoBack' || key === 'BrowserBack' || key === 'Backspace') return o.back ? 'back' : null;
   return null;
 }
 
+// keepArrowDefault — оставить ли браузеру его действие на стрелку: фокус не сдвинулся — да (прокрутка страницы), кроме
+// группы переключателей: там браузер сам выбрал бы соседний вариант («вниз» на «Звуки меню» выключал звуки; ревью 16В).
+export function keepArrowDefault(moved, el) {
+  if (moved) return false;
+  return !(el && el.tagName === 'INPUT' && el.type === 'radio');
+}
+
 // playSound — звук в приложении (мост KinodomApp.sound; «Назад» с пульта ТВ приложение озвучивает само); в браузере
 // моста нет — тишина.
-function playSound(name) {
+export function playSound(name) {
   if (!name) return;
   const app = typeof window !== 'undefined' ? window.KinodomApp : null;
   if (!app || typeof app.sound !== 'function') return;
@@ -222,6 +229,6 @@ export function initNav() {
     if (!arrowMoves(dir, el, escaped)) return; // курсор ещё двигается внутри поля
     const moved = move(dir);
     playSound(navSound(e.key, el, { moved }));
-    if (moved) e.preventDefault();
+    if (!keepArrowDefault(moved, el)) e.preventDefault();
   });
 }
