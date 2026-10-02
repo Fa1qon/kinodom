@@ -36,17 +36,23 @@ export function searchMemory(q, kp) {
   return '#/search?q=' + encodeURIComponent(q) + (kp > 0 ? `&kp=${kp}` : '');
 }
 
+// searchParts — что на странице поиска (план 16Б): поле всегда; без запроса — история списком и «Очистить
+// историю» (если история есть), с запросом — результаты без истории.
+export function searchParts(q, items) {
+  return { field: true, history: q ? [] : items.map((it) => it.query), clear: !q && items.length > 0, results: !!q };
+}
+
 export function render(root, r, ctx) {
   const q = (r.query.get('q') || '').trim();
   const kp = Number(r.query.get('kp')) || 0;
   if (q) store.set('search', searchMemory(q, kp));
   let alive = true;
-  const history = h('div', { class: 'history' });
+  const history = h('div', { class: 'hist-list' });
   const trackers = h('div', { class: 'tags' });
   const off = h('div'); // трекеры без адреса (этап 11a): поиск идёт только по остальным
   const table = h('div', { class: 'results' });
-  // На узком экране поля поиска в шапке нет — оно здесь.
-  const field = h('input', { name: 'q', value: q, placeholder: 'Поиск', 'aria-label': 'Поиск', autocomplete: 'off', enterkeyhint: 'search' });
+  // Поле поиска — здесь, на любой ширине (в шапке — только кнопка; план 16Б).
+  const field = h('input', { name: 'q', value: q, placeholder: 'Поиск', 'aria-label': 'Поиск', autocomplete: 'off', enterkeyhint: 'search', 'data-key': 'search-field' });
   const form = h('form', { class: 'search-here', role: 'search', onsubmit: (e) => {
     e.preventDefault();
     const v = field.value.trim();
@@ -75,13 +81,14 @@ export function render(root, r, ctx) {
       return;
     }
     if (!alive) return;
-    history.replaceChildren(...(items.length ? [
-      icon('history', 20, 'Недавние запросы'),
-      ...items.map((it) => h('span', { class: it.query.toLowerCase() === q.toLowerCase() ? 'hist on' : 'hist' },
-        h('a', { href: '#/search?q=' + encodeURIComponent(it.query), 'data-key': `hist-${it.query}` }, it.query),
-        h('button', { type: 'button', 'data-key': `forget-${it.query}`, 'aria-label': `Убрать «${it.query}» из истории`, onclick: () => forget(it.query) }, icon('close', 16)))),
-      h('button', { class: 'btn small-btn', type: 'button', 'data-key': 'hist-clear', onclick: () => forget('') }, 'Очистить'),
-    ] : []));
+    // История — списком сверху вниз (на ТВ — «вниз-вниз»), только на странице без запроса (план 16Б).
+    const parts = searchParts(q, items);
+    keepFocus(history, () => history.replaceChildren(
+      ...parts.history.map((query) => h('div', { class: 'hist-row' },
+        h('a', { class: 'hist-q', href: '#/search?q=' + encodeURIComponent(query), 'data-key': `hist-${query}` }, icon('history', 18), h('span', null, query)),
+        h('button', { class: 'sq', type: 'button', 'data-key': `forget-${query}`, 'aria-label': `Убрать «${query}» из истории`, onclick: () => forget(query) }, icon('close', 18)))),
+      parts.clear ? h('button', { class: 'btn', type: 'button', 'data-key': 'hist-clear', onclick: () => forget('') }, 'Очистить историю') : '',
+    ));
   };
 
   async function forget(query) {
@@ -93,8 +100,11 @@ export function render(root, r, ctx) {
     loadHistory();
   }
 
-  loadHistory();
   if (!q) {
+    loadHistory();
+    // Пришли кнопкой «Поиск» — фокуса на экране нет: он на поле (OK — клавиатура, «вниз» — история).
+    const a = document.activeElement;
+    if (!a || a === document.body || !root.contains(a)) field.focus({ preventScroll: true });
     return () => {
       alive = false;
     };
@@ -114,7 +124,6 @@ export function render(root, r, ctx) {
       return;
     }
     if (!alive) return;
-    if (first) loadHistory();
     first = false;
     keepFocus(table, () => draw(res));
     if (!keepPolling(res, started, Date.now())) search.stop();
