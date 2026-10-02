@@ -231,9 +231,16 @@ func (c *Client) Get(ctx context.Context, path string, opts ...GetOption) (*Page
 		if v == MirrorDown && reason == stubReason && g.method != http.MethodPost {
 			// Короткая страница без каркаса бывает разовой (Rutracker 2026-10-02: 1,5 КБ вместо 96) — ещё раз здесь же.
 			c.o.Log.Info(c.o.Name+": повторяю запрос", "url", t.url, "reason", reason)
-			if p2, err2 := c.load(ctx, t.url, g); err2 == nil {
+			p2, err2 := c.load(ctx, t.url, g)
+			var de2 *downError
+			switch {
+			case err2 == nil:
 				p = p2
 				v, reason = c.judge(p, g)
+			case errors.As(err2, &de2):
+				reason = de2.reason // вторая попытка не ответила — это и причина
+			default:
+				return nil, fmt.Errorf("%s: %w", c.o.Name, err2) // отмена, прокси — как есть (ревью 15Д)
 			}
 		}
 		if v == MirrorDown {

@@ -127,12 +127,16 @@ func TestSearchForumsIncludeShows(t *testing.T) {
 		t.Fatal(err)
 	}
 	allowed := searchForums(tree)
-	for _, f := range []string{"46", "2076", "1982", "2151", "255"} {
+	for _, f := range []string{"46", "2076", "1202", "1982", "2151", "255"} {
 		if !allowed[f] {
 			t.Errorf("форума %s нет в поиске", f)
 		}
 	}
-	if allowed["c24"] || allowed["2038"] { // категория — не форум; книги — не видео
-		t.Fatalf("лишнее: %v %v", allowed["c24"], allowed["2038"])
+	// Ревью 15Д, п. 1: из «Авто и мото» — только передачи (1202); каталоги запчастей, книги по ремонту, программы
+	// диагностики и журналы — не видео; книги (2038) — тоже.
+	for _, f := range []string{"1977", "1970", "1975", "1964", "2038"} {
+		if allowed[f] {
+			t.Errorf("не-видео %s в поиске", f)
+		}
 	}
 }

@@ -211,7 +211,7 @@ func (r *Rutor) browse(ctx context.Context, categoryID string, page int, code st
 	return rs, len(rs) >= 100, nil
 }
 
-// Search ищет по видеокатегориям: шесть запросов, не больше трёх одновременно и мимо
+// Search ищет по видеокатегориям: запрос на категорию, по порядку важности, не больше трёх одновременно и мимо
 // ограничителя «1 в секунду» (спека, раздел 7). Часть категорий не ответила или вышло время —
 // возвращаем найденное вместе с *source.PartialError; не ответила ни одна — только ошибку.
 func (r *Rutor) Search(ctx context.Context, query string) ([]source.Release, error) {
@@ -225,14 +225,16 @@ func (r *Rutor) Search(ctx context.Context, query string) ([]source.Release, err
 	found := make([][]source.Release, len(searchCategories))
 	errs := make([]error, len(searchCategories))
 	var wg sync.WaitGroup
+	// Места занимаются по порядку важности категорий: при медленном Rutor срок отрезает хвост списка, а не
+	// случайные категории (ревью 15Д).
 	for i, cat := range searchCategories {
+		select {
+		case r.searches <- struct{}{}:
+		case <-ctx.Done():
+			errs[i] = ctx.Err()
+			continue
+		}
 		wg.Go(func() {
-			select {
-			case r.searches <- struct{}{}:
-			case <-ctx.Done():
-				errs[i] = ctx.Err()
-				return
-			}
 			defer func() { <-r.searches }()
 			found[i], errs[i] = r.searchIn(ctx, cat, q)
 		})

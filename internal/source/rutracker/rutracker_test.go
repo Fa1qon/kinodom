@@ -558,3 +558,27 @@ func TestSortedPageNeedsLogin(t *testing.T) {
 		t.Fatal("неизвестный порядок принят")
 	}
 }
+
+// Ревью 15Д, п. 2: отбор видео и вторая страница закреплены: новая видео-раздача второй страницы — в выдаче,
+// раздача книжного раздела — нет, повторы первой страницы схлопнуты.
+func TestSearchFiltersAndMergesPages(t *testing.T) {
+	s := rutrackertest.NewServer(t)
+	s.Login, s.Password = "user", "pass"
+	s.SecondPage = true
+	rs, err := newRutracker(t, s, withCreds("user", "pass")).Search(ctx, "космос")
+	if err != nil {
+		t.Fatal(err)
+	}
+	ids := map[string]int{}
+	for _, r := range rs {
+		ids[r.TopicID]++
+	}
+	if ids[rutrackertest.SecondPageNew] != 1 || ids[rutrackertest.SecondPageBook] != 0 || len(rs) != 51 {
+		t.Fatalf("новая %d, книга %d, всего %d", ids[rutrackertest.SecondPageNew], ids[rutrackertest.SecondPageBook], len(rs))
+	}
+	for id, n := range ids {
+		if n > 1 {
+			t.Fatalf("повтор %s ×%d", id, n)
+		}
+	}
+}

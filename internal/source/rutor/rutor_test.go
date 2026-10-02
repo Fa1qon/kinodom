@@ -524,3 +524,40 @@ func TestSearchAllVideoCategories(t *testing.T) {
 		t.Fatalf("поиск %v, видеокатегории %d", searchCategories, len(videoCategories))
 	}
 }
+
+// Ревью 15Д, п. 5: категории занимают места поиска по порядку важности — при медленном Rutor срок отрезает хвост
+// списка, а не случайные (под срез не должны попадать «Зарубежные фильмы»).
+func TestSearchCategoriesStartInOrder(t *testing.T) {
+	for range 5 {
+		s := rutortest.NewServer(t)
+		release := make(chan struct{})
+		var mu sync.Mutex
+		var arrived []string
+		s.Override = func(w http.ResponseWriter, r *http.Request) bool {
+			if !strings.HasPrefix(r.URL.Path, "/search/") {
+				return false
+			}
+			mu.Lock()
+			arrived = append(arrived, strings.Split(r.URL.Path, "/")[3])
+			n := len(arrived)
+			mu.Unlock()
+			if n == 3 {
+				time.AfterFunc(100*time.Millisecond, func() { close(release) })
+			}
+			<-release
+			return false
+		}
+		if _, err := newRutor(t, s).Search(ctx, "Матрица"); err != nil {
+			t.Fatal(err)
+		}
+		mu.Lock()
+		first := slices.Clone(arrived[:3])
+		mu.Unlock()
+		slices.Sort(first)
+		want := slices.Clone(searchCategories[:3])
+		slices.Sort(want)
+		if !slices.Equal(first, want) {
+			t.Fatalf("первыми пошли %v, нужно %v", first, want)
+		}
+	}
+}

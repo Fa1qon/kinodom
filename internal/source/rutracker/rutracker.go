@@ -22,12 +22,30 @@ var _ source.Source = (*Rutracker)(nil)
 // ErrNoCredentials — логин и пароль не заданы: поиск недоступен (он только для вошедших).
 var ErrNoCredentials = errors.New("Rutracker: не заданы логин и пароль — поиск недоступен")
 
-// searchCats — категории, в которых ищет поиск (спека, раздел 6): «Кино, Видео и ТВ»,
-// «Сериалы», «Документалистика и юмор», «Обучающие видео».
-var searchCats = []string{"2", "18", "20", "10", "24", "28", "39"}
+// searchCats — категории поиска целиком: кино и видео, сериалы, документалистика и юмор, обучающее видео, спорт,
+// музыкальное видео (жалоба 2026-10-02: передачи и шоу выпадали).
+var searchCats = []string{"2", "18", "20", "10", "28", "39"}
 
-// searchForums — форумы поиска: все под категориями searchCats.
-func searchForums(tree *forumTree) map[string]bool { return tree.forumsUnder(searchCats...) }
+// searchSubtrees — разделы поиска из прочих категорий вместе с подразделами: 1202 «Фильмы и передачи по
+// авто/мото» (Top Gear, «Ферма Кларксона») — без «Ремонта и эксплуатации» с каталогами, книгами и программами
+// (ревью 15Д).
+var searchSubtrees = []string{"1202"}
+
+// searchForums — разделы поиска: всё под searchCats и поддеревья searchSubtrees.
+func searchForums(tree *forumTree) map[string]bool {
+	out := tree.forumsUnder(searchCats...)
+	for _, forums := range tree.Tree {
+		for _, f := range searchSubtrees {
+			if subs, ok := forums[f]; ok {
+				out[f] = true
+				for _, sub := range subs {
+					out[strconv.Itoa(sub)] = true
+				}
+			}
+		}
+	}
+	return out
+}
 
 // SetCredentials — логин и пароль из настроек. Новая пара снимает запрет на вход после неудачи; те
 // же значения не меняют ничего — иначе пульт, сохраняя любые настройки, снимал бы запрет, и форум
@@ -266,7 +284,8 @@ func (r *Rutracker) noteLogin(err error) {
 	}
 }
 
-// Search ищет по видеокатегориям одним запросом, по раздающим (спека, разделы 6 и 7). Нужен вход:
+// Search ищет по раздающим без списка разделов и отбирает видео у себя; полная первая страница — ещё вторая
+// (спека, разделы 6 и 7; жалоба 2026-10-02). Нужен вход:
 // гостя форум отправляет на страницу входа; истёкшая сессия — тихий повторный вход.
 func (r *Rutracker) Search(ctx context.Context, query string) ([]source.Release, error) {
 	q := htmltext.Clean(query)
@@ -299,6 +318,8 @@ func (r *Rutracker) Search(ctx context.Context, query string) ([]source.Release,
 		params.Set("start", strconv.Itoa(searchPage))
 		if more, err := r.trackerPage(ctx, params); err == nil {
 			rs = append(rs, more...)
+		} else if ctx.Err() == nil {
+			r.log.Info("Rutracker: вторая страница поиска не пришла", "err", err)
 		}
 	}
 	seen := map[string]bool{}

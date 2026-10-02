@@ -1,6 +1,7 @@
 package rutracker
 
 import (
+	"bytes"
 	"errors"
 	"strings"
 	"testing"
@@ -209,5 +210,16 @@ func TestParseTopicDescriptionHasNoSiteTail(t *testing.T) {
 	if !strings.HasSuffix(d.Description, "Русские субтитры: нет") {
 		lines := strings.Split(d.Description, "\n")
 		t.Fatalf("конец описания:\n%s", strings.Join(lines[max(0, len(lines)-3):], "\n"))
+	}
+}
+
+// Ревью 15Д, п. 7: строки есть, а раздела ни у одной (сменилась разметка ссылки на раздел) — ошибка разбора, а не
+// «ничего не найдено»: отбор видео держится на разделе строки.
+func TestParseSearchWithoutForumLinks(t *testing.T) {
+	b := rutrackertest.CP1251(t, "search-f2076-seeds.raw-cp1251.html")
+	b = bytes.ReplaceAll(b, []byte("f-name-col"), []byte("x-name-col"))
+	var pe *source.ParseError
+	if _, err := parseSearch(b); !errors.As(err, &pe) {
+		t.Fatalf("ошибка %v", err)
 	}
 }

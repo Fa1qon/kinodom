@@ -729,3 +729,22 @@ func TestStubPostIsNotRepeated(t *testing.T) {
 		t.Fatalf("%v; попыток %d", err, m.hits.Load())
 	}
 }
+
+// Ревью 15Д, п. 3: отмена во время повтора заглушки — это отмена, а не «заглушка».
+func TestStubRetryKeepsCancel(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	var calls atomic.Int32
+	m := newSite(t, func(w http.ResponseWriter, r *http.Request) {
+		if calls.Add(1) == 1 {
+			page("<html>обрезано</html>")(w, r)
+			return
+		}
+		cancel()
+		<-r.Context().Done()
+	})
+	_, err := newTestClient(t, m.URL).Get(ctx, "/browse")
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("%v", err)
+	}
+}
