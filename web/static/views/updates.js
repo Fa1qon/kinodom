@@ -1,8 +1,10 @@
 // «Новые серии» (спека 11b, 6.1): раздачи, за которыми следят, — что вышло; «Смотреть» — первая новая
 // серия, «Убрать» — строка уходит. Общие для семьи; строка уходит и сама, когда серии досмотрели.
-import { h, fill, icon, poll, keepFocus, day, openPlayer, thumb as thumbOf } from '../ui.js';
+import { h, fill, icon, poll, keepFocus, day, openPlayer, store, thumb as thumbOf } from '../ui.js';
 import { get, post, del } from '../api.js';
 import { playerLink } from './release.js';
+import { webPlayer, playHash } from './player-parts.js';
+import { appBridge } from './tvkit.js';
 
 // updateLabel — «Холод — 1×07–1×08», «Холод — Раздача снята с трекера».
 export function updateLabel(u) {
@@ -39,6 +41,10 @@ export function render(root, r, ctx) {
   ctx.listeners.add(onStatus);
 
   async function watch(u) {
+    if (webPlayer(ctx.status, store.get('moviePlayer'), appBridge())) { // плеер в браузере (план 18Б)
+      ctx.go(playHash(`torrent/${u.hash}/${u.files[0].index}`, false));
+      return;
+    }
     busy = u.id;
     draw();
     try {

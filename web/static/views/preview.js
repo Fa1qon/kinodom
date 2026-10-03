@@ -6,7 +6,7 @@ import { h, icon, openModal, rating } from '../ui.js';
 const libs = {};
 
 // loadLib — библиотека плеера (сборка UMD кладёт объект в window) по первому требованию.
-function loadLib(src, name) {
+export function loadLib(src, name) {
   if (globalThis[name]) return Promise.resolve(globalThis[name]);
   libs[src] ||= new Promise((resolve, reject) => {
     const s = document.createElement('script');

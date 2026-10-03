@@ -34,6 +34,7 @@ import (
 	"kinodom/internal/logx"
 	"kinodom/internal/meta"
 	"kinodom/internal/netx"
+	"kinodom/internal/playback"
 	"kinodom/internal/power"
 	"kinodom/internal/settings"
 	"kinodom/internal/source"
@@ -68,6 +69,7 @@ type Options struct {
 	// LocalImages — тесты: картинки с адресов этого ПК (фейковые хостинги). В работе адреса этого ПК
 	// и домашней сети в картинках не скачиваются.
 	LocalImages bool
+	FFmpegDir   string // папка ffmpeg.exe и ffprobe.exe; пусто — рядом с kinodom.exe (тесты — third_party/ffmpeg)
 }
 
 // Trackers — адреса трекеров вместо настроек при старте. Пусто — из настроек (rutor.address,
@@ -100,6 +102,7 @@ type App struct {
 	Library  *library.Library      // медиатека: скачанное и папки заказчика (модуль library, этап 9)
 	Follow   *follow.Module        // подписка на новые серии (модуль follow, этап 11b-В)
 	KPCat    *kpcat.Module         // каталог «Кинопоиск» (модуль kpcat, план 14Г)
+	Playback *playback.Module      // свой плеер фильмов (цикл 18)
 	writable func(dir string) bool // служба может писать в папку медиатеки; nil — Library.Writable (тесты подменяют)
 
 	version   string
@@ -186,6 +189,7 @@ func New(ctx context.Context, o Options) (*App, error) {
 		return fail(err)
 	}
 	a.initLibrary(ctx)
+	a.initPlayback(o)
 	a.initFollow(ctx)
 	a.initKPCat(ctx)
 	a.initSetup()
