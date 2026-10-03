@@ -8,6 +8,27 @@ import kotlinx.coroutines.withContext
 // Api — GET JSON с сервера Kinodom для плеера каналов (источники, программа, список): base — адрес пульта
 // («http://192.168.0.10:8090/»), path — после /api/v1/. Ошибка сети, не 200 — null.
 object Api {
+    // Resp — ответ сервера: код (−1 — сеть не ответила) и тело.
+    data class Resp(val code: Int, val body: String?)
+
+    // fetch — GET с кодом и телом и при ошибке: плееру фильмов нужен текст ошибки сервера (ревью 18В, I6).
+    suspend fun fetch(base: String, path: String, timeoutMs: Int = 8000): Resp = withContext(Dispatchers.IO) {
+        try {
+            val c = URL(base + "api/v1/" + path.removePrefix("/")).openConnection() as HttpURLConnection
+            c.connectTimeout = timeoutMs
+            c.readTimeout = timeoutMs
+            try {
+                val code = c.responseCode
+                val stream = if (code in 200..299) c.inputStream else c.errorStream
+                Resp(code, stream?.bufferedReader()?.readText())
+            } finally {
+                c.disconnect()
+            }
+        } catch (e: Exception) {
+            Resp(-1, null)
+        }
+    }
+
     suspend fun get(base: String, path: String, timeoutMs: Int = 8000): String? = withContext(Dispatchers.IO) {
         try {
             val c = URL(base + "api/v1/" + path.removePrefix("/")).openConnection() as HttpURLConnection

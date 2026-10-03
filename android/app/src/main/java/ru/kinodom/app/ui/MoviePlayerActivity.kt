@@ -41,9 +41,12 @@ import androidx.media3.datasource.HttpDataSource
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.ui.AspectRatioFrameLayout
 import androidx.media3.ui.PlayerView
+import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.MainScope
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import ru.kinodom.app.R
 import ru.kinodom.app.core.Foreground
 import ru.kinodom.app.core.Hold
@@ -53,6 +56,7 @@ import ru.kinodom.app.core.MovieSub
 import ru.kinodom.app.core.MovieTrack
 import ru.kinodom.app.core.MovieTracks
 import ru.kinodom.app.core.MovieUrls
+import ru.kinodom.app.core.TrackMap
 import ru.kinodom.app.net.Api
 import ru.kinodom.app.net.Prefs
 
@@ -80,6 +84,7 @@ class MoviePlayerActivity : Activity() {
     private var decided = false // дорожки выбраны для текущего источника
     private var retried = false
     private var resumeAt = -1.0 // откуда начать, когда источник откроется
+    private var opened = false // источник открыт (не грузятся сведения)
     private var openSeq = 0 // номер открытия: ответ ключевого кадра прежнего открытия не перебивает новое (быстрые ⏩)
     private var hold: Hold? = null
     private var holdTime = 0L
@@ -149,7 +154,6 @@ class MoviePlayerActivity : Activity() {
         fromStart = intent.getBooleanExtra(EXTRA_FROM_START, false)
         prefs = Prefs(this)
         sounds = Sounds(this)
-        window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         buildViews()
         setContentView(root)
         fullScreen()
@@ -189,6 +193,8 @@ class MoviePlayerActivity : Activity() {
                 setText(n)
                 setPadding(pad / 2, pad / 3, pad / 2, pad / 3)
                 setOnClickListener { press(i) }
+                isFocusable = false // фокус кнопок рисуется сам (row/col): из меню он уходил на них, OK их нажимал (ревью 18В, I5)
+                isFocusableInTouchMode = false
             }
         }
         val rowView = LinearLayout(this).apply {
@@ -274,7 +280,8 @@ class MoviePlayerActivity : Activity() {
     override fun onStop() {
         report()
         handler.removeCallbacksAndMessages(null)
-        resumeAt = pos()
+        if (opened) resumeAt = pos() // источника ещё нет (грузятся сведения) — место не трогать (ревью 18В, I4)
+        opened = false
         player?.release()
         player = null
         if (::video.isInitialized) video.player = null
@@ -292,9 +299,10 @@ class MoviePlayerActivity : Activity() {
     private fun loadInfo() {
         load.visibility = View.VISIBLE
         scope.launch {
-            val i = Api.get(base, MovieUrls.info(src, fromStart), INFO_TIMEOUT_MS)?.let { MovieInfo.parse(it) }
+            val r = Api.fetch(base, MovieUrls.info(src, fromStart), INFO_TIMEOUT_MS)
+            val i = if (r.code == 200) r.body?.let { MovieInfo.parse(it) } else null
             if (i == null) {
-                fail(getString(R.string.movie_no_info), false)
+                fail(TrackMap.errorText(r.body) ?: getString(R.string.movie_no_info), false) // текст сервера (ревью 18В, I6)
                 return@launch
             }
             info = i
@@ -312,8 +320,12 @@ class MoviePlayerActivity : Activity() {
     // open — источник с места at: прямо — исходный файл и перемотка в нём; запасной путь — поток с кадра.
     private fun open(at: Double) {
         val i = info ?: return
-        val p = player ?: return
+        val p = player ?: run {
+            resumeAt = at // экран остановлен — откроем с этого места в onStart (ревью 18В, I4)
+            return
+        }
         val n = ++openSeq
+        opened = true
         decided = false
         box.visibility = View.GONE
         load.visibility = View.VISIBLE
@@ -330,13 +342,14 @@ class MoviePlayerActivity : Activity() {
         }
         resumeAt = at
         scope.launch {
-            val kf = if (at > 0) Api.get(base, MovieUrls.keyframe(src, at), INFO_TIMEOUT_MS)?.let { Regex("\"t\":([0-9.]+)").find(it)?.groupValues?.get(1)?.toDoubleOrNull() } else 0.0
+            val r = if (at > 0) Api.fetch(base, MovieUrls.keyframe(src, at), INFO_TIMEOUT_MS) else null
+            val kf = if (r == null) 0.0 else if (r.code == 200) r.body?.let { Regex("\"t\":([0-9.]+)").find(it)?.groupValues?.get(1)?.toDoubleOrNull() } else null
+            if (n != openSeq) return@launch // уже открыли с другого места — и ошибка этого открытия не нужна (ревью 18В)
             if (kf == null) {
-                fail(getString(R.string.movie_broken), true)
+                fail(TrackMap.errorText(r?.body) ?: getString(R.string.movie_broken), true)
                 return@launch
             }
             val pl = player ?: return@launch
-            if (n != openSeq) return@launch // уже открыли с другого места
             k = kf
             resumeAt = -1.0
             val s = sub?.takeIf { !it.image }?.id
@@ -354,6 +367,11 @@ class MoviePlayerActivity : Activity() {
         decided = true
         val audioGroups = tracks.groups.filter { it.type == C.TRACK_TYPE_AUDIO }
         val textGroups = tracks.groups.filter { it.type == C.TRACK_TYPE_TEXT }
+        // Видео, которое устройство не декодирует, Media3 просто не выбирает — был бы звук на чёрном (ревью 18В, I3).
+        if (!TrackMap.videoOk(tracks.groups.filter { it.type == C.TRACK_TYPE_VIDEO }.map { it.isSupported(true) })) {
+            fail(getString(R.string.movie_cant_show), true)
+            return
+        }
         var params = p.trackSelectionParameters.buildUpon()
         if (!fallback) {
             val want = audio
@@ -371,11 +389,9 @@ class MoviePlayerActivity : Activity() {
         params = if (s == null) {
             params.setTrackTypeDisabled(C.TRACK_TYPE_TEXT, true)
         } else {
-            val g = if (fallback) textGroups.firstOrNull() else if (s.external) {
-                textGroups.firstOrNull { it.getTrackFormat(0).id == s.id }
-            } else {
-                textGroups.filter { tg -> i.subs.none { it.external && it.id == tg.getTrackFormat(0).id } }.getOrNull(i.subs.filter { !it.external }.indexOf(s))
-            }
+            // Прямо — по id и порядку (TrackMap: с внешними субтитрами id групп — «1:f0», ревью 18В, C1).
+            val g = if (fallback) textGroups.firstOrNull()
+            else TrackMap.textGroup(textGroups.map { it.getTrackFormat(0).id }, i.subs, s)?.let { textGroups[it] }
             if (g == null) params.setTrackTypeDisabled(C.TRACK_TYPE_TEXT, true)
             else params.setTrackTypeDisabled(C.TRACK_TYPE_TEXT, false).setOverrideForType(TrackSelectionOverride(g.mediaTrackGroup, 0))
         }
@@ -394,6 +410,7 @@ class MoviePlayerActivity : Activity() {
         }
 
         override fun onIsPlayingChanged(isPlaying: Boolean) {
+            video.keepScreenOn = isPlaying // экран не гаснет, пока идёт фильм; на паузе — как обычно (ревью 18В)
             buttons[0].setText(if (isPlaying) R.string.movie_pause else R.string.movie_play)
             if (!isPlaying) {
                 report()
@@ -456,6 +473,10 @@ class MoviePlayerActivity : Activity() {
         fromStart = false
         info = null
         fallback = false
+        retried = false // у новой серии — свой повтор (ревью 18В)
+        openSeq++ // ответ ключевого кадра прошлой серии не откроет её поток
+        hold = null
+        menu.hide()
         box.visibility = View.GONE
         player?.stop()
         loadInfo()
@@ -500,7 +521,11 @@ class MoviePlayerActivity : Activity() {
     }
 
     private fun openVlc() {
-        vlcIntent()?.let { startActivity(it) }
+        try {
+            vlcIntent()?.let { startActivity(it) }
+        } catch (e: android.content.ActivityNotFoundException) {
+            // VLC удалили, пока окно было открыто
+        }
         finish()
     }
 
@@ -509,7 +534,9 @@ class MoviePlayerActivity : Activity() {
         val i = info ?: return
         if (dur() <= 0) return
         val body = MovieUrls.report(if (final) dur() else pos(), dur())
-        scope.launch { Api.put(base, MovieUrls.history(i.hash, i.index), body) }
+        // Сразу и не отменяясь: при «Назад» onStop и onDestroy (scope.cancel) идут подряд — обычная корутина не успевала
+        // начаться, и место при закрытии терялось (ревью 18В, I1).
+        scope.launch(start = CoroutineStart.UNDISPATCHED) { withContext(NonCancellable) { Api.put(base, MovieUrls.history(i.hash, i.index), body) } }
     }
 
     private fun seekTo(t: Double) {
@@ -640,8 +667,10 @@ class MoviePlayerActivity : Activity() {
         }
         if (!down) return super.dispatchKeyEvent(event)
         scheduleHide()
+        val repeat = event.repeatCount > 0 // удержание OK или ⏯ — не пауза/просмотр на каждом повторе (ревью 18В)
         when (code) {
             KeyEvent.KEYCODE_DPAD_CENTER, KeyEvent.KEYCODE_ENTER, KeyEvent.KEYCODE_NUMPAD_ENTER -> {
+                if (repeat) return true
                 if (controls.visibility == View.VISIBLE && row == 1) visibleButtons().getOrNull(col)?.let { press(it) }
                 else {
                     togglePause()
@@ -657,8 +686,16 @@ class MoviePlayerActivity : Activity() {
                 if (controls.visibility != View.VISIBLE) showControls(true) else if (row == 1) { row = 0; sounds?.play("move"); drawFocus() }
                 return true
             }
-            KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE, KeyEvent.KEYCODE_MEDIA_PLAY, KeyEvent.KEYCODE_MEDIA_PAUSE -> {
-                togglePause()
+            KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE -> {
+                if (!repeat) togglePause()
+                return true
+            }
+            KeyEvent.KEYCODE_MEDIA_PLAY -> {
+                player?.play()
+                return true
+            }
+            KeyEvent.KEYCODE_MEDIA_PAUSE -> {
+                player?.pause()
                 return true
             }
             KeyEvent.KEYCODE_MEDIA_FAST_FORWARD -> { seekTo(pos() + 30); return true }
