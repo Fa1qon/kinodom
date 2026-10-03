@@ -39,11 +39,11 @@ func TestParseProbe(t *testing.T) {
 	 {"index":3,"codec_type":"audio","codec_name":"ac3","channels":2,"tags":{"LANGUAGE":"und"},"disposition":{"default":0}},
 	 {"index":4,"codec_type":"subtitle","codec_name":"hdmv_pgs_subtitle","tags":{"language":"eng"}},
 	 {"index":5,"codec_type":"subtitle","codec_name":"subrip","tags":{"language":"rus","title":"Надписи"},"disposition":{"forced":1}}],
-	 "format":{"duration":"2559.400000"}}`))
+	 "format":{"duration":"2559.400000","bit_rate":"4812345"}}`))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if m.Duration != 2559.4 || m.Video != (Video{ID: 1, Codec: "h264", Mime: "avc1.640029", Width: 1920, Height: 804}) {
+	if m.Duration != 2559.4 || m.BitRate != 4812345 || m.Video != (Video{ID: 1, Codec: "h264", Mime: "avc1.640029", Width: 1920, Height: 804}) {
 		t.Errorf("видео: %+v %v", m.Video, m.Duration)
 	}
 	if len(m.Audio) != 2 || m.Audio[0] != (Track{ID: 2, Lang: "rus", Title: "Дубляж", Codec: "eac3", Channels: 6, Default: true}) ||

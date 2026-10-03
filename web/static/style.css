@@ -585,6 +585,7 @@ body.playing #top { display: none; }
 .player .pl-ui { position: absolute; inset: 0; display: flex; flex-direction: column; justify-content: space-between; pointer-events: none; transition: opacity 0.25s; }
 .player .pl-ui > * { pointer-events: auto; }
 .player.idle .pl-ui { opacity: 0; }
+.player.idle .pl-ui > * { pointer-events: none; } /* спрятанные кнопки не ловят касания (ревью 18Б, I2) */
 .player.idle { cursor: none; }
 .player .pl-top { display: flex; align-items: center; gap: 14px; padding: 16px var(--pad); background: linear-gradient(rgba(0, 0, 0, 0.75), transparent); }
 .player .pl-title { font-size: 20px; font-weight: 600; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
