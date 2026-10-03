@@ -32,6 +32,9 @@ func TestInstallerScript(t *testing.T) {
 		// Свой плеер — урезанный ffmpeg рядом с программой (план 18А).
 		`Source: "..\bin\ffmpeg.exe"; DestDir: "{app}"; Flags: ignoreversion`,
 		`Source: "..\bin\ffprobe.exe"; DestDir: "{app}"; Flags: ignoreversion`,
+		// LGPL: текст лицензии и откуда исходники — рядом с ffmpeg (ревью 18А).
+		`Source: "..\third_party\ffmpeg\LICENSE.LGPLv2.1.txt"; DestDir: "{app}"; DestName: "ffmpeg-LICENSE.LGPLv2.1.txt"; Flags: ignoreversion`,
+		`Source: "..\third_party\ffmpeg\README.md"; DestDir: "{app}"; DestName: "ffmpeg-README.md"; Flags: ignoreversion`,
 		"function PrepareToInstall",
 		"Exec(Exe, 'stop'",
 		"'install ' + InstallParams(",
