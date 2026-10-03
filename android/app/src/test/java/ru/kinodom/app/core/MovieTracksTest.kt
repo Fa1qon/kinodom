@@ -42,4 +42,17 @@ class MovieTracksTest {
         assertNull(Mem.decode(null))
         assertNull(Mem.decode("мусор"))
     }
+
+    // Живая проверка 18Б: две дорожки «Русский» без названий неразличимы — подписи с кодеком и каналами, память с кодеком.
+    @Test
+    fun sameLabels() {
+        val polden = listOf(MovieTrack(1, "rus", "", "ac3", 6, true), MovieTrack(2, "rus", "", "eac3", 6, false))
+        assertEquals(listOf("Русский · AC3 5.1", "Русский · E-AC3 5.1"), MovieTracks.labels(polden))
+        assertEquals(listOf("Русский · AC3 5.1 · 1", "Русский · AC3 5.1 · 2"), MovieTracks.labels(listOf(polden[0], polden[0].copy(id = 3))))
+        assertEquals(listOf("Русский — Дубляж", "Русский — LostFilm", "Английский"), MovieTracks.labels(a))
+        assertEquals(2, MovieTracks.pickAudio(polden, Mem.of("", "rus", "eac3"))?.id)
+        assertEquals(Mem.of("", "rus", "eac3"), Mem.decode(Mem.of("", "rus", "eac3").encode()))
+        val subs = listOf(MovieSub("3", "rus", "", false), MovieSub("4", "rus", "", false))
+        assertEquals(listOf("Русский · 1", "Русский · 2"), MovieTracks.subLabels(subs))
+    }
 }

@@ -576,10 +576,10 @@ class MoviePlayerActivity : Activity() {
         val i = info ?: return
         menuKind = kind
         val items = if (kind == "audio") {
-            i.audio.mapIndexed { n, t -> MovieTracks.label(t.lang, t.title, n) to (t == audio) }
+            MovieTracks.labels(i.audio).mapIndexed { n, l -> l to (i.audio[n] == audio) }
         } else {
             val subs = i.subs.filter { !fallback || !it.image }
-            listOf(getString(R.string.movie_subs_off) to (sub == null)) + subs.mapIndexed { n, s -> MovieTracks.label(s.lang, s.title, n) to (s == sub) }
+            listOf(getString(R.string.movie_subs_off) to (sub == null)) + MovieTracks.subLabels(subs).mapIndexed { n, l -> l to (subs[n] == sub) }
         }
         menu.show(getString(if (kind == "audio") R.string.movie_audio else R.string.movie_subs), items)
         handler.removeCallbacks(hide)
@@ -593,7 +593,7 @@ class MoviePlayerActivity : Activity() {
             val t = i.audio.getOrNull(n) ?: return
             if (t == audio) return
             audio = t
-            prefs.setTrackMem("audio", i.hash, Mem.of(t.title, t.lang))
+            prefs.setTrackMem("audio", i.hash, Mem.of(t.title, t.lang, t.codec))
             val at = pos()
             fallback = false // новая озвучка — снова пробуем исходный файл
             open(at)

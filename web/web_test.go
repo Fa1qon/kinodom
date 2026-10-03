@@ -2656,8 +2656,8 @@ eq(P.externalLink(info, 'Mozilla/5.0 (Windows NT 10.0)'), info.m3uUrl, 'ПК —
 eq(P.externalLink(info, 'Mozilla/5.0 (Linux; Android 14)'),
   'intent://192.168.0.26:8090/media/1/P.mkv#Intent;scheme=http;type=video/*;package=org.videolan.vlc;l.position=690000;S.title=%D0%9F%D0%BE%D0%BB%D0%B4%D0%B5%D0%BD%D1%8C%20%E2%80%94%201%C3%9701;S.browser_fallback_url=http%3A%2F%2F192.168.0.26%3A8090%2Fm3u%2Flibrary%2F1.m3u8%3Fstart%3D690;end',
   'Android — VLC с места, без own=1');
-eq([P.webPlayer({ transcoder: true }, null, null), P.webPlayer({ transcoder: true }, 'external', null), P.webPlayer({ transcoder: false }, 'web', null),
-  P.webPlayer(null, 'web', null), P.webPlayer({ transcoder: true }, 'web', {})], [true, false, false, false, false], 'где смотреть');
+eq([P.watchTarget({ transcoder: true }, null, null), P.watchTarget({ transcoder: true }, 'external', null), P.watchTarget({ transcoder: false }, 'web', null),
+  P.watchTarget(null, 'web', null), P.watchTarget({ transcoder: true }, 'web', {})], ['web', 'external', 'external', 'external', 'external'], 'где смотреть');
 eq([P.playHash('library/7', false), P.playHash('torrent/ab/1', true)], ['#/play/library/7', '#/play/torrent/ab/1?fromStart=1'], 'адрес страницы');
 const hx = 'a'.repeat(40);
 eq([P.srcOf(['library', '7']), P.srcOf(['torrent', hx.toUpperCase(), '2']), P.srcOf(['torrent', 'zz', '2']), P.srcOf(['library', '7', 'x']), P.srcOf([])],
@@ -2698,11 +2698,46 @@ func TestPultPlayerWired(t *testing.T) {
 func TestPultWatchGoesToPlayer(t *testing.T) {
 	src := scripts(t)
 	for _, f := range []string{"views/release.js", "views/updates.js", "views/library-card.js"} {
-		if !strings.Contains(src[f], "webPlayer(ctx.status, store.get('moviePlayer'), appBridge())") || !strings.Contains(src[f], "playHash(") {
+		if !strings.Contains(src[f], "watchTarget(ctx.status, store.get('moviePlayer'), appBridge())") || !strings.Contains(src[f], "playHash(") {
 			t.Errorf("%s: «Смотреть» не ведёт в плеер в браузере", f)
 		}
 	}
 	if s := src["views/settings-params.js"]; !strings.Contains(s, "'На этом устройстве'") || !strings.Contains(s, "store.set('moviePlayer'") {
 		t.Error("settings-params.js: нет карточки «На этом устройстве»")
+	}
+}
+
+// Куда «Смотреть» (план 18В): приложение с playMovie и встроенным плеером фильмов — его экран; приложение без
+// него или с VLC — как раньше; браузер — плеер в браузере, если выбран; без ffmpeg на сервере — как раньше.
+func TestPultWatchTarget(t *testing.T) {
+	node := lookNode(t)
+	script := `
+import { watchTarget } from './views/player-parts.js';
+const on = { transcoder: true };
+const app = (mode) => ({ moviePlayer: () => mode, playMovie: () => true });
+const got = [
+  watchTarget(on, null, null), watchTarget(on, 'external', null), watchTarget({ transcoder: false }, 'web', null), watchTarget(null, 'web', null),
+  watchTarget(on, null, app('builtin')), watchTarget(on, null, app('system')), watchTarget(on, null, { player: () => 'builtin' }),
+  watchTarget({ transcoder: false }, null, app('builtin')),
+].join(' ');
+const want = 'web external external external app external external external';
+if (got !== want) {
+  console.error(got, '≠', want);
+  process.exitCode = 1;
+}
+`
+	cmd := exec.Command(node, "--input-type=module", "--no-warnings", "-e", script)
+	cmd.Dir = "static"
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Errorf("%v\n%s", err, out)
+	}
+	src := scripts(t)
+	for _, f := range []string{"views/release.js", "views/updates.js", "views/library-card.js"} {
+		if !strings.Contains(src[f], "watchTarget(ctx.status, store.get('moviePlayer'), appBridge())") || !strings.Contains(src[f], ".playMovie(") {
+			t.Errorf("%s: «Смотреть» не спрашивает watchTarget или не зовёт playMovie", f)
+		}
+	}
+	if !strings.Contains(src["views/settings-app.js"], "'Плеер фильмов'") {
+		t.Error("settings-app.js: нет «Плеер фильмов»")
 	}
 }
