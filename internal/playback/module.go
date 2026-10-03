@@ -342,7 +342,7 @@ func (m *Module) stream(format string) handler {
 			fail(w, err)
 			return
 		}
-		o := streamOpts{Input: m.input(s), From: t, Video: md.Video.ID, Format: format}
+		o := streamOpts{Input: m.input(s), From: t, Video: md.Video.ID, Format: format, Burst: burstFor(md.BitRate)}
 		if o.Audio, ok = pickAudio(md.Audio, q.Get("a")); !ok {
 			httpx.WriteError(w, http.StatusBadRequest, "такой озвучки в файле нет")
 			return

@@ -4,7 +4,8 @@
 // (он работает без ключа — спека 11b, 5.7).
 // «Сохранить» отправляет только изменённые поля; ошибка поля — под полем; не из домашней сети — только
 // чтение (спека этапа 7, разделы 5.1, 6.3, 10.1 и 10.3).
-import { h, icon } from '../ui.js';
+import { h, icon, store } from '../ui.js';
+import { appBridge } from './tvkit.js';
 import { get, put, post } from '../api.js';
 import { layout, remoteNote } from './settings-layout.js';
 import { pickFolder } from './folders.js';
@@ -173,12 +174,25 @@ export function render(root, r, ctx) {
               field('Раздача, МБ/с', 'upload', upload)),
             uploadHint,
             field('Серий позади при нехватке места', 'keepBehind', input('keepBehind', String(v.storage.keepBehind), { inputmode: 'numeric' }))),
+          deviceCard(),
           h('div', { class: 'card' }, h('div', { class: 'h' }, 'Плеер'), players, errs.player),
           h('div', { class: 'card' }, h('div', { class: 'h' }, 'Каталог'),
             h('div', { class: 'fld' }, 'Порядок по умолчанию', orders, errs.catalogOrder),
             h('div', { class: 'fld' }, 'Формат в приоритете', formats, errs.preferredFormat)))),
     );
     saveBtn.disabled = !canEdit;
+  }
+
+  // «На этом устройстве» (план 18Б): где смотреть фильмы — выбор этого браузера; в приложении — своя настройка.
+  function deviceCard() {
+    if (appBridge()) return null;
+    const now = store.get('moviePlayer') === 'external' ? 'external' : 'web';
+    return h('div', { class: 'card' }, h('div', { class: 'h' }, 'На этом устройстве'),
+      h('div', { class: 'fld' }, 'Фильмы',
+        h('div', { class: 'checks', role: 'radiogroup', 'aria-label': 'Фильмы' },
+          [['web', 'В браузере'], ['external', 'Во внешнем плеере']].map(([id, t]) => h('label', null,
+            h('input', { type: 'radio', name: 'movie-player', value: id, checked: now === id, 'data-key': `movie-${id}`,
+              onchange: () => store.set('moviePlayer', id) }), t)))));
   }
 
   // eraseKey — «Стереть» ключ: Кинопоиска (без него — без токена) или источника поиска (group).
