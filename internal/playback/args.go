@@ -1,6 +1,9 @@
 package playback
 
-import "strconv"
+import (
+	"math"
+	"strconv"
+)
 
 // seekPad — запас после ключевого кадра: при B-кадрах ffmpeg ищет на 3/23 с раньше -ss (fftools/ffmpeg_demux.c,
 // dts_heuristic) и с -ss ровно на кадре встал бы на предыдущий, а звук начал бы с -ss (замер 2026-10-03: 2 с).
@@ -9,6 +12,19 @@ const seekPad = 0.15
 // Burst — сколько секунд фильма поток отдаёт сразу; дальше — в темпе просмотра (-readrate 1): иначе плеер
 // затянул бы фильм в память целиком (замер 2026-10-03: 700 МБ за секунды). Тесты меняют.
 var Burst = 60
+
+// burstBytes — сколько отдать сразу: MSE браузера держит около 150 МБ видео вперёд, а mpegts.js при переполнении
+// останавливает загрузку насовсем (ревью 18Б, C1) — запас считается по объёму, а не по секундам.
+const burstBytes = 64 << 20
+
+// burstFor — запас потока в секундах для файла с битрейтом bits: около 64 МБ, не меньше 10 с и не больше Burst.
+func burstFor(bits int64) int {
+	if bits <= 0 {
+		return Burst
+	}
+	sec := int(math.Round(float64(burstBytes) * 8 / float64(bits)))
+	return max(10, min(sec, Burst))
+}
 
 // seekAt — куда ffmpeg ищет для потока с ключевого кадра from (0 — без поиска). Время потока начинается с кадра
 // from: ffmpeg сдвигает всё на запас, чтобы кадр не оказался раньше нуля.
@@ -27,15 +43,19 @@ type streamOpts struct {
 	Audio  *Track // nil — в файле нет звука
 	Sub    *Sub   // только mkv: текстовые субтитры; у файла рядом реплики сервер шлёт в stdin (WebVTT, сдвинутые)
 	Format string // "ts" или "mkv"
+	Burst  int    // запас, с (burstFor); 0 — Burst
 }
 
-func pace() []string {
-	return []string{"-readrate", "1", "-readrate_initial_burst", strconv.Itoa(Burst)}
+func pace(burst int) []string {
+	if burst <= 0 {
+		burst = Burst
+	}
+	return []string{"-readrate", "1", "-readrate_initial_burst", strconv.Itoa(burst)}
 }
 
 // streamArgs — ffmpeg: с ключевого кадра, видео как есть, звук — AAC стерео (AAC стерео — как есть).
 func streamArgs(o streamOpts) []string {
-	a := append([]string{"-hide_banner", "-loglevel", "error", "-nostdin"}, pace()...)
+	a := append([]string{"-hide_banner", "-loglevel", "error", "-nostdin"}, pace(o.Burst)...)
 	if at := seekAt(o.From); at > 0 {
 		a = append(a, "-ss", secs(at))
 	}
@@ -85,7 +105,7 @@ func streamArgs(o streamOpts) []string {
 // subsArgs — встроенные субтитры id браузеру: WebVTT с секунды from в темпе просмотра, время реплик — время файла
 // (-copyts): с -ss ffmpeg сдвинул бы реплики так, чтобы первая была с нуля; начало потока вычтет плеер.
 func subsArgs(input string, from float64, id string) []string {
-	a := append([]string{"-hide_banner", "-loglevel", "error", "-nostdin"}, pace()...)
+	a := append([]string{"-hide_banner", "-loglevel", "error", "-nostdin"}, pace(0)...)
 	if from > 0 {
 		a = append(a, "-ss", secs(from))
 	}

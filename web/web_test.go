@@ -2628,6 +2628,17 @@ eq(P.trackLabels([polden[0], { ...polden[0], id: 3 }]), ['Русский · AC3 
 eq(P.trackLabels(a), ['Русский — Дубляж', 'Русский — LostFilm', 'Английский', 'Дорожка 4'], 'разные — как есть');
 eq(P.memOf(polden[1]), { title: '', lang: 'rus', codec: 'eac3' }, 'память с кодеком');
 eq(P.pickTrack(polden, P.memOf(polden[1])).id, 2, 'тот же язык — по кодеку');
+// Ревью 18Б, C1: буфер MSE полон — mpegts.js останавливает загрузку и отчёты статистики; играем, а их нет дольше STALL_MS — перезапуск.
+eq([P.loaderStalled(0, 4000, true), P.loaderStalled(0, 3999, true), P.loaderStalled(0, 9000, false)], [true, false, false], 'загрузка встала');
+// I1: кнопка — по состоянию видео (отказ автозапуска не даёт события pause).
+eq([P.playButton(true), P.playButton(false)], [{ icon: 'play_arrow', label: 'Смотреть' }, { icon: 'pause', label: 'Пауза' }], 'кнопка');
+// I2, I3: мышиные события, которые Chrome шлёт вслед за касанием, — не мышь.
+eq([P.fromTouch(1500, 1000), P.fromTouch(1900, 1000), P.fromTouch(5000, 0)], [true, false, false], 'вслед за касанием');
+// I5: пока поток с нового места запускается, место — то, куда идём; на долгой паузе — где остановились.
+eq([P.positionNow({ parkedAt: -1, pendingAt: 600, k: 0, currentTime: 0 }), P.positionNow({ parkedAt: 900, pendingAt: -1, k: 0, currentTime: 0 }),
+  P.positionNow({ parkedAt: -1, pendingAt: -1, k: 1196.04, currentTime: 3.5 })], [600, 900, 1199.54], 'место сейчас');
+// Minor 8: открыли и ушли, ничего не посмотрев, — место не трогаем (иначе «Продолжить» уезжает назад на 10 с и больше).
+eq([P.shouldReport(false, false), P.shouldReport(true, false), P.shouldReport(false, true)], [false, true, true], 'сообщать ли место');
 eq([P.memKey('abc', 'audio'), P.readMem('{"title":"x"}'), P.readMem('мусор'), P.readMem(null)], ['player.audio.abc', { title: 'x' }, null, null], 'хранение');
 eq([P.fmtTime(0), P.fmtTime(65.9), P.fmtTime(3723), P.fmtTime(-5)], ['0:00', '1:05', '1:02:03', '0:00'], 'время');
 let st = P.seekStep(null, 10, 1000, 100);
