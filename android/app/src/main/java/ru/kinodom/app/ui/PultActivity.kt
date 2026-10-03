@@ -40,6 +40,7 @@ import ru.kinodom.app.core.BackDecision
 import ru.kinodom.app.core.Foreground
 import ru.kinodom.app.core.Lineup
 import ru.kinodom.app.core.Links
+import ru.kinodom.app.core.MovieUrls
 import ru.kinodom.app.core.PlayerMode
 import ru.kinodom.app.core.Recovery
 import ru.kinodom.app.core.Route
@@ -595,6 +596,29 @@ class PultActivity : Activity() {
         @JavascriptInterface
         fun setPlayer(mode: String) {
             PlayerMode.of(mode)?.let { Prefs(this@PultActivity).player = it }
+        }
+
+        // moviePlayer, setMoviePlayer — плеер фильмов (план 18В): встроенный или VLC.
+        @JavascriptInterface
+        fun moviePlayer(): String = Prefs(this@PultActivity).moviePlayer.id
+
+        @JavascriptInterface
+        fun setMoviePlayer(mode: String) {
+            PlayerMode.of(mode)?.let { Prefs(this@PultActivity).moviePlayer = it }
+        }
+
+        // playMovie — «Смотреть» фильм или серию src («torrent/<hash>/<номер>», «library/<номер>») в своём плеере; не тот
+        // src — false (пульт откроет по-старому).
+        @JavascriptInterface
+        fun playMovie(src: String, fromStart: Boolean): Boolean {
+            if (!MovieUrls.validSrc(src)) return false
+            handler.post {
+                if (::web.isInitialized && web.url?.startsWith(base) == true) {
+                    startActivity(Intent(this@PultActivity, MoviePlayerActivity::class.java).putExtra(MoviePlayerActivity.EXTRA_BASE, base)
+                        .putExtra(MoviePlayerActivity.EXTRA_SRC, src).putExtra(MoviePlayerActivity.EXTRA_FROM_START, fromStart))
+                }
+            }
+            return true
         }
 
         // versionCode — номер сборки: пульт сравнивает его с APK на сервере («Обновить» или «Последняя версия»).

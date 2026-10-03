@@ -6,7 +6,7 @@ import { get, put, del } from '../api.js';
 import { whereStopped, resumeIndex } from './history.js';
 import { libPoster, continueLabel } from './library-parts.js';
 import { skippedText } from './downloads.js';
-import { webPlayer, playHash } from './player-parts.js';
+import { watchTarget, playHash } from './player-parts.js';
 import { appBridge } from './tvkit.js';
 
 // deleteRequest — «Удалить» версии карточки (план 14В): скачанное — как в «Загрузках» (вся раздача), своё —
@@ -77,10 +77,12 @@ export function libraryPlayerLink(res, hasNext, ua = navigator.userAgent) {
 
 // playFile — «Смотреть» файл медиатеки: на этом ПК — плеер ссылкой kinodom://, иначе — VLC или .m3u8.
 export async function playFile(file, ctx, fromStart = false, hasNext = true) {
-  if (webPlayer(ctx.status, store.get('moviePlayer'), appBridge())) { // плеер в браузере (план 18Б)
+  const to = watchTarget(ctx.status, store.get('moviePlayer'), appBridge()); // свой плеер (планы 18Б, 18В)
+  if (to === 'web') {
     location.hash = playHash(`library/${file}`, fromStart);
     return null;
   }
+  if (to === 'app' && appBridge().playMovie(`library/${file}`, fromStart)) return null;
   const res = await get(`/library/files/${file}/play` + (fromStart ? '?fromStart=1' : ''));
   if (ctx.local && res.launchUrl) openPlayer(res.launchUrl, res.m3uUrl, ctx.status && ctx.status.protocol);
   else location.href = libraryPlayerLink(res, hasNext);
