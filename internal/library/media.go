@@ -174,8 +174,12 @@ func (l *Library) handleMedia(w http.ResponseWriter, r *http.Request) {
 	defer l.o.Power.Acquire()() // ПК не засыпает, пока смотрят
 	hash, index := f.hash()
 	l.learnDuration(r.Context(), hash, index, fh, fi.Size(), f.Path)
-	body, done := l.tracker.Wrap(watch.Key{Device: httpx.Device(r), Hash: hash, Index: index}, fi.Size(), fh)
-	defer done()
+	var body io.ReadSeeker = fh
+	if !httpx.OwnPlayer(r) { // свой плеер сообщает место сам (спека цикла 18, раздел 4)
+		var done func()
+		body, done = l.tracker.Wrap(watch.Key{Device: httpx.Device(r), Hash: hash, Index: index}, fi.Size(), fh)
+		defer done()
+	}
 	http.ServeContent(w, r, "", fi.ModTime(), body)
 }
 
