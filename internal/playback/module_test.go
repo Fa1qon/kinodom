@@ -325,3 +325,33 @@ func TestInfoErrorHidesInternals(t *testing.T) {
 		}
 	}
 }
+
+// Чужая страница не может дёрнуть плеер (ревью 18А, Minor 7 → Important): сведения выбирают файл раздачи (и могут
+// освободить место, удалив старые загрузки), поток запускает ffmpeg. Браузер помечает такие запросы
+// Sec-Fetch-Site: cross-site; свой пульт — same-origin, приложение и VLC — без метки.
+func TestPlayRejectsCrossSite(t *testing.T) {
+	_, srv := fixture(t, fakeRes{}, true)
+	get := func(path, site string) int {
+		req, _ := http.NewRequest("GET", srv.URL+path, nil)
+		if site != "" {
+			req.Header.Set("Sec-Fetch-Site", site)
+		}
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		io.Copy(io.Discard, resp.Body)
+		resp.Body.Close()
+		return resp.StatusCode
+	}
+	for _, p := range []string{"/api/v1/play/library/7", "/api/v1/play/library/7/keyframe?t=5", "/play/library/7/stream.ts?sid=x1", "/play/library/7/subs/3.vtt?sid=x1"} {
+		if c := get(p, "cross-site"); c != http.StatusForbidden {
+			t.Errorf("%s с чужого сайта: %d", p, c)
+		}
+	}
+	for _, site := range []string{"", "same-origin", "none"} {
+		if c := get("/api/v1/play/library/7", site); c != 200 {
+			t.Errorf("свой запрос (%q): %d", site, c)
+		}
+	}
+}
