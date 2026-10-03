@@ -136,6 +136,11 @@ type handler func(w http.ResponseWriter, r *http.Request, ref Ref)
 
 func (m *Module) handle(parse func(*http.Request) (Ref, bool), h handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Чужая страница (Sec-Fetch-Site: cross-site) — нет: эти GET выбирают файл раздачи и запускают ffmpeg (ревью 18А).
+		if r.Header.Get("Sec-Fetch-Site") == "cross-site" {
+			httpx.WriteError(w, http.StatusForbidden, "Плеер открывается только из пульта Kinodom")
+			return
+		}
 		if !m.o.OK {
 			httpx.WriteError(w, http.StatusServiceUnavailable, "Плеер в браузере недоступен: нет ffmpeg рядом с программой")
 			return
