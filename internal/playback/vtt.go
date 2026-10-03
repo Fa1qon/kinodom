@@ -1,11 +1,17 @@
 package playback
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"io"
+	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
+	"unicode/utf8"
+
+	"golang.org/x/text/encoding/charmap"
 )
 
 // cue — реплика субтитров: время — секунды файла.
@@ -14,14 +20,38 @@ type cue struct {
 	Text       string
 }
 
-// fileCues — реплики файла субтитров рядом с видео (SRT, ASS, VTT) — один проход ffmpeg, файл маленький.
+// subFormats — формат входа ffmpeg по расширению файла субтитров.
+var subFormats = map[string]string{".srt": "srt", ".ass": "ass", ".ssa": "ass", ".vtt": "webvtt"}
+
+// fileCues — реплики файла субтитров рядом с видео (SRT, ASS, VTT). Файл читает сервер и отдаёт ffmpeg в UTF-8:
+// русские .srt часто в cp1251, а ffmpeg без iconv их не перекодирует (ревью 18А, Important 3).
 func (t Tools) fileCues(ctx context.Context, path string) ([]cue, error) {
-	out, err := t.output(ctx, t.FFmpeg, "-hide_banner", "-loglevel", "error", "-nostdin", "-i", path, "-map", "0:s:0",
-		"-c:s", "webvtt", "-f", "webvtt", "pipe:1")
+	b, err := os.ReadFile(path)
+	if err != nil {
+		return nil, err
+	}
+	format := subFormats[strings.ToLower(filepath.Ext(path))]
+	if format == "" {
+		format = "srt"
+	}
+	out, err := t.outputIn(ctx, bytes.NewReader(toUTF8(b)), t.FFmpeg, "-hide_banner", "-loglevel", "error", "-f", format, "-i", "pipe:0",
+		"-map", "0:s:0", "-c:s", "webvtt", "-f", "webvtt", "pipe:1")
 	if err != nil {
 		return nil, err
 	}
 	return parseVTT(out), nil
+}
+
+// toUTF8 — текст субтитров в UTF-8: UTF-8 (с BOM и без) и UTF-16 с BOM — как есть (UTF-16 ffmpeg переводит сам),
+// иначе — cp1251.
+func toUTF8(b []byte) []byte {
+	if utf8.Valid(b) || bytes.HasPrefix(b, []byte{0xFF, 0xFE}) || bytes.HasPrefix(b, []byte{0xFE, 0xFF}) {
+		return b
+	}
+	if u, err := charmap.Windows1251.NewDecoder().Bytes(b); err == nil {
+		return u
+	}
+	return b
 }
 
 // parseVTT — реплики WebVTT: блоки через пустую строку, строка времени «[ЧЧ:]ММ:СС.ммм --> [ЧЧ:]ММ:СС.ммм [настройки]».

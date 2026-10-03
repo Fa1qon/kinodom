@@ -9,6 +9,9 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"unicode/utf16"
+
+	"golang.org/x/text/encoding/charmap"
 )
 
 // packets — пакеты файла: «дорожка,время,размер» по строке.
@@ -139,5 +142,28 @@ func TestSubsFixture(t *testing.T) {
 	writeVTT(&b, cues, 4, 0)
 	if s := b.String(); !strings.Contains(s, "00:00:07.000 --> 00:00:08.000\nВнешняя два") || strings.Contains(s, "Внешняя один") {
 		t.Errorf("внешние:\n%s", s)
+	}
+}
+
+// Русские .srt часто в cp1251, бывают в UTF-16 — ffmpeg без iconv их не перекодирует (ревью 18А, Important 3):
+// файл читает сервер, ffmpeg получает UTF-8.
+func TestFileCuesEncodings(t *testing.T) {
+	tl := tools(t)
+	src := "1\r\n00:00:07,000 --> 00:00:08,000\r\nВнешняя два\r\n"
+	cp, err := charmap.Windows1251.NewEncoder().String(src)
+	if err != nil {
+		t.Fatal(err)
+	}
+	u16 := []byte{0xFF, 0xFE}
+	for _, r := range utf16.Encode([]rune(src)) {
+		u16 = append(u16, byte(r), byte(r>>8))
+	}
+	for name, data := range map[string][]byte{"cp1251.srt": []byte(cp), "utf16.srt": u16, "bom.srt": append([]byte("\xef\xbb\xbf"), src...)} {
+		p := filepath.Join(t.TempDir(), name)
+		os.WriteFile(p, data, 0o644)
+		cues, err := tl.fileCues(context.Background(), p)
+		if err != nil || len(cues) != 1 || cues[0].Text != "Внешняя два" || cues[0].Start != 7 {
+			t.Errorf("%s: %+v %v", name, cues, err)
+		}
 	}
 }

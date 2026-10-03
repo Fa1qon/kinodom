@@ -25,12 +25,17 @@ func (t *tail) String() string { return strings.TrimSpace(string(t.b)) }
 
 // output — запустить bin и вернуть его вывод; процесс скрыт и в задании (не переживёт сервер).
 func (t Tools) output(ctx context.Context, bin string, args ...string) ([]byte, error) {
+	return t.outputIn(ctx, nil, bin, args...)
+}
+
+// outputIn — как output, stdin — вход процесса (nil — нет).
+func (t Tools) outputIn(ctx context.Context, stdin io.Reader, bin string, args ...string) ([]byte, error) {
 	cmd := exec.CommandContext(ctx, bin, args...)
 	hide(cmd)
 	cmd.WaitDelay = 2 * time.Second
 	var out bytes.Buffer
 	var errs tail
-	cmd.Stdout, cmd.Stderr = &out, &errs
+	cmd.Stdout, cmd.Stderr, cmd.Stdin = &out, &errs, stdin
 	if err := cmd.Start(); err != nil {
 		return nil, fmt.Errorf("%s не запустился: %w", baseOf(bin), err)
 	}
