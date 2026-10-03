@@ -2,6 +2,7 @@ package playback
 
 import (
 	"errors"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -70,5 +71,54 @@ func TestManagerSubsNotCounted(t *testing.T) {
 	}
 	if _, err := m.Acquire("subs", "a", noop); err != nil || !cancelled.Load() || m.Active() != 1 {
 		t.Fatalf("субтитры: %v %v %d", err, cancelled.Load(), m.Active())
+	}
+}
+
+// Перемотка и автоповтор одного плеера одновременно (ревью 18А, Important 1): из одновременных запусков одного sid
+// жить остаётся один, остальные отменены; предел считает его одним.
+func TestManagerConcurrentSameSid(t *testing.T) {
+	m := NewManager(3)
+	var mu sync.Mutex
+	alive := 0 // держат место и не отменены
+	acquire := func(sid string) {
+		cancelled := make(chan struct{})
+		var once sync.Once
+		rel, err := m.Acquire("video", sid, func() { once.Do(func() { close(cancelled) }) })
+		if err != nil {
+			return
+		}
+		mu.Lock()
+		alive++
+		mu.Unlock()
+		go func() { // «процесс» кончается после отмены
+			<-cancelled
+			time.Sleep(5 * time.Millisecond)
+			mu.Lock()
+			alive--
+			mu.Unlock()
+			rel()
+		}()
+	}
+	acquire("a")
+	var wg sync.WaitGroup
+	for range 10 {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			acquire("a")
+		}()
+	}
+	wg.Wait()
+	time.Sleep(200 * time.Millisecond)
+	mu.Lock()
+	n := alive
+	mu.Unlock()
+	if n != 1 || m.Active() != 1 {
+		t.Fatalf("живых процессов плеера a: %d, учтено %d — ждали 1 и 1", n, m.Active())
+	}
+	acquire("b")
+	acquire("c")
+	if _, err := m.Acquire("video", "d", noop); !errors.Is(err, ErrBusy) {
+		t.Fatalf("четвёртый плеер: %v", err)
 	}
 }
