@@ -2591,3 +2591,79 @@ for (const [got, want] of checks) {
 		t.Errorf("%v\n%s", err, out)
 	}
 }
+
+// Плеер фильмов в браузере (план 18Б): подписи и выбор дорожек по памяти раздачи, время, перемотка стрелками
+// (нажатия подряд — одна), адреса потока, разбор WebVTT кусками, ссылка внешнего плеера, где смотреть.
+func TestPultPlayerParts(t *testing.T) {
+	node := lookNode(t)
+	script := `
+import * as P from './views/player-parts.js';
+const eq = (got, want, what) => {
+  if (JSON.stringify(got) !== JSON.stringify(want)) {
+    console.error(what, JSON.stringify(got), '≠', JSON.stringify(want));
+    process.exitCode = 1;
+  }
+};
+const a = [{ id: 1, lang: 'rus', title: 'Дубляж', default: true }, { id: 2, lang: 'rus', title: 'LostFilm' }, { id: 3, lang: 'eng', title: '' }, { id: 4, lang: '', title: '' }];
+eq(a.map((t, i) => P.trackLabel(t, i)), ['Русский — Дубляж', 'Русский — LostFilm', 'Английский', 'Дорожка 4'], 'подписи');
+eq(P.trackLabel({ lang: 'rus', title: 'Русский' }, 0), 'Русский', 'название = язык');
+eq(P.trackLabel({ lang: 'fin', title: '' }, 0), 'FIN', 'неизвестный язык');
+eq(P.pickTrack(a, null).id, 1, 'без памяти — главная');
+eq(P.pickTrack(a, { title: 'LostFilm', lang: 'rus' }).id, 2, 'по названию');
+eq(P.pickTrack(a, { title: 'Кубик', lang: 'eng' }).id, 3, 'нет названия — по языку');
+eq(P.pickTrack([{ id: 7 }, { id: 8 }], { title: 'x', lang: 'y' }).id, 7, 'нет ни того ни другого, нет главной — первая');
+eq(P.pickTrack([], null), null, 'без звука');
+const s = [{ id: '3', lang: 'rus', title: 'Надписи' }, { id: '4', lang: 'eng', title: 'Full', image: true }, { id: 'f0', lang: 'eng', title: 'a.eng.srt' }];
+eq(P.textSubs(s).map((x) => x.id), ['3', 'f0'], 'картинки браузеру не показываем');
+eq(P.pickSub(s, null), null, 'без памяти — выключены');
+eq(P.pickSub(s, { off: true }), null, 'выключены помнятся');
+eq(P.pickSub(s, { title: 'a.eng.srt', lang: 'eng' }).id, 'f0', 'по названию');
+eq(P.pickSub(s, { title: 'другой', lang: 'eng' }).id, 'f0', 'по языку — только текстовые');
+eq([P.memOf(a[1]), P.memOf(null)], [{ title: 'LostFilm', lang: 'rus' }, { off: true }], 'память');
+eq([P.memKey('abc', 'audio'), P.readMem('{"title":"x"}'), P.readMem('мусор'), P.readMem(null)], ['player.audio.abc', { title: 'x' }, null, null], 'хранение');
+eq([P.fmtTime(0), P.fmtTime(65.9), P.fmtTime(3723), P.fmtTime(-5)], ['0:00', '1:05', '1:02:03', '0:00'], 'время');
+let st = P.seekStep(null, 10, 1000, 100);
+st = P.seekStep(st, 10, 1400, 105);
+eq(st, { target: 120, at: 1400 }, 'нажатия подряд складываются');
+eq(P.seekStep(st, -10, 2100, 130), { target: 120, at: 2100 }, 'после перерыва — от текущего места');
+eq([P.clampPos(-5, 100), P.clampPos(150, 100), P.clampPos(50, 100), P.clampPos(50, 0)], [0, 99, 50, 50], 'в пределах файла');
+eq(P.positionOf(1196.04, 3.5), 1199.54, 'место — кадр плюс время потока');
+eq(P.streamURL('library/7', 1196.04, { id: 2 }, 'abc'), '/play/library/7/stream.ts?t=1196.04&sid=abc&a=2', 'поток');
+eq(P.streamURL('library/7', 0, null, 'abc'), '/play/library/7/stream.ts?t=0&sid=abc', 'поток без звука');
+eq(P.subsURL('torrent/ab/1', { id: 'f0' }, 4, 'abc'), '/play/torrent/ab/1/subs/f0.vtt?t=4&sid=abc', 'субтитры');
+const sid = P.newSid(() => 0.5);
+eq([sid.length, /^[a-z0-9]+$/.test(sid)], [16, true], 'номер плеера');
+eq([P.canShow('avc1.640028', (t) => t === 'video/mp4; codecs="avc1.640028"'), P.canShow('', () => true), P.canShow('hvc1.1.6.L120.B0', () => false), P.canShow('avc1.640028', null)],
+  [true, false, false, false], 'покажет ли браузер');
+eq([P.reportDue(0, 10000), P.reportDue(5000, 14999)], [true, false], 'раз в 10 с');
+eq([P.reportBody(1200.04, 2559), P.reportBody(3000, 2559), P.reportBody(-1, 2559)],
+  [{ positionSec: 1200, durationSec: 2559 }, { positionSec: 2559, durationSec: 2559 }, { positionSec: 0, durationSec: 2559 }], 'тело отчёта');
+eq([P.vttTime('00:05.000'), P.vttTime('01:02:03.500'), P.vttTime('x')], [5, 3723.5, null], 'время WebVTT');
+const pr = P.cueParser();
+eq(pr.push('WEBVTT\n\n00:05.000 --> 00:06.500\nВто', false), [], 'неполная реплика ждёт');
+eq(pr.push('рая\n\n01:00:09.000 --> 01:00:10.500 align:start\nТретья\nстрока', false), [{ start: 5, end: 6.5, text: 'Вторая' }], 'реплика целиком');
+eq(pr.push('', true), [{ start: 3609, end: 3610.5, text: 'Третья\nстрока' }], 'конец потока — последняя');
+const info = { title: 'Полдень — 1×01', direct: 'http://192.168.0.26:8090/media/1/P.mkv?own=1', m3uUrl: 'http://192.168.0.26:8090/m3u/library/1.m3u8?start=690', startSec: 690 };
+eq(P.externalLink(info, 'Mozilla/5.0 (Windows NT 10.0)'), info.m3uUrl, 'ПК — .m3u8');
+eq(P.externalLink(info, 'Mozilla/5.0 (Linux; Android 14)'),
+  'intent://192.168.0.26:8090/media/1/P.mkv#Intent;scheme=http;type=video/*;package=org.videolan.vlc;l.position=690000;S.title=%D0%9F%D0%BE%D0%BB%D0%B4%D0%B5%D0%BD%D1%8C%20%E2%80%94%201%C3%9701;S.browser_fallback_url=http%3A%2F%2F192.168.0.26%3A8090%2Fm3u%2Flibrary%2F1.m3u8%3Fstart%3D690;end',
+  'Android — VLC с места, без own=1');
+eq([P.webPlayer({ transcoder: true }, null, null), P.webPlayer({ transcoder: true }, 'external', null), P.webPlayer({ transcoder: false }, 'web', null),
+  P.webPlayer(null, 'web', null), P.webPlayer({ transcoder: true }, 'web', {})], [true, false, false, false, false], 'где смотреть');
+eq([P.playHash('library/7', false), P.playHash('torrent/ab/1', true)], ['#/play/library/7', '#/play/torrent/ab/1?fromStart=1'], 'адрес страницы');
+const hx = 'a'.repeat(40);
+eq([P.srcOf(['library', '7']), P.srcOf(['torrent', hx.toUpperCase(), '2']), P.srcOf(['torrent', 'zz', '2']), P.srcOf(['library', '7', 'x']), P.srcOf([])],
+  ['library/7', 'torrent/' + hx + '/2', null, null, null], 'src из адреса');
+eq([P.backHash('library/7'), P.backHash('torrent/ab/1'), P.backHash(null)], ['#/library', '#/downloads', '#/downloads'], 'куда назад');
+eq([P.tapZone(10, 900), P.tapZone(450, 900), P.tapZone(800, 900)], [-10, 0, 10], 'двойное касание');
+eq([P.hideDue(true, 0, 3000, false), P.hideDue(true, 0, 2999, false), P.hideDue(false, 0, 9000, false), P.hideDue(true, 0, 9000, true)],
+  [true, false, false, false], 'прятать кнопки');
+eq([P.volumeStep(0.95, 0.1), P.volumeStep(0.05, -0.1), P.volumeStep(0.5, 0.1)], [1, 0, 0.6], 'громкость');
+eq([P.nearEnd(2540, 2559), P.nearEnd(1200, 2559), P.nearEnd(10, 0)], [true, false, false], 'конец файла, а не обрыв');
+`
+	cmd := exec.Command(node, "--input-type=module", "--no-warnings", "-e", script)
+	cmd.Dir = "static"
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Errorf("%v\n%s", err, out)
+	}
+}
