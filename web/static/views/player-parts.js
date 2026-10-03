@@ -15,12 +15,33 @@ export function trackLabel(t, i) {
   return lang || title || `Дорожка ${i + 1}`;
 }
 
-// pickTrack — озвучка по памяти раздачи: то же название, затем тот же язык; иначе главная, иначе первая.
+// CODECS — кодек дорожки для подписи.
+const CODECS = { ac3: 'AC3', eac3: 'E-AC3', dts: 'DTS', truehd: 'TrueHD', aac: 'AAC', mp3: 'MP3', flac: 'FLAC', opus: 'Opus', vorbis: 'Vorbis', alac: 'ALAC' };
+const CHANNELS = { 1: '1.0', 2: '2.0', 6: '5.1', 8: '7.1' };
+
+// trackLabels — подписи всех дорожек: одинаковые («Русский» и «Русский» у «Полдня», живая проверка 18Б) — с кодеком и
+// каналами («Русский · AC3 5.1»), и всё ещё одинаковые — с номером.
+export function trackLabels(tracks) {
+  const dup = (ls) => ls.map((l) => ls.filter((x) => x === l).length > 1);
+  const base = tracks.map((t, i) => trackLabel(t, i));
+  const d1 = dup(base);
+  const withCodec = base.map((l, i) => {
+    if (!d1[i]) return l;
+    const t = tracks[i];
+    const c = [CODECS[t.codec] || (t.codec || '').toUpperCase(), CHANNELS[t.channels] || ''].filter(Boolean).join(' ');
+    return c ? `${l} · ${c}` : l;
+  });
+  const d2 = dup(withCodec);
+  return withCodec.map((l, i) => (d2[i] ? `${l} · ${i + 1}` : l));
+}
+
+// pickTrack — озвучка по памяти раздачи: то же название, затем тот же язык и кодек, затем язык; иначе главная, иначе первая.
 export function pickTrack(tracks, mem) {
   if (!tracks || !tracks.length) return null;
   const byTitle = mem && mem.title ? tracks.find((x) => x.title === mem.title) : null;
+  const byCodec = mem && mem.lang && mem.codec ? tracks.find((x) => x.lang === mem.lang && x.codec === mem.codec) : null;
   const byLang = mem && mem.lang ? tracks.find((x) => x.lang === mem.lang) : null;
-  return byTitle || byLang || tracks.find((x) => x.default) || tracks[0];
+  return byTitle || byCodec || byLang || tracks.find((x) => x.default) || tracks[0];
 }
 
 // textSubs — субтитры, которые браузер покажет (не картинки).
@@ -35,9 +56,9 @@ export function pickSub(subs, mem) {
   return (mem.title && text.find((x) => x.title === mem.title)) || (mem.lang && text.find((x) => x.lang === mem.lang)) || null;
 }
 
-// memOf — что запомнить о выборе (null — субтитры выключены).
+// memOf — что запомнить о выборе (null — субтитры выключены); кодек — чтобы различить дорожки одного языка без названий.
 export function memOf(t) {
-  return t ? { title: t.title || '', lang: t.lang || '' } : { off: true };
+  return t ? { title: t.title || '', lang: t.lang || '', codec: t.codec || '' } : { off: true };
 }
 
 // memKey — ключ памяти выбора в браузере: по раздаче, отдельно озвучка и субтитры.
