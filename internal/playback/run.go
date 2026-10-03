@@ -94,5 +94,10 @@ func (t Tools) stream(ctx context.Context, args []string, stdin io.Reader, w io.
 	if werr != nil {
 		return fmt.Errorf("ffmpeg: %w: %s", werr, errs.String())
 	}
+	// Файл оборвался посреди (недокачанные куски, пропавший диск) — ffmpeg пишет «Error during demuxing» и выходит
+	// с 0 (ревью 18А, Important 2): это обрыв, а не конец.
+	if s := errs.String(); strings.Contains(s, "Error during demuxing") || strings.Contains(s, "I/O error") {
+		return fmt.Errorf("ffmpeg: файл не дочитан: %s", s)
+	}
 	return nil
 }

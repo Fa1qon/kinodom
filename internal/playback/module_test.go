@@ -3,6 +3,7 @@ package playback
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -48,6 +49,13 @@ func fixture(t *testing.T, res Resolver, ok bool) (*Module, *httptest.Server) {
 	mux := http.NewServeMux()
 	mux.Handle("GET /files/", http.StripPrefix("/files/", http.FileServer(http.Dir("testdata"))))
 	mux.HandleFunc("GET /stall/", func(w http.ResponseWriter, r *http.Request) { <-r.Context().Done() })
+	mux.HandleFunc("GET /holey/sample.mkv", func(w http.ResponseWriter, r *http.Request) {
+		data, _ := os.ReadFile(filepath.Join("testdata", "sample.mkv"))
+		http.ServeContent(w, r, "", time.Time{}, &holey{data: data, from: int64(len(data)) * 6 / 10, to: int64(len(data)) * 9 / 10})
+	})
+	mux.HandleFunc("GET /junk/x.mkv", func(w http.ResponseWriter, r *http.Request) {
+		http.ServeContent(w, r, "", time.Time{}, strings.NewReader(strings.Repeat("не видео ", 5000)))
+	})
 	srv := httptest.NewServer(mux)
 	t.Cleanup(srv.Close)
 	var tl Tools
@@ -243,4 +251,77 @@ func TestExternalSubs(t *testing.T) {
 		t.Errorf("%+v", got)
 	}
 	_ = os.Remove
+}
+
+// holey — файл с «дырой» [from, to): чтение оттуда — ошибка (недокачанные куски раздачи, пропавший диск).
+type holey struct {
+	data     []byte
+	from, to int64
+	pos      int64
+}
+
+func (h *holey) Read(p []byte) (int, error) {
+	if h.pos >= int64(len(h.data)) {
+		return 0, io.EOF
+	}
+	if h.pos >= h.from && h.pos < h.to {
+		return 0, errors.New("кусок не скачан")
+	}
+	end := int64(len(h.data))
+	if h.pos < h.from {
+		end = min(end, h.from)
+	}
+	n := copy(p, h.data[h.pos:end])
+	h.pos += int64(n)
+	return n, nil
+}
+
+func (h *holey) Seek(off int64, whence int) (int64, error) {
+	switch whence {
+	case io.SeekStart:
+		h.pos = off
+	case io.SeekCurrent:
+		h.pos += off
+	case io.SeekEnd:
+		h.pos = int64(len(h.data)) + off
+	}
+	return h.pos, nil
+}
+
+// Файл оборвался посреди (ревью 18А, Important 2): ffmpeg выходит с 0 и «Error during demuxing», а ответ должен
+// оборваться — иначе плеер примет обрыв за конец фильма («просмотрено», следующая серия).
+func TestStreamBrokenUpstream(t *testing.T) {
+	_, srv := fixture(t, fakeRes{path: "/holey/sample.mkv"}, true)
+	resp, err := (&http.Client{Timeout: 30 * time.Second}).Get(srv.URL + "/play/library/7/stream.ts?sid=p1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	b, rerr := io.ReadAll(resp.Body)
+	resp.Body.Close()
+	if resp.StatusCode == 200 && rerr == nil {
+		t.Fatalf("оборванный файл — ответ кончился штатно (%d байт): плеер решит, что фильм досмотрен", len(b))
+	}
+}
+
+// ffmpeg не смог начать (звука нет в сборке) — понятная ошибка, а не 200 с пустым телом (ревью 18А, Important 2).
+func TestStreamFailsBeforeOutput(t *testing.T) {
+	_, srv := fixture(t, fakeRes{path: "/files/adpcm.avi"}, true)
+	code, _, body := getBody(t, srv.URL+"/play/library/7/stream.ts?sid=p1")
+	if code == 200 || !strings.Contains(body, "Поток не запустился") || strings.Contains(body, "127.0.0.1") || strings.Contains(body, "ffmpeg") {
+		t.Errorf("ffmpeg не начал: %d %s", code, body)
+	}
+}
+
+// Тексты ошибок — без внутренних адресов и вывода ffmpeg (правило «без адресов», ревью 18А, Minor 4).
+func TestInfoErrorHidesInternals(t *testing.T) {
+	_, srv := fixture(t, fakeRes{path: "/junk/x.mkv"}, true)
+	code, _, body := getBody(t, srv.URL+"/api/v1/play/library/7")
+	if code != 422 || !strings.Contains(body, "Файл не читается") {
+		t.Fatalf("мусор вместо видео: %d %s", code, body)
+	}
+	for _, bad := range []string{"127.0.0.1", "http", "ffprobe", "exit status", "own=1"} {
+		if strings.Contains(body, bad) {
+			t.Errorf("в тексте ошибки — %q: %s", bad, body)
+		}
+	}
 }
