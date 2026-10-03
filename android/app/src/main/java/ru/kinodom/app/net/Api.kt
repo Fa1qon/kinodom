@@ -22,4 +22,24 @@ object Api {
             null
         }
     }
+
+    // put — PUT JSON (место просмотра, план 18В); удалось — true.
+    suspend fun put(base: String, path: String, json: String, timeoutMs: Int = 8000): Boolean = withContext(Dispatchers.IO) {
+        try {
+            val c = URL(base + "api/v1/" + path.removePrefix("/")).openConnection() as HttpURLConnection
+            c.connectTimeout = timeoutMs
+            c.readTimeout = timeoutMs
+            c.requestMethod = "PUT"
+            c.doOutput = true
+            c.setRequestProperty("Content-Type", "application/json")
+            try {
+                c.outputStream.use { it.write(json.toByteArray()) }
+                c.responseCode in 200..299
+            } finally {
+                c.disconnect()
+            }
+        } catch (e: Exception) {
+            false
+        }
+    }
 }
