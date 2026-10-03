@@ -9,6 +9,7 @@
   - JDK 17 и Android SDK с платформой 36;
   - переменные `JAVA_HOME` и `ANDROID_HOME` (их можно задать и для пользователя).
 - Node.js — только для тестов пульта.
+- ffmpeg для своего плеера уже собран и лежит в `third_party/ffmpeg`. Пересобрать его можно в Docker Desktop, команда — в [third_party/ffmpeg/README.md](third_party/ffmpeg/README.md).
 
 ## Сборка
 
@@ -17,6 +18,7 @@
 .\build.ps1 -Installer   # и установщик dist\Kinodom-<версия>-setup.exe
 ```
 
+- `build.ps1` кладёт рядом с программой `ffmpeg.exe` и `ffprobe.exe` из `third_party/ffmpeg`. Без них плеер в браузере выключен, а «Смотреть» открывает внешний плеер.
 - `kinodomw.exe` — та же программа без консоли. Ею Windows открывает ссылки `kinodom://` (плеер, «Разрешить доступ») и значок в трее.
 - Приложение Android подписывается ключом из `%USERPROFILE%\.kinodom`. Ключ создаёт `android\make-key.ps1` при первой сборке.
 - Сохраните эту папку: без того же ключа новую версию приложения не поставить поверх старой.
