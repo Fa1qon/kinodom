@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"sort"
 	"strings"
 )
 
@@ -243,11 +244,10 @@ var subtitleExt = map[string]bool{".srt": true, ".ass": true, ".ssa": true, ".su
 // subsDirs — папки субтитров рядом с видео.
 var subsDirs = map[string]bool{"subs": true, "subtitles": true, "sub": true, "субтитры": true}
 
-// removeSidecars — субтитры удалённых видео videos: файлы, чьё имя начинается с имени видео без расширения и
-// точки («Сериал.S01E01.rus.srt»), в папке видео и в её «Subs»/«Subtitles». Не по всей папке сериала: там
-// может лежать раздача Kinodom другого сериала или «Extras» с тем же именем серии (ревью 15Б, Important 1).
-// Удалённые — в ответе.
-func removeSidecars(videos []string, remove func(string) error) []string {
+// findSidecars — субтитры и спутники видео videos: файлы, чьё имя начинается с имени видео без расширения и точки
+// («Сериал.S01E01.rus.srt»), в папке видео и в её «Subs»/«Subtitles». Не по всей папке сериала: там может лежать
+// раздача Kinodom другого сериала или «Extras» с тем же именем серии (ревью 15Б, Important 1). По порядку пути.
+func findSidecars(videos []string) []string {
 	stems := map[string][]string{} // папка видео → основы имён его видео
 	dirs := map[string]string{}    // где искать → папка видео, чьи основы там ищутся
 	for _, v := range videos {
@@ -274,13 +274,22 @@ func removeSidecars(videos []string, remove func(string) error) []string {
 			name := strings.ToLower(e.Name())
 			for _, s := range stems[pathKey(owner)] {
 				if strings.HasPrefix(name, s) {
-					p := filepath.Join(at, e.Name())
-					if remove(p) == nil {
-						out = append(out, p)
-					}
+					out = append(out, filepath.Join(at, e.Name()))
 					break
 				}
 			}
+		}
+	}
+	sort.Strings(out)
+	return out
+}
+
+// removeSidecars — удалить субтитры удалённых видео videos (findSidecars); удалённые — в ответе.
+func removeSidecars(videos []string, remove func(string) error) []string {
+	var out []string
+	for _, p := range findSidecars(videos) {
+		if remove(p) == nil {
+			out = append(out, p)
 		}
 	}
 	return out

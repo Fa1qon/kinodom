@@ -168,16 +168,20 @@ func (s *Service) handleWatch(w http.ResponseWriter, r *http.Request) {
 // writePrepareError — ответ на неудачный выбор файла: такой раздачи или файла нет, списка файлов
 // ещё нет, мало места.
 func writePrepareError(w http.ResponseWriter, err error) {
+	httpx.WriteError(w, prepareCode(err), err.Error())
+}
+
+// prepareCode — код ответа на неудачный выбор файла (и у «Смотреть», и у своего плеера — PlaySource).
+func prepareCode(err error) int {
 	switch {
 	case errors.Is(err, ErrNotOpen), errors.Is(err, ErrNoSuchFile):
-		httpx.WriteError(w, http.StatusNotFound, err.Error())
+		return http.StatusNotFound
 	case errors.Is(err, ErrNoInfo):
-		httpx.WriteError(w, http.StatusConflict, err.Error())
+		return http.StatusConflict
 	case errors.Is(err, ErrLowSpace):
-		httpx.WriteError(w, http.StatusInsufficientStorage, err.Error())
-	default:
-		httpx.WriteError(w, http.StatusInternalServerError, err.Error())
+		return http.StatusInsufficientStorage
 	}
+	return http.StatusInternalServerError
 }
 
 // handleM3U — плейлист файла для плеера на устройстве без Kinodom (основная спека, раздел 14):

@@ -120,5 +120,7 @@ func (a *App) statusFields(ctx context.Context) (map[string]any, error) {
 		"disk":    disk,
 		"streams": streamsStatus{Count: a.Power.Active(), DownloadSpeed: down, UploadSpeed: up},
 		"iptv":    a.IPTV.Status(),
+		// Свой плеер в браузере (цикл 18): ffmpeg рядом с программой.
+		"transcoder": a.Playback != nil && a.Playback.Available(),
 	}, nil
 }
