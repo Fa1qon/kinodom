@@ -197,10 +197,16 @@ export function externalLink(info, ua) {
     + (info.startSec > 0 ? `l.position=${info.startSec * 1000};` : '') + tail;
 }
 
-// webPlayer — «Смотреть» открывает плеер в браузере: не в приложении (bridge), у сервера есть ffmpeg, на этом
-// устройстве не выбран внешний плеер (choice — «Параметры» → «На этом устройстве»).
-export function webPlayer(status, choice, bridge) {
-  return !bridge && !!(status && status.transcoder) && choice !== 'external';
+// watchTarget — куда «Смотреть»: 'app' — экран плеера приложения (мост с playMovie, выбран встроенный, план 18В),
+// 'web' — плеер в браузере (не приложение, на этом устройстве не выбран внешний плеер), 'external' — как раньше.
+// Без ffmpeg на сервере (status.transcoder) — всегда как раньше: сведения о файле отдаёт он.
+export function watchTarget(status, choice, bridge) {
+  if (!(status && status.transcoder)) return 'external';
+  if (bridge) {
+    const ok = typeof bridge.playMovie === 'function' && typeof bridge.moviePlayer === 'function' && bridge.moviePlayer() === 'builtin';
+    return ok ? 'app' : 'external';
+  }
+  return choice === 'external' ? 'external' : 'web';
 }
 
 // playHash — адрес страницы плеера.

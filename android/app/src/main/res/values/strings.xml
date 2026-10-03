@@ -24,4 +24,19 @@
     <string name="no_channel">Нет канала %1$s</string>
     <string name="voice_prompt">Скажите, что найти</string>
     <string name="channel_list">Список</string>
+    <string name="movie_loading">Загрузка</string>
+    <string name="movie_pause">Пауза</string>
+    <string name="movie_play">Смотреть</string>
+    <string name="movie_audio">Озвучка</string>
+    <string name="movie_subs">Субтитры</string>
+    <string name="movie_subs_off">Выключены</string>
+    <string name="movie_next">Следующая серия</string>
+    <string name="movie_next_in">Следующая: %1$s — через %2$d с</string>
+    <string name="movie_cancel">Отмена</string>
+    <string name="movie_cant_show">Телевизор не покажет этот файл</string>
+    <string name="movie_broken">Поток оборвался</string>
+    <string name="movie_busy">Сейчас смотрят на трёх устройствах — закройте один плеер</string>
+    <string name="movie_no_info">Сведения о файле не пришли</string>
+    <string name="movie_vlc">Открыть в VLC</string>
+    <string name="movie_back">Назад</string>
 </resources>
