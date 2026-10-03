@@ -34,7 +34,9 @@ func NewManager(max int) *Manager { return &Manager{max: max, runs: map[string]*
 func (m *Manager) Acquire(kind, sid string, cancel context.CancelFunc) (func(), error) {
 	key := kind + "/" + sid
 	m.mu.Lock()
-	if old := m.runs[key]; old != nil {
+	// Пока у плеера есть процесс этого вида — отменить и дождаться. В цикле: одновременные запуски одного плеера
+	// (перемотка поверх автоповтора) ждут друг друга, и живым остаётся один (ревью 18А, Important 1).
+	for old := m.runs[key]; old != nil; old = m.runs[key] {
 		m.mu.Unlock()
 		old.cancel()
 		select {
@@ -42,6 +44,9 @@ func (m *Manager) Acquire(kind, sid string, cancel context.CancelFunc) (func(), 
 		case <-time.After(3 * time.Second):
 		}
 		m.mu.Lock()
+		if m.runs[key] == old {
+			delete(m.runs, key) // не дождались — место всё равно забираем
+		}
 	}
 	if kind == "video" {
 		n := 0
