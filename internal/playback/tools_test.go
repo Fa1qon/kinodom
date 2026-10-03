@@ -53,6 +53,8 @@ func TestBundledBuild(t *testing.T) {
 	for _, c := range []struct{ flag, want string }{
 		{"-encoders", " aac "}, {"-encoders", " webvtt "}, {"-encoders", " subrip "},
 		{"-decoders", " ac3 "}, {"-decoders", " eac3 "}, {"-decoders", " dca "}, {"-decoders", " truehd "},
+		// ревью 18А: mov_text (компонент «movtext» — неверное имя configure молча пропускал), звук ALAC и WMA
+		{"-decoders", " mov_text "}, {"-decoders", " alac "}, {"-decoders", " wmav2 "}, {"-decoders", " wmapro "},
 		{"-muxers", " mpegts "}, {"-muxers", " matroska "}, {"-muxers", " webvtt "},
 		{"-demuxers", " matroska,webm "}, {"-demuxers", " avi "}, {"-protocols", "http"},
 	} {
