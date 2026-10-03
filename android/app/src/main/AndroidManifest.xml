@@ -13,6 +13,8 @@
 
     <!-- Выбор файла логотипа в пульте: видимость приложений выбора (Android 11+). -->
     <queries>
+        <!-- «Открыть в VLC» из плеера фильмов (план 18В): с Android 11 без этого VLC приложению не виден (ревью 18В). -->
+        <package android:name="org.videolan.vlc" />
         <!-- голосовой поиск: системное распознавание речи (план 17В) -->
         <intent>
             <action android:name="android.speech.action.RECOGNIZE_SPEECH" />
