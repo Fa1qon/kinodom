@@ -246,6 +246,42 @@ export function nearEnd(pos, dur) {
   return dur > 0 && pos >= dur - 30;
 }
 
+// STALL_MS — mpegts.js шлёт статистику каждые 0,6 с, пока загрузка жива; полный буфер MSE останавливает загрузку насовсем
+// и статистику тоже (ревью 18Б, C1). Медленная раздача шлёт статистику и с нулевой скоростью — её не трогаем.
+export const STALL_MS = 4000;
+
+// loaderStalled — смотрим, а статистики давно нет: загрузка встала, поток — заново с того же места.
+export function loaderStalled(lastStat, now, playing) {
+  return playing && now - lastStat >= STALL_MS;
+}
+
+// playButton — вид кнопки по состоянию видео: отказ автозапуска не даёт события pause (ревью 18Б, I1).
+export function playButton(paused) {
+  return paused ? { icon: 'play_arrow', label: 'Смотреть' } : { icon: 'pause', label: 'Пауза' };
+}
+
+// TOUCH_MOUSE_MS — Chrome шлёт мышиные события (mousemove, click, dblclick) вслед за касанием; в это окно они — не мышь
+// (ревью 18Б, I2, I3).
+export const TOUCH_MOUSE_MS = 800;
+
+export function fromTouch(now, lastTouch) {
+  return now - lastTouch < TOUCH_MOUSE_MS;
+}
+
+// positionNow — место в файле сейчас: на долгой паузе — где остановились; пока поток с нового места запускается — куда
+// идём (ревью 18Б, I5); иначе — кадр начала потока плюс время потока.
+export function positionNow({ parkedAt, pendingAt, k, currentTime }) {
+  if (parkedAt >= 0) return parkedAt;
+  if (pendingAt >= 0) return pendingAt;
+  return positionOf(k, currentTime);
+}
+
+// shouldReport — сообщать ли место: только когда что-то посмотрели (иначе «Продолжить» и сразу «Назад» сдвигали место
+// назад, ревью 18Б, Minor 8) или досмотрели до конца.
+export function shouldReport(played, final) {
+  return played || final;
+}
+
 // NEXT_AFTER — отсчёт до следующей серии, с (спека 18, 5.5).
 export const NEXT_AFTER = 10;
 

@@ -12,6 +12,7 @@ import (
 // Media — что в файле: длительность, видео, озвучки, субтитры (спека 18, 3.2).
 type Media struct {
 	Duration float64
+	BitRate  int64 // бит/с всего файла; 0 — неизвестно
 	Video    Video
 	Audio    []Track
 	Subs     []Sub
@@ -68,6 +69,7 @@ type probeJSON struct {
 	} `json:"streams"`
 	Format struct {
 		Duration string `json:"duration"`
+		BitRate  string `json:"bit_rate"`
 	} `json:"format"`
 }
 
@@ -89,6 +91,7 @@ func parseProbe(b []byte) (Media, error) {
 	}
 	m := Media{Video: Video{ID: -1}}
 	m.Duration, _ = strconv.ParseFloat(p.Format.Duration, 64)
+	m.BitRate, _ = strconv.ParseInt(p.Format.BitRate, 10, 64)
 	for _, s := range p.Streams {
 		switch s.CodecType {
 		case "video":
