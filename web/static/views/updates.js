@@ -3,7 +3,7 @@
 import { h, fill, icon, poll, keepFocus, day, openPlayer, store, thumb as thumbOf } from '../ui.js';
 import { get, post, del } from '../api.js';
 import { playerLink } from './release.js';
-import { webPlayer, playHash } from './player-parts.js';
+import { watchTarget, playHash } from './player-parts.js';
 import { appBridge } from './tvkit.js';
 
 // updateLabel — «Холод — 1×07–1×08», «Холод — Раздача снята с трекера».
@@ -41,10 +41,13 @@ export function render(root, r, ctx) {
   ctx.listeners.add(onStatus);
 
   async function watch(u) {
-    if (webPlayer(ctx.status, store.get('moviePlayer'), appBridge())) { // плеер в браузере (план 18Б)
-      ctx.go(playHash(`torrent/${u.hash}/${u.files[0].index}`, false));
+    const to = watchTarget(ctx.status, store.get('moviePlayer'), appBridge()); // свой плеер (планы 18Б, 18В)
+    const src = `torrent/${u.hash}/${u.files[0].index}`;
+    if (to === 'web') {
+      ctx.go(playHash(src, false));
       return;
     }
+    if (to === 'app' && appBridge().playMovie(src, false)) return;
     busy = u.id;
     draw();
     try {
