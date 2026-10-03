@@ -167,3 +167,15 @@ func TestFileCuesEncodings(t *testing.T) {
 		}
 	}
 }
+
+// Субтитры mov_text из MP4 (ревью 18А, Important 4): декодер в сборке есть, реплики приходят.
+func TestMovTextSubs(t *testing.T) {
+	tl := tools(t)
+	var b bytes.Buffer
+	if err := tl.stream(context.Background(), subsArgs(filepath.Join("testdata", "movtext.mp4"), 0, "1"), nil, &b); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(b.String(), "Вторая реплика") {
+		t.Errorf("mov_text:\n%s", b.String())
+	}
+}
