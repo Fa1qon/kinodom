@@ -340,3 +340,17 @@ func TestMediaLead(t *testing.T) {
 		t.Errorf("поправка не больше 2 %%: %+v", fs)
 	}
 }
+
+// Чтение своего плеера (own=1) — не угадывание места: точное место плеер пришлёт сам (спека 18, раздел 4).
+func TestMediaOwnPlayerNotTracked(t *testing.T) {
+	quick(t)
+	e, file, unit, _ := withFile(t, "film.mkv", make([]byte, 1000))
+	get(t, mediaMux(e.l), mediaURL(file, "film.mkv")+"?own=1", fromPhone, "Range", "bytes=0-499")
+	e.clk.add(time.Second)
+	e.l.tracker.Tick(e.clk.now())
+	e.clk.add(time.Minute)
+	e.l.tracker.Tick(e.clk.now())
+	if fs, _ := e.hist.Files(ctx, "192.168.0.50", "lib-"+strconv.FormatInt(unit, 10)); len(fs) != 0 {
+		t.Errorf("own=1 попало в историю: %+v", fs)
+	}
+}
