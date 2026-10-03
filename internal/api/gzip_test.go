@@ -53,6 +53,7 @@ func TestGzipSkips(t *testing.T) {
 		{"пересылка", "/api/v1/iptv/relay?s=1&u=x&sig=y", "text/plain", "gzip", "", "", 200, text},
 		{"файл медиатеки", "/media/1/a.srt", "text/plain", "gzip", "", "", 200, text},
 		{"плейлист", "/m3u/library/a.m3u", "text/plain", "gzip", "", "", 200, text},
+		{"поток своего плеера", "/play/library/1/subs/3.vtt", "text/plain", "gzip", "", "", 200, text}, // по мере показа (план 18А)
 		{"картинка", "/img/x", "image/jpeg", "gzip", "", "", 200, text},
 		{"не текст", "/app/kinodom.apk", "application/vnd.android.package-archive", "gzip", "", "", 200, text},
 		{"уже сжат", "/api/v1/x", "application/json", "gzip", "", "br", 200, text},

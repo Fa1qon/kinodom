@@ -26,6 +26,8 @@ if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 go build -trimpath -ldflags "-H windowsgui -X main.version=$version -X main.gui=1" -o bin\kinodomw.exe .\cmd\kinodom
 if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 Write-Host "bin\kinodom.exe, bin\kinodomw.exe ($version)"
+# Свой плеер (план 18А): урезанный ffmpeg — рядом с kinodom.exe, там его ищет сервер.
+Copy-Item third_party\ffmpeg\ffmpeg.exe, third_party\ffmpeg\ffprobe.exe bin\ -Force
 
 # Приложение для Android: версия — как у сервера, номер сборки — число коммитов; подпись — ключ из
 # %USERPROFILE%\.kinodom (make-key.ps1 создаёт его при первой сборке). Нет JDK или SDK — без APK.

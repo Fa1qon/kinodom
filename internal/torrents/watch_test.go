@@ -253,3 +253,18 @@ func TestTailReadNotWatched(t *testing.T) {
 		}
 	}
 }
+
+// Чтение своего плеера (own=1) — не угадывание места (спека 18, раздел 4).
+func TestOwnPlayerNotTracked(t *testing.T) {
+	quickWatch(t, 0)
+	fw := &fakeWatch{dur: map[string]float64{}}
+	_, srv, ih, _ := streamFixtureWith(t, "film.mkv", 300_000, func(s *Service) { s.SetWatchTracker(fw) })
+	url := srv.URL + "/stream/" + ih.HexString() + "/0/film.mkv"
+	getRange(t, url+"?own=1", "bytes=0-99999")
+	time.Sleep(1500 * time.Millisecond) // трекер тикает раз в секунду; сеанс кончился бы через 300 мс и был бы сообщён
+	if r := fw.snapshot(); len(r) != 0 {
+		t.Errorf("own=1 попало в историю: %v", r)
+	}
+	getRange(t, url, "bytes=0-99999") // то же без own=1 — место есть: трекер в этой обвязке работает
+	waitUntil(t, "место обычного чтения", func() bool { return len(fw.snapshot()) > 0 })
+}
