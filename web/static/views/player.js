@@ -265,10 +265,12 @@ export function render(root, r, ctx) {
 
   function openMenu(kind) {
     if (!info) return;
+    const subs = P.textSubs(info.subs);
+    const labels = P.trackLabels(kind === 'audio' ? info.audio : subs);
     const items = kind === 'audio'
-      ? info.audio.map((t, i) => ({ label: P.trackLabel(t, i), on: t === audio, pick: () => setAudio(t) }))
+      ? info.audio.map((t, i) => ({ label: labels[i], on: t === audio, pick: () => setAudio(t) }))
       : [{ label: 'Выключены', on: !sub, pick: () => setSub(null) },
-        ...P.textSubs(info.subs).map((x, i) => ({ label: P.trackLabel(x, i), on: x === sub, pick: () => setSub(x) }))];
+        ...subs.map((x, i) => ({ label: labels[i], on: x === sub, pick: () => setSub(x) }))];
     menu = kind;
     menuBox.replaceChildren(h('div', { class: 'pl-menu-h' }, kind === 'audio' ? 'Озвучка' : 'Субтитры'),
       ...items.map((it, i) => h('button', { class: it.on ? 'pl-item on' : 'pl-item', type: 'button', role: 'menuitemradio',

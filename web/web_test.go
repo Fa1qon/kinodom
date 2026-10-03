@@ -2619,7 +2619,15 @@ eq(P.pickSub(s, null), null, 'без памяти — выключены');
 eq(P.pickSub(s, { off: true }), null, 'выключены помнятся');
 eq(P.pickSub(s, { title: 'a.eng.srt', lang: 'eng' }).id, 'f0', 'по названию');
 eq(P.pickSub(s, { title: 'другой', lang: 'eng' }).id, 'f0', 'по языку — только текстовые');
-eq([P.memOf(a[1]), P.memOf(null)], [{ title: 'LostFilm', lang: 'rus' }, { off: true }], 'память');
+eq([P.memOf(a[1]), P.memOf(null)], [{ title: 'LostFilm', lang: 'rus', codec: '' }, { off: true }], 'память');
+// Живая проверка 18Б: у «Полдня» две дорожки «Русский» без названий — подписи различаются кодеком и каналами, память —
+// с кодеком (иначе при следующем открытии бралась первая «Русский»).
+const polden = [{ id: 1, lang: 'rus', title: '', codec: 'ac3', channels: 6, default: true }, { id: 2, lang: 'rus', title: '', codec: 'eac3', channels: 6 }];
+eq(P.trackLabels(polden), ['Русский · AC3 5.1', 'Русский · E-AC3 5.1'], 'одинаковые подписи — с кодеком');
+eq(P.trackLabels([polden[0], { ...polden[0], id: 3 }]), ['Русский · AC3 5.1 · 1', 'Русский · AC3 5.1 · 2'], 'и кодек одинаковый — с номером');
+eq(P.trackLabels(a), ['Русский — Дубляж', 'Русский — LostFilm', 'Английский', 'Дорожка 4'], 'разные — как есть');
+eq(P.memOf(polden[1]), { title: '', lang: 'rus', codec: 'eac3' }, 'память с кодеком');
+eq(P.pickTrack(polden, P.memOf(polden[1])).id, 2, 'тот же язык — по кодеку');
 eq([P.memKey('abc', 'audio'), P.readMem('{"title":"x"}'), P.readMem('мусор'), P.readMem(null)], ['player.audio.abc', { title: 'x' }, null, null], 'хранение');
 eq([P.fmtTime(0), P.fmtTime(65.9), P.fmtTime(3723), P.fmtTime(-5)], ['0:00', '1:05', '1:02:03', '0:00'], 'время');
 let st = P.seekStep(null, 10, 1000, 100);
