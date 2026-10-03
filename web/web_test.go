@@ -2684,3 +2684,17 @@ func TestPultPlayerWired(t *testing.T) {
 		t.Error("preview.js: loadLib не экспортирован")
 	}
 }
+
+// «Смотреть» во всех трёх местах сначала спрашивает webPlayer (план 18Б), «Параметры» — карточка «На этом
+// устройстве» (выбор хранится в браузере, ключ moviePlayer).
+func TestPultWatchGoesToPlayer(t *testing.T) {
+	src := scripts(t)
+	for _, f := range []string{"views/release.js", "views/updates.js", "views/library-card.js"} {
+		if !strings.Contains(src[f], "webPlayer(ctx.status, store.get('moviePlayer'), appBridge())") || !strings.Contains(src[f], "playHash(") {
+			t.Errorf("%s: «Смотреть» не ведёт в плеер в браузере", f)
+		}
+	}
+	if s := src["views/settings-params.js"]; !strings.Contains(s, "'На этом устройстве'") || !strings.Contains(s, "store.set('moviePlayer'") {
+		t.Error("settings-params.js: нет карточки «На этом устройстве»")
+	}
+}
