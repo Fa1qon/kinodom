@@ -99,3 +99,19 @@ func TestVTT(t *testing.T) {
 		t.Errorf("во времени файла:\n%q", s)
 	}
 }
+
+// Ревью 18Б, C1: запас потока — по объёму, а не по секундам: на 40 Мбит/с минута запаса — 300 МБ, больше, чем MSE
+// браузера держит (~150 МБ), и загрузка встаёт. Около 64 МБ, но не меньше 10 с и не больше 60 с.
+func TestBurstFor(t *testing.T) {
+	for _, c := range []struct {
+		bits int64
+		want int
+	}{{0, 60}, {5_000_000, 60}, {20_000_000, 27}, {40_000_000, 13}, {100_000_000, 10}} {
+		if got := burstFor(c.bits); got != c.want {
+			t.Errorf("burstFor(%d) = %d, ждали %d", c.bits, got, c.want)
+		}
+	}
+	if a := streamArgs(streamOpts{Input: "x", Video: 0, Format: "ts", Burst: 27}); !pair(a, "-readrate_initial_burst", "27") {
+		t.Errorf("запас из сведений: %v", a)
+	}
+}

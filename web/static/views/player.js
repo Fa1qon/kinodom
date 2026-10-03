@@ -29,6 +29,10 @@ export function render(root, r, ctx) {
   let parkTimer = 0;
   let parkedAt = -1; // поток остановлен на долгой паузе — место, с которого продолжить
   let tapTimer = 0;
+  let lastTouch = 0; // последнее касание: мышиные события вслед за ним — не мышь
+  let lastStat = 0; // последняя статистика mpegts.js: нет дольше STALL_MS при просмотре — загрузка встала
+  let pendingAt = -1; // поток с этого места запускается
+  let played = false; // что-то посмотрели — можно сообщать место
   let lastTap = 0;
 
   const video = h('video', { class: 'pl-video', playsinline: true });
@@ -39,7 +43,7 @@ export function render(root, r, ctx) {
   const bar = h('input', { class: 'pl-bar', type: 'range', min: '0', max: '0', step: '1', value: '0', 'aria-label': 'Место', 'data-key': 'pl-bar' });
   const time = h('div', { class: 'pl-time' }, '0:00 / 0:00');
   const btn = (name, label, key, onclick) => h('button', { class: 'sq pl-btn', type: 'button', 'aria-label': label, title: label, 'data-key': key, onclick }, icon(name));
-  const playBtn = btn('pause', 'Пауза', 'pl-play', () => togglePause());
+  const playBtn = btn('play_arrow', 'Смотреть', 'pl-play', () => togglePause());
   const audioBtn = btn('audiotrack', 'Озвучка', 'pl-audio', () => openMenu('audio'));
   const subsBtn = btn('subtitles', 'Субтитры', 'pl-subs', () => openMenu('subs'));
   const nextBtn = btn('skip_next', 'Следующая серия', 'pl-next', () => goNext());
@@ -66,7 +70,7 @@ export function render(root, r, ctx) {
   muteBtn.replaceChildren(icon(video.muted ? 'volume_off' : 'volume_up'));
 
   const dur = () => (info ? info.durationSec : 0);
-  const pos = () => (parkedAt >= 0 ? parkedAt : P.positionOf(k, video.currentTime));
+  const pos = () => P.positionNow({ parkedAt, pendingAt, k, currentTime: video.currentTime });
 
   async function begin() {
     if (!src) return fail('Такого файла нет', false);
@@ -100,6 +104,8 @@ export function render(root, r, ctx) {
     const n = ++starting;
     stop();
     parkedAt = -1;
+    pendingAt = Math.max(at, 0);
+    showTime(pendingAt);
     msg.hidden = true;
     load.hidden = false;
     let t = 0;
@@ -113,17 +119,39 @@ export function render(root, r, ctx) {
     }
     if (!alive || n !== starting) return;
     k = t;
+    pendingAt = -1;
     showTime(k);
+    // Позади держим 10–30 с (по умолчанию 2–3 мин — лишнее место в MSE, ревью 18Б).
     mp = mpegts.createPlayer({ type: 'mpegts', isLive: false, url: P.streamURL(src, k, audio, sid) },
-      { enableWorker: false, enableStashBuffer: false, lazyLoad: false, autoCleanupSourceBuffer: true });
+      { enableWorker: false, enableStashBuffer: false, lazyLoad: false, autoCleanupSourceBuffer: true,
+        autoCleanupMaxBackwardDuration: 30, autoCleanupMinBackwardDuration: 10 });
     mp.on(mpegts.Events.ERROR, (type, detail, data) => onError(data));
+    mp.on(mpegts.Events.STATISTICS_INFO, () => { lastStat = Date.now(); });
+    lastStat = Date.now();
     mp.attachMediaElement(video);
     mp.load();
     video.play().catch(() => {
-      load.hidden = true; // без жеста пользователя со звуком не играет — кнопка «Смотреть» (Review Focus 1)
+      if (!alive || n !== starting) return; // старый запуск — не трогать новый
+      // Без жеста пользователя со звуком не играет: «Загрузка» прочь, кнопка — «Смотреть», долгая пауза — как у паузы
+      // (иначе поток копится в браузере, ревью 18Б, I1).
+      load.hidden = true;
+      syncPlayBtn();
+      armPark();
       showUI();
     });
     startSubs();
+  }
+
+  function syncPlayBtn() {
+    const b = P.playButton(video.paused || !mp);
+    playBtn.replaceChildren(icon(b.icon));
+    playBtn.setAttribute('aria-label', b.label);
+    playBtn.title = b.label;
+  }
+
+  function armPark() {
+    clearTimeout(parkTimer);
+    parkTimer = setTimeout(park, P.PARK_AFTER);
   }
 
   function stop() {
@@ -178,6 +206,7 @@ export function render(root, r, ctx) {
   }
 
   function onError(data) {
+    report(); // место — до перезапуска или сообщения (ревью 18Б, I4)
     if (data && data.code === 429) return fail('Сейчас смотрят на трёх устройствах — закройте один плеер', true);
     if (!retried) {
       retried = true;
@@ -197,9 +226,18 @@ export function render(root, r, ctx) {
     msg.querySelector('button').focus({ preventScroll: true });
   }
 
-  function openExternal() {
-    if (ctx.local && info.launchUrl) openPlayer(info.launchUrl, info.m3uUrl, ctx.status && ctx.status.protocol);
-    else location.href = P.externalLink(info, navigator.userAgent);
+  // openExternal — внешний плеер с того места, где оборвалось: место — серверу, ссылки — свежие (в первых сведениях — место
+  // открытия страницы, ревью 18Б, I4).
+  async function openExternal() {
+    let at = info;
+    try {
+      await report();
+      at = await get(`/play/${src}`);
+    } catch {
+      // сервер не ответил — ссылки первых сведений
+    }
+    if (ctx.local && at.launchUrl) openPlayer(at.launchUrl, at.m3uUrl, ctx.status && ctx.status.protocol);
+    else location.href = P.externalLink(at, navigator.userAgent);
   }
 
   function showTime(t) {
@@ -228,10 +266,10 @@ export function render(root, r, ctx) {
 
   // report — место серверу (спека 18, раздел 4).
   function report(final = false) {
-    if (!info || !(dur() > 0) || (!mp && parkedAt < 0 && !final)) return;
+    if (!info || !(dur() > 0) || !P.shouldReport(played, final) || (!mp && parkedAt < 0 && pendingAt < 0 && !final)) return Promise.resolve();
     lastReport = Date.now();
     const body = P.reportBody(final ? dur() : pos(), dur());
-    fetch(`/api/v1/history/${encodeURIComponent(info.hash)}/${info.index}`, {
+    return fetch(`/api/v1/history/${encodeURIComponent(info.hash)}/${info.index}`, {
       method: 'PUT', keepalive: true, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body),
     }).catch(() => {});
   }
@@ -240,6 +278,10 @@ export function render(root, r, ctx) {
     if (!info || !msg.hidden) return;
     if (parkedAt >= 0) {
       start(parkedAt);
+      return;
+    }
+    if (video.paused && mp && Date.now() - lastStat >= P.STALL_MS) {
+      start(pos()); // на паузе буфер переполнился, загрузка встала (ревью 18Б, C1)
       return;
     }
     if (video.paused) video.play().catch(() => {});
@@ -415,35 +457,34 @@ export function render(root, r, ctx) {
   video.addEventListener('waiting', () => { load.hidden = false; });
   video.addEventListener('play', () => {
     clearTimeout(parkTimer);
-    playBtn.replaceChildren(icon('pause'));
-    playBtn.setAttribute('aria-label', 'Пауза');
+    syncPlayBtn();
   });
   video.addEventListener('pause', () => {
-    playBtn.replaceChildren(icon('play_arrow'));
-    playBtn.setAttribute('aria-label', 'Смотреть');
-    if (mp) report();
+    syncPlayBtn();
+    if (!alive || !mp) return; // пауза от stop() при уходе или перезапуске — не пауза человека
+    report();
     showUI();
-    clearTimeout(parkTimer);
-    parkTimer = setTimeout(park, P.PARK_AFTER);
+    armPark();
   });
   video.addEventListener('timeupdate', () => {
     if (seek || !mp) return;
+    if (video.currentTime > 0.5) played = true;
     showTime(pos());
     if (video.currentTime > 30) retried = false;
     if (!video.paused && P.reportDue(lastReport, Date.now())) report();
   });
   video.addEventListener('ended', onEnded);
-  video.addEventListener('click', (e) => {
-    if (e.pointerType && e.pointerType !== 'mouse') return; // касание — ниже
-    togglePause();
+  // Касание — ниже (pointerup); мышиные click и dblclick, которые Chrome шлёт вслед за касанием, — не мышь (ревью 18Б, I3).
+  video.addEventListener('click', () => {
+    if (!P.fromTouch(Date.now(), lastTouch)) togglePause();
   });
-  video.addEventListener('dblclick', (e) => {
-    if (e.pointerType && e.pointerType !== 'mouse') return;
-    toggleFull();
+  video.addEventListener('dblclick', () => {
+    if (!P.fromTouch(Date.now(), lastTouch)) toggleFull();
   });
   video.addEventListener('pointerup', (e) => {
     if (e.pointerType === 'mouse') return;
     const now = Date.now();
+    lastTouch = now;
     const zone = P.tapZone(e.offsetX, video.clientWidth);
     clearTimeout(tapTimer);
     if (now - lastTap < 300 && zone) {
@@ -457,7 +498,9 @@ export function render(root, r, ctx) {
       else wrap.classList.add('idle');
     }, 300);
   });
-  wrap.addEventListener('mousemove', showUI);
+  wrap.addEventListener('mousemove', () => {
+    if (!P.fromTouch(Date.now(), lastTouch)) showUI(); // mousemove вслед за касанием сразу показывал кнопки (ревью 18Б, I2)
+  });
   bar.addEventListener('input', () => {
     dragging = true;
     time.textContent = `${P.fmtTime(Number(bar.value))} / ${P.fmtTime(dur())}`;
@@ -471,8 +514,12 @@ export function render(root, r, ctx) {
   window.addEventListener('pagehide', onHide);
   document.addEventListener('fullscreenchange', onFull);
   const idle = setInterval(() => {
-    if (P.hideDue(!video.paused, lastActivity, Date.now(), !!menu || dragging)) wrap.classList.add('idle');
-  }, 500);
+    const now = Date.now();
+    if (P.hideDue(!video.paused, lastActivity, now, !!menu || dragging)) wrap.classList.add('idle');
+    // Смотрим, а статистики mpegts.js давно нет — полный буфер MSE остановил загрузку насовсем: заново с того же места,
+    // повтор не тратится (ревью 18Б, C1).
+    if (mp && msg.hidden && nextBox.hidden && P.loaderStalled(lastStat, now, !video.paused)) start(pos());
+  }, 1000);
 
   begin();
 
