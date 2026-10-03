@@ -158,8 +158,52 @@ func fail(w http.ResponseWriter, err error) {
 	case errors.Is(err, context.DeadlineExceeded):
 		httpx.WriteError(w, http.StatusGatewayTimeout, "Сведения о файле не пришли — раздача ещё качается? Попробуйте через минуту")
 	default:
-		httpx.WriteError(w, http.StatusUnprocessableEntity, "Файл не читается: "+err.Error())
+		// Подробности (адреса, вывод ffmpeg) — в журнал, не человеку (правило «без адресов», ревью 18А).
+		httpx.WriteError(w, http.StatusUnprocessableEntity, "Файл не читается этим плеером")
 	}
+}
+
+// lazyWriter — ответ потока: заголовки уходят с первым байтом ffmpeg. Не начал — ещё можно ответить ошибкой; начал
+// и оборвался — ответ обрывается (ревью 18А, Important 2).
+type lazyWriter struct {
+	w       http.ResponseWriter
+	ct      string
+	started bool
+}
+
+func (l *lazyWriter) Write(p []byte) (int, error) {
+	if !l.started {
+		l.started = true
+		l.w.Header().Set("Content-Type", l.ct)
+		l.w.Header().Set("Cache-Control", "no-store")
+		l.w.WriteHeader(http.StatusOK)
+	}
+	return l.w.Write(p)
+}
+
+func (l *lazyWriter) Flush() {
+	if f, ok := l.w.(http.Flusher); ok && l.started {
+		f.Flush()
+	}
+}
+
+// pipe — отдать вывод ffmpeg ответом; ошибка до первого байта — 502 с понятным текстом, после — обрыв ответа:
+// плеер увидит обрыв, а не конец фильма (ревью 18А, Important 2).
+func (m *Module) pipe(ctx context.Context, w http.ResponseWriter, ct string, args []string, stdin io.Reader, what string, ref Ref) {
+	lw := &lazyWriter{w: w, ct: ct}
+	err := m.o.Tools.stream(ctx, args, stdin, lw)
+	if err == nil {
+		if !lw.started && ctx.Err() == nil {
+			httpx.WriteError(w, http.StatusBadGateway, "Поток не запустился — файл не читается этим плеером")
+		}
+		return
+	}
+	m.o.Log.Warn(what+" оборвался", "src", ref.Src(), "err", err)
+	if !lw.started {
+		httpx.WriteError(w, http.StatusBadGateway, "Поток не запустился — файл не читается этим плеером")
+		return
+	}
+	panic(http.ErrAbortHandler)
 }
 
 // input — адрес файла для ffmpeg: через этот сервер, чтение — не в угадывание места (own=1).
@@ -329,12 +373,7 @@ func (m *Module) stream(format string) handler {
 		if format == "mkv" {
 			ct = "video/x-matroska"
 		}
-		w.Header().Set("Content-Type", ct)
-		w.Header().Set("Cache-Control", "no-store")
-		w.WriteHeader(http.StatusOK)
-		if err := m.o.Tools.stream(ctx, streamArgs(o), stdin, w); err != nil {
-			m.o.Log.Warn("поток плеера оборвался", "src", ref.Src(), "err", err)
-		}
+		m.pipe(ctx, w, ct, streamArgs(o), stdin, "поток плеера", ref)
 	}
 }
 
@@ -416,12 +455,7 @@ func (m *Module) subs(w http.ResponseWriter, r *http.Request, ref Ref) {
 		return
 	}
 	defer release()
-	w.Header().Set("Content-Type", "text/vtt; charset=utf-8")
-	w.Header().Set("Cache-Control", "no-store")
-	w.WriteHeader(http.StatusOK)
-	if err := m.o.Tools.stream(ctx, subsArgs(m.input(s), t, sub.ID), nil, w); err != nil {
-		m.o.Log.Warn("субтитры плеера оборвались", "src", ref.Src(), "err", err)
-	}
+	m.pipe(ctx, w, "text/vtt; charset=utf-8", subsArgs(m.input(s), t, sub.ID), nil, "поток субтитров", ref)
 }
 
 // fileCues — реплики файла субтитров рядом с видео: из памяти (10 мин) или один проход ffmpeg.
