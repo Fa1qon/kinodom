@@ -63,10 +63,12 @@ func (s *Service) StreamHandler() http.Handler {
 		w.Header().Set("Content-Type", ct) // иначе ServeContent стал бы угадывать тип по байтам
 		var body io.ReadSeeker = rd
 		if s.watch != nil { // место по чтению — в историю устройства (спека этапа 8, раздел 7.2)
-			var done func()
-			body, done = s.tracker.Wrap(watch.Key{Device: httpx.Device(r), Hash: ih.HexString(), Index: index}, f.Length(), rd)
-			defer done()
 			s.learnDuration(ih, index, f)
+			if !httpx.OwnPlayer(r) { // свой плеер сообщает место сам (спека цикла 18, раздел 4)
+				var done func()
+				body, done = s.tracker.Wrap(watch.Key{Device: httpx.Device(r), Hash: ih.HexString(), Index: index}, f.Length(), rd)
+				defer done()
+			}
 		}
 		http.ServeContent(w, r, "", time.Time{}, body)
 	})

@@ -1,11 +1,13 @@
 // Карточка медиатеки (спека этапа 9, раздел 6.2): постер, описание, рейтинги; «Смотреть» /
 // «Продолжить»; у сериала — сезоны и серии с отметками этого устройства; версии («Есть дубли»);
 // правки из домашней сети — «Это другой фильм», «Разметить вручную», «Перенести в категорию».
-import { h, fill, icon, keepFocus, rating, size, openPlayer, poll, ready, confirmDialog } from '../ui.js';
+import { h, fill, icon, keepFocus, rating, size, openPlayer, poll, ready, confirmDialog, store } from '../ui.js';
 import { get, put, del } from '../api.js';
 import { whereStopped, resumeIndex } from './history.js';
 import { libPoster, continueLabel } from './library-parts.js';
 import { skippedText } from './downloads.js';
+import { webPlayer, playHash } from './player-parts.js';
+import { appBridge } from './tvkit.js';
 
 // deleteRequest — «Удалить» версии карточки (план 14В): скачанное — как в «Загрузках» (вся раздача), своё —
 // файл или папка с диска через медиатеку. {path, text} — запрос и вопрос подтверждения.
@@ -75,6 +77,10 @@ export function libraryPlayerLink(res, hasNext, ua = navigator.userAgent) {
 
 // playFile — «Смотреть» файл медиатеки: на этом ПК — плеер ссылкой kinodom://, иначе — VLC или .m3u8.
 export async function playFile(file, ctx, fromStart = false, hasNext = true) {
+  if (webPlayer(ctx.status, store.get('moviePlayer'), appBridge())) { // плеер в браузере (план 18Б)
+    location.hash = playHash(`library/${file}`, fromStart);
+    return null;
+  }
   const res = await get(`/library/files/${file}/play` + (fromStart ? '?fromStart=1' : ''));
   if (ctx.local && res.launchUrl) openPlayer(res.launchUrl, res.m3uUrl, ctx.status && ctx.status.protocol);
   else location.href = libraryPlayerLink(res, hasNext);

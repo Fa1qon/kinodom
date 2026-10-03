@@ -19,7 +19,7 @@ var gzipTypes = map[string]bool{
 
 // gzipSkip — пути, которые не трогаются вовсе: потоки и пересылка (Flush, Range), файлы медиатеки, плейлисты
 // плееров, картинки, APK.
-var gzipSkip = []string{"/stream/", "/media/", "/m3u/", "/api/v1/iptv/relay", "/api/v1/iptv/streams/", "/img/", "/logo/", "/app/"}
+var gzipSkip = []string{"/stream/", "/media/", "/m3u/", "/api/v1/iptv/relay", "/api/v1/iptv/streams/", "/img/", "/logo/", "/app/", "/play/"}
 
 // gzipMin — меньше не сжимается: заголовки и сжатие дороже выигрыша.
 const gzipMin = 1024
