@@ -80,6 +80,7 @@ class MoviePlayerActivity : Activity() {
     private var decided = false // дорожки выбраны для текущего источника
     private var retried = false
     private var resumeAt = -1.0 // откуда начать, когда источник откроется
+    private var openSeq = 0 // номер открытия: ответ ключевого кадра прежнего открытия не перебивает новое (быстрые ⏩)
     private var hold: Hold? = null
     private var holdTime = 0L
     private var row = 0 // фокус в кнопках: 0 — шкала, 1 — ряд кнопок
@@ -312,6 +313,7 @@ class MoviePlayerActivity : Activity() {
     private fun open(at: Double) {
         val i = info ?: return
         val p = player ?: return
+        val n = ++openSeq
         decided = false
         box.visibility = View.GONE
         load.visibility = View.VISIBLE
@@ -334,6 +336,7 @@ class MoviePlayerActivity : Activity() {
                 return@launch
             }
             val pl = player ?: return@launch
+            if (n != openSeq) return@launch // уже открыли с другого места
             k = kf
             resumeAt = -1.0
             val s = sub?.takeIf { !it.image }?.id
@@ -394,7 +397,7 @@ class MoviePlayerActivity : Activity() {
             buttons[0].setText(if (isPlaying) R.string.movie_pause else R.string.movie_play)
             if (!isPlaying) {
                 report()
-                showControls(true)
+                if (box.visibility != View.VISIBLE) showControls(true) // за окном «Следующая» или ошибки — без кнопок
             } else {
                 scheduleHide()
             }
@@ -607,11 +610,9 @@ class MoviePlayerActivity : Activity() {
     }
 
     override fun dispatchKeyEvent(event: KeyEvent): Boolean {
+        // «Назад» — только системой (OnBackInvokedCallback, onBackPressed): свой разбор KEYCODE_BACK вызывал back() дважды —
+        // при показанных кнопках одно нажатие закрывало плеер (живая проверка 18В).
         if (box.visibility == View.VISIBLE || menu.shown) {
-            if (event.keyCode == KeyEvent.KEYCODE_BACK && event.action == KeyEvent.ACTION_UP) {
-                back()
-                return true
-            }
             return super.dispatchKeyEvent(event) // стрелки и OK — по кнопкам окна и пунктам меню
         }
         val code = event.keyCode
@@ -663,17 +664,8 @@ class MoviePlayerActivity : Activity() {
             KeyEvent.KEYCODE_MEDIA_FAST_FORWARD -> { seekTo(pos() + 30); return true }
             KeyEvent.KEYCODE_MEDIA_REWIND -> { seekTo(pos() - 10); return true }
             KeyEvent.KEYCODE_MEDIA_NEXT -> { if (info?.nextSrc != null) goNext(); return true }
-            KeyEvent.KEYCODE_BACK -> return true // по отпусканию — back()
         }
         return super.dispatchKeyEvent(event)
-    }
-
-    override fun onKeyUp(keyCode: Int, event: KeyEvent): Boolean {
-        if (keyCode == KeyEvent.KEYCODE_BACK) {
-            back()
-            return true
-        }
-        return super.onKeyUp(keyCode, event)
     }
 
     private fun moveCol(dir: Int) {
