@@ -2667,3 +2667,20 @@ eq([P.nearEnd(2540, 2559), P.nearEnd(1200, 2559), P.nearEnd(10, 0)], [true, fals
 		t.Errorf("%v\n%s", err, out)
 	}
 }
+
+// Страница плеера подключена (план 18Б): маршрут play, значки кнопок плеера — в icons.js.
+func TestPultPlayerWired(t *testing.T) {
+	src := scripts(t)
+	if !strings.Contains(src["app.js"], "import * as player from './views/player.js';") || !strings.Contains(src["app.js"], "play: player") ||
+		!strings.Contains(src["app.js"], "classList.toggle('playing'") {
+		t.Error("app.js: нет маршрута play или класса playing")
+	}
+	for _, name := range []string{"arrow_back", "fast_rewind", "fast_forward", "audiotrack", "subtitles", "skip_next", "volume_up", "volume_off", "fullscreen", "fullscreen_exit"} {
+		if !strings.Contains(src["icons.js"], "  "+name+": '") {
+			t.Errorf("icons.js: нет %s", name)
+		}
+	}
+	if !strings.Contains(src["views/preview.js"], "export function loadLib(") {
+		t.Error("preview.js: loadLib не экспортирован")
+	}
+}

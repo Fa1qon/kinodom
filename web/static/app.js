@@ -21,10 +21,11 @@ import * as settingsUnrecognized from './views/settings-unrecognized.js';
 import * as settingsApp from './views/settings-app.js';
 import * as setup from './views/setup.js';
 import * as updates from './views/updates.js';
+import * as player from './views/player.js';
 import { settingsRoute } from './views/settings-layout.js';
 
 // views — экраны по первой части адреса; у «Настроек» — по второй.
-const views = { catalog, release, search, downloads, channels, channel, history, library, setup, updates };
+const views = { catalog, release, search, downloads, channels, channel, history, library, setup, updates, play: player };
 const settingsViews = { status: settingsStatus, params: settingsParams, sections: settingsSections, iptv: settingsIPTV, unrecognized: settingsUnrecognized,
   library: settingsLibrary, app: settingsApp };
 
@@ -101,6 +102,7 @@ function setMenu(open) {
 
 // updateHeader — выбранный раздел и жёлтый значок у «Настроек», если есть хоть одна проблема.
 function updateHeader(r) {
+  document.body.classList.toggle('playing', r.parts[0] === 'play'); // плеер — во всё окно, без шапки (план 18Б)
   const current = { release: 'catalog', channel: 'channels' }[r.parts[0]] || r.parts[0];
   navLinks.catalog.href = defaultRoute();
   for (const [id, a] of Object.entries(navLinks)) {
