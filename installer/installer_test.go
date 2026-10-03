@@ -29,6 +29,9 @@ func TestInstallerScript(t *testing.T) {
 		// Android SDK — без него.
 		`Source: "..\bin\kinodom.apk"; DestDir: "{app}"; Flags: ignoreversion skipifsourcedoesntexist`,
 		`Source: "..\bin\kinodom.apk.json"; DestDir: "{app}"; Flags: ignoreversion skipifsourcedoesntexist`,
+		// Свой плеер — урезанный ffmpeg рядом с программой (план 18А).
+		`Source: "..\bin\ffmpeg.exe"; DestDir: "{app}"; Flags: ignoreversion`,
+		`Source: "..\bin\ffprobe.exe"; DestDir: "{app}"; Flags: ignoreversion`,
 		"function PrepareToInstall",
 		"Exec(Exe, 'stop'",
 		"'install ' + InstallParams(",
