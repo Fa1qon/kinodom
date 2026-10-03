@@ -6,6 +6,8 @@ import { get, post, put, del } from '../api.js';
 import { whereStopped, resumeIndex } from './history.js';
 import { poster, returnTo } from './catalog.js';
 import { trackerTags, trackerLabel, backTo } from './search.js';
+import { webPlayer, playHash } from './player-parts.js';
+import { appBridge } from './tvkit.js';
 
 const PENDING_FOR = 120000; // догрузку страницы раздачи ждём не дольше 2 минут (трекер мог лечь)
 const POSTER_FOR = 60000; // постер после страницы — не дольше минуты: сервер пробует его раз в минуту (спека 11b, 14.2)
@@ -432,6 +434,11 @@ export function render(root, r, ctx) {
   // watch — «Смотреть»: фокус загрузки на этот файл и плеер. На этом ПК — ссылка kinodom://, на
   // других устройствах — .m3u8 (спека этапа 7, раздел 6.3).
   async function watch(f, fromStart = false) {
+    // Плеер в браузере (план 18Б): файл выберет и место найдёт страница плеера.
+    if (webPlayer(ctx.status, store.get('moviePlayer'), appBridge())) {
+      ctx.go(playHash(`torrent/${rel.hash}/${f.index}`, fromStart));
+      return;
+    }
     busy = true;
     actionError = '';
     chosen = f.index;
