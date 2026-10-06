@@ -24,6 +24,7 @@ var required = []string{
 	"views/settings-layout.js", "views/settings-status.js", "views/settings-params.js", "views/settings-sections.js", "views/updates.js",
 	"views/channels.js", "views/channel.js", "views/channel-settings.js", "views/tvkit.js", "views/settings-iptv.js", "views/settings-unrecognized.js",
 	"views/history.js", "views/library.js", "views/library-card.js", "views/library-parts.js", "views/catalog-parts.js", "views/settings-library.js", "views/folders.js", "views/setup.js",
+	"views/help.js",
 }
 
 // scripts — все модули пульта.
@@ -923,8 +924,8 @@ const checks = [
   [defaultVersion({ lastVersion: 0, versions: [{ unit: 10, source: 'Фильмы' }, { unit: 11, source: 'Скачано' }] }), 11],
   [defaultVersion({ lastVersion: 99, versions: [{ unit: 10, source: 'Фильмы' }] }), 10],
   [libraryPlayerLink(res, true, 'Mozilla/5.0 (Windows NT 10.0)'), res.m3uUrl],
-  [libraryPlayerLink(res, true, android).startsWith('intent://192.168.0.2:8090/m3u/library/7.m3u8?start=600#Intent;scheme=http;type=audio/x-mpegurl;package=org.videolan.vlc;'), true],
-  [libraryPlayerLink(res, false, android).startsWith('intent://192.168.0.2:8090/media/7/film.mkv#Intent;scheme=http;type=video/*;package=org.videolan.vlc;l.position=600000;'), true],
+  [libraryPlayerLink(res, true, android).startsWith('intent://192.168.0.2:8090/m3u/library/7.m3u8?start=600#Intent;scheme=http;type=audio/x-mpegurl;'), true],
+  [libraryPlayerLink(res, false, android).startsWith('intent://192.168.0.2:8090/media/7/film.mkv#Intent;scheme=http;type=video/*;l.position=600000;'), true],
 ];
 for (const [got, want] of checks) {
   if (got !== want) {
@@ -1006,6 +1007,21 @@ for (const [got, want] of checks) {
 	cmd.Dir = "static"
 	if out, err := cmd.CombinedOutput(); err != nil {
 		t.Errorf("%v\n%s", err, out)
+	}
+	// Мастер собирает всё нужное сразу: поиск Jacred, все разделы по умолчанию, папка загрузок.
+	// Справка «?» — в шапке пульта.
+	src := scripts(t)
+	for file, needles := range map[string][]string{
+		"views/setup.js": {"search: { address:", "Разделы каталога", "encodeGroups(groups, sel)", "Папка загрузок",
+			"storage: { downloadsDir: dir }", "все ${ids.length}", "Promise.allSettled"},
+		"views/help.js": {"Как пользоваться Kinodom", "С пульта ТВ", "Плеер канала", "openModal"},
+		"app.js":        {"openHelp", "help_outline", "'data-key': 'help'"},
+	} {
+		for _, needle := range needles {
+			if !strings.Contains(src[file], needle) {
+				t.Errorf("%s: нет %q", file, needle)
+			}
+		}
 	}
 }
 
@@ -1501,7 +1517,7 @@ body.append(root);
 const stop = render(root, { parts: ['release', '7'], query: new URLSearchParams() }, { canEdit: true, listeners: new Set(), status: null, go() {}, refreshStatus() {} });
 await new Promise((r) => setTimeout(r, 300));
 const text = root.textContent;
-if (!text.includes('Скачать') || text.includes('null')) {
+if (!text.includes('Смотреть') || text.includes('Скачать') || text.includes('null')) {
   console.error('текст экрана:', text);
   process.exitCode = 1;
 }
@@ -2665,7 +2681,7 @@ eq(pr.push('', true), [{ start: 3609, end: 3610.5, text: 'Третья\nстро
 const info = { title: 'Полдень — 1×01', direct: 'http://192.168.0.26:8090/media/1/P.mkv?own=1', m3uUrl: 'http://192.168.0.26:8090/m3u/library/1.m3u8?start=690', startSec: 690 };
 eq(P.externalLink(info, 'Mozilla/5.0 (Windows NT 10.0)'), info.m3uUrl, 'ПК — .m3u8');
 eq(P.externalLink(info, 'Mozilla/5.0 (Linux; Android 14)'),
-  'intent://192.168.0.26:8090/media/1/P.mkv#Intent;scheme=http;type=video/*;package=org.videolan.vlc;l.position=690000;S.title=%D0%9F%D0%BE%D0%BB%D0%B4%D0%B5%D0%BD%D1%8C%20%E2%80%94%201%C3%9701;S.browser_fallback_url=http%3A%2F%2F192.168.0.26%3A8090%2Fm3u%2Flibrary%2F1.m3u8%3Fstart%3D690;end',
+  'intent://192.168.0.26:8090/media/1/P.mkv#Intent;scheme=http;type=video/*;l.position=690000;S.title=%D0%9F%D0%BE%D0%BB%D0%B4%D0%B5%D0%BD%D1%8C%20%E2%80%94%201%C3%9701;S.browser_fallback_url=http%3A%2F%2F192.168.0.26%3A8090%2Fm3u%2Flibrary%2F1.m3u8%3Fstart%3D690;end',
   'Android — VLC с места, без own=1');
 eq([P.watchTarget({ transcoder: true }, null, null), P.watchTarget({ transcoder: true }, 'external', null), P.watchTarget({ transcoder: false }, 'web', null),
   P.watchTarget(null, 'web', null), P.watchTarget({ transcoder: true }, 'web', {})], ['web', 'external', 'external', 'external', 'external'], 'где смотреть');
@@ -2713,8 +2729,17 @@ func TestPultWatchGoesToPlayer(t *testing.T) {
 			t.Errorf("%s: «Смотреть» не ведёт в плеер в браузере", f)
 		}
 	}
-	if s := src["views/settings-params.js"]; !strings.Contains(s, "'На этом устройстве'") || !strings.Contains(s, "store.set('moviePlayer'") {
-		t.Error("settings-params.js: нет карточки «На этом устройстве»")
+	if s := src["views/settings-params.js"]; !strings.Contains(s, "store.set('moviePlayer'") || !strings.Contains(s, "movie-player") {
+		t.Error("settings-params.js: нет общей настройки режима воспроизведения")
+	}
+	// Единая кнопка «Смотреть» активна, даже когда списка файлов ещё нет (страница Rutracker его не
+	// отдаёт): нажатие добавляет раздачу и запускает первый готовый файл (ревью 2026-10-06).
+	if s := src["views/release.js"]; !strings.Contains(s, "disabled: busy || waiting, 'data-key': 'watch'") ||
+		!strings.Contains(s, "onclick: () => watchOrPrepare(target)") {
+		t.Error("release.js: «Смотреть» не активна до списка файлов")
+	}
+	if strings.Contains(src["views/release.js"], "|| !target") {
+		t.Error("release.js: «Смотреть» выключена, пока списка файлов нет")
 	}
 }
 
@@ -2748,7 +2773,58 @@ if (got !== want) {
 			t.Errorf("%s: «Смотреть» не спрашивает watchTarget или не зовёт playMovie", f)
 		}
 	}
-	if !strings.Contains(src["views/settings-app.js"], "'Плеер фильмов'") {
-		t.Error("settings-app.js: нет «Плеер фильмов»")
+	if !strings.Contains(src["views/settings-app.js"], "'Плеер фильмов и каналов'") {
+		t.Error("settings-app.js: нет «Плеер фильмов и каналов»")
+	}
+}
+func TestPultPlayerSplitModesAndEpisodeControls(t *testing.T) {
+	src := scripts(t)
+	checks := map[string][]string{
+		"views/settings-params.js": {"movie-player", "channel-player", "store.set('moviePlayer'", "store.set('channelPlayer'"},
+		"views/settings-app.js":    {"moviePlaybackMode", "channelPlaybackMode", "Плеер фильмов", "Плеер каналов"},
+		"views/player.js":          {"pl-prev", "pl-next", "ArrowUp", "ArrowDown", "pl-bar"},
+	}
+	for file, needles := range checks {
+		for _, needle := range needles {
+			if !strings.Contains(src[file], needle) {
+				t.Errorf("%s: нет %q", file, needle)
+			}
+		}
+	}
+}
+
+// Полноэкранный плеер канала — один движок с окном проверки источников (план 2026-10-06, Task A):
+// attach из preview.js, а не свой плеер; переключение каналов, передача, метрики; DASH — не молча,
+// внешней кнопкой; список — запомненный экрана «Каналы»; уход разбирает плеер и клавиатуру.
+func TestPultChannelPlayerUnified(t *testing.T) {
+	src := scripts(t)
+	if !strings.Contains(src["views/preview.js"], "export async function attach(") {
+		t.Error("preview.js: attach не экспортирован — движка не два?")
+	}
+	cp := src["views/channel-player.js"]
+	for _, needle := range []string{
+		"from './preview.js'",
+		"attach(video",
+		"playerKind(x) !== 'dash'",
+		"cp-external",
+		"channelPlayerLink",
+		"listFor(startKey)",
+		"loadChannel(idx + dir)",
+		"previewStats",
+		"hhmm(",
+		"removeEventListener('keydown'",
+		"session.destroy()",
+	} {
+		if !strings.Contains(cp, needle) {
+			t.Errorf("views/channel-player.js: нет %q", needle)
+		}
+	}
+	for _, banned := range []string{"new Hls(", "mpegts.createPlayer("} {
+		if strings.Contains(cp, banned) {
+			t.Errorf("views/channel-player.js: свой плеер (%s) вместо общего attach", banned)
+		}
+	}
+	if !strings.Contains(src["app.js"], "'channel-play': channelPlayer") {
+		t.Error("app.js: маршрут channel-play не зарегистрирован")
 	}
 }
