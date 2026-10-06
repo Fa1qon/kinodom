@@ -29,11 +29,13 @@ func TestInstallerScript(t *testing.T) {
 		// Android SDK — без него.
 		`Source: "..\bin\kinodom.apk"; DestDir: "{app}"; Flags: ignoreversion skipifsourcedoesntexist`,
 		`Source: "..\bin\kinodom.apk.json"; DestDir: "{app}"; Flags: ignoreversion skipifsourcedoesntexist`,
-		// Свой плеер — урезанный ffmpeg рядом с программой (план 18А).
+		// Свой плеер — урезанный ffmpeg рядом с программой (план 18А); libvpx и libopus — перекод видео.
 		`Source: "..\bin\ffmpeg.exe"; DestDir: "{app}"; Flags: ignoreversion`,
 		`Source: "..\bin\ffprobe.exe"; DestDir: "{app}"; Flags: ignoreversion`,
-		// LGPL: текст лицензии и откуда исходники — рядом с ffmpeg (ревью 18А).
+		// LGPL и лицензии компонентов (BSD): тексты и откуда исходники — рядом с ffmpeg (ревью 18А).
 		`Source: "..\third_party\ffmpeg\LICENSE.LGPLv2.1.txt"; DestDir: "{app}"; DestName: "ffmpeg-LICENSE.LGPLv2.1.txt"; Flags: ignoreversion`,
+		`Source: "..\third_party\ffmpeg\LICENSE.vpx.txt"; DestDir: "{app}"; DestName: "ffmpeg-LICENSE.vpx.txt"; Flags: ignoreversion`,
+		`Source: "..\third_party\ffmpeg\LICENSE.opus.txt"; DestDir: "{app}"; DestName: "ffmpeg-LICENSE.opus.txt"; Flags: ignoreversion`,
 		`Source: "..\third_party\ffmpeg\README.md"; DestDir: "{app}"; DestName: "ffmpeg-README.md"; Flags: ignoreversion`,
 		"function PrepareToInstall",
 		"stop --program-dir ",

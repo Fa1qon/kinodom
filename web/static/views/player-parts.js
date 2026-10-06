@@ -110,6 +110,11 @@ export function streamURL(src, k, audio, sid) {
   return `/play/${src}/stream.ts?t=${t3(k)}&sid=${sid}` + (audio ? `&a=${audio.id}` : '');
 }
 
+// webmStreamURL — то же для видео, которое браузер не показывает: сервер переводит его в VP8 + Opus.
+export function webmStreamURL(src, k, audio, sid) {
+  return `/play/${src}/stream.webm?t=${t3(k)}&sid=${sid}` + (audio ? `&a=${audio.id}` : '');
+}
+
 // subsURL — субтитры сервера с кадра k (время реплик — время файла).
 export function subsURL(src, sub, k, sid) {
   return `/play/${src}/subs/${encodeURIComponent(sub.id)}.vtt?t=${t3(k)}&sid=${sid}`;
