@@ -531,8 +531,9 @@ func (a *App) handleDownload(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var req struct {
-		File *int `json:"file"`
-		From *int `json:"from"`
+		File    *int  `json:"file"`
+		From    *int  `json:"from"`
+		Prepare *bool `json:"prepare"` // единая кнопка «Смотреть»: пульт сам начнёт просмотр, когда файл придёт
 	}
 	if !httpx.ReadJSON(w, r, &req) {
 		return
