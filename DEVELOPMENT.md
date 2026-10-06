@@ -70,6 +70,7 @@ Kinodom — одна программа на Go, `kinodom.exe`. Она рабо�
 - Мост `KinodomApp`: версия, обновление с сервера, встроенный или системный плеер каналов, `canPickFiles(тип)` — есть ли на устройстве выбор файла. Пульт в приложении умеет выбирать файлы (`<input type=file>`) и показывать видео во весь экран (WebChromeClient).
 - Свой плеер каналов: листание, набор номера, список с передачами.
 - Сервер ищется по SSDP или вводится адресом.
+- **Сервер на устройстве** (полный порт): тот же сервер собран под android/arm64 — `build.ps1` кладёт его в `jniLibs` как `libkinodomserver.so`, Android распаковывает в `nativeLibraryDir`, откуда приложение запускает его процессом (`LocalServerProcess`). Данные — в `filesDir/kinodom`, пульт — `127.0.0.1:8190`, куча сервера ограничена `GOMEMLIMIT`. Windows-пакеты (служба, трей, Edge, реестр) под `go:build windows`; на Android у них заглушки той же формы. ffprobe/ffmpeg для устройства — `third_party/ffmpeg/build-android.sh` (NDK).
 
 ## Установщик: `installer`
 
