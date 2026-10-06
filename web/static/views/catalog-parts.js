@@ -126,7 +126,9 @@ export function openFilters({ trackers = [], sections = [], orders = [] }) {
     close();
   };
   const row = (kind, it) => h('a', {
-    class: it.on ? 'drow on' : 'drow', href: it.href, 'data-key': `${kind}-${it.id}`, 'aria-current': it.on ? 'true' : null,
+    class: (it.on ? 'drow on' : 'drow') + (it.count === 0 ? ' empty' : ''),
+    href: it.href, 'data-key': `${kind}-${it.id}`, 'aria-current': it.on ? 'true' : null,
+    title: it.count === 0 ? 'Раздел выбран — раздачи ещё не получены' : null,
     onclick: pick(kind, it),
   }, h('span', { class: 'ellipsis' }, it.name), it.bad ? icon('warning', 18, 'Есть проблемы') : null);
   const block = (title, items) => (items.length ? [h('div', { class: 'dtitle' }, title), ...items] : []);

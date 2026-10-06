@@ -332,8 +332,10 @@ func (c *Catalog) handleSections(w http.ResponseWriter, r *http.Request) {
 	httpx.WriteJSON(w, http.StatusOK, out)
 }
 
-// trackerSections — разделы трекера, в которых есть раздачи, в порядке настройки и дерева. У Rutracker —
-// с группой, в порядке групп и дерева (спека 11b, 7.1); раздел вне групп — в конце, без группы.
+// trackerSections — включённые разделы трекера в порядке настройки и дерева; у тех, куда ещё не дошло
+// обновление, Count 0 — панель показывает их приглушёнными (иначе выбор человека «пропадает», пока
+// каталог качает новые разделы). У Rutracker — с группой, в порядке групп и дерева (спека 11b, 7.1);
+// раздел вне групп — в конце, без группы.
 func (c *Catalog) trackerSections(ctx context.Context, tracker string) ([]SectionInfo, error) {
 	cats, err := c.Categories(ctx)
 	if err != nil {
@@ -341,7 +343,7 @@ func (c *Catalog) trackerSections(ctx context.Context, tracker string) ([]Sectio
 	}
 	out := []SectionInfo{}
 	for _, cat := range cats {
-		if cat.Tracker == tracker && cat.Count > 0 {
+		if cat.Tracker == tracker {
 			out = append(out, SectionInfo{ID: cat.ID, Name: cat.Name, Count: cat.Count})
 		}
 	}

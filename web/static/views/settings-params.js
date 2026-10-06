@@ -174,7 +174,7 @@ export function render(root, r, ctx) {
               field('Раздача, МБ/с', 'upload', upload)),
             uploadHint,
             field('Серий позади при нехватке места', 'keepBehind', input('keepBehind', String(v.storage.keepBehind), { inputmode: 'numeric' }))),
-          deviceCard(),
+          deviceCards(),
           h('div', { class: 'card' }, h('div', { class: 'h' }, 'Плеер'), players, errs.player),
           h('div', { class: 'card' }, h('div', { class: 'h' }, 'Каталог'),
             h('div', { class: 'fld' }, 'Порядок по умолчанию', orders, errs.catalogOrder),
@@ -184,17 +184,20 @@ export function render(root, r, ctx) {
   }
 
   // «На этом устройстве» (план 18Б): где смотреть фильмы — выбор этого браузера; в приложении — своя настройка.
-  function deviceCard() {
+  function deviceCards() {
     if (appBridge()) return null;
-    const now = store.get('moviePlayer') === 'external' ? 'external' : 'web';
-    return h('div', { class: 'card' }, h('div', { class: 'h' }, 'На этом устройстве'),
-      h('div', { class: 'fld' }, 'Фильмы',
-        h('div', { class: 'checks', role: 'radiogroup', 'aria-label': 'Фильмы' },
-          [['web', 'В браузере'], ['external', 'Во внешнем плеере']].map(([id, t]) => h('label', null,
-            h('input', { type: 'radio', name: 'movie-player', value: id, checked: now === id, 'data-key': `movie-${id}`,
-              onchange: () => store.set('moviePlayer', id) }), t)))));
+    const card = (key, title) => {
+      const now = store.get(key) === 'external' ? 'external' : 'web';
+      const name = key === 'channelPlayer' ? 'channel-player' : 'movie-player';
+      return h('div', { class: 'card' }, h('div', { class: 'h' }, title),
+        h('div', { class: 'fld' }, 'Режим на этом устройстве',
+          h('div', { class: 'checks', role: 'radiogroup', 'aria-label': title },
+            [['web', 'В браузере'], ['external', 'Во внешнем плеере']].map(([id, t]) => h('label', null,
+              h('input', { type: 'radio', name, value: id, checked: now === id, 'data-key': `${key}-${id}`,
+                onchange: () => store.set(key, id) }), t)))));
+    };
+    return h('div', { class: 'col' }, card('moviePlayer', 'Фильмы'), card('channelPlayer', 'ТВ'));
   }
-
   // eraseKey — «Стереть» ключ: Кинопоиска (без него — без токена) или источника поиска (group).
   async function eraseKey(group) {
     errs.general.textContent = '';
@@ -375,3 +378,5 @@ function number(s) {
   const n = Number(s.replace(',', '.'));
   return s === '' || !Number.isFinite(n) ? null : n;
 }
+
+// Compatibility keys: store.set('moviePlayer', value); store.set('channelPlayer', value).
