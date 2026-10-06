@@ -243,7 +243,7 @@ export function render(root, r, ctx) {
     openFilters({
       trackers: trackerItems(tracker, statusTrackers),
       sections: drawerSections(sectionList).map((s) => (s.head !== undefined ? s
-        : { id: s.id, name: s.name, href: `#/catalog/${tracker}/${encodeURIComponent(s.id)}`, on: s.id === shownSection })),
+        : { id: s.id, name: s.name, href: `#/catalog/${tracker}/${encodeURIComponent(s.id)}`, on: s.id === shownSection, count: s.count || 0 })),
       orders: shownSection ? orderLinks(orderList, shownOrder, base).map((o) => ({ ...o,
         onPick: () => store.set(ORDER, JSON.stringify({ o: o.id, d: defaultOrder })) })) : [],
     });

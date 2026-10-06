@@ -40,6 +40,7 @@ if ($jdk -and $sdk -and (Test-Path "$jdk\bin\java.exe") -and (Test-Path "$sdk\pl
     # Номер сборки — 1000 + число коммитов: после чистки истории перед публикацией (2026-10-01) коммитов стало
     # меньше, чем номер уже установленных приложений (до 445), а Android ставит обновление, только если номер больше.
     $code = 1000 + [int](git rev-list --count HEAD)
+    if (git status --porcelain) { $code++ }
     Push-Location android
     # Свойства — в кавычках: PowerShell режет «-PversionName=0.11.0-…» на два аргумента. Gradle пишет
     # предупреждения в поток ошибок — судим по коду выхода.
