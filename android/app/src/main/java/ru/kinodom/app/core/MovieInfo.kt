@@ -20,6 +20,8 @@ data class MovieInfo(
     val m3uUrl: String,
     val audio: List<MovieTrack>,
     val subs: List<MovieSub>,
+    val prevSrc: String?,
+    val prevTitle: String?,
     val nextSrc: String?,
     val nextTitle: String?,
 ) {
@@ -28,6 +30,7 @@ data class MovieInfo(
             val o = JSONObject(json)
             val a = o.getJSONArray("audio")
             val s = o.getJSONArray("subs")
+            val prev = o.optJSONObject("prev")
             val next = o.optJSONObject("next")
             MovieInfo(
                 src = o.getString("src"), title = o.getString("title"), hash = o.getString("hash"), index = o.getInt("index"),
@@ -41,6 +44,8 @@ data class MovieInfo(
                     val t = s.getJSONObject(i)
                     MovieSub(t.getString("id"), t.optString("lang"), t.optString("title"), t.optBoolean("image"))
                 },
+                prevSrc = prev?.optString("src")?.takeIf { it.isNotEmpty() },
+                prevTitle = prev?.optString("title"),
                 nextSrc = next?.optString("src")?.takeIf { it.isNotEmpty() },
                 nextTitle = next?.optString("title"),
             )

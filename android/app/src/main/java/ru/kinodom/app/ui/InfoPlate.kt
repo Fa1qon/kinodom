@@ -20,8 +20,9 @@ import ru.kinodom.app.core.Plate
 import ru.kinodom.app.net.Logos
 
 // InfoPlate — плашка снизу поверх видео (спека этапа 13, 4.4): логотип, «1 Первый канал · МСК+4», «Сейчас:
-// 21:00–22:30 …» с полоской прошедшего, «Дальше: …»; программы нет — только имя. На телефоне — кнопка «Список».
-class InfoPlate(private val a: Activity, private val logos: Logos, touch: Boolean, onList: () -> Unit) {
+// 21:00–22:30 …» с полоской прошедшего, «Дальше: …»; программы нет — только имя. На телефоне — кнопки
+// «Сведения» (техпанель, план 2026-10-06, B3) и «Список».
+class InfoPlate(private val a: Activity, private val logos: Logos, touch: Boolean, onList: () -> Unit, onTech: () -> Unit) {
     private val logo = ImageView(a).apply { scaleType = ImageView.ScaleType.FIT_CENTER }
     private val title = text(26f, R.color.text, bold = true)
     private val now = text(20f, R.color.text)
@@ -46,11 +47,20 @@ class InfoPlate(private val a: Activity, private val logos: Logos, touch: Boolea
             addView(bar, LinearLayout.LayoutParams(Screens.dp(a, 360), Screens.dp(a, 6)).apply { topMargin = Screens.dp(a, 6); bottomMargin = Screens.dp(a, 6) })
             addView(next)
         }, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
-        if (touch) addView(Screens.button(a, a.getString(R.string.channel_list)) { onList() }.apply {
-            layoutParams = LinearLayout.LayoutParams(LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT)
-            val p = Screens.dp(a, 20)
-            setPadding(p, 0, p, 0)
-        })
+        if (touch) addView(LinearLayout(a).apply {
+            orientation = LinearLayout.VERTICAL
+            gravity = Gravity.CENTER_VERTICAL
+            addView(Screens.button(a, a.getString(R.string.tech_short)) { onTech() }.apply {
+                layoutParams = LinearLayout.LayoutParams(LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT)
+                val p = Screens.dp(a, 20)
+                setPadding(p, 0, p, 0)
+            })
+            addView(Screens.button(a, a.getString(R.string.channel_list)) { onList() }.apply {
+                layoutParams = LinearLayout.LayoutParams(LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT)
+                val p = Screens.dp(a, 20)
+                setPadding(p, 0, p, 0)
+            })
+        }, LinearLayout.LayoutParams(LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT))
         visibility = View.GONE
         layoutParams = FrameLayout.LayoutParams(FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.WRAP_CONTENT, Gravity.BOTTOM)
     }
