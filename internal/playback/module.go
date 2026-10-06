@@ -87,6 +87,7 @@ type Module struct {
 	mu   sync.Mutex
 	seen map[string]cached     // сведения по Src
 	cues map[string]cachedCues // реплики внешних субтитров по пути файла
+	tr   *bool                 // ffmpeg умеет перекод видео (libvpx); nil — ещё не спрашивали
 }
 
 type cachedCues struct {
@@ -109,6 +110,33 @@ func New(o Options) *Module {
 // Available — ffmpeg есть: в «Состоянии» — transcoder.
 func (m *Module) Available() bool { return m.o.OK }
 
+// transcoding — ffmpeg умеет перекод видео: в сведениях поле trans; старая сборка ffmpeg (без
+// libvpx) — нет, и браузер честно зовёт во внешний плеер. Один запрос на процесс.
+func (m *Module) transcoding() bool {
+	m.mu.Lock()
+	if m.tr != nil {
+		v := *m.tr
+		m.mu.Unlock()
+		return v
+	}
+	m.mu.Unlock()
+	if !m.o.OK {
+		m.mu.Lock()
+		v := false
+		m.tr = &v
+		m.mu.Unlock()
+		return v
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), ProbeTimeout)
+	defer cancel()
+	out, err := m.o.Tools.output(ctx, m.o.Tools.FFmpeg, "-hide_banner", "-encoders")
+	v := err == nil && strings.Contains(string(out), "libvpx")
+	m.mu.Lock()
+	m.tr = &v
+	m.mu.Unlock()
+	return v
+}
+
 func (m *Module) Register(r Router) {
 	for _, p := range []struct {
 		path string
@@ -118,6 +146,7 @@ func (m *Module) Register(r Router) {
 		r.Handle("GET /api/v1/play/"+p.path+"/keyframe", "", m.handle(p.ref, m.keyframe))
 		r.Handle("GET /play/"+p.path+"/stream.ts", "", m.handle(p.ref, m.stream("ts")))
 		r.Handle("GET /play/"+p.path+"/stream.mkv", "", m.handle(p.ref, m.stream("mkv")))
+		r.Handle("GET /play/"+p.path+"/stream.webm", "", m.handle(p.ref, m.stream("webm")))
 		r.Handle("GET /play/"+p.path+"/subs/{sub}", "", m.handle(p.ref, m.subs))
 	}
 }
@@ -265,6 +294,7 @@ type infoResponse struct {
 	Video       Video     `json:"video"`
 	Audio       []Track   `json:"audio"`
 	Subs        []Sub     `json:"subs"`
+	Trans       bool      `json:"trans"` // сервер умеет перекод видео: браузер может открыть stream.webm
 	Prev        *nextJSON `json:"prev"`
 	Next        *nextJSON `json:"next"`
 }
@@ -282,7 +312,8 @@ func (m *Module) info(w http.ResponseWriter, r *http.Request, ref Ref) {
 	}
 	out := infoResponse{Src: ref.Src(), Title: s.Title, Hash: s.Hash, Index: s.Index, DurationSec: md.Duration, StartSec: s.StartSec,
 		Direct: "http://" + r.Host + s.Path + "?own=1", M3UURL: "http://" + r.Host + s.M3U, LaunchURL: s.Launch, Video: md.Video,
-		Audio: append([]Track{}, md.Audio...), Subs: append(append([]Sub{}, md.Subs...), externalSubs(s.SubFiles)...)}
+		Audio: append([]Track{}, md.Audio...), Subs: append(append([]Sub{}, md.Subs...), externalSubs(s.SubFiles)...),
+		Trans: m.transcoding()}
 	if s.Prev != nil {
 
 		out.Prev = &nextJSON{Src: s.Prev.Src(), Title: s.PrevTitle}
@@ -389,6 +420,8 @@ func (m *Module) stream(format string) handler {
 		ct := "video/mp2t"
 		if format == "mkv" {
 			ct = "video/x-matroska"
+		} else if format == "webm" {
+			ct = "video/webm"
 		}
 		m.pipe(ctx, w, ct, streamArgs(o), stdin, "поток плеера", ref)
 	}

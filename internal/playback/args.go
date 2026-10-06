@@ -35,14 +35,15 @@ func seekAt(from float64) float64 {
 	return 0
 }
 
-// streamOpts — поток плеера: ts — браузеру (mpegts.js), mkv — приложению (субтитры — внутри).
+// streamOpts — поток плеера: ts — браузеру (mpegts.js), mkv — приложению (субтитры — внутри),
+// webm — браузеру для видео, которое он не показывает: VP8 + Opus (перекод на лету).
 type streamOpts struct {
 	Input  string
 	From   float64 // ключевой кадр, с
 	Video  int
 	Audio  *Track // nil — в файле нет звука
 	Sub    *Sub   // только mkv: текстовые субтитры; у файла рядом реплики сервер шлёт в stdin (WebVTT, сдвинутые)
-	Format string // "ts" или "mkv"
+	Format string // "ts", "mkv" или "webm"
 	Burst  int    // запас, с (burstFor); 0 — Burst
 }
 
@@ -79,6 +80,17 @@ func streamArgs(o streamOpts) []string {
 		} else {
 			a = append(a, "-map", "0:"+sub.ID)
 		}
+	}
+	if o.Format == "webm" {
+		// Видео, которое браузер не декодирует (MPEG-4/Xvid в AVI и т. п.), — в VP8; звук — в Opus.
+		// VP8 realtime (deadline realtime, cpu-used 8) за 720p успевает; большее сжимаем в него —
+		// качество важнее пауз. Субтитров в этом потоке нет — WebVTT идёт отдельно.
+		a = append(a, "-c:v", "libvpx", "-deadline", "realtime", "-cpu-used", "8",
+			"-b:v", "2500k", "-vf", "scale=w='min(1280,iw)':h='min(720,ih)':force_original_aspect_ratio=decrease,format=yuv420p")
+		if o.Audio != nil {
+			a = append(a, "-c:a", "libopus", "-ac", "2", "-b:a", "160k")
+		}
+		return append(a, "-f", "webm", "pipe:1")
 	}
 	a = append(a, "-c:v", "copy")
 	if o.Audio != nil {
