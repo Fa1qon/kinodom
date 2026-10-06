@@ -49,10 +49,12 @@ Name: "desktopicon"; Description: "Ярлык на рабочем столе"; F
 [Files]
 Source: "..\bin\kinodom.exe"; DestDir: "{app}"; Flags: ignoreversion
 Source: "..\bin\kinodomw.exe"; DestDir: "{app}"; Flags: ignoreversion
-; Свой плеер (цикл 18): урезанный ffmpeg (LGPL), исходники и скрипт сборки — third_party\ffmpeg.
+; Свой плеер (цикл 18): урезанный ffmpeg (LGPL) с libvpx и libopus (BSD) — перекод видео для браузера.
 Source: "..\bin\ffmpeg.exe"; DestDir: "{app}"; Flags: ignoreversion
 Source: "..\bin\ffprobe.exe"; DestDir: "{app}"; Flags: ignoreversion
 Source: "..\third_party\ffmpeg\LICENSE.LGPLv2.1.txt"; DestDir: "{app}"; DestName: "ffmpeg-LICENSE.LGPLv2.1.txt"; Flags: ignoreversion
+Source: "..\third_party\ffmpeg\LICENSE.vpx.txt"; DestDir: "{app}"; DestName: "ffmpeg-LICENSE.vpx.txt"; Flags: ignoreversion
+Source: "..\third_party\ffmpeg\LICENSE.opus.txt"; DestDir: "{app}"; DestName: "ffmpeg-LICENSE.opus.txt"; Flags: ignoreversion
 Source: "..\third_party\ffmpeg\README.md"; DestDir: "{app}"; DestName: "ffmpeg-README.md"; Flags: ignoreversion
 ; Приложение для Android (спека этапа 13, 5.3): сервер раздаёт его по /app; сборка без Android SDK — без него.
 Source: "..\bin\kinodom.apk"; DestDir: "{app}"; Flags: ignoreversion skipifsourcedoesntexist

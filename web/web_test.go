@@ -2741,6 +2741,15 @@ func TestPultWatchGoesToPlayer(t *testing.T) {
 	if strings.Contains(src["views/release.js"], "|| !target") {
 		t.Error("release.js: «Смотреть» выключена, пока списка файлов нет")
 	}
+	// Видео, которое браузер не показывает, — не тупик: сервер умеет перекод (info.trans), плеер
+	// открывает stream.webm.
+	if s := src["views/player.js"]; !strings.Contains(s, "trans = !P.canShow(info.video.mime, mse)") ||
+		!strings.Contains(s, "if (trans && !info.trans)") || !strings.Contains(s, "webmStreamURL(src, k, audio, sid)") {
+		t.Error("player.js: нет автоперехода на перекод-поток")
+	}
+	if !strings.Contains(src["views/player-parts.js"], "export function webmStreamURL(") {
+		t.Error("player-parts.js: webmStreamURL не экспортирован")
+	}
 }
 
 // Куда «Смотреть» (план 18В): приложение с playMovie и встроенным плеером фильмов — его экран; приложение без

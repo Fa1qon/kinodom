@@ -13,6 +13,7 @@ export function render(root, r, ctx) {
   let info = null; // ответ /play/{src}
   let mpegts = null;
   let mp = null; // плеер mpegts.js текущего потока
+  let trans = false; // браузер это видео не показывает — поток stream.webm (VP8 + Opus, перекод сервера)
   let k = 0; // ключевой кадр начала потока, с от начала файла
   let audio = null;
   let sub = null;
@@ -36,6 +37,9 @@ export function render(root, r, ctx) {
   let lastTap = 0;
 
   const video = h('video', { class: 'pl-video', playsinline: true });
+  video.addEventListener('error', () => {
+    if (trans && alive && starting) onError(null); // у перекод-потока ошибки — события video
+  });
   const track = video.addTextTrack('subtitles', 'Субтитры', 'ru');
   track.mode = 'showing';
   const load = h('div', { class: 'pl-load', role: 'status' }, icon('progress_activity'), 'Загрузка');
@@ -88,14 +92,17 @@ export function render(root, r, ctx) {
     prevBtn.hidden = !info.prev;
     nextBtn.hidden = !info.next;
     const mse = window.MediaSource && MediaSource.isTypeSupported.bind(MediaSource);
-    if (!P.canShow(info.video.mime, mse)) return fail('Браузер не покажет этот файл', true);
-    try {
-      mpegts = await loadLib('vendor/mpegts.js', 'mpegts');
-    } catch (e) {
-      return fail(e.message, true);
+    trans = !P.canShow(info.video.mime, mse);
+    if (trans && !info.trans) return fail('Браузер не покажет этот файл', true);
+    if (!trans) {
+      try {
+        mpegts = await loadLib('vendor/mpegts.js', 'mpegts');
+      } catch (e) {
+        return fail(e.message, true);
+      }
+      if (!alive) return;
+      if (!mpegts.isSupported()) return fail('Браузер не покажет этот файл', true);
     }
-    if (!alive) return;
-    if (!mpegts.isSupported()) return fail('Браузер не покажет этот файл', true);
     audio = P.pickTrack(info.audio, P.readMem(store.get(P.memKey(info.hash, 'audio'))));
     sub = P.pickSub(info.subs, P.readMem(store.get(P.memKey(info.hash, 'subs'))));
     start(info.startSec);
@@ -123,6 +130,19 @@ export function render(root, r, ctx) {
     k = t;
     pendingAt = -1;
     showTime(k);
+    if (trans) {
+      // Перекод-поток: обычное <video> с webm; перемотка — новым потоком, как у MPEG-TS.
+      video.src = P.webmStreamURL(src, k, audio, sid);
+      video.play().catch(() => {
+        if (!alive || n !== starting) return;
+        load.hidden = true;
+        syncPlayBtn();
+        armPark();
+        showUI();
+      });
+      startSubs();
+      return;
+    }
     // Позади держим 10–30 с (по умолчанию 2–3 мин — лишнее место в MSE, ревью 18Б).
     mp = mpegts.createPlayer({ type: 'mpegts', isLive: false, url: P.streamURL(src, k, audio, sid) },
       { enableWorker: false, enableStashBuffer: false, lazyLoad: false, autoCleanupSourceBuffer: true,
@@ -145,7 +165,7 @@ export function render(root, r, ctx) {
   }
 
   function syncPlayBtn() {
-    const b = P.playButton(video.paused || !mp);
+    const b = P.playButton(video.paused || (!mp && !trans));
     playBtn.replaceChildren(icon(b.icon));
     playBtn.setAttribute('aria-label', b.label);
     playBtn.title = b.label;
