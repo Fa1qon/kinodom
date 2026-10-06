@@ -51,6 +51,12 @@ func (l *Library) PlaySource(r *http.Request, id int64, fromStart bool) (playbac
 		}
 	}
 	if files, err := l.d.files(ctx, f.Unit); err == nil {
+		if n, ok := prevLibFile(files, f.libFile); ok {
+			nf := f
+			nf.libFile = n
+			out.Prev = &playback.Ref{Kind: "library", File: n.ID}
+			out.PrevTitle = l.fileTitle(ctx, nf)
+		}
 		if n, ok := nextLibFile(files, f.libFile); ok {
 			nf := f
 			nf.libFile = n
@@ -62,6 +68,20 @@ func (l *Library) PlaySource(r *http.Request, id int64, fromStart bool) (playbac
 }
 
 // nextLibFile — следующий файл единицы по правилу .m3u8 (handleM3U): тот же сезон; у серий с номером — тот же раздел.
+func prevLibFile(files []libFile, f libFile) (libFile, bool) {
+	for i, x := range files {
+		if x.ID != f.ID || i == 0 {
+			continue
+		}
+		n := files[i-1]
+		if n.Season != f.Season || (n.Section != f.Section && f.Episode > 0) {
+			return libFile{}, false
+		}
+		return n, true
+	}
+	return libFile{}, false
+}
+
 func nextLibFile(files []libFile, f libFile) (libFile, bool) {
 	for i, x := range files {
 		if x.ID != f.ID || i+1 >= len(files) {

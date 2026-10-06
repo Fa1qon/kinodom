@@ -243,6 +243,16 @@ func (s *Service) restore(ctx context.Context) error {
 		if err != nil {
 			return err
 		}
+		verifyStored := s.eng.recreated
+		for _, i := range idxs {
+			stored, ok, err := s.reg.StoredFile(ctx, rec.InfoHash, i)
+			if err != nil {
+				return err
+			}
+			if ok && needsStoredFileVerify(stored.Path, stored.Size) {
+				verifyStored = true
+			}
+		}
 		s.mu.Lock()
 		ss := s.sessionFor(t)
 		ss.stored, ss.metaSaved = true, true
@@ -254,7 +264,7 @@ func (s *Service) restore(ctx context.Context) error {
 			}
 		}
 		ss.focus = rec.Focus
-		if s.eng.recreated {
+		if verifyStored {
 			s.queueVerify(ss)
 		}
 		if ss.focus < 0 || !ss.storedFiles[ss.focus] {
@@ -305,6 +315,18 @@ func (s *Service) restore(ctx context.Context) error {
 	s.reg.setProblem(ctx, "torrents.dirs", "Папка загрузок недоступна: "+strings.Join(parts, ", ")+
 		" — эти раздачи не раздаются и не докачиваются, пока диск не вернётся")
 	return nil
+}
+
+// needsStoredFileVerify detects stale completion state after a reinstall,
+// moved download directory, or a manually removed media file. The torrent
+// engine keeps piece completion separately from the registry, so a missing
+// file must trigger a fresh hash check before it can be streamed.
+func needsStoredFileVerify(path string, expectedSize int64) bool {
+	info, err := os.Stat(path)
+	if err != nil || !info.Mode().IsRegular() {
+		return true
+	}
+	return expectedSize > 0 && info.Size() != expectedSize
 }
 
 // Folders — папки всех раздач на диске (у каждой своя «Название [хэш]»): обход медиатеки их пропускает —

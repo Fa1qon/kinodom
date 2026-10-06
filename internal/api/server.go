@@ -75,7 +75,7 @@ func (s *Server) HandleLocal(pattern, module string, h http.Handler) {
 // Handler — все проверки и маршруты. Порядок важен: сначала ловим панику, затем сжатие ответа (план 16А),
 // затем отсекаем чужой Host, затем проверяем Content-Type изменяющих запросов.
 func (s *Server) Handler() http.Handler {
-	return recoverer(s.deps.Log, gzipped(s.hosts.guard(jsonGuard(s.mux))))
+	return recoverer(s.deps.Log, deviceCookie(gzipped(s.hosts.guard(jsonGuard(s.mux)))))
 }
 
 // Listen занимает порт API заранее — чтобы запуск сразу узнал, что порт занят,

@@ -3,6 +3,7 @@ package torrents
 import (
 	"context"
 	"errors"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -291,8 +292,10 @@ func TestFocusSurvivesRestart(t *testing.T) {
 		torrenttest.File{Path: "Серия 3.mkv", Size: 300_000})
 	ih := mi.HashInfoBytes()
 	must(t, reg.SaveMetainfo(ctx, ih, "Сериал", torrentBytes(t, mi)))
+	stored := filepath.Join(t.TempDir(), "Серия.mkv")
+	must(t, os.WriteFile(stored, make([]byte, 300_000), 0o644))
 	for i := range 3 {
-		must(t, reg.MarkStored(ctx, ih, i, filepath.Join(`D:\K`, "Серия.mkv"), 300_000))
+		must(t, reg.MarkStored(ctx, ih, i, stored, 300_000))
 	}
 	must(t, reg.SetFocus(ctx, ih, 2))
 

@@ -3,6 +3,7 @@ package httpx
 import (
 	"net"
 	"net/http"
+	"regexp"
 	"slices"
 	"strings"
 	"sync"
@@ -100,6 +101,23 @@ func FromHome(r *http.Request) bool {
 // DevicePC — устройство «этот ПК»: loopback и все его адреса в сети.
 const DevicePC = "pc"
 
+const (
+	DeviceCookie = "kinodom_device"
+	DeviceHeader = "X-Kinodom-Device"
+)
+
+var deviceID = regexp.MustCompile(`^[A-Za-z0-9_-]{16,80}$`)
+
+func stableDevice(r *http.Request) string {
+	if c, err := r.Cookie(DeviceCookie); err == nil && deviceID.MatchString(c.Value) {
+		return c.Value
+	}
+	if v := r.Header.Get(DeviceHeader); deviceID.MatchString(v) {
+		return v
+	}
+	return ""
+}
+
 // Device — устройство, с которого пришёл запрос: у каждого своё избранное и своя история просмотров
 // (спека этапа 8, раздел 4). Это адрес без порта; все адреса этого ПК — одно устройство DevicePC.
 // "" — адрес не разобрать.
@@ -110,6 +128,9 @@ func Device(r *http.Request) string {
 		return ""
 	case ip.IsLoopback() || isOwn(ip):
 		return DevicePC
+	}
+	if id := stableDevice(r); id != "" {
+		return "id:" + id
 	}
 	return ip.String()
 }

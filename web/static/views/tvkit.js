@@ -1,6 +1,6 @@
 // Общее для экранов каналов (спека этапа 8, раздел 6): оценка проверки, время передач, «Смотреть»,
 // избранное устройства, логотип.
-import { h, icon, openPlayer } from '../ui.js';
+import { h, icon, openPlayer, store } from '../ui.js';
 import { get, put, del } from '../api.js';
 
 // GRADE — оценка первого источника канала: цвет и подпись (цвет считает сервер).
@@ -62,7 +62,7 @@ export function appBridge() {
 // 'external' — как раньше: браузер, приложение 13a без playChannels, системный плеер в настройках приложения.
 export function watchRoute(bridge) {
   if (!bridge || typeof bridge.playChannels !== 'function') return 'external';
-  const mode = typeof bridge.player === 'function' ? bridge.player() : 'builtin';
+  const mode = typeof bridge.channelPlaybackMode === 'function' ? bridge.channelPlaybackMode() : (typeof bridge.playbackMode === 'function' ? bridge.playbackMode() : (typeof bridge.player === 'function' ? bridge.player() : 'builtin'));
   return mode === 'system' ? 'external' : 'app';
 }
 
@@ -118,6 +118,7 @@ export function listFor(key, stored = storedList()) {
 export async function watchChannel(key, ctx, from) {
   const bridge = appBridge();
   if (from && watchRoute(bridge) === 'app' && bridge.playChannels(JSON.stringify(channelPayload(from.list, from.start, from.listName)))) return;
+  if (!bridge && store.get('channelPlayer') !== 'external') { location.hash = '#/channel-play/' + encodeURIComponent(key); return; }
   const res = await get(`/channels/${encodeURIComponent(key)}/play`);
   if (!bridge && ctx.local && res.launchUrl) {
     openPlayer(res.launchUrl, res.m3uUrl, ctx.status && ctx.status.protocol); // обработчика kinodom:// нет — скачается .m3u8
@@ -129,7 +130,7 @@ export async function watchChannel(key, ctx, from) {
 export function channelPlayerLink(res) {
   if (!/Android/i.test(navigator.userAgent)) return res.m3uUrl;
   const u = new URL(res.m3uUrl);
-  return `intent://${u.host}${u.pathname}#Intent;scheme=${u.protocol.replace(':', '')};type=audio/x-mpegurl;package=org.videolan.vlc;`
+  return `intent://${u.host}${u.pathname}#Intent;scheme=${u.protocol.replace(':', '')};type=audio/x-mpegurl;`
     + `S.title=${encodeURIComponent(res.title)};S.browser_fallback_url=${encodeURIComponent(res.m3uUrl)};end`;
 }
 

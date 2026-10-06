@@ -68,10 +68,10 @@ export function libraryPlayerLink(res, hasNext, ua = navigator.userAgent) {
   const tail = `S.title=${encodeURIComponent(res.title)};S.browser_fallback_url=${encodeURIComponent(res.m3uUrl)};end`;
   if (hasNext) {
     const u = new URL(res.m3uUrl);
-    return `intent://${u.host}${u.pathname}${u.search}#Intent;scheme=${u.protocol.replace(':', '')};type=audio/x-mpegurl;package=org.videolan.vlc;${tail}`;
+    return `intent://${u.host}${u.pathname}${u.search}#Intent;scheme=${u.protocol.replace(':', '')};type=audio/x-mpegurl;${tail}`;
   }
   const u = new URL(res.streamUrl);
-  return `intent://${u.host}${u.pathname}#Intent;scheme=${u.protocol.replace(':', '')};type=video/*;package=org.videolan.vlc;`
+  return `intent://${u.host}${u.pathname}#Intent;scheme=${u.protocol.replace(':', '')};type=video/*;`
     + (res.startSec > 0 ? `l.position=${res.startSec * 1000};` : '') + tail;
 }
 

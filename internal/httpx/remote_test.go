@@ -2,6 +2,7 @@ package httpx
 
 import (
 	"net"
+	"net/http"
 	"net/http/httptest"
 	"testing"
 	"time"
@@ -155,4 +156,20 @@ func setAddrs(t *testing.T, cidrs ...string) {
 		addrs = append(addrs, n)
 	}
 	interfaceAddrs = func() ([]net.Addr, error) { return addrs, nil }
+}
+
+func TestDeviceStableID(t *testing.T) {
+	setOwn(t, "192.168.0.26/24")
+	r := httptest.NewRequest("GET", "/", nil)
+	r.RemoteAddr = "192.168.0.50:5000"
+	r.Header.Set(DeviceHeader, "tv-0123456789abcdef")
+	if got := Device(r); got != "id:tv-0123456789abcdef" {
+		t.Fatalf("header device = %q", got)
+	}
+	r = httptest.NewRequest("GET", "/", nil)
+	r.RemoteAddr = "192.168.0.99:5000"
+	r.AddCookie(&http.Cookie{Name: DeviceCookie, Value: "tv-0123456789abcdef"})
+	if got := Device(r); got != "id:tv-0123456789abcdef" {
+		t.Fatalf("cookie device after IP change = %q", got)
+	}
 }

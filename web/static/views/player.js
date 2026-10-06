@@ -46,9 +46,12 @@ export function render(root, r, ctx) {
   const playBtn = btn('play_arrow', 'Смотреть', 'pl-play', () => togglePause());
   const audioBtn = btn('audiotrack', 'Озвучка', 'pl-audio', () => openMenu('audio'));
   const subsBtn = btn('subtitles', 'Субтитры', 'pl-subs', () => openMenu('subs'));
+  const prevBtn = btn('skip_previous', 'Предыдущая серия', 'pl-prev', () => goPrev());
   const nextBtn = btn('skip_next', 'Следующая серия', 'pl-next', () => goNext());
   const muteBtn = btn('volume_up', 'Звук', 'pl-mute', () => toggleMute());
   const fullBtn = btn('fullscreen', 'Во весь экран', 'pl-full', () => toggleFull());
+  const back10Btn = btn('fast_rewind', 'Назад на 10 с', 'pl-back10', () => jump(-10));
+  const fwd30Btn = btn('fast_forward', 'Вперёд на 30 с', 'pl-fwd30', () => jump(30));
   const backBtn = h('button', { class: 'btn pl-back', type: 'button', 'data-key': 'pl-back', onclick: () => leave() }, icon('arrow_back'), 'Назад');
   const menuBox = h('div', { class: 'pl-menu', role: 'menu', hidden: true });
   const nextBox = h('div', { class: 'pl-box', hidden: true });
@@ -56,13 +59,11 @@ export function render(root, r, ctx) {
   const ui = h('div', { class: 'pl-ui' },
     h('div', { class: 'pl-top' }, backBtn, title),
     h('div', { class: 'pl-bottom' }, bar,
-      h('div', { class: 'pl-row' }, playBtn,
-        btn('fast_rewind', 'Назад на 10 с', 'pl-back10', () => jump(-10)),
-        btn('fast_forward', 'Вперёд на 30 с', 'pl-fwd30', () => jump(30)),
+      h('div', { class: 'pl-row' }, prevBtn, playBtn, back10Btn, fwd30Btn,
         time, h('div', { class: 'grow' }), audioBtn, subsBtn, nextBtn, muteBtn, fullBtn)));
   const wrap = h('div', { class: 'player' }, video, load, ui, menuBox, nextBox, msg);
   root.append(wrap);
-  audioBtn.hidden = subsBtn.hidden = nextBtn.hidden = true;
+  audioBtn.hidden = subsBtn.hidden = prevBtn.hidden = nextBtn.hidden = true;
 
   const vol = Number(store.get('player.volume'));
   if (store.get('player.volume') !== null && vol >= 0 && vol <= 1) video.volume = vol;
@@ -84,6 +85,7 @@ export function render(root, r, ctx) {
     bar.max = String(Math.floor(dur()));
     audioBtn.hidden = info.audio.length < 2;
     subsBtn.hidden = P.textSubs(info.subs).length === 0;
+    prevBtn.hidden = !info.prev;
     nextBtn.hidden = !info.next;
     const mse = window.MediaSource && MediaSource.isTypeSupported.bind(MediaSource);
     if (!P.canShow(info.video.mime, mse)) return fail('Браузер не покажет этот файл', true);
@@ -375,6 +377,13 @@ export function render(root, r, ctx) {
     leave();
   }
 
+  function goPrev() {
+    clearInterval(nextTimer);
+    if (!info || !info.prev) return;
+    report();
+    location.replace(P.playHash(info.prev.src, false));
+  }
+
   function goNext() {
     clearInterval(nextTimer);
     if (!info || !info.next) return;
@@ -385,6 +394,15 @@ export function render(root, r, ctx) {
   function leave() {
     if (ctx.prev) history.back();
     else location.replace(P.backHash(src));
+  }
+
+  function controls() { return [prevBtn, playBtn, back10Btn, fwd30Btn, nextBtn, audioBtn, subsBtn, muteBtn, fullBtn].filter(x => x && !x.hidden && !x.disabled); }
+
+  function focusControl(delta) {
+    const xs = controls();
+    if (!xs.length) return;
+    const i = Math.max(0, xs.indexOf(document.activeElement));
+    xs[(i + delta + xs.length) % xs.length].focus({ preventScroll: true });
   }
 
   function showUI() {
@@ -438,11 +456,13 @@ export function render(root, r, ctx) {
       return; // стрелки по пунктам меню — nav.js
     }
     const key = e.key;
+    const active = document.activeElement;
+    if (key === 'ArrowUp') { backBtn.focus({ preventScroll: true }); take(); return; }
+    if (key === 'ArrowDown') { if (active === bar) playBtn.focus({ preventScroll: true }); else if (active === backBtn) bar.focus({ preventScroll: true }); else focusControl(1); take(); return; }
+    if ((key === 'ArrowLeft' || key === 'ArrowRight') && active && active.classList.contains('pl-btn')) { focusControl(key === 'ArrowLeft' ? -1 : 1); take(); return; }
     if (key === ' ' || key === 'k' || key === 'K' || key === 'л' || key === 'Л') togglePause();
     else if (key === 'ArrowLeft') jump(-10);
     else if (key === 'ArrowRight') jump(10);
-    else if (key === 'ArrowUp') setVolume(P.volumeStep(video.volume, 0.1));
-    else if (key === 'ArrowDown') setVolume(P.volumeStep(video.volume, -0.1));
     else if (key === 'm' || key === 'M' || key === 'ь' || key === 'Ь') toggleMute();
     else if (key === 'f' || key === 'F' || key === 'а' || key === 'А') toggleFull();
     else if (key === 'Escape') leave();

@@ -3,6 +3,8 @@ package torrents
 import (
 	"context"
 	"errors"
+	"os"
+	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
@@ -117,7 +119,9 @@ func TestPrepareAfterRestartKeepsStoredEpisodeQueued(t *testing.T) {
 		torrenttest.File{Path: "Серия 2.mkv", Size: 300_000})
 	ih := mi.HashInfoBytes()
 	must(t, reg.SaveMetainfo(ctx, ih, "Сериал", torrentBytes(t, mi)))
-	must(t, reg.MarkStored(ctx, ih, 0, `D:\K\1.mkv`, 300_000))
+	stored := filepath.Join(t.TempDir(), "1.mkv")
+	must(t, os.WriteFile(stored, make([]byte, 300_000), 0o644))
+	must(t, reg.MarkStored(ctx, ih, 0, stored, 300_000))
 
 	s := serviceFor(newOfflineEngine(t), reg)
 	runService(t, s)
