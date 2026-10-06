@@ -26,6 +26,19 @@ if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 go build -trimpath -ldflags "-H windowsgui -X main.version=$version -X main.gui=1" -o bin\kinodomw.exe .\cmd\kinodom
 if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 Write-Host "bin\kinodom.exe, bin\kinodomw.exe ($version)"
+# Полный порт сервера для приложения (план 2026-10-06): android/arm64 в jniLibs как lib*.so — Android
+# сам распаковывает в nativeLibraryDir, откуда разрешён запуск. Сборка с пределом кучи по умолчанию
+# (GOMEMLIMIT ставит приложение). Сервер есть — есть и ffprobe/ffmpeg android: их же и в jniLibs.
+$jni = "android\app\src\main\jniLibs\arm64-v8a"
+New-Item -ItemType Directory -Force $jni | Out-Null
+$env:GOOS, $env:GOARCH = 'android', 'arm64'
+go build -trimpath -ldflags "-s -w -checklinkname=0 -X main.version=$version" -o "$jni\libkinodomserver.so" .\cmd\kinodom
+$env:GOOS, $env:GOARCH = '', ''
+if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+foreach ($t in 'ffprobe', 'ffmpeg') {
+    if (Test-Path "third_party\ffmpeg\android\$t") { Copy-Item "third_party\ffmpeg\android\$t" "$jni\lib$t.so" -Force }
+}
+Write-Host "$jni\libkinodomserver.so ($version)"
 # Свой плеер (план 18А): урезанный ffmpeg — рядом с kinodom.exe, там его ищет сервер.
 Copy-Item third_party\ffmpeg\ffmpeg.exe, third_party\ffmpeg\ffprobe.exe bin\ -Force
 

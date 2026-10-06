@@ -19,24 +19,16 @@ type command struct {
 
 // commands — все подкоманды. Новые команды добавляются сюда.
 func commands() []command {
-	return []command{
+	base := []command{
 		{"run", "запустить сервер в консоли (для разработки)", cmdRun},
-		{"service", "сервер как служба Windows (запускает диспетчер служб)", cmdService},
-		{"install", "установить или починить службу на этом ПК (от администратора): kinodom install --downloads D:\\Kinodom", cmdInstall},
-		{"uninstall", "удалить службу (от администратора); --purge — ещё настройки", cmdUninstall},
-		{"stop", "остановить службу перед заменой файлов (перезапуск при сбое вернёт install)", cmdStop},
-		{"check", "проверить установку: служба, пульт, брандмауэр, ссылки kinodom://", cmdCheck},
-		{"grant", "права службы на папку (от администратора): kinodom grant [--write] ПАПКА", cmdGrant},
-		{"tray", "значок в трее: открыть пульт, выход с остановкой сервера (kinodomw tray [--open])", cmdTray},
 		{"play", "открыть раздачу на запущенном сервере и получить ссылку для VLC", cmdPlay},
 		{"source", "проверить источник раздач вживую: kinodom source rutor top 12", cmdSource},
 		{"meta", "проверить метаданные вживую: kinodom meta kp film 301", cmdMeta},
 		{"torrent", "проверить движок вживую: kinodom torrent info <magnet> — метаинфо от пиров", cmdTorrent},
 		{"catalog", "каталог вживую на отдельной папке: kinodom catalog refresh --home …", cmdCatalog},
-		{"open", "открыть поток в плеере по ссылке kinodom:// (её открывает браузер на этом ПК)", cmdOpen},
-		{"protocol", "ссылка kinodom:// для этого пользователя: kinodom protocol install | uninstall", cmdProtocol},
 		{"version", "показать версию", cmdVersion},
 	}
+	return append(base, osCommands()...)
 }
 
 func main() {

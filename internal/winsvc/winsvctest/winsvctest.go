@@ -1,3 +1,5 @@
+//go:build windows
+
 // Package winsvctest — подделка системных операций установки для тестов.
 package winsvctest
 

@@ -41,13 +41,6 @@ func ProtocolEntries(exe string) []ProtocolEntry {
 	}
 }
 
-// ProtocolEntry — ключ реестра ссылки kinodom://.
-type ProtocolEntry struct {
-	Key     string
-	Default string
-	Values  map[string]string
-}
-
 // InstallProtocol регистрирует kinodom:// у текущего пользователя: браузер на этом ПК открывает такие
 // ссылки командой «kinodom open». Инсталлятор (этап 11) делает то же для всех.
 func InstallProtocol(exe string) error {

@@ -1,3 +1,5 @@
+//go:build windows
+
 // Package tray — значок Kinodom в области уведомлений Windows (спека этапа 11a, раздел 5.2): меню
 // «Открыть Kinodom» и «Выход», двойной щелчок — пульт.
 package tray

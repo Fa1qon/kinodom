@@ -466,7 +466,7 @@ func netReason(err error) string {
 		return "ошибка сертификата TLS"
 	case errors.As(err, &opErr) && opErr.Op == "dial":
 		return "не удаётся подключиться"
-	case errors.Is(err, syscall.WSAECONNRESET) || errors.Is(err, syscall.ECONNRESET):
+	case errors.Is(err, syscall.ECONNRESET): // на Windows это и есть WSAECONNRESET
 		return "соединение сброшено"
 	case errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF):
 		return "соединение закрылось без ответа"

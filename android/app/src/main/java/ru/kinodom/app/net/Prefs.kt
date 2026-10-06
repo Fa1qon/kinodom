@@ -13,6 +13,12 @@ class Prefs(context: Context) {
         get() = p.getString("base", null)
         set(v) = p.edit().putString("base", v).apply()
 
+    // localServer — сервер на этом устройстве (полный порт, план 2026-10-06): пульт смотрит на
+    // 127.0.0.1, отдельный сервер в сети не нужен. Пункт виден, если сборка сервера есть в апк.
+    var localServer: Boolean
+        get() = p.getBoolean("localServer", false)
+        set(v) = p.edit().putBoolean("localServer", v).apply()
+
     var player: PlayerMode
         get() = PlayerMode.of(p.getString("player", null)) ?: PlayerMode.Builtin
         set(v) = p.edit().putString("player", v.id).apply()

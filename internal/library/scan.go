@@ -7,7 +7,6 @@ import (
 	"slices"
 	"strconv"
 	"strings"
-	"syscall"
 	"time"
 	"unicode"
 )
@@ -152,11 +151,8 @@ func (w walker) ignored(e fs.DirEntry, path string) bool {
 	if strings.HasPrefix(e.Name(), ".") {
 		return true
 	}
-	if info, err := e.Info(); err == nil {
-		if a, ok := info.Sys().(*syscall.Win32FileAttributeData); ok &&
-			a.FileAttributes&(syscall.FILE_ATTRIBUTE_HIDDEN|syscall.FILE_ATTRIBUTE_SYSTEM) != 0 {
-			return true
-		}
+	if info, err := e.Info(); err == nil && hiddenAttrs(info) {
+		return true
 	}
 	if e.IsDir() {
 		return skipDirs[strings.ToLower(e.Name())] || (w.skip != nil && w.skip(path))

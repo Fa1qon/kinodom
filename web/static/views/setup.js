@@ -94,7 +94,7 @@ export function render(root, r, ctx) {
       const f = {
         rtAddress: input('rtAddress', v.rutracker.address, { inputmode: 'url' }), rtLogin: input('rtLogin', v.rutracker.login),
         rtPassword: secret('rtPassword', v.rutracker.passwordSet), rutorAddress: input('rutorAddress', v.rutor.address, { inputmode: 'url' }),
-        searchAddress: input('searchAddress', v.search.address, { inputmode: 'url', placeholder: 'https://jac.red' }),
+        searchAddress: input('searchAddress', v.search.address, { inputmode: 'url', placeholder: 'http://192.168.0.10:9000' }),
         proxyAddress: input('proxyAddress', v.proxy.address), proxyLogin: input('proxyLogin', v.proxy.login), proxyPassword: secret('proxyPassword', v.proxy.passwordSet),
       };
       const types = [['none', 'Нет'], ['http', 'HTTP'], ['socks5', 'SOCKS5']];
@@ -217,8 +217,8 @@ export function render(root, r, ctx) {
           h('div', { class: 'row gap10' }, checkBtn('check-rutracker', check('rutracker', rtResult)), rtResult)),
         h('div', { class: 'card' }, h('div', { class: 'h' }, 'Rutor'), field('Адрес сайта или зеркала', f.rutorAddress),
           h('div', { class: 'row gap10' }, checkBtn('check-rutor', check('rutor', rutorResult)), rutorResult)),
-        h('div', { class: 'card' }, h('div', { class: 'h' }, 'Поиск раздач'), field('Адрес сервиса Jacred', f.searchAddress),
-          h('p', { class: 'muted small' }, 'Поиск по названию. Пусто — поиск выключен.')),
+        h('div', { class: 'card' }, h('div', { class: 'h' }, 'Поиск раздач'), field('Адрес сервиса поиска', f.searchAddress),
+          h('p', { class: 'muted small' }, 'Jacred или Jackett: поиск сразу по многим трекерам. Пусто — поиск выключен.')),
         h('div', { class: 'card' }, h('div', { class: 'h' }, 'Разделы каталога'),
           h('p', { class: 'muted small' }, 'Какие разделы показывать в «Каталоге». По умолчанию отмечены все.'),
           groups ? groupBox : h('p', { class: 'muted small' }, 'Разделы Rutracker не загрузились — сохранённый выбор не изменится.'),

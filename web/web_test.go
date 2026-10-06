@@ -1012,7 +1012,7 @@ for (const [got, want] of checks) {
 	// Справка «?» — в шапке пульта.
 	src := scripts(t)
 	for file, needles := range map[string][]string{
-		"views/setup.js": {"search: { address:", "Разделы каталога", "encodeGroups(groups, sel)", "Папка загрузок",
+		"views/setup.js": {"p.search = { address:", "Разделы каталога", "encodeGroups(groups, sel)", "Папка загрузок",
 			"storage: { downloadsDir: dir }", "все ${ids.length}", "Promise.allSettled"},
 		"views/help.js": {"Как пользоваться Kinodom", "С пульта ТВ", "Плеер канала", "openModal"},
 		"app.js":        {"openHelp", "help_outline", "'data-key': 'help'"},
@@ -2796,10 +2796,14 @@ if (got !== want) {
 		t.Errorf("%v\n%s", err, out)
 	}
 	src := scripts(t)
-	for _, f := range []string{"views/release.js", "views/updates.js", "views/library-card.js"} {
+	for _, f := range []string{"views/updates.js", "views/library-card.js"} {
 		if !strings.Contains(src[f], "watchTarget(ctx.status, store.get('moviePlayer'), appBridge())") || !strings.Contains(src[f], ".playMovie(") {
 			t.Errorf("%s: «Смотреть» не спрашивает watchTarget или не зовёт playMovie", f)
 		}
+	}
+	// У раздачи вызов с форматом (неродные контейнеры — сразу внешний плеер).
+	if !strings.Contains(src["views/release.js"], "watchTarget(ctx.status, store.get('moviePlayer'), appBridge(), rel.format)") || !strings.Contains(src["views/release.js"], ".playMovie(") {
+		t.Error("views/release.js: «Смотреть» не спрашивает watchTarget или не зовёт playMovie")
 	}
 	if !strings.Contains(src["views/settings-app.js"], "'Плеер фильмов и каналов'") {
 		t.Error("settings-app.js: нет «Плеер фильмов и каналов»")
@@ -2809,8 +2813,10 @@ func TestPultPlayerSplitModesAndEpisodeControls(t *testing.T) {
 	src := scripts(t)
 	checks := map[string][]string{
 		"views/settings-params.js": {"movie-player", "channel-player", "store.set('moviePlayer'", "store.set('channelPlayer'"},
-		"views/settings-app.js":    {"moviePlaybackMode", "channelPlaybackMode", "Плеер фильмов", "Плеер каналов"},
-		"views/player.js":          {"pl-prev", "pl-next", "ArrowUp", "ArrowDown", "pl-bar"},
+		"views/settings-app.js": {"moviePlaybackMode", "channelPlaybackMode", "Плеер фильмов", "Плеер каналов",
+			// Сервер на устройстве (полный порт): карточка видна, только если он есть в сборке.
+			"localServer", "Сервер на этом устройстве"},
+		"views/player.js": {"pl-prev", "pl-next", "ArrowUp", "ArrowDown", "pl-bar"},
 	}
 	for file, needles := range checks {
 		for _, needle := range needles {

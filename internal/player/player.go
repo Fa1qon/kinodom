@@ -131,3 +131,10 @@ func startOnly(rawQuery string) bool {
 	n, err := strconv.Atoi(strings.TrimPrefix(rawQuery, "start="))
 	return err == nil && n <= 7*24*3600
 }
+
+// ProtocolEntry — ключ реестра ссылки kinodom:// (Windows); на Android записей нет.
+type ProtocolEntry struct {
+	Key     string
+	Default string
+	Values  map[string]string
+}

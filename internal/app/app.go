@@ -44,7 +44,6 @@ import (
 	"kinodom/internal/store"
 	"kinodom/internal/supervisor"
 	"kinodom/internal/torrents"
-	"kinodom/internal/winsvc"
 	"kinodom/web"
 )
 
@@ -195,7 +194,7 @@ func New(ctx context.Context, o Options) (*App, error) {
 	a.initSetup()
 	a.initDiscovery(ctx, o)
 	a.API.SetStatus(a.statusFields)
-	a.API.SetProtocolCheck(cachedCheck(winsvc.KinodomProtocol, time.Minute))
+	a.API.SetProtocolCheck(cachedCheck(protocolCheck(), time.Minute))
 	// Следующие этапы добавляют сюда свои модули так же: a.Sup.Add(m, a.ModuleEnabled(ctx, m.Name())).
 	return a, nil
 }

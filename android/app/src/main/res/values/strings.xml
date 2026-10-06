@@ -2,6 +2,7 @@
 <resources>
     <string name="app_name">Kinodom</string>
     <string name="searching">Ищу Kinodom в домашней сети…</string>
+    <string name="local_starting">Запускаю Kinodom на устройстве…</string>
     <string name="connecting">Подключаюсь к Kinodom…</string>
     <string name="choose_server">Найдено несколько Kinodom</string>
     <string name="other_address">Другой адрес</string>
