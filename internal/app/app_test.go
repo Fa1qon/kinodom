@@ -952,6 +952,15 @@ func TestDownloadFromRoute(t *testing.T) {
 	if resp.StatusCode != http.StatusBadRequest {
 		t.Fatalf("file и from вместе: %d", resp.StatusCode)
 	}
+	// Единая кнопка «Смотреть» присылает prepare: принимается, запрос не отваливается (ревью 2026-10-07).
+	resp2, err := http.Post(fmt.Sprintf("%s/releases/%d/download", base, id), "application/json", strings.NewReader(`{"file":0,"prepare":true}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp2.Body.Close()
+	if resp2.StatusCode != http.StatusOK {
+		t.Fatalf("download с prepare: %d", resp2.StatusCode)
+	}
 }
 
 func TestDownloadAndWatchThroughAPI(t *testing.T) {
