@@ -37,7 +37,7 @@ SetupIconFile=kinodom.ico
 UninstallDisplayIcon={app}\kinodom.ico
 UninstallDisplayName=Kinodom
 ; Службу останавливает kinodom.exe stop (PrepareToInstall), а не «Перезапуск приложений» Windows.
-CloseApplications=no
+CloseApplications=force
 SetupLogging=yes
 
 [Languages]
@@ -190,22 +190,36 @@ end;
 function PrepareToInstall(var NeedsRestart: Boolean): String;
 var
   Exe, ResultFile: String;
-  Code: Integer;
+  Code, Attempt: Integer;
+  StopOK: Boolean;
 begin
   Result := '';
   Exe := ExpandConstant('{app}\kinodom.exe');
+  { Сначала используем новый бинарник из установщика: старая версия может быть уже повреждена или зависнуть. }
+  ExtractTemporaryFile('kinodom.exe');
   if FileExists(Exe) then
   begin
-    if Exec(Exe, 'stop', '', SW_HIDE, ewWaitUntilTerminated, Code) and (Code = 0) then
-      StoppedByUs := True
-    else
-    begin
-      Result := 'Служба Kinodom не остановилась. Закройте просмотр на телевизорах и телефонах и запустите установку ещё раз.';
-      Exit;
-    end;
+    StopOK := False;
+    repeat
+      for Attempt := 1 to 3 do
+      begin
+        if Exec(ExpandConstant('{tmp}\\kinodom.exe'), 'stop --program-dir ' + QuotedPath(ExpandConstant('{app}')), '', SW_HIDE, ewWaitUntilTerminated, Code) and (Code = 0) then
+        begin
+          StopOK := True;
+          Break;
+        end;
+        Sleep(1000);
+      end;
+      if not StopOK then
+        if MsgBox('Kinodom ещё использует старую версию программы. Установщик попробует закрыть её ещё раз.' + #13#10 + #13#10 + 'Если открыто окно Kinodom, просто закройте его и нажмите «Повторить».', mbError, MB_RETRYCANCEL) <> IDRETRY then
+        begin
+          Result := 'Установка отменена: старую версию Kinodom не удалось закрыть.';
+          Exit;
+        end;
+    until StopOK;
+    StoppedByUs := True;
   end;
-  ExtractTemporaryFile('kinodom.exe');
-  ResultFile := ExpandConstant('{tmp}\check-result.txt');
+  ResultFile := ExpandConstant('{tmp}\\check-result.txt');
   if not Exec(ExpandConstant('{tmp}\kinodom.exe'), 'install --check ' + InstallParams(ResultFile), '', SW_HIDE,
      ewWaitUntilTerminated, Code) or (Code <> 0) then
     Result := 'Kinodom не установлен: ' + ResultText(ResultFile, Code);
@@ -216,7 +230,8 @@ end;
 procedure CurStepChanged(CurStep: TSetupStep);
 var
   ResultFile: String;
-  Code: Integer;
+  Code, Attempt: Integer;
+  StopOK: Boolean;
 begin
   if CurStep = ssInstall then
     CopyStarted := True;
@@ -255,7 +270,8 @@ end;
   на месте, чинит установку: возвращает перезапуск при сбое и запускает службу. }
 procedure DeinitializeSetup;
 var
-  Code: Integer;
+  Code, Attempt: Integer;
+  StopOK: Boolean;
 begin
   if InstallOK then
     Exit;
@@ -272,13 +288,14 @@ end;
 procedure CurUninstallStepChanged(CurUninstallStep: TUninstallStep);
 var
   Params, ResultFile, Msg: String;
-  Code: Integer;
+  Code, Attempt: Integer;
+  StopOK: Boolean;
 begin
   if CurUninstallStep <> usUninstall then
     Exit;
   Params := 'uninstall';
   if not UninstallSilent and
-     (MsgBox('Удалить также всё скачанное Kinodom (и в папках медиатеки) и настройки?', mbConfirmation, MB_YESNO or MB_DEFBUTTON2) = IDYES) then
+     (MsgBox('Удалить также настройки Kinodom (базу и кэш)?' + #13#10 + #13#10 + 'Скачанные фильмы, сериалы и папки медиатеки не удаляются — останутся на диске.', mbConfirmation, MB_YESNO or MB_DEFBUTTON2) = IDYES) then
     Params := 'uninstall --purge';
   ResultFile := AddBackslash(GetTempDir) + 'kinodom-uninstall-result.txt';
   DeleteFile(ResultFile);

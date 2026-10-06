@@ -23,7 +23,7 @@ func commands() []command {
 		{"run", "запустить сервер в консоли (для разработки)", cmdRun},
 		{"service", "сервер как служба Windows (запускает диспетчер служб)", cmdService},
 		{"install", "установить или починить службу на этом ПК (от администратора): kinodom install --downloads D:\\Kinodom", cmdInstall},
-		{"uninstall", "удалить службу (от администратора); --purge — ещё настройки и скачанное", cmdUninstall},
+		{"uninstall", "удалить службу (от администратора); --purge — ещё настройки", cmdUninstall},
 		{"stop", "остановить службу перед заменой файлов (перезапуск при сбое вернёт install)", cmdStop},
 		{"check", "проверить установку: служба, пульт, брандмауэр, ссылки kinodom://", cmdCheck},
 		{"grant", "права службы на папку (от администратора): kinodom grant [--write] ПАПКА", cmdGrant},

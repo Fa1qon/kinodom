@@ -312,7 +312,7 @@ func TestStopClosesTrays(t *testing.T) {
 		t.Fatalf("код %d: %s", code, errOut)
 	}
 	dir, _ := programDir()
-	if acts := f.Actions(); len(acts) == 0 || acts[0] != "procs.close "+filepath.Join(dir, "kinodomw.exe") {
+	if acts := f.Actions(); len(acts) < 2 || acts[0] != "procs.close "+filepath.Join(dir, "kinodomw.exe") || acts[len(acts)-1] != "procs.close "+filepath.Join(dir, "kinodom.exe") {
 		t.Fatalf("действия %v", acts)
 	}
 }

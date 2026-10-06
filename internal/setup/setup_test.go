@@ -59,7 +59,10 @@ func closedPort(t *testing.T) int {
 }
 
 func options(t *testing.T, downloads string) InstallOptions {
-	return InstallOptions{Downloads: downloads, Home: t.TempDir(), ProgramDir: prog, APIPort: kinodomAPI(t), TorrentPort: 42000,
+	t.Helper()
+	home := t.TempDir()
+	t.Setenv(config.EnvHome, home) // purge удаляет только домашнюю папку Kinodom этого ПК
+	return InstallOptions{Downloads: downloads, Home: home, ProgramDir: prog, APIPort: kinodomAPI(t), TorrentPort: 42000,
 		ReadyTimeout: 5 * time.Second}
 }
 
@@ -219,7 +222,7 @@ func TestUninstallKeepsData(t *testing.T) {
 	if err := Uninstall(ctx, f.System(), UninstallOptions{Home: o.Home, ProgramDir: prog}, nolog); err != nil {
 		t.Fatal(err)
 	}
-	want := []string{"procs.close " + filepath.Join(prog, "kinodomw.exe"), "scm.stop Kinodom", "scm.delete Kinodom",
+	want := []string{"procs.close " + filepath.Join(prog, "kinodomw.exe"), "scm.stop Kinodom", "scm.delete Kinodom", "procs.close " + filepath.Join(prog, "kinodom.exe"),
 		"fw.delete Kinodom — пульт", "fw.delete Kinodom — раздачи", "fw.delete Kinodom — обнаружение", "reg.delete kinodom", "reg.noautorun Kinodom"}
 	if acts := f.Actions(); !slices.Equal(acts, want) {
 		t.Fatalf("действия %v", acts)
@@ -236,38 +239,54 @@ func TestUninstallKeepsData(t *testing.T) {
 	}
 }
 
-// Удаление с данными (Review Focus 4): папки раздач из реестра и данные удаляются, чужие файлы в
-// папке загрузок остаются; пустая папка загрузок удаляется.
-func TestUninstallPurgeKeepsForeign(t *testing.T) {
-	for _, foreign := range []bool{true, false} {
-		f := winsvctest.New()
-		dl := filepath.Join(t.TempDir(), "Kinodom")
-		o := options(t, dl)
-		if err := Install(ctx, f.System(), o, nolog); err != nil {
-			t.Fatal(err)
-		}
-		folder := addTorrent(t, o.Home, dl)
-		mine := filepath.Join(dl, "мои фото.jpg")
-		if foreign {
-			os.WriteFile(mine, []byte("x"), 0o644)
-		}
-		if err := Uninstall(ctx, f.System(), UninstallOptions{Purge: true, Home: o.Home, ProgramDir: prog}, nolog); err != nil {
-			t.Fatal(err)
-		}
-		if _, err := os.Stat(folder); !os.IsNotExist(err) {
-			t.Fatalf("папка раздачи осталась: %v", err)
-		}
-		if _, err := os.Stat(o.Home); !os.IsNotExist(err) {
-			t.Fatalf("данные остались: %v", err)
-		}
-		_, errMine := os.Stat(mine)
-		_, errDL := os.Stat(dl)
-		if foreign && (errMine != nil || errDL != nil) {
-			t.Fatalf("чужой файл удалён: %v, %v", errMine, errDL)
-		}
-		if !foreign && !os.IsNotExist(errDL) {
-			t.Fatalf("пустая папка загрузок осталась: %v", errDL)
-		}
+// Удаление с настройками: purge удаляет только папку данных Kinodom; скачанное и чужие файлы в
+// папках человека (загрузки, медиатека) не трогает.
+func TestUninstallPurgeKeepsDownloads(t *testing.T) {
+	f := winsvctest.New()
+	dl := filepath.Join(t.TempDir(), "Kinodom")
+	o := options(t, dl)
+	if err := Install(ctx, f.System(), o, nolog); err != nil {
+		t.Fatal(err)
+	}
+	folder := addTorrent(t, o.Home, dl)
+	mine := filepath.Join(dl, "мои фото.jpg")
+	if err := os.WriteFile(mine, []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := Uninstall(ctx, f.System(), UninstallOptions{Purge: true, Home: o.Home, ProgramDir: prog}, nolog); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(o.Home); !os.IsNotExist(err) {
+		t.Fatalf("настройки остались: %v", err)
+	}
+	if _, err := os.Stat(folder); err != nil {
+		t.Fatalf("папка раздачи в папке человека удалена: %v", err)
+	}
+	if _, err := os.Stat(mine); err != nil {
+		t.Fatalf("чужой файл удалён: %v", err)
+	}
+}
+
+// Purge не удаляет папку, не являющуюся домашней папкой Kinodom этого ПК: по чужому пути данные
+// остаются, удаление программы при этом проходит.
+func TestUninstallPurgeRefusesForeignHome(t *testing.T) {
+	f := winsvctest.New()
+	o := options(t, filepath.Join(t.TempDir(), "Kinodom"))
+	if err := Install(ctx, f.System(), o, nolog); err != nil {
+		t.Fatal(err)
+	}
+	foreign := t.TempDir()
+	if err := os.WriteFile(filepath.Join(foreign, "файл.txt"), []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := Uninstall(ctx, f.System(), UninstallOptions{Purge: true, Home: foreign, ProgramDir: prog}, nolog); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(foreign, "файл.txt")); err != nil {
+		t.Fatalf("чужая папка удалена: %v", err)
+	}
+	if _, err := os.Stat(foreign); err != nil {
+		t.Fatalf("чужая папка удалена: %v", err)
 	}
 }
 
