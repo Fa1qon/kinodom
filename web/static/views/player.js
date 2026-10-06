@@ -53,6 +53,9 @@ export function render(root, r, ctx) {
   const prevBtn = btn('skip_previous', 'Предыдущая серия', 'pl-prev', () => goPrev());
   const nextBtn = btn('skip_next', 'Следующая серия', 'pl-next', () => goNext());
   const muteBtn = btn('volume_up', 'Звук', 'pl-mute', () => toggleMute());
+  // Громкость — ползунком (просьба 2026-10-06): не только мьют; на ТВ ←/→ у ползунка меняют её.
+  const vol = h('input', { class: 'pl-vol', type: 'range', min: '0', max: '1', step: '0.05',
+    'aria-label': 'Громкость', 'data-key': 'pl-vol', oninput: () => setVolume(Number(vol.value)) });
   const fullBtn = btn('fullscreen', 'Во весь экран', 'pl-full', () => toggleFull());
   const back10Btn = btn('fast_rewind', 'Назад на 10 с', 'pl-back10', () => jump(-10));
   const fwd30Btn = btn('fast_forward', 'Вперёд на 30 с', 'pl-fwd30', () => jump(30));
@@ -64,15 +67,16 @@ export function render(root, r, ctx) {
     h('div', { class: 'pl-top' }, backBtn, title),
     h('div', { class: 'pl-bottom' }, bar,
       h('div', { class: 'pl-row' }, prevBtn, playBtn, back10Btn, fwd30Btn,
-        time, h('div', { class: 'grow' }), audioBtn, subsBtn, nextBtn, muteBtn, fullBtn)));
+        time, h('div', { class: 'grow' }), audioBtn, subsBtn, nextBtn, muteBtn, vol, fullBtn)));
   const wrap = h('div', { class: 'player' }, video, load, ui, menuBox, nextBox, msg);
   root.append(wrap);
   audioBtn.hidden = subsBtn.hidden = prevBtn.hidden = nextBtn.hidden = true;
 
-  const vol = Number(store.get('player.volume'));
-  if (store.get('player.volume') !== null && vol >= 0 && vol <= 1) video.volume = vol;
+  const vol0 = Number(store.get('player.volume'));
+  if (store.get('player.volume') !== null && vol0 >= 0 && vol0 <= 1) video.volume = vol0;
   video.muted = store.get('player.muted') === '1';
   muteBtn.replaceChildren(icon(video.muted ? 'volume_off' : 'volume_up'));
+  vol.value = String(video.volume);
 
   const dur = () => (info ? info.durationSec : 0);
   const pos = () => P.positionNow({ parkedAt, pendingAt, k, currentTime: video.currentTime });
@@ -416,7 +420,7 @@ export function render(root, r, ctx) {
     else location.replace(P.backHash(src));
   }
 
-  function controls() { return [prevBtn, playBtn, back10Btn, fwd30Btn, nextBtn, audioBtn, subsBtn, muteBtn, fullBtn].filter(x => x && !x.hidden && !x.disabled); }
+  function controls() { return [prevBtn, playBtn, back10Btn, fwd30Btn, nextBtn, audioBtn, subsBtn, muteBtn, vol, fullBtn].filter(x => x && !x.hidden && !x.disabled); }
 
   function focusControl(delta) {
     const xs = controls();
@@ -438,6 +442,7 @@ export function render(root, r, ctx) {
 
   function toggleMute() {
     video.muted = !video.muted;
+    if (!video.muted && video.volume === 0) video.volume = 0.5; // «Звук» после нуля — на слышимую громкость
     saveVolume();
   }
 
@@ -445,6 +450,8 @@ export function render(root, r, ctx) {
     store.set('player.volume', String(video.volume));
     store.set('player.muted', video.muted ? '1' : '0');
     muteBtn.replaceChildren(icon(video.muted ? 'volume_off' : 'volume_up'));
+    vol.value = String(video.volume);
+    vol.classList.toggle('off', video.muted);
   }
 
   function toggleFull() {
@@ -477,6 +484,7 @@ export function render(root, r, ctx) {
     }
     const key = e.key;
     const active = document.activeElement;
+    if (active === vol && (key === 'ArrowLeft' || key === 'ArrowRight')) return; // ползунок громкости сам
     if (key === 'ArrowUp') { backBtn.focus({ preventScroll: true }); take(); return; }
     if (key === 'ArrowDown') { if (active === bar) playBtn.focus({ preventScroll: true }); else if (active === backBtn) bar.focus({ preventScroll: true }); else focusControl(1); take(); return; }
     if ((key === 'ArrowLeft' || key === 'ArrowRight') && active && active.classList.contains('pl-btn')) { focusControl(key === 'ArrowLeft' ? -1 : 1); take(); return; }

@@ -202,10 +202,20 @@ export function externalLink(info, ua) {
     + (info.startSec > 0 ? `l.position=${info.startSec * 1000};` : '') + tail;
 }
 
+// webBlockedFormat — контейнер, который веб-плеер не открывает: видео в нём браузер не покажет, а
+// перекод ради каждой раздачи не нужен — «Смотреть» ведёт во внешний плеер (просьба 2026-10-06).
+const WEB_BLOCKED = ['AVI', 'WMV', 'ASF', 'MPG', 'MPEG', 'VOB', 'FLV', 'RM', 'RMVB', 'OGM', '3GP'];
+
+export function webBlockedFormat(format) {
+  return WEB_BLOCKED.includes(String(format || '').toUpperCase());
+}
+
 // watchTarget — куда «Смотреть»: 'app' — экран плеера приложения (мост с playMovie, выбран встроенный, план 18В),
 // 'web' — плеер в браузере (не приложение, на этом устройстве не выбран внешний плеер), 'external' — как раньше.
-// Без ffmpeg на сервере (status.transcoder) — всегда как раньше: сведения о файле отдаёт он.
-export function watchTarget(status, choice, bridge) {
+// Без ffmpeg на сервере (status.transcoder) — всегда как раньше: сведения о файле отдаёт он. Формат из
+// «неродных» для браузера — тоже внешний, что мост есть, что нет.
+export function watchTarget(status, choice, bridge, format) {
+  if (webBlockedFormat(format)) return 'external';
   if (!(status && status.transcoder)) return 'external';
   if (bridge) {
     const mode = typeof bridge.moviePlaybackMode === 'function' ? bridge.moviePlaybackMode() : (typeof bridge.playbackMode === 'function' ? bridge.playbackMode() : (typeof bridge.moviePlayer === 'function' ? bridge.moviePlayer() : 'builtin'));

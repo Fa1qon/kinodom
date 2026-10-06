@@ -2724,10 +2724,14 @@ func TestPultPlayerWired(t *testing.T) {
 // устройстве» (выбор хранится в браузере, ключ moviePlayer).
 func TestPultWatchGoesToPlayer(t *testing.T) {
 	src := scripts(t)
-	for _, f := range []string{"views/release.js", "views/updates.js", "views/library-card.js"} {
+	for _, f := range []string{"views/updates.js", "views/library-card.js"} {
 		if !strings.Contains(src[f], "watchTarget(ctx.status, store.get('moviePlayer'), appBridge())") || !strings.Contains(src[f], "playHash(") {
 			t.Errorf("%s: «Смотреть» не ведёт в плеер в браузере", f)
 		}
+	}
+	// У раздачи вызов с форматом: неродные контейнеры уходят во внешний плеер.
+	if !strings.Contains(src["views/release.js"], "watchTarget(ctx.status, store.get('moviePlayer'), appBridge(), rel.format)") || !strings.Contains(src["views/release.js"], "playHash(") {
+		t.Error("views/release.js: «Смотреть» не ведёт в плеер в браузере")
 	}
 	if s := src["views/settings-params.js"]; !strings.Contains(s, "store.set('moviePlayer'") || !strings.Contains(s, "movie-player") {
 		t.Error("settings-params.js: нет общей настройки режима воспроизведения")
@@ -2742,13 +2746,24 @@ func TestPultWatchGoesToPlayer(t *testing.T) {
 		t.Error("release.js: «Смотреть» выключена, пока списка файлов нет")
 	}
 	// Видео, которое браузер не показывает, — не тупик: сервер умеет перекод (info.trans), плеер
-	// открывает stream.webm.
+	// открывает stream.webm. Но у раздачи с «неродным» контейнером (AVI и пр.) — предупреждение и
+	// внешний плеер, веб-плеер не открывается (просьба 2026-10-06).
 	if s := src["views/player.js"]; !strings.Contains(s, "trans = !P.canShow(info.video.mime, mse)") ||
 		!strings.Contains(s, "if (trans && !info.trans)") || !strings.Contains(s, "webmStreamURL(src, k, audio, sid)") {
 		t.Error("player.js: нет автоперехода на перекод-поток")
 	}
 	if !strings.Contains(src["views/player-parts.js"], "export function webmStreamURL(") {
 		t.Error("player-parts.js: webmStreamURL не экспортирован")
+	}
+	if s := src["views/release.js"]; !strings.Contains(s, "webBlockedFormat(rel.format)") ||
+		!strings.Contains(s, "watchTarget(ctx.status, store.get('moviePlayer'), appBridge(), rel.format)") ||
+		!strings.Contains(s, "внешний плеер или приложение") {
+		t.Error("release.js: нет предупреждения о формате и внешней маршрутизации")
+	}
+	// Громкость — ползунком, не только мьют (просьба 2026-10-06).
+	if s := src["views/player.js"]; !strings.Contains(s, "'data-key': 'pl-vol'") ||
+		!strings.Contains(s, "'aria-label': 'Громкость'") || !strings.Contains(s, "active === vol") {
+		t.Error("player.js: нет ползунка громкости")
 	}
 }
 
@@ -2757,15 +2772,19 @@ func TestPultWatchGoesToPlayer(t *testing.T) {
 func TestPultWatchTarget(t *testing.T) {
 	node := lookNode(t)
 	script := `
-import { watchTarget } from './views/player-parts.js';
+import { watchTarget, webBlockedFormat } from './views/player-parts.js';
 const on = { transcoder: true };
 const app = (mode) => ({ moviePlayer: () => mode, playMovie: () => true });
 const got = [
   watchTarget(on, null, null), watchTarget(on, 'external', null), watchTarget({ transcoder: false }, 'web', null), watchTarget(null, 'web', null),
   watchTarget(on, null, app('builtin')), watchTarget(on, null, app('system')), watchTarget(on, null, { player: () => 'builtin' }),
   watchTarget({ transcoder: false }, null, app('builtin')),
+  // Неродные для браузера контейнеры — внешний плеер, что мост есть, что нет (просьба 2026-10-06).
+  watchTarget(on, null, null, 'AVI'), watchTarget(on, null, app('builtin'), 'avi'), watchTarget(on, 'web', null, 'WMV'),
+  watchTarget(on, null, null, 'MKV'), watchTarget(on, null, null, ''),
+  webBlockedFormat('rmvb'), webBlockedFormat('mkv'), webBlockedFormat(''),
 ].join(' ');
-const want = 'web external external external app external external external';
+const want = 'web external external external app external external external external external external web web true false false';
 if (got !== want) {
   console.error(got, '≠', want);
   process.exitCode = 1;
