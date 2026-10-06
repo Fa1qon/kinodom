@@ -4,6 +4,10 @@
 
 ## [Не выпущено]
 
+- Пока пусто.
+
+## [0.16.1] — 2026-10-06
+
 ### Добавлено
 - Громкость в плеере фильмов браузера — ползунком рядом со «Звуком»: на телефоне и ПК тянется, на ТВ — стрелками, когда ползунок в фокусе.
 - Видео, которое браузер не показывает (например, Xvid в AVI), теперь играет в пульте: сервер переводит его в VP8 в реальном времени (до 720p), звук — в Opus. Плеер сам открывает такой поток, перемотка и «Продолжить» — как раньше. В сборке ffmpeg — libvpx и libopus (BSD), лицензии — рядом с программой.
@@ -122,7 +126,8 @@
 ### Установщик
 - Inno Setup: служба, правила брандмауэра, приложение для Android внутри.
 
-[Не выпущено]: https://github.com/Fa1qon/kinodom/compare/v0.16.0...HEAD
+[Не выпущено]: https://github.com/Fa1qon/kinodom/compare/v0.16.1...HEAD
+[0.16.1]: https://github.com/Fa1qon/kinodom/releases/tag/v0.16.1
 [0.16.0]: https://github.com/Fa1qon/kinodom/releases/tag/v0.16.0
 [0.15.0]: https://github.com/Fa1qon/kinodom/releases/tag/v0.15.0
 [0.14.0]: https://github.com/Fa1qon/kinodom/releases/tag/v0.14.0
