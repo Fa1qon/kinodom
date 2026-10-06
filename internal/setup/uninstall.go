@@ -7,24 +7,21 @@ import (
 	"os"
 	"path/filepath"
 
-	"kinodom/internal/app"
 	"kinodom/internal/config"
-	"kinodom/internal/settings"
-	"kinodom/internal/store"
-	"kinodom/internal/torrents"
 	"kinodom/internal/winsvc"
 )
 
 // UninstallOptions — что удалять.
 type UninstallOptions struct {
-	Purge      bool   // ещё данные и скачанное
+	Purge      bool   // ещё настройки (папку данных Kinodom)
 	Home       string // %ProgramData%\Kinodom
 	ProgramDir string // папка kinodomw.exe: значки в трее закрываются
 }
 
 // Uninstall убирает значки в трее, службу, правила брандмауэра, ссылку kinodom:// и автозапуск (спека
-// этапа 11a, разделы 4.3 и 5.2). Purge — ещё данные (Home) и скачанное: папки раздач из реестра, затем
-// папка загрузок, если она пуста. Чужие файлы в папке загрузок не удаляются.
+// этапа 11a, разделы 4.3 и 5.2). Скачанное и папки медиатеки — это файлы человека в его папках,
+// удаление программы их не трогает. Purge удаляет только папку данных самой программы и только
+// если это действительно она: путь совпадает с домашней папкой Kinodom этого ПК.
 func Uninstall(ctx context.Context, sys winsvc.System, o UninstallOptions, log func(string)) error {
 	if !sys.IsAdmin() {
 		return ErrNotAdmin
@@ -43,6 +40,9 @@ func Uninstall(ctx context.Context, sys winsvc.System, o UninstallOptions, log f
 			return fmt.Errorf("служба Kinodom не удалилась: %w", err)
 		}
 	}
+	if err := sys.Procs.Close(filepath.Join(o.ProgramDir, "kinodom.exe")); err != nil {
+		return fmt.Errorf("процесс Kinodom не завершился: %w", err)
+	}
 	for _, name := range []string{RuleAPI, RuleTorrents, RuleDiscovery} {
 		if err := sys.Firewall.Delete(name); err != nil {
 			return fmt.Errorf("брандмауэр, правило «%s»: %w", name, err)
@@ -57,46 +57,14 @@ func Uninstall(ctx context.Context, sys winsvc.System, o UninstallOptions, log f
 	if !purge {
 		return nil
 	}
-	log("Удаляю скачанное и настройки")
-	paths := config.NewPaths(home)
-	downloads, folders, err := downloaded(ctx, paths)
-	if err != nil {
-		return err
-	}
-	for _, f := range folders {
-		if err := os.RemoveAll(f); err != nil {
-			return fmt.Errorf("папка раздачи %s не удалилась: %w", f, err)
-		}
-	}
-	if downloads != "" {
-		os.Remove(downloads) // только пустая: чужие файлы остаются вместе с папкой
+	log("Удаляю настройки Kinodom")
+	if filepath.Clean(home) != filepath.Clean(config.DefaultHome()) {
+		// Домашняя папка задаётся человеком (KINODOM_HOME) — по чужому пути настройки не удаляются.
+		log("Настройки не удалены: " + home + " — не папка данных Kinodom этого ПК")
+		return nil
 	}
 	if err := os.RemoveAll(home); err != nil {
 		return fmt.Errorf("данные Kinodom %s не удалились: %w", home, err)
 	}
 	return nil
-}
-
-// downloaded — папка загрузок из настроек и папки раздач из реестра; базы нет — ничего.
-func downloaded(ctx context.Context, paths config.Paths) (string, []string, error) {
-	if _, err := os.Stat(paths.DB); err != nil {
-		return "", nil, nil
-	}
-	db, err := store.Open(ctx, paths.DB)
-	if err != nil {
-		return "", nil, fmt.Errorf("база: %w", err)
-	}
-	defer db.Close()
-	dir, ok, err := db.Setting(ctx, settings.KeyDownloadsDir)
-	if err != nil {
-		return "", nil, fmt.Errorf("база: %w", err)
-	}
-	if !ok || dir == "" {
-		dir = app.DefaultDownloadsDir
-	}
-	folders, err := torrents.NewRegistry(db).Folders(ctx, dir)
-	if err != nil {
-		return "", nil, fmt.Errorf("реестр раздач: %w", err)
-	}
-	return dir, folders, nil
 }

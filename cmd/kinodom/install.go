@@ -110,7 +110,7 @@ func install(downloads, downloadsDefault string, noStart bool, stdout io.Writer)
 func cmdUninstall(args []string, stdout, stderr io.Writer) int {
 	fs := flag.NewFlagSet("uninstall", flag.ContinueOnError)
 	fs.SetOutput(stderr)
-	purge := fs.Bool("purge", false, "удалить также настройки и скачанное")
+	purge := fs.Bool("purge", false, "удалить также настройки (папку данных Kinodom)")
 	result := fs.String("result", "", "файл для текста отказа (UTF-8; его читает программа удаления)")
 	if err := fs.Parse(args); err != nil || fs.NArg() > 0 {
 		fmt.Fprintln(stderr, "использование: kinodom uninstall [--purge] [--result ФАЙЛ]")
@@ -132,12 +132,21 @@ func cmdUninstall(args []string, stdout, stderr io.Writer) int {
 // Перезапуск при сбое снимается (иначе упавшая служба поднялась бы посреди копирования) и
 // возвращается следующим kinodom install. Службы нет — ничего не делает.
 func cmdStop(args []string, stdout, stderr io.Writer) int {
-	if len(args) != 0 {
-		fmt.Fprintln(stderr, "использование: kinodom stop")
+	var dir string
+	var dirErr error
+	force := false
+	switch {
+	case len(args) == 0:
+		dir, dirErr = programDir()
+	case len(args) == 2 && args[0] == "--program-dir" && args[1] != "":
+		dir = filepath.Clean(args[1])
+		force = true
+	default:
+		fmt.Fprintln(stderr, "использование: kinodom stop [--program-dir ПАПКА]")
 		return 2
 	}
 	sys := newSystem()
-	if dir, err := programDir(); err == nil {
+	if dirErr == nil {
 		// Значки в трее держат kinodomw.exe — установщик его заменяет. После установки значок
 		// запускается снова.
 		if err := sys.Procs.Close(filepath.Join(dir, "kinodomw.exe")); err != nil {
@@ -147,9 +156,18 @@ func cmdStop(args []string, stdout, stderr io.Writer) int {
 	err := sys.SCM.Stop(setup.ServiceName, setup.StopWait)
 	switch {
 	case errors.Is(err, winsvc.ErrNotInstalled):
-		return 0
+		// Служба уже остановлена; остаточный процесс закрывается ниже
 	case err != nil:
-		return fail(stderr, fmt.Errorf("служба Kinodom не остановилась: %w", err))
+		// Если штатная остановка не успела завершиться, принудительно закрываем
+		// процесс по точному пути. Это последний fallback для обновления.
+		if !force || dirErr != nil || sys.Procs.Close(filepath.Join(dir, "kinodom.exe")) != nil {
+			return fail(stderr, fmt.Errorf("служба Kinodom не остановилась: %w", err))
+		}
+	}
+	if dirErr == nil {
+		if err := sys.Procs.Close(filepath.Join(dir, "kinodom.exe")); err != nil {
+			return fail(stderr, fmt.Errorf("процесс Kinodom не завершился: %w", err))
+		}
 	}
 	fmt.Fprintln(stdout, "Служба Kinodom остановлена")
 	return 0

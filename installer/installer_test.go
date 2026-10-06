@@ -36,7 +36,7 @@ func TestInstallerScript(t *testing.T) {
 		`Source: "..\third_party\ffmpeg\LICENSE.LGPLv2.1.txt"; DestDir: "{app}"; DestName: "ffmpeg-LICENSE.LGPLv2.1.txt"; Flags: ignoreversion`,
 		`Source: "..\third_party\ffmpeg\README.md"; DestDir: "{app}"; DestName: "ffmpeg-README.md"; Flags: ignoreversion`,
 		"function PrepareToInstall",
-		"Exec(Exe, 'stop'",
+		"stop --program-dir ",
 		"'install ' + InstallParams(",
 		"' --downloads-default '",               // сохранённую папку загрузок не перезаписывает (ревью C1)
 		`Uninstall\{' + '{#AppGuid}' + '}_is1'`, // ключ удаления — со скобками, как AppId (ревью C1)
@@ -51,13 +51,16 @@ func TestInstallerScript(t *testing.T) {
 		"procedure CurUninstallStepChanged", "CurUninstallStep <> usUninstall",
 		"Abort;",
 		"'uninstall --purge'",
-		"Удалить также всё скачанное Kinodom (и в папках медиатеки) и настройки?", // ревью 14В
+		// Скачанное и медиатека — файлы человека в его папках: программа удаления их не трогает.
+		"Удалить также настройки Kinodom (базу и кэш)?",
+		"Скачанные фильмы, сериалы и папки медиатеки не удаляются",
 		"MB_DEFBUTTON2",
 		"Kinodom.url",
 		"Открыть Kinodom",
 		// Отказ до копирования и без полуустановки (спека этапа 11a, раздел 5.1): исключение в
 		// AfterInstall Inno не откатывает — проверено первой живой установкой.
 		"ExtractTemporaryFile('kinodom.exe')",
+		"stop --program-dir ",
 		"'install --check ' + InstallParams(",
 		"CurStep = ssPostInstall",
 		"'/VERYSILENT /SUPPRESSMSGBOXES /NORESTART'",
