@@ -68,6 +68,11 @@ func TestStreamArgs(t *testing.T) {
 	if a := streamArgs(streamOpts{Input: "x", Video: 0, Audio: ac3, Sub: &Sub{ID: "3", Codec: "subrip"}, Format: "ts"}); pair(a, "-map", "0:3") {
 		t.Errorf("TS — без субтитров (браузеру они идут отдельно): %v", a)
 	}
+	if a := streamArgs(streamOpts{Input: "x", From: 60, Video: 0, Audio: ac3, Format: "webm"}); !pair(a, "-ss", "60.150") ||
+		!pair(a, "-c:v", "libvpx") || !pair(a, "-deadline", "realtime") || !pair(a, "-c:a", "libopus") ||
+		!pair(a, "-f", "webm") || pair(a, "-c:v", "copy") {
+		t.Errorf("WEBM — VP8 realtime и Opus вместо копии: %v", a)
+	}
 	if a := streamArgs(streamOpts{Input: "x", Video: 0, Format: "ts"}); slices.Contains(a, "-c:a") || strings.Count(strings.Join(a, " "), "-map") != 1 {
 		t.Errorf("без звука: %v", a)
 	}
