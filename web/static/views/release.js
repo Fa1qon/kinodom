@@ -5,7 +5,7 @@ import { get, post, put, del } from '../api.js';
 import { whereStopped, resumeIndex } from './history.js';
 import { poster, returnTo } from './catalog.js';
 import { trackerTags, trackerLabel, backTo } from './search.js';
-import { watchTarget, playHash } from './player-parts.js';
+import { watchTarget, webBlockedFormat, playHash } from './player-parts.js';
 import { appBridge } from './tvkit.js';
 
 const PENDING_FOR = 120000; // догрузку страницы раздачи ждём не дольше 2 минут (трекер мог лечь)
@@ -295,6 +295,8 @@ export function render(root, r, ctx) {
       // Списка файлов ещё нет (страница трекера его не отдаёт) — кнопка активна: «Смотреть» добавит
       // раздачу, дождётся списка и запустит первый готовый файл (watchOrPrepare без файла).
       out.push(h('button', { class: 'btn inv big', type: 'button', disabled: busy || waiting, 'data-key': 'watch', 'data-nav-main': true, onclick: () => watchOrPrepare(target) }, icon('play_arrow'), 'Смотреть'), followControl());
+      if (webBlockedFormat(rel.format)) out.push(h('div', { class: 'muted small' }, icon('warning', 16),
+        ` ${rel.format.toUpperCase()} в браузере не играется — «Смотреть» откроет внешний плеер или приложение.`));
       if (waiting) out.push(h('div', { class: 'muted' }, st.state === 'connecting' ? 'Ищем раздающих…' : 'Получаем список файлов…'));
       if (error) out.push(h('div', { class: 'error' }, error));
       return out;
@@ -447,10 +449,10 @@ export function render(root, r, ctx) {
   }
 
   // watch — «Смотреть»: фокус загрузки на этот файл и плеер. На этом ПК — ссылка kinodom://, на
-  // других устройствах — .m3u8 (спека этапа 7, раздел 6.3).
+  // других устройствах — .m3u8 (спека этапа 7, раздел 6.3). Форматы, которых браузер не показывает
+  // (AVI и пр.), — сразу внешний плеер, веб-плеер не открываем (просьба 2026-10-06).
   async function watch(f, fromStart = false) {
-    // Свой плеер (планы 18Б, 18В): в браузере — страница плеера, в приложении — его экран; файл выберет и место найдёт он.
-    const to = watchTarget(ctx.status, store.get('moviePlayer'), appBridge());
+    const to = watchTarget(ctx.status, store.get('moviePlayer'), appBridge(), rel.format);
     const src = `torrent/${rel.hash}/${f.index}`;
     if (to === 'web') {
       ctx.go(playHash(src, fromStart));

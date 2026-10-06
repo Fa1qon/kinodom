@@ -616,6 +616,8 @@ body.playing #top { display: none; }
 .player .pl-row { display: flex; align-items: center; gap: 8px; }
 .player .pl-time { margin-left: 6px; font-variant-numeric: tabular-nums; white-space: nowrap; }
 .player .pl-btn, .player .pl-back { background: rgba(255, 255, 255, 0.14); color: #fff; border-color: transparent; }
+.player .pl-vol { width: 92px; height: 24px; margin: 0 4px; accent-color: #fff; cursor: pointer; }
+.player .pl-vol.off { opacity: 0.55; }
 .player .pl-load { position: absolute; inset: 0; z-index: 2; display: flex; align-items: center; justify-content: center; gap: 10px; padding: 24px; background: rgba(0, 0, 0, 0.72); font-size: 18px; }
 .player .pl-load .ic { animation: pl-spin 1s linear infinite; }
 @keyframes pl-spin { to { transform: rotate(360deg); } }
@@ -635,7 +637,7 @@ body.playing #top { display: none; }
   .player .pl-menu { left: var(--pad); right: var(--pad); bottom: 120px; }
 }
 
-.player .pl-btn:focus-visible, .player .pl-bar:focus-visible, .player .pl-back:focus-visible { outline: 3px solid #4aa3ff; outline-offset: 3px; }
+.player .pl-btn:focus-visible, .player .pl-bar:focus-visible, .player .pl-back:focus-visible, .player .pl-vol:focus-visible { outline: 3px solid #4aa3ff; outline-offset: 3px; }
 
 /* Плеер канала (план 2026-10-06, Task A): текущая передача и метрики под видео, список каналов справа. */
 .player .cp-now { font-size: 17px; }
