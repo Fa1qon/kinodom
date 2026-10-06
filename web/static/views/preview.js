@@ -128,8 +128,8 @@ export function hlsWay(mse, native) {
 
 // attach — источник в <video>: {destroy, latency(), buffer()} — задержка от эфира (только живой HLS) и запас буфера
 // (поток MPEG-TS; ревью 14Д, п. 14); остановка плеера — onFail({what, text}). Библиотека не загрузилась или
-// браузер её не тянет — исключение.
-async function attach(video, url, kind, onFail = () => {}) {
+// браузер её не тянет — исключение. Один движок для окна проверки источников и плеера канала (план 2026-10-06, A).
+export async function attach(video, url, kind, onFail = () => {}) {
   if (kind === 'hls') {
     const Hls = await loadLib('vendor/hls.light.min.js', 'Hls').catch(() => null);
     const way = hlsWay(!!Hls && Hls.isSupported(), !!video.canPlayType('application/vnd.apple.mpegurl'));

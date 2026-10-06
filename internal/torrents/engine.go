@@ -101,13 +101,22 @@ func NewEngine(c Config) (*Engine, error) {
 		UsePartFiles: g.Some(false),
 		Logger:       c.Log,
 	})
+	host := ""
+	if c.Offline {
+		host = "127.0.0.1"
+	}
+	if c.ListenPort > 0 && !netx.TCPUDPPortAvailable(host, c.ListenPort) {
+		requested := c.ListenPort
+		port, err := netx.FreeTCPUDPPort(host)
+		if err != nil {
+			return nil, fmt.Errorf("порт %d занят, свободный порт не найден: %w", requested, err)
+		}
+		c.Log.Warn("порт торрентов занят, выбран свободный", "requested", requested, "port", port)
+		c.ListenPort = port
+	}
 	if c.ListenPort == 0 {
 		// Случайный порт (тесты): движок открывает на одном номере TCP и UDP, а случайный
 		// TCP-порт может попасть в диапазон UDP, зарезервированный Windows (Hyper-V, WSL).
-		host := ""
-		if c.Offline {
-			host = "127.0.0.1"
-		}
 		port, err := netx.FreeTCPUDPPort(host)
 		if err != nil {
 			fc.Close()

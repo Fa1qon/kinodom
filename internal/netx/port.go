@@ -30,3 +30,19 @@ func FreeTCPUDPPort(host string) (int, error) {
 	}
 	return 0, errors.New("не нашлось порта, свободного и для TCP, и для UDP")
 }
+
+// TCPUDPPortAvailable reports whether a port can be bound for both protocols.
+func TCPUDPPortAvailable(host string, port int) bool {
+	addr := net.JoinHostPort(host, fmt.Sprint(port))
+	pc, err := net.ListenPacket("udp4", addr)
+	if err != nil {
+		return false
+	}
+	defer pc.Close()
+	ln, err := net.Listen("tcp4", addr)
+	if err != nil {
+		return false
+	}
+	ln.Close()
+	return true
+}

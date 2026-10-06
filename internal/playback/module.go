@@ -46,6 +46,9 @@ type Source struct {
 	Launch    *string  // kinodom:// — только запросу с этого ПК
 	StartSec  int      // откуда открыть; 0 — с начала
 	SubFiles  []string // внешние субтитры на диске
+	Prev      *Ref
+	PrevTitle string
+
 	Next      *Ref
 	NextTitle string
 }
@@ -262,6 +265,7 @@ type infoResponse struct {
 	Video       Video     `json:"video"`
 	Audio       []Track   `json:"audio"`
 	Subs        []Sub     `json:"subs"`
+	Prev        *nextJSON `json:"prev"`
 	Next        *nextJSON `json:"next"`
 }
 
@@ -279,8 +283,16 @@ func (m *Module) info(w http.ResponseWriter, r *http.Request, ref Ref) {
 	out := infoResponse{Src: ref.Src(), Title: s.Title, Hash: s.Hash, Index: s.Index, DurationSec: md.Duration, StartSec: s.StartSec,
 		Direct: "http://" + r.Host + s.Path + "?own=1", M3UURL: "http://" + r.Host + s.M3U, LaunchURL: s.Launch, Video: md.Video,
 		Audio: append([]Track{}, md.Audio...), Subs: append(append([]Sub{}, md.Subs...), externalSubs(s.SubFiles)...)}
+	if s.Prev != nil {
+
+		out.Prev = &nextJSON{Src: s.Prev.Src(), Title: s.PrevTitle}
+
+	}
+
 	if s.Next != nil {
+
 		out.Next = &nextJSON{Src: s.Next.Src(), Title: s.NextTitle}
+
 	}
 	httpx.WriteJSON(w, http.StatusOK, out)
 }

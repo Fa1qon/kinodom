@@ -46,6 +46,18 @@ func jsonGuard(next http.Handler) http.Handler {
 	})
 }
 
+// deviceCookie pins a browser/app to one logical device. The old fallback was the client IP address, which changes after DHCP/router reconnects.
+func deviceCookie(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if _, err := r.Cookie(httpx.DeviceCookie); err != nil {
+			if id := r.Header.Get(httpx.DeviceHeader); id != "" {
+				http.SetCookie(w, &http.Cookie{Name: httpx.DeviceCookie, Value: id, Path: "/", MaxAge: 365 * 24 * 60 * 60, SameSite: http.SameSiteLaxMode})
+			}
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
 // thisPCOnly пропускает только запросы с этого же ПК — по loopback или по его адресу в сети.
 func thisPCOnly(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

@@ -193,7 +193,7 @@ export function externalLink(info, ua) {
   const u = new URL(info.direct);
   u.searchParams.delete('own');
   const tail = `S.title=${encodeURIComponent(info.title)};S.browser_fallback_url=${encodeURIComponent(info.m3uUrl)};end`;
-  return `intent://${u.host}${u.pathname}${u.search}#Intent;scheme=${u.protocol.replace(':', '')};type=video/*;package=org.videolan.vlc;`
+  return `intent://${u.host}${u.pathname}${u.search}#Intent;scheme=${u.protocol.replace(':', '')};type=video/*;`
     + (info.startSec > 0 ? `l.position=${info.startSec * 1000};` : '') + tail;
 }
 
@@ -203,7 +203,8 @@ export function externalLink(info, ua) {
 export function watchTarget(status, choice, bridge) {
   if (!(status && status.transcoder)) return 'external';
   if (bridge) {
-    const ok = typeof bridge.playMovie === 'function' && typeof bridge.moviePlayer === 'function' && bridge.moviePlayer() === 'builtin';
+    const mode = typeof bridge.moviePlaybackMode === 'function' ? bridge.moviePlaybackMode() : (typeof bridge.playbackMode === 'function' ? bridge.playbackMode() : (typeof bridge.moviePlayer === 'function' ? bridge.moviePlayer() : 'builtin'));
+    const ok = typeof bridge.playMovie === 'function' && mode === 'builtin';
     return ok ? 'app' : 'external';
   }
   return choice === 'external' ? 'external' : 'web';

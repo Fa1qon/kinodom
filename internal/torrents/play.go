@@ -48,6 +48,10 @@ func (s *Service) PlaySource(r *http.Request, hash string, index int, prepare, f
 			out.Launch = &l
 		}
 	}
+	if n, ok := prevPlayable(s.fileInfos(ih), index); ok {
+		out.Prev = &playback.Ref{Kind: "torrent", Hash: ih.HexString(), Index: n.Index}
+		out.PrevTitle = strings.TrimSuffix(baseName(n.Name), extOf(n.Name))
+	}
 	if n, ok := nextPlayable(s.fileInfos(ih), index); ok {
 		out.Next = &playback.Ref{Kind: "torrent", Hash: ih.HexString(), Index: n.Index}
 		out.NextTitle = strings.TrimSuffix(baseName(n.Name), extOf(n.Name))
@@ -73,6 +77,16 @@ func (s *Service) fileInfos(ih metainfo.Hash) []FileInfo {
 
 // nextPlayable — следующая серия после index: следующий видеофайл в порядке страницы раздачи (playableFiles) в
 // той же папке — папка как сезон (спека 18, 3.2).
+func prevPlayable(all []FileInfo, index int) (FileInfo, bool) {
+	ps := playableFiles(all)
+	dir := func(n string) string { return path.Dir(strings.ReplaceAll(n, `\`, "/")) }
+	for i, f := range ps {
+		if f.Index == index && i > 0 && dir(ps[i-1].Name) == dir(f.Name) {
+			return ps[i-1], true
+		}
+	}
+	return FileInfo{}, false
+}
 func nextPlayable(all []FileInfo, index int) (FileInfo, bool) {
 	ps := playableFiles(all)
 	dir := func(n string) string { return path.Dir(strings.ReplaceAll(n, `\`, "/")) }

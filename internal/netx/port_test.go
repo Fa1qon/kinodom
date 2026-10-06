@@ -26,3 +26,15 @@ func TestFreeTCPUDPPortIsBindableForBoth(t *testing.T) {
 		ln.Close()
 	}
 }
+
+func TestTCPUDPPortAvailableDetectsOccupiedPort(t *testing.T) {
+	pc, err := net.ListenPacket("udp4", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pc.Close()
+	port := pc.LocalAddr().(*net.UDPAddr).Port
+	if TCPUDPPortAvailable("127.0.0.1", port) {
+		t.Fatalf("занятый UDP-порт %d отмечен как свободный", port)
+	}
+}
