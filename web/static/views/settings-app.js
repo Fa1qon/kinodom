@@ -21,8 +21,8 @@ export function render(root) {
   draw();
   get('/app').then((info) => fill(update, appCard(appModel(info, [], app), app) || version()), () => {});
 
-  function radioCard(title, mode, group, key, setMode) {
-    const labels = PLAYERS.map(([id, text]) => {
+  function radioCard(title, mode, group, key, setMode, values = PLAYERS, note = null) {
+    const labels = values.map(([id, text]) => {
       const label = h('label', { class: id === mode ? 'on' : null }, text);
       label.append(h('input', {
         type: 'radio', name: group, checked: id === mode, 'data-key': key + '-' + id,
@@ -31,6 +31,7 @@ export function render(root) {
       return label;
     });
     return h('section', { class: 'card' }, h('div', { class: 'h' }, title),
+      note ? h('p', { class: 'muted small' }, note) : null,
       h('div', { class: 'seg', role: 'radiogroup', 'aria-label': title }, ...labels));
   }
 
@@ -43,7 +44,12 @@ export function render(root) {
     const channel = channelCap ? app.channelPlaybackMode() : (channelLegacy ? app.playbackMode() : 'builtin');
     const canSound = typeof app.soundsOn === 'function' && typeof app.setSoundsOn === 'function';
     const sound = canSound && app.soundsOn() ? 'on' : 'off';
+    // Сервер на устройстве (полный порт, план 2026-10-06): пункт только в сборках с сервером.
+    const localCap = typeof app.localServer === 'function' && typeof app.setLocalServer === 'function' && app.localServer() !== 'none';
     keepFocus(body, () => fill(body,
+      localCap ? radioCard('Сервер на этом устройстве', app.localServer() === 'on' ? 'on' : 'off', 'local-server', 'local-server',
+        id => { app.setLocalServer(id === 'on'); draw(); }, [['on', 'Включён'], ['off', 'Выключен']],
+        'Кино смотрят с этого телевизора и без сервера в сети: загрузки и медиатека — в памяти устройства.') : null,
       movieCap || movieLegacy ? radioCard('Плеер фильмов', movie, 'movie-playback-mode', 'movie-player', id => movieCap ? app.setMoviePlaybackMode(id) : app.setMoviePlayer(id)) : null,
       channelCap || channelLegacy ? radioCard('Плеер каналов', channel, 'channel-playback-mode', 'channel-player', id => channelCap ? app.setChannelPlaybackMode(id) : app.setPlaybackMode(id)) : null,
       canSound ? radioSound(sound) : null));

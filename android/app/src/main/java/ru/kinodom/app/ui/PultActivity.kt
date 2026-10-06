@@ -39,6 +39,7 @@ import ru.kinodom.app.core.Action
 import ru.kinodom.app.core.BackDecision
 import ru.kinodom.app.core.Foreground
 import ru.kinodom.app.core.Lineup
+import ru.kinodom.app.core.LocalServer
 import ru.kinodom.app.core.Links
 import ru.kinodom.app.core.MovieUrls
 import ru.kinodom.app.core.PlayerMode
@@ -620,6 +621,19 @@ class PultActivity : Activity() {
         @JavascriptInterface
         fun setChannelPlaybackMode(mode: String) {
             PlayerMode.of(mode)?.let { Prefs(this@PultActivity).channelPlaybackMode = it }
+        }
+
+        // localServer — сервер на этом устройстве (полный порт, план 2026-10-06): есть ли он в сборке
+        // и включён ли. Включение переставляет пульт на 127.0.0.1 после перезапуска входа.
+        @JavascriptInterface
+        fun localServer(): String {
+            val p = Prefs(this@PultActivity)
+            return if (LocalServer.binary(this@PultActivity) == null) "none" else if (p.localServer) "on" else "off"
+        }
+
+        @JavascriptInterface
+        fun setLocalServer(on: Boolean) {
+            Prefs(this@PultActivity).localServer = on
         }
         // Compatibility aliases for older web clients.
         // moviePlayer, setMoviePlayer — compatibility aliases for the movie mode.

@@ -10,15 +10,19 @@ import android.view.inputmethod.EditorInfo
 import android.widget.EditText
 import android.widget.LinearLayout
 import android.widget.ProgressBar
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.MainScope
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import ru.kinodom.app.R
 import ru.kinodom.app.core.Found
+import ru.kinodom.app.core.LocalServer
 import ru.kinodom.app.core.Parsed
 import ru.kinodom.app.core.ServerAddress
 import ru.kinodom.app.core.StartFlow
 import ru.kinodom.app.core.Step
+import ru.kinodom.app.net.LocalServerProcess
 import ru.kinodom.app.net.Prefs
 import ru.kinodom.app.net.ServerFinder
 import ru.kinodom.app.net.Status
@@ -32,6 +36,16 @@ class StartActivity : Activity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         prefs = Prefs(this)
+        // Сервер на устройстве (полный порт, план 2026-10-06): включён и есть в сборке — пульт
+        // смотрит на 127.0.0.1, поиск в сети не нужен. Не запустился — обычный путь.
+        if (prefs.localServer && LocalServer.binary(this) != null && intent.getBooleanExtra(EXTRA_SEARCH, false) == false) {
+            waiting(getString(R.string.local_starting))
+            scope.launch {
+                val ok = withContext(Dispatchers.IO) { LocalServerProcess.start(applicationContext) }
+                if (ok) open(LocalServer.baseUrl()) else go(StartFlow.first(prefs.base))
+            }
+            return
+        }
         go(if (intent.getBooleanExtra(EXTRA_SEARCH, false)) Step.Search else StartFlow.first(prefs.base))
     }
 

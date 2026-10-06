@@ -1,3 +1,5 @@
+//go:build windows
+
 package app
 
 import (
@@ -16,22 +18,6 @@ import (
 	"kinodom/internal/torrents"
 )
 
-// driveView — диск этого ПК в обзоре папок.
-type driveView struct {
-	Path string `json:"path"` // «D:\»
-	Free int64  `json:"free"` // свободно, байт
-}
-
-// dirsView — папка в обзоре: полный путь, родитель ("" — у корня диска: выше — список дисков) и
-// имена подпапок. Denied — служба папку не читает: её можно выбрать и «Разрешить доступ».
-type dirsView struct {
-	Path   string      `json:"path,omitempty"`
-	Parent string      `json:"parent"`
-	Dirs   []string    `json:"dirs"`
-	Denied bool        `json:"denied,omitempty"`
-	Drives []driveView `json:"drives,omitempty"`
-}
-
 // readDir — чтение папки от имени службы; usersRoot — папка профилей (тесты подменяют).
 var (
 	readDir   = os.ReadDir
@@ -48,9 +34,12 @@ var (
 // profileFolders — обычные папки пользователя: профиль службе не виден, а фильмы у людей — там.
 var profileFolders = []string{"Desktop", "Downloads", "Videos"}
 
-// handleDirs — обзор папок (спека этапа 11a, раздел 7): без path — диски этого ПК; иначе — подпапки
-// по имени, без скрытых и системных. Файлов и их содержимого нет; сетевых путей — тоже.
-func handleDirs(w http.ResponseWriter, r *http.Request) {
+// dirsHandler — обзор папок Windows: ставится диспетчером handleDirs (dirs.go) в init.
+func init() { dirsHandler = handleDirsWindows }
+
+// handleDirsWindows — диски этого ПК и подпапки по имени; иначе —
+// подпапки по имени, без скрытых и системных. Файлов и их содержимого нет; сетевых путей — тоже.
+func handleDirsWindows(w http.ResponseWriter, r *http.Request) {
 	p := r.URL.Query().Get("path")
 	if p == "" {
 		httpx.WriteJSON(w, http.StatusOK, dirsView{Dirs: []string{}, Drives: localDrives()})

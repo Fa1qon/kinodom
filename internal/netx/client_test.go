@@ -614,7 +614,7 @@ func TestNetReasonIsShortRussian(t *testing.T) {
 		err  error
 		want string
 	}{
-		{wrap(&net.OpError{Op: "read", Net: "tcp", Err: os.NewSyscallError("wsarecv", syscall.WSAECONNRESET)}), "соединение сброшено"},
+		{wrap(&net.OpError{Op: "read", Net: "tcp", Err: os.NewSyscallError("wsarecv", syscall.ECONNRESET)}), "соединение сброшено"},
 		{wrap(&net.OpError{Op: "read", Net: "tcp", Err: syscall.ECONNRESET}), "соединение сброшено"},
 		{wrap(io.EOF), "соединение закрылось без ответа"},
 		{wrap(io.ErrUnexpectedEOF), "соединение закрылось без ответа"},
