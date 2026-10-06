@@ -7,6 +7,7 @@ import { remoteNote } from './settings-layout.js';
 import { pickFolder, grantControl } from './folders.js';
 import { fileFieldShown } from './settings-unrecognized.js';
 import { appBridge } from './tvkit.js';
+import { buildTree, decodeGroups, encodeGroups } from './settings-sections.js';
 
 export const STEPS = [
   { id: 'trackers', title: 'Раздачи' },
@@ -86,12 +87,14 @@ export function render(root, r, ctx) {
   } }, icon('network_check'), 'Проверить');
 
   const steps = {
-    // Раздачи: адреса и вход t2, адрес t1, прокси. «Проверить» сначала сохраняет поля.
+    // Раздачи: адреса и вход t2, адрес t1, поиск Jacred, разделы каталога (все отмечены —
+    // просьба 2026-10-06), прокси. «Проверить» и «Далее» сначала сохраняют поля.
     async trackers() {
       const v = await get('/settings');
       const f = {
         rtAddress: input('rtAddress', v.t2.address, { inputmode: 'url' }), rtLogin: input('rtLogin', v.t2.login),
         rtPassword: secret('rtPassword', v.t2.passwordSet), t1Address: input('t1Address', v.t1.address, { inputmode: 'url' }),
+        searchAddress: input('searchAddress', v.search.address, { inputmode: 'url', placeholder: 'https://jac.red' }),
         proxyAddress: input('proxyAddress', v.proxy.address), proxyLogin: input('proxyLogin', v.proxy.login), proxyPassword: secret('proxyPassword', v.proxy.passwordSet),
       };
       const types = [['none', 'Нет'], ['http', 'HTTP'], ['socks5', 'SOCKS5']];
@@ -99,10 +102,90 @@ export function render(root, r, ctx) {
         h('input', { type: 'radio', name: 'ptype', value: id, checked: v.proxy.type === id, disabled: !canEdit(), 'data-key': `ptype-${id}` }), t)));
       const rtResult = result();
       const t1Result = result();
+
+      // Разделы каталога: выбор не трогаем, пока деревья не загрузились (без сети разделы уйдут бы).
+      let groups = null; // группы t2 и их подразделы первого уровня
+      let fullTree = null;
+      let t1Cats = [];
+      const sel = new Set();
+      const t1Sel = new Set();
+      try {
+        // Каждый список — сам по себе: t2 недоступен, а категории t1 пусть загрузятся.
+        const [level, full, t1] = await Promise.allSettled([
+          get('/sources/t2/categories?level=1'), get('/sources/t2/categories'), get('/sources/t1/categories'),
+        ]);
+        const saved = (v.catalog && v.catalog.sections) || {};
+        if (level.status === 'fulfilled' && full.status === 'fulfilled') {
+          fullTree = buildTree(full.value);
+          groups = buildTree(level.value);
+          if (groups.roots.some((g) => g.children.length > 0)) {
+            if ((saved.t2 || []).length) {
+              for (const id of decodeGroups(fullTree, groups, saved.t2)) sel.add(id);
+            } else {
+              for (const g of groups.roots) for (const c of g.children) sel.add(c.id); // по умолчанию — все
+            }
+          } else {
+            groups = null;
+          }
+        }
+        if (t1.status === 'fulfilled') {
+          t1Cats = t1.value || [];
+          if ((saved.t1 || []).length) {
+            for (const id of saved.t1) t1Sel.add(id);
+          } else {
+            for (const c of t1Cats) t1Sel.add(c.id);
+          }
+        }
+      } catch {
+        groups = null;
+        t1Cats = [];
+      }
+      const groupBox = h('div', { class: 'groups' });
+      const t1Box = h('div', { class: 'checks' });
+      const drawGroups = () => {
+        if (!groups) return;
+        const active = document.activeElement;
+        const key = active && groupBox.contains(active) ? active.dataset.key : null;
+        groupBox.replaceChildren(...groups.roots.filter((g) => g.children.length > 0).map((g) => {
+          const ids = g.children.map((c) => c.id);
+          const n = ids.filter((id) => sel.has(id)).length;
+          return h('div', { class: 'group' },
+            h('label', { class: 'check group-head' },
+              h('input', { type: 'checkbox', name: `st-${g.id}`, checked: n === ids.length, indeterminate: n > 0 && n < ids.length, disabled: !canEdit(),
+                'data-key': `st-${g.id}`, onchange: () => {
+                  const all = n === ids.length;
+                  for (const id of ids) (all ? sel.delete(id) : sel.add(id));
+                  drawGroups();
+                } }),
+              h('span', { class: 'grow' }, g.name),
+              n > 0 ? h('span', { class: 'count' }, n === ids.length ? `все ${ids.length}` : `${n} из ${ids.length}`) : null),
+            h('div', { class: 'list' }, g.children.map((c) => h('label', { class: 'check' },
+              h('input', { type: 'checkbox', name: `st-${c.id}`, checked: sel.has(c.id), disabled: !canEdit(), 'data-key': `st-${c.id}`, onchange: (e) => {
+                if (e.target.checked) sel.add(c.id);
+                else sel.delete(c.id);
+                drawGroups();
+              } }), c.name))));
+        }));
+        if (key) groupBox.querySelector(`[data-key="${CSS.escape(key)}"]`)?.focus({ preventScroll: true });
+      };
+      const drawt1 = () => t1Box.replaceChildren(...t1Cats.map((c) => h('label', { class: 'check' },
+        h('input', { type: 'checkbox', name: `sr-${c.id}`, checked: t1Sel.has(c.id), disabled: !canEdit(), 'data-key': `sr-${c.id}`,
+          onchange: (e) => (e.target.checked ? t1Sel.add(c.id) : t1Sel.delete(c.id)) }), c.name)));
+      // sectionsPatch — словарь целиком: у трекера без записи сервер потерял бы его разделы. Деревья
+      // не загрузились — patch null: каталог в запросе не участвует, серверные разделы остаются.
+      const sectionsPatch = () => (groups === null && t1Cats.length === 0 ? null : {
+        t2: groups ? encodeGroups(groups, sel) : (v.catalog && v.catalog.sections && v.catalog.sections.t2) || [],
+        t1: t1Cats.length ? t1Cats.filter((c) => t1Sel.has(c.id)).map((c) => c.id)
+          : (v.catalog && v.catalog.sections && v.catalog.sections.t1) || [],
+      });
+
       const save = async () => {
         const val = (k) => f[k].value.trim();
         const p = { t2: { address: val('rtAddress'), login: val('rtLogin') }, t1: { address: val('t1Address') } };
         if (f.rtPassword.value) p.t2.password = f.rtPassword.value;
+        const sp = sectionsPatch();
+        if (sp) p.catalog = { sections: sp };
+        p.search = { address: val('searchAddress') };
         const type = ptype.querySelector('input:checked').value;
         if (type !== v.proxy.type || val('proxyAddress') !== v.proxy.address || val('proxyLogin') !== v.proxy.login || f.proxyPassword.value) {
           p.proxy = type === 'none' ? { type } : { type, address: val('proxyAddress'), login: val('proxyLogin') };
@@ -111,6 +194,7 @@ export function render(root, r, ctx) {
         Object.assign(v, await put('/settings', p));
         f.rtAddress.value = v.t2.address; // адрес — как его сохранил сервер: «схема://хост»
         f.t1Address.value = v.t1.address;
+        f.searchAddress.value = v.search.address;
         f.rtPassword.value = f.proxyPassword.value = '';
         f.rtPassword.placeholder = v.t2.passwordSet ? 'задан' : '';
         f.proxyPassword.placeholder = v.proxy.passwordSet ? 'задан' : '';
@@ -125,12 +209,20 @@ export function render(root, r, ctx) {
         await save();
         return true;
       };
+      if (groups) drawGroups();
+      if (t1Cats.length) drawt1();
       return [
         h('div', { class: 'card' }, h('div', { class: 'h' }, 't2'), field('Адрес сайта', f.rtAddress),
           h('div', { class: 'two' }, field('Логин', f.rtLogin), field('Пароль', f.rtPassword)),
           h('div', { class: 'row gap10' }, checkBtn('check-t2', check('t2', rtResult)), rtResult)),
         h('div', { class: 'card' }, h('div', { class: 'h' }, 't1'), field('Адрес сайта или зеркала', f.t1Address),
           h('div', { class: 'row gap10' }, checkBtn('check-t1', check('t1', t1Result)), t1Result)),
+        h('div', { class: 'card' }, h('div', { class: 'h' }, 'Поиск раздач'), field('Адрес сервиса Jacred', f.searchAddress),
+          h('p', { class: 'muted small' }, 'Поиск по названию. Пусто — поиск выключен.')),
+        h('div', { class: 'card' }, h('div', { class: 'h' }, 'Разделы каталога'),
+          h('p', { class: 'muted small' }, 'Какие разделы показывать в «Каталоге». По умолчанию отмечены все.'),
+          groups ? groupBox : h('p', { class: 'muted small' }, 'Разделы t2 не загрузились — сохранённый выбор не изменится.'),
+          t1Cats.length ? t1Box : null),
         h('div', { class: 'card' }, h('div', { class: 'h' }, 'Прокси для трекеров'), ptype, field('Адрес', f.proxyAddress),
           h('div', { class: 'two' }, field('Логин', f.proxyLogin), field('Пароль', f.proxyPassword))),
       ];
@@ -181,10 +273,18 @@ export function render(root, r, ctx) {
         fileFieldShown(appBridge(), '*/*') ? h('button', { class: 'btn', type: 'button', 'data-key': 'pl-file', onclick: () => file.click() }, icon('upload'), 'Файлом') : null, file) : null);
     },
 
-    // Медиатека: папки с фильмами и сериалами (обзор кликами или путь), «Найти» — обход и сверка с
-    // Кинопоиском, ход — «найдено N, распознано M».
+    // Медиатека: папка загрузок, папки с фильмами и сериалами (обзор кликами или путь), «Найти» —
+    // обход и сверка с Кинопоиском, ход — «найдено N, распознано M».
     async library() {
-      let cats = await get('/library/categories');
+      const [cats0, v] = await Promise.all([get('/library/categories'), get('/settings')]);
+      let cats = cats0;
+      const dl = input('dlDir', v.storage.downloadsDir, { 'aria-label': 'Папка загрузок' });
+      const saveDownloads = async () => {
+        const dir = dl.value.trim();
+        if (!dir || dir === v.storage.downloadsDir) return;
+        Object.assign(v, await put('/settings', { storage: { downloadsDir: dir } }));
+        dl.value = v.storage.downloadsDir; // как сохранил сервер (сравнение путей — его)
+      };
       const wanted = [['films', 'Папка с фильмами'], ['series', 'Папка с сериалами']];
       const rows = new Map(); // категория → поля новых папок
       const progress = h('div', { class: 'small', role: 'status' });
@@ -245,6 +345,7 @@ export function render(root, r, ctx) {
         }
       };
       const find = async () => {
+        await saveDownloads();
         for (const c of cats) {
           const add = (rows.get(c.id) || []).map((el) => el.value.trim()).filter(Boolean);
           if (!add.length) continue;
@@ -258,11 +359,19 @@ export function render(root, r, ctx) {
         if (!stop) stop = poll(watch, 2000).stop;
       };
       next = async () => {
+        await saveDownloads();
         if ([...rows.values()].some((l) => l.some((el) => el.value.trim()))) await find();
         return true;
       };
       draw();
-      return [box, h('div', { class: 'row gap10' }, h('button', { class: 'btn inv', type: 'button', 'data-key': 'lib-find', disabled: !canEdit(), onclick: async (e) => {
+      const dlCard = h('div', { class: 'card' }, h('div', { class: 'h' }, 'Папка загрузок'),
+        h('div', { class: 'row gap10' }, h('div', { class: 'grow' }, dl),
+          h('button', { class: 'btn', type: 'button', 'data-key': 'dl-browse', disabled: !canEdit(), onclick: async () => {
+            const p = await pickFolder(dl.value.trim());
+            if (p) dl.value = p;
+          } }, icon('folder_open'), 'Обзор')),
+        h('p', { class: 'muted small' }, 'Куда Kinodom скачивает раздачи. Инсталлятор уже предложил папку — здесь её можно поменять.'));
+      return [dlCard, box, h('div', { class: 'row gap10' }, h('button', { class: 'btn inv', type: 'button', 'data-key': 'lib-find', disabled: !canEdit(), onclick: async (e) => {
         const b = e.currentTarget;
         b.disabled = true;
         err.textContent = '';

@@ -20,12 +20,14 @@ import * as settingsIPTV from './views/settings-iptv.js';
 import * as settingsUnrecognized from './views/settings-unrecognized.js';
 import * as settingsApp from './views/settings-app.js';
 import * as setup from './views/setup.js';
+import { openHelp } from './views/help.js';
 import * as updates from './views/updates.js';
 import * as player from './views/player.js';
+import * as channelPlayer from './views/channel-player.js';
 import { settingsRoute } from './views/settings-layout.js';
 
 // views — экраны по первой части адреса; у «Настроек» — по второй.
-const views = { catalog, release, search, downloads, channels, channel, history, library, setup, updates, play: player };
+const views = { catalog, release, search, downloads, channels, channel, history, library, setup, updates, play: player, 'channel-play': channelPlayer };
 const settingsViews = { status: settingsStatus, params: settingsParams, sections: settingsSections, iptv: settingsIPTV, unrecognized: settingsUnrecognized,
   library: settingsLibrary, app: settingsApp };
 
@@ -82,12 +84,14 @@ function buildHeader() {
     onclick: () => setMenu(!top.classList.contains('open')) }, icon('menu'));
   bellCount = h('span', { class: 'bell-n' });
   bell = h('a', { class: 'sq bell', href: '#/updates', 'aria-label': 'Новые серии', 'data-key': 'bell' }, icon('notifications'), bellCount);
+  const helpBtn = h('button', { class: 'sq', type: 'button', 'aria-label': 'Справка', title: 'Справка', 'data-key': 'help', onclick: openHelp }, icon('help_outline'));
   top.append(
     // Логотип заказчика: иконка, затем надпись (нарезка — assets/logo/cut.py).
     h('a', { class: 'logo', href: '#/', 'aria-label': 'Kinodom' },
       h('img', { class: 'logo-icon', src: 'logo-icon.png', alt: '' }), h('img', { class: 'logo-text', src: 'logo-text.png', alt: '' })),
     nav,
     h('div', { class: 'grow' }),
+    helpBtn,
     bell,
     searchBtn,
     menuButton,
@@ -102,7 +106,7 @@ function setMenu(open) {
 
 // updateHeader — выбранный раздел и жёлтый значок у «Настроек», если есть хоть одна проблема.
 function updateHeader(r) {
-  document.body.classList.toggle('playing', r.parts[0] === 'play'); // плеер — во всё окно, без шапки (план 18Б)
+  document.body.classList.toggle('playing', r.parts[0] === 'play' || r.parts[0] === 'channel-play'); // плеер — во всё окно, без шапки (план 18Б)
   const current = { release: 'catalog', channel: 'channels' }[r.parts[0]] || r.parts[0];
   navLinks.catalog.href = defaultRoute();
   for (const [id, a] of Object.entries(navLinks)) {
