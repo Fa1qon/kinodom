@@ -591,20 +591,44 @@ class PultActivity : Activity() {
         }
 
         @JavascriptInterface
-        fun player(): String = Prefs(this@PultActivity).player.id
+        fun player(): String = Prefs(this@PultActivity).channelPlaybackMode.id
 
         @JavascriptInterface
         fun setPlayer(mode: String) {
-            PlayerMode.of(mode)?.let { Prefs(this@PultActivity).player = it }
+            PlayerMode.of(mode)?.let { Prefs(this@PultActivity).channelPlaybackMode = it }
         }
 
-        // moviePlayer, setMoviePlayer — плеер фильмов (план 18В): встроенный или VLC.
         @JavascriptInterface
-        fun moviePlayer(): String = Prefs(this@PultActivity).moviePlayer.id
+        fun playbackMode(): String = Prefs(this@PultActivity).playbackMode.id
+
+        @JavascriptInterface
+        fun setPlaybackMode(mode: String) {
+            PlayerMode.of(mode)?.let { Prefs(this@PultActivity).playbackMode = it }
+        }
+
+        @JavascriptInterface
+        fun moviePlaybackMode(): String = Prefs(this@PultActivity).moviePlaybackMode.id
+
+        @JavascriptInterface
+        fun setMoviePlaybackMode(mode: String) {
+            PlayerMode.of(mode)?.let { Prefs(this@PultActivity).moviePlaybackMode = it }
+        }
+
+        @JavascriptInterface
+        fun channelPlaybackMode(): String = Prefs(this@PultActivity).channelPlaybackMode.id
+
+        @JavascriptInterface
+        fun setChannelPlaybackMode(mode: String) {
+            PlayerMode.of(mode)?.let { Prefs(this@PultActivity).channelPlaybackMode = it }
+        }
+        // Compatibility aliases for older web clients.
+        // moviePlayer, setMoviePlayer — compatibility aliases for the movie mode.
+        @JavascriptInterface
+        fun moviePlayer(): String = Prefs(this@PultActivity).moviePlaybackMode.id
 
         @JavascriptInterface
         fun setMoviePlayer(mode: String) {
-            PlayerMode.of(mode)?.let { Prefs(this@PultActivity).moviePlayer = it }
+            PlayerMode.of(mode)?.let { Prefs(this@PultActivity).moviePlaybackMode = it }
         }
 
         // playMovie — «Смотреть» фильм или серию src («torrent/<hash>/<номер>», «library/<номер>») в своём плеере; не тот

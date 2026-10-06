@@ -33,6 +33,7 @@ import androidx.media3.common.Tracks
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.datasource.DefaultHttpDataSource
 import androidx.media3.exoplayer.ExoPlayer
+import androidx.media3.exoplayer.analytics.AnalyticsListener
 import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
 import androidx.media3.ui.AspectRatioFrameLayout
 import androidx.media3.ui.PlayerView
@@ -50,6 +51,7 @@ import ru.kinodom.app.core.Lineup
 import ru.kinodom.app.core.NowTitles
 import ru.kinodom.app.core.Source
 import ru.kinodom.app.core.Sources
+import ru.kinodom.app.core.TechInfo
 import ru.kinodom.app.core.Tuner
 import ru.kinodom.app.net.Api
 import ru.kinodom.app.net.Logos
@@ -70,6 +72,8 @@ class PlayerActivity : Activity() {
     private lateinit var corner: TextView
     private lateinit var plate: InfoPlate
     private lateinit var panel: ChannelPanel
+    private lateinit var tech: TechPanel
+    private var dropped = 0 // пропущенные кадры текущего источника (техпанель)
     private var sounds: Sounds? = null // звуки списка каналов (план 16В)
     private lateinit var logos: Logos
     private var player: ExoPlayer? = null
@@ -90,6 +94,13 @@ class PlayerActivity : Activity() {
     private var titlesAt = 0L
     private val hidePlate = Runnable { plate.hide() }
     private val hideCorner = Runnable { corner.visibility = View.GONE }
+    private val techTick = object : Runnable { // техпанель обновляется, пока показана
+        override fun run() {
+            if (!tech.shown) return
+            tech.show(techLines())
+            handler.postDelayed(this, 1000)
+        }
+    }
     private val zap = Runnable { switchTo(tuner.commit()) }
     private val number = Runnable { pickNumber() }
     private val minute = object : Runnable {
@@ -148,7 +159,7 @@ class PlayerActivity : Activity() {
         // Кнопка «Список» — телефону; эмулятор ТВ тоже сообщает о сенсорном экране, поэтому ТВ — по leanback.
         val touch = packageManager.hasSystemFeature(PackageManager.FEATURE_TOUCHSCREEN) &&
             !packageManager.hasSystemFeature(PackageManager.FEATURE_LEANBACK)
-        plate = InfoPlate(this, logos, touch) { openPanel() }
+        plate = InfoPlate(this, logos, touch, { openPanel() }, { toggleTech() })
         root.addView(plate.view)
         panel = ChannelPanel(this, l.items, logos, { sounds?.play(it) }) { i ->
             panel.hide()
@@ -157,6 +168,9 @@ class PlayerActivity : Activity() {
             switchTo(i)
         }
         root.addView(panel.view)
+        tech = TechPanel(this)
+        root.addView(tech.view, FrameLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT, Gravity.TOP or Gravity.END)
+            .apply { setMargins(m, m, m, m) })
         val gestures = GestureDetector(this, object : GestureDetector.SimpleOnGestureListener() {
             override fun onDown(e: MotionEvent) = true
 
@@ -206,6 +220,7 @@ class PlayerActivity : Activity() {
         if (!::tuner.isInitialized) return
         player = ExoPlayer.Builder(this).build().also {
             it.addListener(listener)
+            it.addAnalyticsListener(analytics)
             video.player = it
         }
         playing = -1
@@ -318,13 +333,53 @@ class PlayerActivity : Activity() {
         }
         when {
             panel.shown -> closePanel()
+            tech.shown -> tech.hide()
             plate.shown -> plate.hide()
             else -> finish()
         }
     }
 
+    // toggleTech — техпанель (план 2026-10-06, B3): длинное «Инфо» пульта или «Сведения» в плашке.
+    private fun toggleTech() {
+        if (tech.shown) {
+            tech.hide()
+            return
+        }
+        plate.hide()
+        tech.show(techLines())
+        handler.removeCallbacks(techTick)
+        handler.postDelayed(techTick, 1000)
+    }
+
+    // techLines — строки из текущего состояния Media3, того же вида, что в плеере фильмов.
+    private fun techLines(): List<String> {
+        val p = player ?: return listOf(getString(R.string.tech_empty))
+        val vf = p.videoFormat
+        val af = p.audioFormat
+        val buf = (p.bufferedPosition - p.currentPosition).coerceAtLeast(0) / 1000
+        return TechInfo.panel(vf?.sampleMimeType, vf?.width ?: 0, vf?.height ?: 0, vf?.frameRate ?: -1f,
+            af?.sampleMimeType, buf, dropped)
+    }
+
+    // analytics — пропущенные кадры для техпанели.
+    private val analytics = object : AnalyticsListener {
+        override fun onDroppedVideoFrames(eventTime: AnalyticsListener.EventTime, droppedFrames: Int, elapsedMs: Long) {
+            dropped += droppedFrames
+        }
+    }
+
+    // Длинное «Инфо» — техпанель; короткое остаётся плашкой с передачей (спека 4.4).
+    override fun onKeyLongPress(keyCode: Int, event: KeyEvent): Boolean {
+        if (::tuner.isInitialized && keyCode == KeyEvent.KEYCODE_INFO && !panel.shown) {
+            toggleTech()
+            return true
+        }
+        return super.onKeyLongPress(keyCode, event)
+    }
+
     private fun openPanel() {
         plate.hide()
+        tech.hide()
         panel.show(tuner.current)
         loadTitles()
     }
@@ -387,6 +442,8 @@ class PlayerActivity : Activity() {
         loading?.cancel()
         handler.removeCallbacks(silence)
         player?.stop()
+        dropped = 0 // у нового источника — свой счёт (техпанель)
+        tech.hide()
         message.visibility = View.GONE
         val ch = lineup.items[i]
         loading = scope.launch {

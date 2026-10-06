@@ -21,8 +21,10 @@ import android.view.View
 import android.view.ViewGroup
 import android.view.WindowManager
 import android.widget.FrameLayout
+import android.widget.ImageView
 import android.widget.LinearLayout
 import android.widget.ProgressBar
+import android.widget.SeekBar
 import android.widget.TextView
 import android.window.OnBackInvokedDispatcher
 import androidx.annotation.OptIn
@@ -39,6 +41,7 @@ import androidx.media3.common.Tracks
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.datasource.HttpDataSource
 import androidx.media3.exoplayer.ExoPlayer
+import androidx.media3.exoplayer.analytics.AnalyticsListener
 import androidx.media3.ui.AspectRatioFrameLayout
 import androidx.media3.ui.PlayerView
 import kotlinx.coroutines.CoroutineStart
@@ -48,6 +51,7 @@ import kotlinx.coroutines.cancel
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import ru.kinodom.app.R
+import ru.kinodom.app.core.DropWatch
 import ru.kinodom.app.core.Foreground
 import ru.kinodom.app.core.Hold
 import ru.kinodom.app.core.Mem
@@ -56,14 +60,17 @@ import ru.kinodom.app.core.MovieSub
 import ru.kinodom.app.core.MovieTrack
 import ru.kinodom.app.core.MovieTracks
 import ru.kinodom.app.core.MovieUrls
+import ru.kinodom.app.core.TechInfo
 import ru.kinodom.app.core.TrackMap
 import ru.kinodom.app.net.Api
 import ru.kinodom.app.net.Prefs
 
 // MoviePlayerActivity — плеер фильмов приложения (спека цикла 18, раздел 6; план 18В). Прямо — исходный файл (Media3
 // сам решает, умеет ли ТВ звук); выбранную озвучку ТВ не умеет — поток сервера с ключевого кадра, звук в AAC
-// (stream.mkv, перемотка — новым потоком). Пульт ТВ: кнопки скрыты — OK пауза, ←/→ перемотка (удержание —
-// шаг растёт), «Назад» — закрыть; кнопки показаны — шкала и ряд «Пауза, Озвучка, Субтитры, Следующая серия».
+// (stream.mkv, перемотка — новым потоком). Кнопки — значки: предыдущая серия, пауза/просмотр, следующая,
+// озвучка, субтитры; под ними — шкала положения фильма (касанием — перемотка). Пульт ТВ: кнопки скрыты —
+// OK пауза, ←/→ перемотка (удержание — шаг растёт), «Назад» — закрыть; кнопки показаны — шкала и ряд значков
+// (вниз/вверх — между ними, ←/→ по значкам, ⏮/⏭ — соседние серии).
 @OptIn(UnstableApi::class)
 class MoviePlayerActivity : Activity() {
     private lateinit var base: String
@@ -78,6 +85,8 @@ class MoviePlayerActivity : Activity() {
     private var info: MovieInfo? = null
     private var player: ExoPlayer? = null
     private var fallback = false // поток сервера вместо исходного файла
+    private var dropped = 0 // пропущенные кадры текущего источника (техпанель и DropWatch, план 2026-10-06)
+    private val drops = DropWatch() // решение «пора на запасной путь» (план 2026-10-06, Task C)
     private var k = 0.0 // кадр начала потока запасного пути
     private var audio: MovieTrack? = null
     private var sub: MovieSub? = null
@@ -86,21 +95,23 @@ class MoviePlayerActivity : Activity() {
     private var resumeAt = -1.0 // откуда начать, когда источник откроется
     private var opened = false // источник открыт (не грузятся сведения)
     private var openSeq = 0 // номер открытия: ответ ключевого кадра прежнего открытия не перебивает новое (быстрые ⏩)
-    private var hold: Hold? = null
-    private var holdTime = 0L
-    private var row = 0 // фокус в кнопках: 0 — шкала, 1 — ряд кнопок
-    private var col = 0
-    private var nextLeft = 0
+	private var hold: Hold? = null
+	private var holdTime = 0L
+	private var scrubbing = false // палец на шкале: часы не перебивают предпросмотр времени
+	private var row = 0 // фокус в кнопках: 0 — шкала, 1 — ряд кнопок
+	private var col = 0
+	private var nextLeft = 0
 
-    private lateinit var root: FrameLayout
-    private lateinit var video: PlayerView
-    private lateinit var load: ProgressBar
-    private lateinit var controls: LinearLayout
-    private lateinit var title: TextView
-    private lateinit var bar: ProgressBar
-    private lateinit var time: TextView
-    private lateinit var buttons: List<TextView>
+	private lateinit var root: FrameLayout
+	private lateinit var video: PlayerView
+	private lateinit var load: ProgressBar
+	private lateinit var controls: LinearLayout
+	private lateinit var title: TextView
+	private lateinit var bar: SeekBar
+	private lateinit var time: TextView
+	private lateinit var buttons: List<ImageView>
     private lateinit var menu: TrackMenu
+    private lateinit var tech: TechPanel
     private lateinit var box: LinearLayout // сообщение или «Следующая»
     private lateinit var boxText: TextView
     private lateinit var boxButtons: LinearLayout
@@ -119,6 +130,8 @@ class MoviePlayerActivity : Activity() {
     private val clock = object : Runnable {
         override fun run() {
             drawTime()
+            if (tech.shown) tech.show(techLines())
+            watchDrops()
             handler.postDelayed(this, 500)
         }
     }
@@ -185,13 +198,42 @@ class MoviePlayerActivity : Activity() {
         load = ProgressBar(this)
         root.addView(load, FrameLayout.LayoutParams(Screens.dp(this, 56), Screens.dp(this, 56), Gravity.CENTER))
         title = text(22f, true).apply { setPadding(pad, pad, pad, pad); maxLines = 1 }
-        bar = ProgressBar(this, null, android.R.attr.progressBarStyleHorizontal).apply { max = 1000 }
-        time = text(18f)
-        val names = listOf(R.string.movie_pause, R.string.movie_audio, R.string.movie_subs, R.string.movie_next)
-        buttons = names.mapIndexed { i, n ->
-            text(18f).apply {
-                setText(n)
-                setPadding(pad / 2, pad / 3, pad / 2, pad / 3)
+        bar = SeekBar(this).apply {
+            max = 1000
+            // Фокус на шкале рисуется сам (row/col): ←/→ у шкалы — перемотка удержанием, OK — пауза.
+            isFocusable = false
+            isFocusableInTouchMode = false
+            setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
+                override fun onStartTrackingTouch(s: SeekBar?) {
+                    scrubbing = true
+                    handler.removeCallbacks(hide)
+                }
+
+                override fun onProgressChanged(s: SeekBar?, progress: Int, fromUser: Boolean) {
+                    if (fromUser) time.text = "${fmt(progress / 1000.0 * dur())} / ${fmt(dur())}"
+                }
+
+                override fun onStopTrackingTouch(s: SeekBar?) {
+                    scrubbing = false
+                    seekTo((s?.progress ?: 0) / 1000.0 * dur())
+                }
+            })
+        }
+        time = text(18f).apply { gravity = Gravity.END }
+        val icons = listOf(
+            R.drawable.ic_prev to R.string.movie_prev_desc,
+            R.drawable.ic_pause to R.string.movie_pause_desc,
+            R.drawable.ic_next to R.string.movie_next_desc,
+            R.drawable.ic_audio to R.string.movie_audio_desc,
+            R.drawable.ic_subs to R.string.movie_subs_desc,
+            R.drawable.ic_info to R.string.movie_info_desc,
+        )
+        buttons = icons.mapIndexed { i, (res, desc) ->
+            ImageView(this).apply {
+                setImageResource(res)
+                contentDescription = getString(desc)
+                setColorFilter(Color.WHITE)
+                setPadding(pad / 3, pad / 3, pad / 3, pad / 3)
                 setOnClickListener { press(i) }
                 isFocusable = false // фокус кнопок рисуется сам (row/col): из меню он уходил на них, OK их нажимал (ревью 18В, I5)
                 isFocusableInTouchMode = false
@@ -200,14 +242,14 @@ class MoviePlayerActivity : Activity() {
         val rowView = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
+            buttons.forEach { addView(it, LinearLayout.LayoutParams(Screens.dp(this@MoviePlayerActivity, 36), Screens.dp(this@MoviePlayerActivity, 36))) }
             addView(time, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
-            buttons.forEach { addView(it) }
         }
         controls = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             background = GradientDrawable(GradientDrawable.Orientation.BOTTOM_TOP, intArrayOf(0xE6000000.toInt(), 0x00000000))
             setPadding(pad, pad * 2, pad, pad)
-            addView(bar, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, Screens.dp(this@MoviePlayerActivity, 10)))
+            addView(bar, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, Screens.dp(this@MoviePlayerActivity, 28)))
             addView(rowView, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
         }
         root.addView(title, FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT, Gravity.TOP).apply {
@@ -216,6 +258,9 @@ class MoviePlayerActivity : Activity() {
         root.addView(controls, FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT, Gravity.BOTTOM))
         menu = TrackMenu(this) { i -> pickFromMenu(i) }
         root.addView(menu.view, FrameLayout.LayoutParams(Screens.dp(this, 380), ViewGroup.LayoutParams.WRAP_CONTENT, Gravity.END or Gravity.BOTTOM)
+            .apply { setMargins(pad, pad, pad, Screens.dp(this@MoviePlayerActivity, 140)) })
+        tech = TechPanel(this)
+        root.addView(tech.view, FrameLayout.LayoutParams(Screens.dp(this, 380), ViewGroup.LayoutParams.WRAP_CONTENT, Gravity.END or Gravity.BOTTOM)
             .apply { setMargins(pad, pad, pad, Screens.dp(this@MoviePlayerActivity, 140)) })
         boxText = text(20f).apply { gravity = Gravity.CENTER }
         boxButtons = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER }
@@ -269,6 +314,7 @@ class MoviePlayerActivity : Activity() {
         if (!::src.isInitialized) return
         player = ExoPlayer.Builder(this).build().also {
             it.addListener(listener)
+            it.addAnalyticsListener(analytics)
             video.player = it
         }
         val at = if (info != null) pos() else -1.0
@@ -307,9 +353,11 @@ class MoviePlayerActivity : Activity() {
             }
             info = i
             title.text = i.title
-            buttons[3].visibility = if (i.nextSrc != null) View.VISIBLE else View.GONE
-            buttons[1].visibility = if (i.audio.size > 1) View.VISIBLE else View.GONE
-            buttons[2].visibility = if (i.subs.isNotEmpty()) View.VISIBLE else View.GONE
+            buttons[0].visibility = if (i.prevSrc != null) View.VISIBLE else View.GONE
+            if (i.prevSrc != null) buttons[0].contentDescription = getString(R.string.movie_prev_in, i.prevTitle)
+            buttons[2].visibility = if (i.nextSrc != null) View.VISIBLE else View.GONE
+            buttons[3].visibility = if (i.audio.size > 1) View.VISIBLE else View.GONE
+            buttons[4].visibility = if (i.subs.isNotEmpty()) View.VISIBLE else View.GONE
             audio = MovieTracks.pickAudio(i.audio, prefs.trackMem("audio", i.hash))
             sub = MovieTracks.pickSub(i.subs, prefs.trackMem("subs", i.hash), true)
             fallback = false
@@ -327,7 +375,10 @@ class MoviePlayerActivity : Activity() {
         val n = ++openSeq
         opened = true
         decided = false
+        dropped = 0 // у нового источника — свой счёт (техпанель и запасной путь)
+        drops.onStart(SystemClock.uptimeMillis())
         box.visibility = View.GONE
+        tech.hide()
         load.visibility = View.VISIBLE
         if (!fallback) {
             val subs = i.subs.filter { it.external }.map { s ->
@@ -399,6 +450,14 @@ class MoviePlayerActivity : Activity() {
         Log.i(TAG, "${if (fallback) "поток сервера" else "прямо"}: озвучка ${audio?.id}, субтитры ${sub?.id}")
     }
 
+    // analytics — пропущенные кадры: техпанель и решение «пора на запасной путь» (DropWatch, Task C).
+    private val analytics = object : AnalyticsListener {
+        override fun onDroppedVideoFrames(eventTime: AnalyticsListener.EventTime, droppedFrames: Int, elapsedMs: Long) {
+            dropped += droppedFrames
+            drops.onDropped(SystemClock.uptimeMillis(), droppedFrames)
+        }
+    }
+
     private val listener = object : Player.Listener {
         override fun onTracksChanged(tracks: Tracks) {
             if (!tracks.isEmpty) decideTracks(tracks)
@@ -411,7 +470,8 @@ class MoviePlayerActivity : Activity() {
 
         override fun onIsPlayingChanged(isPlaying: Boolean) {
             video.keepScreenOn = isPlaying // экран не гаснет, пока идёт фильм; на паузе — как обычно (ревью 18В)
-            buttons[0].setText(if (isPlaying) R.string.movie_pause else R.string.movie_play)
+            buttons[1].setImageResource(if (isPlaying) R.drawable.ic_pause else R.drawable.ic_play)
+            buttons[1].contentDescription = getString(if (isPlaying) R.string.movie_pause_desc else R.string.movie_play_desc)
             if (!isPlaying) {
                 report()
                 if (box.visibility != View.VISIBLE) showControls(true) // за окном «Следующая» или ошибки — без кнопок
@@ -468,14 +528,27 @@ class MoviePlayerActivity : Activity() {
     private fun goNext() {
         handler.removeCallbacks(countdown)
         val n = info?.nextSrc ?: return
+        switchEpisode(n, false)
+    }
+
+    // goPrev — значок и ⏮ пульта: предыдущая серия с начала (её сохранённое место — обычно самый конец).
+    private fun goPrev() {
+        val p = info?.prevSrc ?: return
+        switchEpisode(p, true)
+    }
+
+    private fun switchEpisode(src: String, fromStart: Boolean) {
         report()
-        src = n
-        fromStart = false
+        this.src = src
+        this.fromStart = fromStart
         info = null
         fallback = false
         retried = false // у новой серии — свой повтор (ревью 18В)
         openSeq++ // ответ ключевого кадра прошлой серии не откроет её поток
         hold = null
+        col = 0
+        buttons[0].visibility = View.GONE // соседей новой серии скажут её сведения
+        buttons[2].visibility = View.GONE
         menu.hide()
         box.visibility = View.GONE
         player?.stop()
@@ -553,6 +626,7 @@ class MoviePlayerActivity : Activity() {
     }
 
     private fun drawTime() {
+        if (scrubbing) return // палец на шкале — предпросмотр места уже показан
         val t = hold?.target?.coerceIn(0.0, dur()) ?: pos()
         bar.progress = if (dur() > 0) (t / dur() * 1000).toInt() else 0
         time.text = "${fmt(t)} / ${fmt(dur())}"
@@ -593,11 +667,41 @@ class MoviePlayerActivity : Activity() {
     private fun press(n: Int) {
         sounds?.play("select")
         when (n) {
-            0 -> togglePause()
-            1 -> openMenu("audio")
-            2 -> openMenu("subs")
-            3 -> goNext()
+            0 -> goPrev()
+            1 -> togglePause()
+            2 -> goNext()
+            3 -> openMenu("audio")
+            4 -> openMenu("subs")
+            5 -> toggleTech()
         }
+    }
+
+    // techLines — строки техпанели из текущего состояния Media3 (план 2026-10-06, Task B).
+    private fun techLines(): List<String> {
+        val p = player ?: return listOf(getString(R.string.tech_empty))
+        val vf = p.videoFormat
+        val af = p.audioFormat
+        val buf = (p.bufferedPosition - p.currentPosition).coerceAtLeast(0) / 1000
+        return TechInfo.panel(vf?.sampleMimeType, vf?.width ?: 0, vf?.height ?: 0, vf?.frameRate ?: -1f,
+            af?.sampleMimeType, buf, dropped)
+    }
+
+    // watchDrops — устойчиво пропадают кадры при прямом воспроизведении — один переход на поток сервера
+    // с сохранением места (план 2026-10-06, Task C). Запасной путь — remux в MPEG-TS: контейнерные
+    // подтормаживания AVI/MP4 он чинит, поэтому решения в нём самого не ждут. Кодек, который телевизор
+    // не декодирует вовсе, — не здесь: это fail с «Открыть в VLC» (remux видео не меняет).
+    private fun watchDrops() {
+        val p = player ?: return
+        if (fallback || !opened || !p.isPlaying || drops.fired()) return
+        if (!drops.shouldFallback(SystemClock.uptimeMillis(), p.videoFormat?.frameRate ?: -1f)) return
+        Log.i(TAG, "кадры пропадают устойчиво (${dropped} шт.) — поток сервера")
+        val at = pos()
+        fallback = true
+        open(at)
+    }
+
+    private fun toggleTech() {
+        if (tech.shown) tech.hide() else tech.show(techLines())
     }
 
     private var menuKind = ""
@@ -671,6 +775,10 @@ class MoviePlayerActivity : Activity() {
         when (code) {
             KeyEvent.KEYCODE_DPAD_CENTER, KeyEvent.KEYCODE_ENTER, KeyEvent.KEYCODE_NUMPAD_ENTER -> {
                 if (repeat) return true
+                if (tech.shown) {
+                    tech.hide() // повторный OK закрывает техпанель (план 2026-10-06, B2)
+                    return true
+                }
                 if (controls.visibility == View.VISIBLE && row == 1) visibleButtons().getOrNull(col)?.let { press(it) }
                 else {
                     togglePause()
@@ -700,6 +808,7 @@ class MoviePlayerActivity : Activity() {
             }
             KeyEvent.KEYCODE_MEDIA_FAST_FORWARD -> { seekTo(pos() + 30); return true }
             KeyEvent.KEYCODE_MEDIA_REWIND -> { seekTo(pos() - 10); return true }
+            KeyEvent.KEYCODE_MEDIA_PREVIOUS -> { if (info?.prevSrc != null) goPrev(); return true }
             KeyEvent.KEYCODE_MEDIA_NEXT -> { if (info?.nextSrc != null) goNext(); return true }
         }
         return super.dispatchKeyEvent(event)
@@ -725,6 +834,7 @@ class MoviePlayerActivity : Activity() {
                 root.requestFocus()
                 scheduleHide()
             }
+            tech.shown -> tech.hide()
             box.visibility == View.VISIBLE -> {
                 handler.removeCallbacks(countdown)
                 finish()

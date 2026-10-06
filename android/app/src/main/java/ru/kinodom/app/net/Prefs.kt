@@ -17,8 +17,28 @@ class Prefs(context: Context) {
         get() = PlayerMode.of(p.getString("player", null)) ?: PlayerMode.Builtin
         set(v) = p.edit().putString("player", v.id).apply()
 
+    // Unified player mode for movies and channels.
+    var playbackMode: PlayerMode
+        get() = PlayerMode.of(p.getString("playbackMode", null))
+            ?: PlayerMode.of(p.getString("moviePlayer", null))
+            ?: PlayerMode.of(p.getString("player", null))
+            ?: PlayerMode.Builtin
+        set(v) = p.edit().putString("playbackMode", v.id).putString("player", v.id).putString("moviePlayer", v.id).apply()
+
+    var moviePlaybackMode: PlayerMode
+        get() = PlayerMode.of(p.getString("moviePlaybackMode", null))
+            ?: PlayerMode.of(p.getString("moviePlayer", null))
+            ?: PlayerMode.Builtin
+        set(v) = p.edit().putString("moviePlaybackMode", v.id).putString("moviePlayer", v.id).apply()
+
+    var channelPlaybackMode: PlayerMode
+        get() = PlayerMode.of(p.getString("channelPlaybackMode", null))
+            ?: PlayerMode.of(p.getString("playbackMode", null))
+            ?: PlayerMode.of(p.getString("player", null))
+            ?: PlayerMode.Builtin
+        set(v) = p.edit().putString("channelPlaybackMode", v.id).putString("playbackMode", v.id).putString("player", v.id).apply()
     var sounds: Boolean
-        get() = p.getBoolean("sounds", true)
+        get() = p.getBoolean("sounds", false)
         set(v) = p.edit().putBoolean("sounds", v).apply()
 
     // moviePlayer — плеер фильмов (план 18В): встроенный (по умолчанию) или VLC, как раньше.
