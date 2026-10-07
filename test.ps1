@@ -24,8 +24,8 @@ if (-not ($jdk -and $sdk -and (Test-Path "$jdk\bin\java.exe") -and (Test-Path "$
 $env:JAVA_HOME, $env:ANDROID_HOME = $jdk, $sdk
 Push-Location (Join-Path $PSScriptRoot 'android')
 $ErrorActionPreference = 'Continue' # Gradle пишет предупреждения в поток ошибок — судим по коду выхода
-& .\gradlew.bat testDebugUnitTest --console=plain -q
+& .\gradlew.bat testFullDebugUnitTest testClientDebugUnitTest --console=plain -q
 $rc = $LASTEXITCODE
 Pop-Location
-if ($rc -eq 0) { Write-Host 'android: unit tests ok' }
+if ($rc -eq 0) { Write-Host 'android: unit tests ok (full, client)' }
 exit $rc

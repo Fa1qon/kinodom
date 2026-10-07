@@ -24,6 +24,6 @@ android/local.properties
 /.github/
 
 # Сборочные артефакты полного порта: сервер кладёт build.ps1, исходники — build-android.sh
-android/app/src/main/jniLibs/arm64-v8a/libkinodomserver.so
+android/app/src/full/jniLibs/arm64-v8a/libkinodomserver.so
 third_party/ffmpeg/android/src/
 third_party/ffmpeg/ffmpeg-8.1.3.tar.xz

@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Kinodom — сборка с сервером на устройстве: перекрывает базовое имя (сборка full). -->
+    <string name="app_name">Kinodom</string>
+</resources>
