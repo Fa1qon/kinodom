@@ -65,18 +65,21 @@ if ($jdk -and $sdk -and (Test-Path "$jdk\bin\java.exe") -and (Test-Path "$sdk\pl
     Pop-Location
     if ($rc -ne 0) { exit $rc }
     $out = 'android\app\build\outputs\apk'
-    Copy-Item "$out\full\release\app-full-release.apk" bin\kinodom.apk
-    Copy-Item "$out\client\release\app-client-release.apk" bin\kinodom-client.apk
+    # kinodom.apk — «Kinodom Client»: его раздаёт сервер по /app и кладёт установщик. Он же нужен
+    # для установки на телевизоры из домашней сети. Автономное «Kinodom» (со встроенным сервером) —
+    # kinodom-standalone.apk: живёт на GitHub-выпусках, ПК ему не нужен (просьба 2026-10-07).
+    Copy-Item "$out\full\release\app-full-release.apk" bin\kinodom-standalone.apk
+    Copy-Item "$out\client\release\app-client-release.apk" bin\kinodom.apk
     [ordered]@{ version = $version; versionCode = $code } | ConvertTo-Json -Compress | Set-Content -Encoding ascii bin\kinodom.apk.json
-    [ordered]@{ version = $version; versionCode = $code } | ConvertTo-Json -Compress | Set-Content -Encoding ascii bin\kinodom-client.apk.json
-    # Full APK must carry all three libs: ffmpeg/ffprobe once vanished and the build silently
+    [ordered]@{ version = $version; versionCode = $code } | ConvertTo-Json -Compress | Set-Content -Encoding ascii bin\kinodom-standalone.apk.json
+    # The standalone APK must carry all three libs: ffmpeg/ffprobe once vanished and the build silently
     # distributed an app without the server (2026-10-07 - verify explicitly).
     $aapt = Get-ChildItem "$env:LOCALAPPDATA\Android\Sdk\build-tools" -Recurse -Filter aapt.exe | Select-Object -First 1 -ExpandProperty FullName
-    $libs = & $aapt list bin\kinodom.apk | Select-String '^lib/'
+    $libs = & $aapt list bin\kinodom-standalone.apk | Select-String '^lib/'
     foreach ($n in 'libkinodomserver.so', 'libffmpeg.so', 'libffprobe.so') {
-        if (-not ($libs -match [regex]::Escape($n))) { throw "bin\kinodom.apk is missing $n - incomplete build" }
+        if (-not ($libs -match [regex]::Escape($n))) { throw "bin\kinodom-standalone.apk is missing $n - incomplete build" }
     }
-    Write-Host "bin\kinodom.apk, bin\kinodom-client.apk ($version, $code)"
+    Write-Host "bin\kinodom.apk (client), bin\kinodom-standalone.apk ($version, $code)"
 } else {
     Write-Host 'JDK 17 or Android SDK not found (JAVA_HOME, ANDROID_HOME) - no kinodom.apk'
 }

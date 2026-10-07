@@ -3,13 +3,17 @@ package ru.kinodom.app.ui
 import android.app.Activity
 import android.content.Intent
 import android.os.Bundle
+import android.graphics.Typeface
 import android.text.InputType
+import android.text.method.ScrollingMovementMethod
 import android.util.TypedValue
 import android.view.KeyEvent
 import android.view.inputmethod.EditorInfo
 import android.widget.EditText
 import android.widget.LinearLayout
 import android.widget.ProgressBar
+import android.widget.ScrollView
+import android.widget.TextView
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.MainScope
 import kotlinx.coroutines.cancel
@@ -51,11 +55,28 @@ class StartActivity : Activity() {
     }
 
     // localFail — свой сервер не поднялся: не отправлять в поиск по сети, дать повторить.
-    // Вывод сервера — в files/kinodom/server.log.
+    // На экране — хвост журнала сервера: по нему сразу видно причину (план 2026-10-07).
     private fun localFail() {
         val c = Screens.column(this)
         c.addView(Screens.title(this, getString(R.string.local_fail)))
-        c.addView(Screens.note(this, getString(R.string.local_fail_note)))
+        val logText = try {
+            val f = java.io.File(java.io.File(filesDir, "kinodom"), "server.log").takeIf { it.isFile }
+            f?.readText()?.takeLast(1200) ?: getString(R.string.local_fail_note)
+        } catch (e: Exception) {
+            e.message ?: getString(R.string.local_fail_note)
+        }
+        val log = TextView(this).apply {
+            setTextColor(getColor(R.color.muted))
+            setTextSize(TypedValue.COMPLEX_UNIT_SP, 13f)
+            typeface = Typeface.MONOSPACE
+            movementMethod = ScrollingMovementMethod()
+            setTextIsSelectable(true)
+            text = logText
+        }
+        c.addView(ScrollView(this).apply {
+            layoutParams = LinearLayout.LayoutParams(Screens.fieldWidth(this@StartActivity), Screens.dp(this@StartActivity, 320))
+            addView(log)
+        })
         c.addView(Screens.button(this, getString(R.string.retry)) {
             waiting(getString(R.string.local_starting))
             scope.launch {
