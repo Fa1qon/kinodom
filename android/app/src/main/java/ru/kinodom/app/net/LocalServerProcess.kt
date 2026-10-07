@@ -38,6 +38,9 @@ object LocalServerProcess {
             log.createNewFile()
             pb.redirectOutput(log).redirectErrorStream(true)
             LocalServer.env(home.absolutePath).forEach { (k, v) -> pb.environment()[k] = v }
+            val cache = ctx.cacheDir
+            cache.mkdirs()
+            pb.environment()["TMPDIR"] = cache.absolutePath
             proc = pb.start()
             Log.i(TAG, "сервер запущен: ${bin.name}, порт ${LocalServer.API_PORT}")
             waitReady()
