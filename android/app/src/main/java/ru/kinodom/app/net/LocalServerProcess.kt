@@ -60,9 +60,11 @@ object LocalServerProcess {
         return statusOk()
     }
 
-    // statusOk — блокирующий вопрос «жив ли сервер»: из фонового потока запуска.
+    // statusOk — блокирующий вопрос «жив ли сервер»: из фонового потока запуска. Базе добавляется
+    // слэш, если его нет: склейка без него даёт «8190api/…» (ревью 2026-10-07).
     private fun statusOk(): Boolean = try {
-        val c = URL(LocalServer.baseUrl() + "api/v1/status").openConnection() as HttpURLConnection
+        val base = LocalServer.baseUrl()
+        val c = URL((if (base.endsWith("/")) base else "$base/") + "api/v1/status").openConnection() as HttpURLConnection
         c.connectTimeout = 1500
         c.readTimeout = 1500
         try {
