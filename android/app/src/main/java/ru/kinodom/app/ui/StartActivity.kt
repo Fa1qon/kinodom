@@ -36,9 +36,13 @@ class StartActivity : Activity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         prefs = Prefs(this)
-        // Сервер на устройстве (полный порт, план 2026-10-06): включён и есть в сборке — пульт
-        // смотрит на 127.0.0.1, поиск в сети не нужен. Не запустился — обычный путь.
-        if (prefs.localServer && LocalServer.binary(this) != null && intent.getBooleanExtra(EXTRA_SEARCH, false) == false) {
+        // Сервер на устройстве (полный порт, план 2026-10-06): включён или человек ещё не выбирал и
+        // знакомого сервера нет — стартуем свой, пульт смотрит на 127.0.0.1, сеть не нужна. Не
+        // поднялся (или выбрали «как раньше») — обычный путь: запомненный адрес, потом поиск.
+        val local = LocalServer.binary(this) != null &&
+            (prefs.localServer || (prefs.localServerAuto && prefs.base == null)) &&
+            !intent.getBooleanExtra(EXTRA_SEARCH, false)
+        if (local) {
             waiting(getString(R.string.local_starting))
             scope.launch {
                 val ok = withContext(Dispatchers.IO) { LocalServerProcess.start(applicationContext) }
