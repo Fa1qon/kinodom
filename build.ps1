@@ -36,7 +36,7 @@ go build -trimpath -ldflags "-s -w -checklinkname=0 -X main.version=$version" -o
 $env:GOOS, $env:GOARCH = '', ''
 if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 foreach ($t in 'ffprobe', 'ffmpeg') {
-    if (Test-Path "third_party\ffmpeg\android\$t") { Copy-Item "third_party\ffmpeg\android\$t" "$jni\lib$t.so" -Force }
+    Copy-Item "third_party\ffmpeg\android\$t" "$jni\lib$t.so" -Force # missing file fails here, not silently in APK
 }
 Write-Host "$jni\libkinodomserver.so ($version)"
 # Свой плеер (план 18А): урезанный ffmpeg — рядом с kinodom.exe, там его ищет сервер.
@@ -69,6 +69,13 @@ if ($jdk -and $sdk -and (Test-Path "$jdk\bin\java.exe") -and (Test-Path "$sdk\pl
     Copy-Item "$out\client\release\app-client-release.apk" bin\kinodom-client.apk
     [ordered]@{ version = $version; versionCode = $code } | ConvertTo-Json -Compress | Set-Content -Encoding ascii bin\kinodom.apk.json
     [ordered]@{ version = $version; versionCode = $code } | ConvertTo-Json -Compress | Set-Content -Encoding ascii bin\kinodom-client.apk.json
+    # Full APK must carry all three libs: ffmpeg/ffprobe once vanished and the build silently
+    # distributed an app without the server (2026-10-07 - verify explicitly).
+    $aapt = Get-ChildItem "$env:LOCALAPPDATA\Android\Sdk\build-tools" -Recurse -Filter aapt.exe | Select-Object -First 1 -ExpandProperty FullName
+    $libs = & $aapt list bin\kinodom.apk | Select-String '^lib/'
+    foreach ($n in 'libkinodomserver.so', 'libffmpeg.so', 'libffprobe.so') {
+        if (-not ($libs -match [regex]::Escape($n))) { throw "bin\kinodom.apk is missing $n - incomplete build" }
+    }
     Write-Host "bin\kinodom.apk, bin\kinodom-client.apk ($version, $code)"
 } else {
     Write-Host 'JDK 17 or Android SDK not found (JAVA_HOME, ANDROID_HOME) - no kinodom.apk'
