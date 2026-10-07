@@ -11,7 +11,8 @@ class LocalServerTest {
         assertEquals(listOf("/data/app/libkinodomserver.so", "run"), LocalServer.command("/data/app/libkinodomserver.so"))
         val env = LocalServer.env("/data/ru.kinodom.home/files/kinodom")
         assertEquals("/data/ru.kinodom.home/files/kinodom", env["KINODOM_HOME"])
-        assertTrue((env["GOMEMLIMIT"] ?: "").endsWith("Mi")) // предел кучи — в мебибайтах
+        val lim = env["GOMEMLIMIT"] ?: ""
+        assertTrue(lim.endsWith("MiB") && !lim.endsWith("Mi")) // Go принимает только «MiB»: «Mi» — мгновенное падение
     }
 
     @Test
@@ -19,6 +20,8 @@ class LocalServerTest {
         assertTrue(LocalServer.API_PORT != 8090) // не как у сервера на ПК
         assertTrue(LocalServer.TORRENT_PORT != 42090)
         assertEquals("""{"apiPort":${LocalServer.API_PORT},"torrentPort":${LocalServer.TORRENT_PORT}}""", LocalServer.bootstrap())
-        assertEquals("http://127.0.0.1:${LocalServer.API_PORT}", LocalServer.baseUrl())
+        // Слэш на конце обязателен: пути клеятся к базе напрямую.
+        assertEquals("http://127.0.0.1:${LocalServer.API_PORT}/", LocalServer.baseUrl())
+        assertTrue(LocalServer.baseUrl().endsWith("/"))
     }
 }
