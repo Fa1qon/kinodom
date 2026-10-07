@@ -60,6 +60,12 @@ android {
         buildConfig = true
     }
 
+    // Сервер запускается файлом из nativeLibraryDir: библиотеки должны быть распакованы при
+    // установке (по умолчанию они грузятся из APK напрямую, и файла на диске нет).
+    packaging {
+        jniLibs.useLegacyPackaging = true
+    }
+
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17

@@ -20,8 +20,9 @@ object LocalServer {
     const val BINARY = "libkinodomserver.so"
 
     // MEM_LIMIT — предел кучи сервера: серверные структуры и кэш каталога — умеренно, главное
-    // окно кусков в памяти движка ограничено самим темпом просмотра.
-    const val MEM_LIMIT = "224Mi"
+    // окно кусков в памяти движка ограничено самим темпом просмотра. Суффикс — только MiB:
+    // «Mi» Go считает испорченным и падает при старте.
+    const val MEM_LIMIT = "224MiB"
 
     // home — папка данных сервера внутри приложения: база, загрузки, кэш.
     fun home(ctx: Context) = File(ctx.filesDir, "kinodom").absolutePath

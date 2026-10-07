@@ -32,6 +32,11 @@ object LocalServerProcess {
             val pb = ProcessBuilder(*LocalServer.command(bin.absolutePath).toTypedArray())
                 .directory(home)
                 .redirectErrorStream(false)
+            // Вывод сервера — в журнал рядом с данными: живое место диагностики запуска.
+            val log = File(home, "server.log")
+            if (log.exists()) log.delete()
+            log.createNewFile()
+            pb.redirectOutput(log).redirectErrorStream(true)
             LocalServer.env(home.absolutePath).forEach { (k, v) -> pb.environment()[k] = v }
             proc = pb.start()
             Log.i(TAG, "сервер запущен: ${bin.name}, порт ${LocalServer.API_PORT}")
