@@ -13,11 +13,15 @@ class Prefs(context: Context) {
         get() = p.getString("base", null)
         set(v) = p.edit().putString("base", v).apply()
 
-    // localServer — сервер на этом устройстве (полный порт, план 2026-10-06): пульт смотрит на
-    // 127.0.0.1, отдельный сервер в сети не нужен. Пункт виден, если сборка сервера есть в апк.
+    // localServer — сервер на этом устройстве (полный порт, план 2026-10-06). Пока человек не
+    // выбирал («auto»): с сервером в сети не знакомы (адрес не сохранён) — стартуют свой, знакомы —
+    // как раньше, по сети. Явное on/off перекрывает.
     var localServer: Boolean
-        get() = p.getBoolean("localServer", false)
-        set(v) = p.edit().putBoolean("localServer", v).apply()
+        get() = p.getString("localServer", "auto") != "off"
+        set(v) = p.edit().putString("localServer", if (v) "on" else "off").apply()
+
+    val localServerAuto: Boolean
+        get() = "auto" == p.getString("localServer", "auto")
 
     var player: PlayerMode
         get() = PlayerMode.of(p.getString("player", null)) ?: PlayerMode.Builtin
