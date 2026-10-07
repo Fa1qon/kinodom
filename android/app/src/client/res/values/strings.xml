@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Kinodom Client — сборка без сервера: перекрывает базовое имя (сборка client). -->
+    <string name="app_name">Kinodom Client</string>
+</resources>

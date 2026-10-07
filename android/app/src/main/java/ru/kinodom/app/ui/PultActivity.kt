@@ -420,6 +420,7 @@ class PultActivity : Activity() {
 
     // checkUpdate — на сервере новее и «Позже» не нажимали — окно «Есть новая версия Kinodom».
     private fun checkUpdate() {
+        if (BuildConfig.FLAVOR != "full") return // «Клиент» обновляется не с сервера: там full-APK другого пакета
         updateCheckedAt = SystemClock.elapsedRealtime()
         scope.launch {
             if (overlay != null || postponed) return@launch

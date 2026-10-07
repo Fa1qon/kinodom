@@ -44,6 +44,18 @@ android {
         }
     }
 
+    // Два распространения (просьба 2026-10-07): full — «Kinodom», сервер на устройстве внутри
+    // (jniLibs кладёт build.ps1 в src/full/jniLibs); client — «Kinodom Client», без сервера,
+    // отдельный пакет: оба живут на одном устройстве.
+    flavorDimensions += "distribution"
+    productFlavors {
+        create("full") { dimension = "distribution" }
+        create("client") {
+            dimension = "distribution"
+            applicationIdSuffix = ".client"
+        }
+    }
+
     buildFeatures {
         buildConfig = true
     }
