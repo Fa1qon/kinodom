@@ -36,21 +36,34 @@ class StartActivity : Activity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         prefs = Prefs(this)
-        // Сервер на устройстве (полный порт, план 2026-10-06): включён или человек ещё не выбирал и
-        // знакомого сервера нет — стартуем свой, пульт смотрит на 127.0.0.1, сеть не нужна. Не
-        // поднялся (или выбрали «как раньше») — обычный путь: запомненный адрес, потом поиск.
-        val local = LocalServer.binary(this) != null &&
-            (prefs.localServer || (prefs.localServerAuto && prefs.base == null)) &&
-            !intent.getBooleanExtra(EXTRA_SEARCH, false)
-        if (local) {
+        // Автономное приложение (полный порт, план 2026-10-06): сервер встроен — никакого ввода
+        // адреса и поиска по сети, своё запускается всегда; мастер первых шагов покажет сам пульт.
+        // Сборка без сервера (Kinodom Client) — прежний путь: запомненный адрес, поиск.
+        if (LocalServer.binary(this) != null) {
             waiting(getString(R.string.local_starting))
             scope.launch {
                 val ok = withContext(Dispatchers.IO) { LocalServerProcess.start(applicationContext) }
-                if (ok) open(LocalServer.baseUrl()) else go(StartFlow.first(prefs.base))
+                if (ok) open(LocalServer.baseUrl()) else localFail()
             }
             return
         }
         go(if (intent.getBooleanExtra(EXTRA_SEARCH, false)) Step.Search else StartFlow.first(prefs.base))
+    }
+
+    // localFail — свой сервер не поднялся: не отправлять в поиск по сети, дать повторить.
+    // Вывод сервера — в files/kinodom/server.log.
+    private fun localFail() {
+        val c = Screens.column(this)
+        c.addView(Screens.title(this, getString(R.string.local_fail)))
+        c.addView(Screens.note(this, getString(R.string.local_fail_note)))
+        c.addView(Screens.button(this, getString(R.string.retry)) {
+            waiting(getString(R.string.local_starting))
+            scope.launch {
+                val ok = withContext(Dispatchers.IO) { LocalServerProcess.start(applicationContext) }
+                if (ok) open(LocalServer.baseUrl()) else localFail()
+            }
+        })
+        setContentView(c)
     }
 
     override fun onDestroy() {
