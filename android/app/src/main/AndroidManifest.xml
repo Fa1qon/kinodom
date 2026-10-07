@@ -31,6 +31,7 @@
 
     <application
         android:allowBackup="false"
+        android:extractNativeLibs="true"
         android:enableOnBackInvokedCallback="true"
         android:banner="@drawable/banner"
         android:icon="@mipmap/ic_launcher"
