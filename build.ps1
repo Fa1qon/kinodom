@@ -29,12 +29,40 @@ Write-Host "bin\kinodom.exe, bin\kinodomw.exe ($version)"
 # Полный порт сервера для приложения (план 2026-10-06): android/arm64 в jniLibs флейвора full как
 # lib*.so — Android сам распаковывает в nativeLibraryDir, откуда разрешён запуск. Клиентский
 # флейвор сервер не получает. ffprobe/ffmpeg android — тоже только full.
+# Сервер собирается с NDK (CGO): без cgo DNS-резолвер Go на Android не работает — он читает
+# /etc/resolv.conf, которого на Android нет, и все адресы «не найдены» (2026-10-08).
 $jni = "android\app\src\full\jniLibs\arm64-v8a"
 New-Item -ItemType Directory -Force $jni | Out-Null
-$env:GOOS, $env:GOARCH = 'android', 'arm64'
-go build -trimpath -ldflags "-s -w -checklinkname=0 -X main.version=$version" -o "$jni\libkinodomserver.so" .\cmd\kinodom
-$env:GOOS, $env:GOARCH = '', ''
-if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+$ndkBase = if ($env:ANDROID_HOME) { "$env:ANDROID_HOME\ndk" } else { "$env:LOCALAPPDATA\Android\Sdk\ndk" }
+$ndk = Get-ChildItem $ndkBase -Directory -ErrorAction SilentlyContinue | Sort-Object Name -Descending | Select-Object -First 1
+$tc = if ($ndk) { "$($ndk.FullName)\toolchains\llvm\prebuilt\windows-x86_64\bin" } else { '' }
+$sysroot = if ($ndk) { "$($ndk.FullName)\toolchains\llvm\prebuilt\windows-x86_64\sysroot" } else { '' }
+if ($tc -and (Test-Path "$tc\clang.exe")) {
+    $wrap = Join-Path $env:TEMP 'kinodom-ndk-wrap'
+    New-Item -ItemType Directory -Force $wrap | Out-Null
+    # CXX-обёртка несёт target, sysroot и путь libc++ — чтобы в -ldflags не осталось
+    # вложенных кавычек (их ломают и PowerShell, и CRT-разбор строки).
+    Set-Content -Encoding ascii -Path "$wrap\clang.cmd" -Value "@echo off`r`n`"$tc\clang.exe`" --target=aarch64-linux-android24 %*"
+    Set-Content -Encoding ascii -Path "$wrap\clangxx.cmd" -Value "@echo off`r`n`"$tc\clang++.exe`" --target=aarch64-linux-android24 --sysroot=`"$sysroot`" -L`"$sysroot\usr\lib\aarch64-linux-android\24`" %* -static-libstdc++"
+    $env:CC = "$wrap\clang.cmd"
+    $env:CXX = "$wrap\clangxx.cmd"
+    $env:CGO_ENABLED = '1'
+    $env:GOOS, $env:GOARCH = 'android', 'arm64'
+    # Вложенные кавычки extldflags через PS-переменную ломаются — команда целиком уходит в batch.
+    $ld = '-s -w -checklinkname=0 -X main.version=' + $version + ' -extldflags -static-libstdc++'
+    $cmdline = 'go build -buildmode=pie -trimpath -ldflags "' + $ld + '" -o "' + $jni + '\libkinodomserver.so" ./cmd/kinodom'
+    $bat = Join-Path $env:TEMP 'kinodom-server-build.cmd'
+    Set-Content -Encoding ascii -Path $bat -Value "@echo off`r`nset GOOS=android`r`nset GOARCH=arm64`r`nset CGO_ENABLED=1`r`nset CC=$($env:CC)`r`nset CXX=$($env:CXX)`r`nset CGO_CXXFLAGS=$($env:CGO_CXXFLAGS)`r`nset CXXFLAGS=$($env:CXXFLAGS)`r`n$cmdline`r`nif errorlevel 1 exit /b 1"
+    cmd /c $bat
+    $env:GOOS, $env:GOARCH, $env:CGO_ENABLED, $env:CC, $env:CXX, $env:CGO_CXXFLAGS, $env:CXXFLAGS = '', '', '', '', '', '', ''
+    if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+} else {
+    Write-Host 'NDK not found - server built WITHOUT CGO: DNS will not resolve on Android'
+    $env:GOOS, $env:GOARCH = 'android', 'arm64'
+    go build -trimpath -ldflags "-s -w -checklinkname=0 -X main.version=$version" -o "$jni\libkinodomserver.so" .\cmd\kinodom
+    $env:GOOS, $env:GOARCH = '', ''
+    if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+}
 foreach ($t in 'ffprobe', 'ffmpeg') {
     Copy-Item "third_party\ffmpeg\android\$t" "$jni\lib$t.so" -Force # missing file fails here, not silently in APK
 }
