@@ -35,7 +35,9 @@ func (s *Service) PlaySource(r *http.Request, hash string, index int, prepare, f
 	}
 	title := strings.TrimSuffix(baseName(name), extOf(name))
 	p := streamPath(ih, index, name)
-	out := playback.Source{Title: title, Hash: ih.HexString(), Index: index, Path: p, M3U: fmt.Sprintf("/m3u/%s/%d.m3u8", ih.HexString(), index)}
+	out := playback.Source{Title: title, Hash: ih.HexString(), Index: index, Path: p,
+		M3U:      fmt.Sprintf("/m3u/%s/%d.m3u8", ih.HexString(), index),
+		Complete: s.fileOnDisk(ih, index)}
 	if prepare && s.watch != nil && !fromStart {
 		out.StartSec = s.watch.StartSec(r.Context(), httpx.Device(r), ih.HexString(), index)
 	}

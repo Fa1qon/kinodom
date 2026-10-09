@@ -119,4 +119,8 @@ func TestBurstFor(t *testing.T) {
 	if a := streamArgs(streamOpts{Input: "x", Video: 0, Format: "ts", Burst: 27}); !pair(a, "-readrate_initial_burst", "27") {
 		t.Errorf("запас из сведений: %v", a)
 	}
+	// скачанный целиком — без темпа загрузки (просьба 2026-10-08)
+	if a := streamArgs(streamOpts{Input: "x", Video: 0, Format: "ts", Complete: true}); slices.Contains(a, "-readrate") {
+		t.Errorf("скачанный файл — без темпа: %v", a)
+	}
 }

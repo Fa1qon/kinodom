@@ -57,8 +57,9 @@ export function render(root, r, ctx) {
   const vol = h('input', { class: 'pl-vol', type: 'range', min: '0', max: '1', step: '0.05',
     'aria-label': 'Громкость', 'data-key': 'pl-vol', oninput: () => setVolume(Number(vol.value)) });
   const fullBtn = btn('fullscreen', 'Во весь экран', 'pl-full', () => toggleFull());
-  const back10Btn = btn('fast_rewind', 'Назад на 10 с', 'pl-back10', () => jump(-10));
-  const fwd30Btn = btn('fast_forward', 'Вперёд на 30 с', 'pl-fwd30', () => jump(30));
+  // Кнопки «назад/вперёд» — соседние серии, когда они есть; иначе — прокрутка (просьба 2026-10-08).
+  const back10Btn = btn('fast_rewind', 'Назад', 'pl-back10', () => backStep());
+  const fwd30Btn = btn('fast_forward', 'Вперёд', 'pl-fwd30', () => fwdStep());
   const backBtn = h('button', { class: 'btn pl-back', type: 'button', 'data-key': 'pl-back', onclick: () => leave() }, icon('arrow_back'), 'Назад');
   const menuBox = h('div', { class: 'pl-menu', role: 'menu', hidden: true });
   const nextBox = h('div', { class: 'pl-box', hidden: true });
@@ -95,6 +96,11 @@ export function render(root, r, ctx) {
     subsBtn.hidden = P.textSubs(info.subs).length === 0;
     prevBtn.hidden = !info.prev;
     nextBtn.hidden = !info.next;
+    // Кнопки «назад/вперёд» теперь серии — заголовок по тому, что они делают (просьба 2026-10-08).
+    back10Btn.title = info.prev ? 'Предыдущая серия' : 'Назад на 10 с';
+    back10Btn.setAttribute('aria-label', back10Btn.title);
+    fwd30Btn.title = info.next ? 'Следующая серия' : 'Вперёд на 30 с';
+    fwd30Btn.setAttribute('aria-label', fwd30Btn.title);
     const mse = window.MediaSource && MediaSource.isTypeSupported.bind(MediaSource);
     trans = !P.canShow(info.video.mime, mse);
     if (trans && !info.trans) return fail('Браузер не покажет этот файл', true);
@@ -147,9 +153,10 @@ export function render(root, r, ctx) {
       startSubs();
       return;
     }
-    // Позади держим 10–30 с (по умолчанию 2–3 мин — лишнее место в MSE, ревью 18Б).
+    // Позади держим 10–30 с (по умолчанию 2–3 мин — лишнее место в MSE, ревью 18Б). Stash-буфер
+    // включён: без него сетевые микрозадержки сразу бьют в декодер — просмотр дёргался (2026-10-08).
     mp = mpegts.createPlayer({ type: 'mpegts', isLive: false, url: P.streamURL(src, k, audio, sid) },
-      { enableWorker: false, enableStashBuffer: false, lazyLoad: false, autoCleanupSourceBuffer: true,
+      { enableWorker: false, enableStashBuffer: true, stashInitialSize: 384, lazyLoad: false, autoCleanupSourceBuffer: true,
         autoCleanupMaxBackwardDuration: 30, autoCleanupMinBackwardDuration: 10 });
     mp.on(mpegts.Events.ERROR, (type, detail, data) => onError(data));
     mp.on(mpegts.Events.STATISTICS_INFO, () => { lastStat = Date.now(); });
@@ -399,6 +406,17 @@ export function render(root, r, ctx) {
     clearInterval(nextTimer);
     nextBox.hidden = true;
     leave();
+  }
+
+  // backStep/fwdStep — серии, если они есть, иначе прокрутка на 10/30 с.
+  function backStep() {
+    if (info && info.prev) { goPrev(); return; }
+    jump(-10);
+  }
+
+  function fwdStep() {
+    if (info && info.next) { goNext(); return; }
+    jump(30);
   }
 
   function goPrev() {

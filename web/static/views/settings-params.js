@@ -1,4 +1,4 @@
-// «Настройки → Параметры»: Rutracker, Rutor (адреса вводит пользователь — этап 11a), прокси, источник поиска
+﻿// «Настройки → Параметры»: Rutracker, Rutor (адреса вводит пользователь — этап 11a), прокси, источник поиска
 // Jacred / Jackett (адрес и ключ — 11b-Д), хранение,
 // плеер и формат в приоритете; в «Дополнительно» — служебные адреса трекеров и запасной ключ Кинопоиска
 // (он работает без ключа — спека 11b, 5.7).
@@ -100,10 +100,32 @@ export function render(root, r, ctx) {
     };
     upload.addEventListener('input', hint);
     hint();
-    const players = h('div', { class: 'checks', role: 'radiogroup', 'aria-label': 'Плеер' },
+    const players = h('div', { class: 'checks', role: 'radiogroup', 'aria-label': 'Внешний плеер' },
       [['auto', 'Авто'], ['vlc', 'VLC'], ['mpc-hc', 'MPC-HC']].map(([id, t]) => h('label', { class: 'check' },
         h('input', { type: 'radio', name: 'player', value: id, checked: v.player === id, disabled: !canEdit, 'data-key': `player-${id}` }), t)));
     inputs.player = players;
+    // Какие плееры реально есть на ПК: не установленный выбрать нельзя (просьба 2026-10-07).
+    const found = h('div', { class: 'muted small', 'data-key': 'players-found' }, 'Проверяю установленные плееры…');
+    get('/players').then((list) => {
+      if (!alive) return;
+      const state = Object.fromEntries(list.map((p) => [p.id, p.found]));
+      found.textContent = 'На этом ПК: ' + list.map((p) => `${p.name} — ${p.found ? 'есть' : 'нет'}`).join(', ');
+      for (const input of players.querySelectorAll('input')) {
+        if (input.value !== 'auto' && !state[input.value]) {
+          input.disabled = true;
+          input.closest('label').title = 'Плеер не установлен';
+        }
+      }
+      // Выбранный плеер исчез — вернуть «Авто» и подсказать.
+      const cur = players.querySelector('input:checked');
+      if (cur && cur.disabled && cur.value !== 'auto') {
+        players.querySelector('input[value="auto"]').checked = true;
+        errs.player.textContent = 'Выбранный плеер на этом ПК не найден — выбран «Авто»';
+      }
+    }, () => { found.textContent = ''; });
+    // Запуск при старте ОС (просьба 2026-10-07): значок в трее при входе и служба — сама.
+    const autorun = h('input', { type: 'checkbox', checked: v.autorun, disabled: !canEdit, 'data-key': 'autorun' });
+    inputs.autorun = autorun;
     errs.player = h('div', { class: 'error field-error' });
     const pf = v.catalog.preferredFormat || '';
     const formats = h('div', { class: 'checks', role: 'radiogroup', 'aria-label': 'Формат в приоритете' },
@@ -175,7 +197,11 @@ export function render(root, r, ctx) {
             uploadHint,
             field('Серий позади при нехватке места', 'keepBehind', input('keepBehind', String(v.storage.keepBehind), { inputmode: 'numeric' }))),
           deviceCards(),
-          h('div', { class: 'card' }, h('div', { class: 'h' }, 'Плеер'), players, errs.player),
+          h('div', { class: 'card' }, h('div', { class: 'h' }, 'Внешний плеер'),
+            h('p', { class: 'muted small' }, 'Чем открывать раздачи на этом компьютере, когда в «На этом устройстве» выбран внешний плеер.'), players, found, errs.player),
+          h('div', { class: 'card' }, h('div', { class: 'h' }, 'Запуск при старте ОС'),
+            h('label', { class: 'check' }, autorun, 'Запускать Kinodom при входе в Windows',
+              h('p', { class: 'muted small' }, 'Значок в трее при входе и служба, качающая и раздающая в фоне.'))),
           h('div', { class: 'card' }, h('div', { class: 'h' }, 'Каталог'),
             h('div', { class: 'fld' }, 'Порядок по умолчанию', orders, errs.catalogOrder),
             h('div', { class: 'fld' }, 'Формат в приоритете', formats, errs.preferredFormat)))),
@@ -302,6 +328,7 @@ export function render(root, r, ctx) {
     }
     const player = inputs.player.querySelector('input:checked').value;
     if (player !== v.player) p.player = player;
+    if (inputs.autorun.checked !== v.autorun) p.autorun = inputs.autorun.checked;
     const format = inputs.preferredFormat.querySelector('input:checked').value;
     if (format !== (v.catalog.preferredFormat || '')) set('catalog', 'preferredFormat', format);
     const order = inputs.catalogOrder.querySelector('input:checked').value;
@@ -380,3 +407,4 @@ function number(s) {
 }
 
 // Compatibility keys: store.set('moviePlayer', value); store.set('channelPlayer', value).
+

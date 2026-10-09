@@ -34,6 +34,7 @@ const (
 	KeyRutorAddress     = "rutor.address"
 	KeyRutorDownload    = "rutor.downloadAddress"
 	KeySetupDone        = "setup.done" // мастер начальных настроек пройден
+	KeyAutorun          = "autorun"    // запуск Kinodom при старте ОС
 	KeyProxy            = "proxy.trackers"
 	KeyKinopoisk        = "kinopoisk.key"
 	KeySearchAddress    = "search.address" // источник поиска Jacred / Jackett (спека 11b, раздел 8)
@@ -84,6 +85,7 @@ type Values struct {
 	RutorAddress      string // «схема://хост»; "" — Rutor выключен
 	RutorDownload     string // адрес .torrent; "" — по правилу из адреса сайта
 	SetupDone         bool
+	Autorun           bool   // запуск при старте ОС; правда по умолчанию
 	Proxy             string // адрес целиком: http:// или socks5://, с логином и паролем; "" — нет
 	KinopoiskKey      string
 	SearchAddress     string // источник поиска: «схема://хост»; "" — выключен
@@ -154,6 +156,9 @@ func Load(ctx context.Context, db *store.DB, def Defaults, overrides map[string]
 	done, err := str(KeySetupDone, "false")
 	collect(err)
 	v.SetupDone = done == "true"
+	auto, err := str(KeyAutorun, "true")
+	collect(err)
+	v.Autorun = auto != "false"
 	v.Proxy, err = str(KeyProxy, "")
 	collect(err)
 	v.KinopoiskKey, err = str(KeyKinopoisk, "")
@@ -249,6 +254,7 @@ func (v Values) entries() map[string]string {
 		KeyRutorAddress:      v.RutorAddress,
 		KeyRutorDownload:     v.RutorDownload,
 		KeySetupDone:         strconv.FormatBool(v.SetupDone),
+		KeyAutorun:           strconv.FormatBool(v.Autorun),
 		KeyProxy:             v.Proxy,
 		KeyKinopoisk:         v.KinopoiskKey,
 		KeySearchAddress:     v.SearchAddress,
@@ -389,6 +395,9 @@ func (v Values) With(p Patch) (Values, error) {
 			}
 			n.UploadMBps = s.UploadLimitMBps.Value
 		}
+	}
+	if p.Autorun != nil {
+		n.Autorun = *p.Autorun
 	}
 	if p.Player != nil {
 		if !slices.Contains(Players, *p.Player) {

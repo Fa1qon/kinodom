@@ -51,6 +51,8 @@ type Source struct {
 
 	Next      *Ref
 	NextTitle string
+
+	Complete bool // файл уже целиком на диске — поток плееру без темпа загрузки
 }
 
 // Resolver — модули раздач и медиатеки. prepare — «Смотреть» (у раздачи — выбрать файл, качать первым);
@@ -385,7 +387,8 @@ func (m *Module) stream(format string) handler {
 			fail(w, err)
 			return
 		}
-		o := streamOpts{Input: m.input(s), From: t, Video: md.Video.ID, Format: format, Burst: burstFor(md.BitRate)}
+		o := streamOpts{Input: m.input(s), From: t, Video: md.Video.ID, Format: format, Burst: burstFor(md.BitRate),
+			Complete: s.Complete}
 		if o.Audio, ok = pickAudio(md.Audio, q.Get("a")); !ok {
 			httpx.WriteError(w, http.StatusBadRequest, "такой озвучки в файле нет")
 			return

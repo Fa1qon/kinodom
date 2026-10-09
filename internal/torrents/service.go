@@ -623,5 +623,17 @@ func (s *Service) fileName(ih metainfo.Hash, index int) (string, bool) {
 	return ss.t.Files()[index].DisplayPath(), true
 }
 
+// fileComplete — файл уже целиком на диске: плееру его отдают без темпа загрузки (просьба
+// 2026-10-08 — просмотр скачанного тормозил).
+func (s *Service) fileOnDisk(ih metainfo.Hash, index int) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	ss, ok := s.sessions[ih]
+	if !ok || ss.t.Info() == nil || index >= len(ss.t.Files()) {
+		return false
+	}
+	return fileDone(ss.t.Files()[index])
+}
+
 // UseKeeper — запрет сна на время потоков (общий для всех модулей); вызывать до Run.
 func (s *Service) UseKeeper(k *power.Keeper) { s.keeper = k }
