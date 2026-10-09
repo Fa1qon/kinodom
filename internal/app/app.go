@@ -390,6 +390,7 @@ func (a *App) initCatalog(ctx context.Context, o Options, v settings.Values) err
 	a.Catalog.Register(a.API)
 	a.API.Handle("GET /api/v1/releases/{id}", a.Catalog.Name(), http.HandlerFunc(a.handleRelease))
 	a.API.Handle("POST /api/v1/releases/{id}/download", a.Torrents.Name(), http.HandlerFunc(a.handleDownload))
+	a.API.Handle("GET /api/v1/players", "", http.HandlerFunc(a.handlePlayers))
 	a.Sup.Add(a.Catalog, a.ModuleEnabled(ctx, a.Catalog.Name()))
 	return nil
 }
@@ -768,6 +769,9 @@ func (a *App) Check(ctx context.Context, old, n settings.Values) error {
 
 // Apply — сохранённые настройки из пульта к работающим модулям, без перезапуска (settings.Applier).
 func (a *App) Apply(ctx context.Context, old, n settings.Values) {
+	if n.Autorun != old.Autorun {
+		a.applyAutorun(n.Autorun)
+	}
 	if n.KinopoiskKey != old.KinopoiskKey {
 		a.kp.SetKey(n.KinopoiskKey)
 		a.Ratings.KeyChanged(ctx)

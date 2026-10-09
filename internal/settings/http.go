@@ -21,6 +21,7 @@ type View struct {
 	Search    SearchView    `json:"search"`
 	Storage   StorageView   `json:"storage"`
 	Player    string        `json:"player"`
+	Autorun   bool          `json:"autorun"` // запуск Kinodom при старте ОС
 	Catalog   CatalogView   `json:"catalog"`
 	IPTV      IPTVView      `json:"iptv"`
 }
@@ -95,6 +96,7 @@ func (v Values) View() View {
 		Search:    SearchView{Address: v.SearchAddress, KeySet: v.SearchKey != ""},
 		Storage:   StorageView{DownloadsDir: v.DownloadsDir, KeepDays: v.KeepDays, KeepBehind: v.KeepBehind, MinFreeGB: v.MinFreeGB, UploadLimitMBps: v.UploadMBps},
 		Player:    v.Player,
+		Autorun:   v.Autorun,
 		Catalog:   CatalogView{Sections: splitSections(v.Sections), PreferredFormat: v.PreferredFormat, Order: v.CatalogOrder},
 		IPTV: IPTVView{EPGURL: v.EPGURL, HiddenCategories: nonNil(v.HiddenCategories), HiddenCountries: nonNil(v.HiddenCountries),
 			HiddenLanguages: nonNil(v.HiddenLanguages), UTCOffset: v.UTCOffset},
@@ -111,6 +113,7 @@ type Patch struct {
 	Search    *SearchPatch    `json:"search"`
 	Storage   *StoragePatch   `json:"storage"`
 	Player    *string         `json:"player"`
+	Autorun   *bool           `json:"autorun"`
 	Catalog   *CatalogPatch   `json:"catalog"`
 	IPTV      *IPTVPatch      `json:"iptv"`
 }

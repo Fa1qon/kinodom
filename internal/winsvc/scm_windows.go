@@ -42,15 +42,19 @@ func (scm) Update(c ServiceConfig) error {
 }
 
 func mgrConfig(c ServiceConfig) mgr.Config {
+	start := uint32(mgr.StartAutomatic)
+	if c.Manual {
+		start = uint32(mgr.StartManual)
+	}
 	return mgr.Config{
 		ServiceType:      windows.SERVICE_WIN32_OWN_PROCESS,
-		StartType:        mgr.StartAutomatic,
+		StartType:        start,
 		ErrorControl:     mgr.ErrorNormal,
 		DisplayName:      c.DisplayName,
 		Description:      c.Description,
 		ServiceStartName: c.Account, // виртуальная учётная запись: без пароля
 		SidType:          windows.SERVICE_SID_TYPE_UNRESTRICTED,
-		DelayedAutoStart: c.DelayedStart,
+		DelayedAutoStart: c.DelayedStart && !c.Manual,
 	}
 }
 

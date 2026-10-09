@@ -38,17 +38,23 @@ func seekAt(from float64) float64 {
 // streamOpts — поток плеера: ts — браузеру (mpegts.js), mkv — приложению (субтитры — внутри),
 // webm — браузеру для видео, которое он не показывает: VP8 + Opus (перекод на лету).
 type streamOpts struct {
-	Input  string
-	From   float64 // ключевой кадр, с
-	Video  int
-	Audio  *Track // nil — в файле нет звука
-	Sub    *Sub   // только mkv: текстовые субтитры; у файла рядом реплики сервер шлёт в stdin (WebVTT, сдвинутые)
-	Format string // "ts", "mkv" или "webm"
-	Burst  int    // запас, с (burstFor); 0 — Burst
+	Input    string
+	From     float64 // ключевой кадр, с
+	Video    int
+	Audio    *Track // nil — в файле нет звука
+	Sub      *Sub   // только mkv: текстовые субтитры; у файла рядом реплики сервер шлёт в stdin (WebVTT, сдвинутые)
+	Format   string // "ts", "mkv" или "webm"
+	Burst    int    // запас, с (burstFor); 0 — Burst
+	Complete bool   // файл целиком на диске: без темпа загрузки
 }
 
-func pace(burst int) []string {
-	if burst <= 0 {
+func pace(burst int, complete bool) []string {
+	if complete || burst <= 0 {
+		// Файл целиком на диске: темп загрузки не нужен — MSE набирает вперёд, дёрганья исчезают
+		// (просьба 2026-10-08).
+		if complete {
+			return nil
+		}
 		burst = Burst
 	}
 	return []string{"-readrate", "1", "-readrate_initial_burst", strconv.Itoa(burst)}
@@ -56,7 +62,7 @@ func pace(burst int) []string {
 
 // streamArgs — ffmpeg: с ключевого кадра, видео как есть, звук — AAC стерео (AAC стерео — как есть).
 func streamArgs(o streamOpts) []string {
-	a := append([]string{"-hide_banner", "-loglevel", "error", "-nostdin"}, pace(o.Burst)...)
+	a := append([]string{"-hide_banner", "-loglevel", "error", "-nostdin"}, pace(o.Burst, o.Complete)...)
 	if at := seekAt(o.From); at > 0 {
 		a = append(a, "-ss", secs(at))
 	}
@@ -117,7 +123,7 @@ func streamArgs(o streamOpts) []string {
 // subsArgs — встроенные субтитры id браузеру: WebVTT с секунды from в темпе просмотра, время реплик — время файла
 // (-copyts): с -ss ffmpeg сдвинул бы реплики так, чтобы первая была с нуля; начало потока вычтет плеер.
 func subsArgs(input string, from float64, id string) []string {
-	a := append([]string{"-hide_banner", "-loglevel", "error", "-nostdin"}, pace(0)...)
+	a := append([]string{"-hide_banner", "-loglevel", "error", "-nostdin"}, pace(0, false)...)
 	if from > 0 {
 		a = append(a, "-ss", secs(from))
 	}

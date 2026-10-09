@@ -35,6 +35,7 @@ type ServiceConfig struct {
 	Args                           []string // аргументы запуска: ["service"]
 	Account                        string   // учётная запись: NT SERVICE\Kinodom
 	DelayedStart                   bool     // автоматически, отложенный запуск
+	Manual                         bool     // вручную (по требованию); перекрывает DelayedStart
 	RestartDelay                   time.Duration
 	ResetPeriod                    time.Duration // сброс счётчика сбоев; перезапуск — и при выходе с ошибкой без падения
 }

@@ -112,6 +112,7 @@ h2 { margin: 0; font-size: 20px; font-weight: 700; }
 .btn.inv:disabled { background: transparent; border-color: var(--line-soft); color: var(--faint); }
 .btn.big { height: 48px; font-size: 15px; border-width: 2px; }
 .sq { display: inline-flex; align-items: center; justify-content: center; width: 40px; height: 40px; padding: 0; border: 1px solid var(--line-strong); background: transparent; color: var(--soft); cursor: pointer; }
+.top .sq { align-self: center; } /* шапка — stretch: кнопки иначе липнут к верху (справка, 2026-10-08) */
 .sq:disabled { color: #4A4741; border-color: var(--line-soft); cursor: default; }
 .sq.following, .btn.following { background: var(--inv-bg); border-color: var(--inv-bg); color: var(--inv-text); } /* «Следить»: следят */
 .bell { position: relative; flex-shrink: 0; align-self: center; }
