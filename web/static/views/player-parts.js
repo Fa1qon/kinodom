@@ -219,7 +219,9 @@ export function watchTarget(status, choice, bridge, format) {
   if (!(status && status.transcoder)) return 'external';
   if (bridge) {
     const mode = typeof bridge.moviePlaybackMode === 'function' ? bridge.moviePlaybackMode() : (typeof bridge.playbackMode === 'function' ? bridge.playbackMode() : (typeof bridge.moviePlayer === 'function' ? bridge.moviePlayer() : 'builtin'));
-    const ok = typeof bridge.playMovie === 'function' && mode === 'builtin';
+    // «Системный» тоже ведёт в приложение: оно само передаёт поток установленному плееру
+    // (просьба 2026-10-10 — выбранный системный запуск открывал встроенный).
+    const ok = typeof bridge.playMovie === 'function' && (mode === 'builtin' || mode === 'system');
     return ok ? 'app' : 'external';
   }
   return choice === 'external' ? 'external' : 'web';

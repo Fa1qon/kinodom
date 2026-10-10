@@ -23,6 +23,7 @@
     <string name="update_loading">Загрузка обновления… %1$d %%</string>
     <string name="update_failed">Не удалось скачать обновление</string>
     <string name="close">Закрыть</string>
+    <string name="no_external_player">Внешний плеер не найден — установите VLC или MX Player</string>
     <string name="no_signal">Канал сейчас не показывает</string>
     <string name="no_channel">Нет канала %1$s</string>
     <string name="voice_prompt">Скажите, что найти</string>

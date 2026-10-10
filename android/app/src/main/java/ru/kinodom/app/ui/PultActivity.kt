@@ -24,6 +24,7 @@ import android.webkit.WebView
 import android.webkit.WebViewClient
 import android.widget.FrameLayout
 import android.widget.TextView
+import android.widget.Toast
 import android.window.OnBackInvokedDispatcher
 import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
@@ -41,6 +42,7 @@ import ru.kinodom.app.core.Foreground
 import ru.kinodom.app.core.Lineup
 import ru.kinodom.app.core.LocalServer
 import ru.kinodom.app.core.Links
+import ru.kinodom.app.core.MovieInfo
 import ru.kinodom.app.core.MovieUrls
 import ru.kinodom.app.core.PlayerMode
 import ru.kinodom.app.core.Recovery
@@ -49,6 +51,7 @@ import ru.kinodom.app.core.ServerApp
 import ru.kinodom.app.core.UpdateDecision
 import ru.kinodom.app.core.Voice
 import ru.kinodom.app.core.WebViewVersion
+import ru.kinodom.app.net.Api
 import ru.kinodom.app.net.Prefs
 import ru.kinodom.app.net.ServerFinder
 import ru.kinodom.app.net.Status
@@ -652,12 +655,44 @@ class PultActivity : Activity() {
         fun playMovie(src: String, fromStart: Boolean): Boolean {
             if (!MovieUrls.validSrc(src)) return false
             handler.post {
-                if (::web.isInitialized && web.url?.startsWith(base) == true) {
+                if (!(::web.isInitialized && web.url?.startsWith(base) == true)) return@post
+                if (Prefs(this@PultActivity).moviePlaybackMode == PlayerMode.System) {
+                    launchSystemPlayer(src, fromStart) // «Системный» — установленный плеер, не встроенный
+                } else {
                     startActivity(Intent(this@PultActivity, MoviePlayerActivity::class.java).putExtra(MoviePlayerActivity.EXTRA_BASE, base)
                         .putExtra(MoviePlayerActivity.EXTRA_SRC, src).putExtra(MoviePlayerActivity.EXTRA_FROM_START, fromStart))
                 }
             }
             return true
+        }
+
+        // launchSystemPlayer — поток сервера (Matroska, звук как есть) установленному плееру через
+        // выбор приложения Android; с места из истории, если оно есть.
+        private fun launchSystemPlayer(src: String, fromStart: Boolean) {
+            scope.launch {
+                var at = 0.0
+                if (!fromStart) {
+                    try {
+                        val r = Api.fetch(base, MovieUrls.info(src, false), 15_000)
+                        at = r.body?.let { MovieInfo.parse(it)?.startSec?.toDouble() } ?: 0.0
+                    } catch (e: Exception) { /* без истории — с начала */ }
+                }
+                var k = 0.0
+                if (at > 0) {
+                    try {
+                        val r = Api.fetch(base, MovieUrls.keyframe(src, at), 15_000)
+                        k = r.body?.let { Regex("\"t\":([0-9.]+)").find(it)?.groupValues?.get(1)?.toDoubleOrNull() } ?: 0.0
+                    } catch (e: Exception) { /* не нашли кадр — с начала */ }
+                }
+                val url = MovieUrls.stream(base, src, k, null, null, MovieUrls.newSid())
+                val i = Intent(Intent.ACTION_VIEW).setDataAndType(Uri.parse(url), "video/x-matroska")
+                    .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                if (i.resolveActivity(packageManager) != null) {
+                    startActivity(i)
+                } else {
+                    Toast.makeText(this@PultActivity, R.string.no_external_player, Toast.LENGTH_LONG).show()
+                }
+            }
         }
 
         // versionCode — номер сборки: пульт сравнивает его с APK на сервере («Обновить» или «Последняя версия»).
