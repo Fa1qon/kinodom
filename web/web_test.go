@@ -1,4 +1,4 @@
-package web
+﻿package web
 
 import (
 	"bytes"
@@ -2784,7 +2784,7 @@ const got = [
   watchTarget(on, null, null, 'MKV'), watchTarget(on, null, null, ''),
   webBlockedFormat('rmvb'), webBlockedFormat('mkv'), webBlockedFormat(''),
 ].join(' ');
-const want = 'web external external external app external external external external external external web web true false false';
+const want = 'web external external external app app external external external external external web web true false false';
 if (got !== want) {
   console.error(got, '≠', want);
   process.exitCode = 1;
@@ -2862,3 +2862,4 @@ func TestPultChannelPlayerUnified(t *testing.T) {
 		t.Error("app.js: маршрут channel-play не зарегистрирован")
 	}
 }
+

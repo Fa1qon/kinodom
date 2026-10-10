@@ -15,6 +15,12 @@ import (
 
 // StreamHandler отдаёт файл раздачи с поддержкой Range: GET /stream/{hash}/{index}/{name}.
 // Перемотка — это новый Range-запрос; движок сам качает нужное место первым.
+
+// streamAheadSeconds — на сколько секунд показа впереди позиции читать при потоке: окно
+// приоритетов кусков вокруг просмотра. 30 с из очереди загрузки мало для плеера — на
+// медленной раздаче упирался в край скачанного и дёргался (просьба 2026-10-10).
+const streamAheadSeconds = 120
+
 func (s *Service) StreamHandler() http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		ih, ok := parseHash(w, r)
@@ -54,7 +60,7 @@ func (s *Service) StreamHandler() http.Handler {
 		defer rd.Close()
 		rd.SetContext(r.Context()) // зритель ушёл — чтение прерывается и не держит приоритеты кусков
 		rd.SetResponsive()         // отдавать данные, не дожидаясь проверки целого куска — быстрая перемотка
-		rd.SetReadahead(int64(headSeconds * s.bitrateOf(ih, index, f.Length())))
+		rd.SetReadahead(int64(streamAheadSeconds * s.bitrateOf(ih, index, f.Length())))
 
 		ct := videoTypes[extOf(f.DisplayPath())]
 		if ct == "" {
