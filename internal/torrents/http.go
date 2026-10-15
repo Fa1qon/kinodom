@@ -29,6 +29,8 @@ func (s *Service) Register(r Router) {
 	r.Handle("GET /stream/{hash}/{index}/{name}", s.Name(), s.StreamHandler())
 	r.Handle("GET /m3u/{hash}/{file}", s.Name(), http.HandlerFunc(s.handleM3U))
 	r.Handle("POST /api/v1/torrents/{hash}/files/{index}/watch", s.Name(), http.HandlerFunc(s.handleWatch))
+	r.HandleHome("POST /api/v1/downloads/{hash}/{index}/pause", s.Name(), http.HandlerFunc(s.handlePauseDownload))
+	r.HandleHome("POST /api/v1/downloads/{hash}/{index}/resume", s.Name(), http.HandlerFunc(s.handleResumeDownload))
 	// Удалять скачанное — из домашней сети (спека этапа 7, раздел 10.1).
 	r.HandleHome("DELETE /api/v1/downloads/{hash}/{index}", s.Name(), http.HandlerFunc(s.handleDelete))
 	r.HandleHome("DELETE /api/v1/downloads/{hash}", s.Name(), http.HandlerFunc(s.handleDeleteRelease))
@@ -219,8 +221,47 @@ func parseIndex(w http.ResponseWriter, r *http.Request) (int, bool) {
 	return i, true
 }
 
+func (s *Service) handlePauseDownload(w http.ResponseWriter, r *http.Request) {
+	s.controlDownload(w, r, true)
+}
+
+func (s *Service) handleResumeDownload(w http.ResponseWriter, r *http.Request) {
+	s.controlDownload(w, r, false)
+}
+
+func (s *Service) controlDownload(w http.ResponseWriter, r *http.Request, pause bool) {
+	ih, ok := parseHash(w, r)
+	if !ok {
+		return
+	}
+	index, ok := parseIndex(w, r)
+	if !ok {
+		return
+	}
+	var err error
+	if pause {
+		err = s.PauseDownload(r.Context(), ih, index)
+	} else {
+		err = s.ResumeDownload(r.Context(), ih, index)
+	}
+	switch {
+	case err == nil:
+		w.WriteHeader(http.StatusNoContent)
+	case errors.Is(err, ErrNotOpen), errors.Is(err, ErrNoSuchFile), errors.Is(err, ErrNotStored):
+		httpx.WriteError(w, http.StatusNotFound, err.Error())
+	case errors.Is(err, ErrWatching), errors.Is(err, ErrDownloadPaused), errors.Is(err, ErrDownloadRunning), errors.Is(err, ErrDownloadDone):
+		httpx.WriteError(w, http.StatusConflict, err.Error())
+	default:
+		httpx.WriteError(w, http.StatusInternalServerError, err.Error())
+	}
+}
+
 // handleDeleteRelease — корзина раздачи: {deleted, skipped} (спека этапа 7, раздел 10.6).
 func (s *Service) handleDeleteRelease(w http.ResponseWriter, r *http.Request) {
+	if s.deleteAllowed != nil && !s.deleteAllowed(r.Context(), httpx.Device(r)) {
+		httpx.WriteError(w, http.StatusForbidden, "профиль не может удалять файлы")
+		return
+	}
 	ih, ok := parseHash(w, r)
 	if !ok {
 		return
@@ -239,6 +280,10 @@ func (s *Service) handleDeleteRelease(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Service) handleDelete(w http.ResponseWriter, r *http.Request) {
+	if s.deleteAllowed != nil && !s.deleteAllowed(r.Context(), httpx.Device(r)) {
+		httpx.WriteError(w, http.StatusForbidden, "профиль не может удалять файлы")
+		return
+	}
 	ih, ok := parseHash(w, r)
 	if !ok {
 		return

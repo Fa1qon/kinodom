@@ -50,6 +50,11 @@ object MovieTracks {
             ?: ts.firstOrNull { it.default } ?: ts.first()
     }
 
+    // needsServerRemix — многоканальный звук на телевизорах часто формально поддерживается Media3,
+    // но аппаратный декодер периодически уходит в rebuffer и возвращает позицию назад. Серверный
+    // поток сводит его в стабильный AAC 2.0; для стерео оставляем исходный файл.
+    fun needsServerRemix(t: MovieTrack?): Boolean = t != null && t.channels > 2
+
     private val codecs = mapOf("ac3" to "AC3", "eac3" to "E-AC3", "dts" to "DTS", "truehd" to "TrueHD", "aac" to "AAC", "mp3" to "MP3",
         "flac" to "FLAC", "opus" to "Opus", "vorbis" to "Vorbis", "alac" to "ALAC")
     private val channels = mapOf(1 to "1.0", 2 to "2.0", 6 to "5.1", 8 to "7.1")

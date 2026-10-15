@@ -58,6 +58,18 @@ export function appBridge() {
   return (typeof window !== 'undefined' && window.KinodomApp) || null;
 }
 
+// Список обработчиков видео Android берётся с устройства, на котором работает приложение.
+export function installedPlayers(bridge) {
+  if (!bridge || typeof bridge.installedPlayers !== 'function') return null;
+  try {
+    const list = JSON.parse(bridge.installedPlayers());
+    if (!Array.isArray(list)) return null;
+    return list.filter(p => p && typeof p.id === 'string' && typeof p.name === 'string');
+  } catch {
+    return null;
+  }
+}
+
 // watchRoute — куда «Смотреть»: 'app' — плеер приложения (есть playChannels и не выбран системный плеер);
 // 'external' — как раньше: браузер, приложение 13a без playChannels, системный плеер в настройках приложения.
 export function watchRoute(bridge) {

@@ -1,7 +1,7 @@
 // Загрузки — по раздачам: скачанное и то, что качается, серии внутри раздачи, место в папке; удаление —
 // из домашней сети (спека этапа 7, разделы 5.5, 6.3 и 10.7).
 import { h, icon, size, speed, day, ready, poll, keepFocus, plural, shortNames, formatTag, fileFormat } from '../ui.js';
-import { get, put, del } from '../api.js';
+import { get, post, put, del } from '../api.js';
 import { followButton } from './release.js';
 
 // STATE — подпись, значок и цвет метки состояния.
@@ -84,8 +84,13 @@ export function render(root, r, ctx) {
     warn.replaceChildren(sp.warn ? h('div', { class: 'warn' }, icon('warning'), sp.warn) : '');
     total.replaceChildren(size(view.usedBytes), h('span', { class: 'muted' }, ` · ${sp.free}`));
     const groups = groupDownloads(view.items);
+    const sections = downloadSections(groups);
     keepFocus(list, () => {
-      list.replaceChildren(...(groups.length ? groups.flatMap(group) : [h('p', { class: 'muted' }, 'Пока ничего не скачано')]));
+      if (!sections.length) {
+        list.replaceChildren(h('p', { class: 'muted' }, 'Пока ничего не скачано'));
+        return;
+      }
+      list.replaceChildren(...sections.flatMap((s) => [h('h2', { class: 'dl-section-title' }, s.title), ...s.items.flatMap(group)]));
     });
   }
 
@@ -118,6 +123,7 @@ export function render(root, r, ctx) {
             draw();
           } }, icon(isOpen ? 'expand_more' : 'chevron_right')),
         followToggle(g, key), // у сериала — и когда скачана одна серия
+        single ? queueButton(d0, key) : null,
         !ctx.canEdit ? null
           : single ? trash(key, d0.canDelete, 'Удалить файл', () => removeFile(d0), confirmText(d0))
             : trash(key, g.canDelete, 'Удалить раздачу', () => removeRelease(g), confirmText({ watchedAt }))))];
@@ -136,7 +142,19 @@ export function render(root, r, ctx) {
       stateCell(d.state, d.readiness, d.percent, stateLabel(d)),
       h('div', { class: 'dl-size' }, size(d.size), d.speed ? h('div', { class: 'muted small' }, speed(d.speed)) : null),
       h('div', { class: 'muted small dl-when' }, when([d]), errorOf(key)),
-      h('div', { class: 'dl-actions' }, ctx.canEdit ? trash(key, d.canDelete, 'Удалить файл', () => removeFile(d), confirmText(d)) : null));
+      h('div', { class: 'dl-actions' }, queueButton(d, key), ctx.canEdit ? trash(key, d.canDelete, 'Удалить файл', () => removeFile(d), confirmText(d)) : null));
+  }
+
+  function queueButton(d, key) {
+    if (!d || (d.state !== 'downloading' && d.state !== 'queued' && d.state !== 'paused')) return null;
+    const paused = d.state === 'paused';
+    return h('button', { class: 'sq', type: 'button', 'data-key': `queue-${key}`,
+      'aria-label': paused ? 'Продолжить загрузку' : 'Поставить на паузу',
+      title: paused ? 'Продолжить загрузку' : 'Поставить на паузу',
+      onclick: () => run(key, async () => {
+        await post(`/downloads/${d.hash}/${d.index}/${paused ? 'resume' : 'pause'}`, {});
+        return '';
+      }) }, icon(paused ? 'play_arrow' : 'pause'));
   }
 
   function stateCell(state, readiness, percent, label) {
@@ -252,6 +270,19 @@ export function groupDownloads(items) {
       canDelete: g.items.some((d) => d.canDelete),
     };
   });
+}
+
+// downloadSections — явная очередь для ТВ: текущее действие отдельно от следующего,
+// фонового хранения и паузы. Заголовки уменьшают риск случайно удалить или открыть
+// не тот элемент, когда одновременно качаются несколько сезонов.
+export function downloadSections(groups) {
+  const order = ['now', 'next', 'background', 'paused'];
+  const titles = { now: 'Сейчас', next: 'Далее', background: 'В фоне', paused: 'На паузе' };
+  const keyOf = (g) => (g.state === 'watching' || g.state === 'downloading') ? 'now'
+    : g.state === 'queued' ? 'next' : g.state === 'paused' ? 'paused' : 'background';
+  const out = new Map(order.map((key) => [key, { key, title: titles[key], items: [] }]));
+  for (const g of groups || []) out.get(keyOf(g)).items.push(g);
+  return order.map((key) => out.get(key)).filter((s) => s.items.length);
 }
 
 // groupLine — вторая строка раздачи: сезон, качество и число серий («S01 · WEB-DL 1080p · 8 серий»), у

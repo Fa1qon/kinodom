@@ -5,8 +5,9 @@ import { get, post, put, del } from '../api.js';
 import { whereStopped, resumeIndex } from './history.js';
 import { poster, returnTo } from './catalog.js';
 import { trackerTags, trackerLabel, backTo } from './search.js';
-import { watchTarget, webBlockedFormat, playHash } from './player-parts.js';
+import { watchTarget, webBlockedFormat, playHash, externalLink } from './player-parts.js';
 import { appBridge } from './tvkit.js';
+import { isClient } from '../client-ui.js';
 
 const PENDING_FOR = 120000; // догрузку страницы раздачи ждём не дольше 2 минут (трекер мог лечь)
 const POSTER_FOR = 60000; // постер после страницы — не дольше минуты: сервер пробует его раз в минуту (спека 11b, 14.2)
@@ -67,6 +68,59 @@ export function seasonLabel(season) {
   return parts.join(' · ');
 }
 
+// variantSeasonGroups — группирует соседние раздачи по сезону, чтобы S01 и S02 не выглядели
+// плоским списком вариантов качества. Раздача без распознанного сезона остаётся в «Без сезона».
+export function variantSeasonGroups(items) {
+  const groups = new Map();
+  const keyOf = (e) => {
+    const s = (e.season || '').trim();
+    let m = /S(\d{1,2})(?:-S?(\d{1,2}))?/i.exec(s);
+    if (!m) m = /(?:сезон|season)\s*:?\s*(\d+)(?:\s*-\s*(\d+))?/i.exec(s);
+    if (!m) m = /(\d{1,2})x\d+/i.exec(s);
+    return m ? `s${Number(m[1])}${m[2] ? `-${Number(m[2])}` : ''}` : 'none';
+  };
+  for (const e of items || []) {
+    const key = keyOf(e);
+    if (!groups.has(key)) groups.set(key, { key, title: key === 'none' ? 'Без сезона' : (seasonLabel(e.season) || 'Сезон'), items: [] });
+    groups.get(key).items.push(e);
+  }
+  return [...groups.values()].sort((a, b) => (a.key === 'none' ? 9999 : Number(a.key.slice(1))) - (b.key === 'none' ? 9999 : Number(b.key.slice(1))));
+}
+
+// fileSeasonGroups — сезон из пути/имени файла, когда заголовок раздачи не содержит S01.
+// Это покрывает обычную структуру «Название/S01/S01E01.mkv».
+export function fileSeasonGroups(files) {
+  const groups = new Map();
+  const seasonOf = (f) => {
+    const s = String(f && f.name || '');
+    let m = /(?:^|[\\/._ -])S(\d{1,2})(?:E\d{1,3})?(?=$|[\\/._ -])/i.exec(s);
+    if (!m) m = /(?:^|[\\/._ -])(?:season|сезон)[ ._-]*(\d{1,2})(?=$|[\\/._ -])/i.exec(s);
+    return m ? Number(m[1]) : 0;
+  };
+  for (const f of files || []) {
+    const season = seasonOf(f);
+    const key = season > 0 ? `s${season}` : 'none';
+    if (!groups.has(key)) groups.set(key, { key, season, title: season > 0 ? `Сезон ${season}` : 'Без сезона', items: [] });
+    groups.get(key).items.push(f);
+  }
+  return [...groups.values()].sort((a, b) => (a.season || 9999) - (b.season || 9999));
+}
+
+export function fileSeasonLabel(files) {
+  const seasons = [...new Set(fileSeasonGroups(files).filter((g) => g.season > 0).map((g) => g.season))];
+  if (!seasons.length) return '';
+  if (seasons.length === 1) return `Сезон ${seasons[0]}`;
+  const runs = [];
+  let start = seasons[0];
+  let prev = start;
+  for (const n of seasons.slice(1)) {
+    if (n !== prev + 1) { runs.push(start === prev ? String(start) : `${start}–${prev}`); start = n; }
+    prev = n;
+  }
+  runs.push(start === prev ? String(start) : `${start}–${prev}`);
+  return `Сезоны ${runs.join(', ')}`;
+}
+
 // episodeAction — OK на строке серии (замечание № 3 этапа 11b): до «Скачать» — окно «Скачать?»,
 // после — выбрать файл панели; пока идёт действие — ничего.
 export function episodeAction(downloadingNow, busyNow) {
@@ -74,7 +128,29 @@ export function episodeAction(downloadingNow, busyNow) {
   return downloadingNow ? 'pick' : 'confirm';
 }
 
+// bestFile — единый выбор серии для главной кнопки: явный выбор и продолжение важнее
+// автоматического выбора, но готовый файл всегда выигрывает у файла, который только стоит
+// в очереди. Так «Смотреть» не отправляет человека ждать первый файл раздачи, если другая
+// серия уже доступна.
+export function bestFile(files, history = [], chosen = null, focus = -1) {
+  const fs = files || [];
+  if (!fs.length) return null;
+  const byIndex = (i) => fs.find((f) => f.index === i);
+  const explicit = byIndex(chosen);
+  if (explicit) return explicit;
+  const resume = resumeIndex(fs.map((f) => f.index), history);
+  const resumed = byIndex(resume);
+  if (resumed && resumed.readiness && resumed.readiness !== 'none') return resumed;
+  const rank = { done: 4, smooth: 3, wait: 2, none: 0 };
+  const ready = fs.filter((f) => (rank[f.readiness || 'none'] || 0) > 0)
+    .sort((a, b) => (rank[b.readiness || 'none'] || 0) - (rank[a.readiness || 'none'] || 0) || a.index - b.index);
+  if (ready.length) return ready[0];
+  const focused = byIndex(focus);
+  return focused || resumed || fs[0];
+}
+
 export function render(root, r, ctx) {
+  const compact = isClient();
   const id = r.parts[1];
   let alive = true;
   let rel = null; // /releases/{id}
@@ -84,7 +160,6 @@ export function render(root, r, ctx) {
   let busy = false;
   let followBusy = false; // «Следить» отправляется
   let torrentPoll = null;
-  let descOpen = false; // описание развёрнуто
   let focusNext = ''; // после «Скачать» с пульта ТВ — куда перевести фокус, когда появится «Смотреть»
   const started = Date.now();
   let pageAt = 0; // когда пришла страница раздачи
@@ -99,6 +174,7 @@ export function render(root, r, ctx) {
   let missingAt = 0; // когда /torrents/{hash} последний раз ответил 404
   let copied = null; // состояние копирования ссылки
   let pendingWatch = null; // файл, который нужно запустить после минимального буфера
+  let pendingExternal = null; // файл, который нужно открыть во внешнем плеере после подготовки
 
   const back = h('div');
   const cover = h('div', { class: 'rel-cover' });
@@ -107,8 +183,21 @@ export function render(root, r, ctx) {
   const side = h('aside', { class: 'panel', 'aria-label': 'Просмотр', 'data-nav-column': true });
   const others = h('section', { class: 'others', 'aria-label': 'Другие раздачи' });
   const preload = h('div', { class: 'release-preload', hidden: true, 'aria-live': 'polite' }, icon('progress_activity'), h('span', null, 'Подготавливаем просмотр…'));
-  root.append(h('div', { class: 'screen release' }, back,
-    h('div', { class: 'rel-grid' }, cover, h('div', { class: 'rel-main', 'data-nav-column': true }, info, live, others), side)));
+  const title = h('h1', { class: 'client-release-title' });
+  const extra = h('div', { class: 'client-release-extra' });
+  const main = h('div', { class: 'rel-main', 'data-nav-column': true }, info, live, others);
+  const grid = h('div', { class: 'rel-grid' }, cover, main, side);
+  const tabs = null;
+  function showTab() {
+    if (!compact) return;
+    // На ТВ и телефоне описание и действия находятся на одном экране с сериями.
+    // Переключатель «Просмотр / Подробнее» скрывал полезное описание за лишним OK.
+    cover.hidden = info.hidden = live.hidden = side.hidden = others.hidden = false;
+    extra.hidden = true;
+  }
+  showTab();
+  root.append(h('div', { class: compact ? 'screen release client-release' : 'screen release' }, back,
+    compact ? title : null, tabs, grid));
   root.append(preload);
   // «Другие раздачи» — при открытии и дальше раз в 10 с (раздачу того же фильма могли найти или открыть).
   const othersPoll = poll(async () => {
@@ -179,6 +268,7 @@ export function render(root, r, ctx) {
       if (!alive) return;
       drawLive();
       maybeStartPendingWatch();
+      maybeStartPendingExternal();
       if (st && torrentDone(st)) {
         torrentPoll.stop();
         torrentPoll = null;
@@ -187,7 +277,8 @@ export function render(root, r, ctx) {
   }
 
   function drawHead() {
-    const title = rel.name || rel.title || 'Раздача';
+    const heading = rel.name || rel.title || 'Раздача';
+    title.textContent = heading;
     const to = backTo(rel, store.get('catalog'), store.get('search'));
     const link = h('a', { class: 'back', href: to.href }, icon('chevron_left', 18), to.text);
     if (to.href.startsWith('#/catalog/')) {
@@ -199,10 +290,10 @@ export function render(root, r, ctx) {
       });
     }
     back.replaceChildren(link);
-    cover.replaceChildren(poster(rel, title, 'poster big'));
-    const desc = rel.description ? h('p', { class: descOpen ? 'desc' : 'desc clamp' }, rel.description) : null;
+    cover.replaceChildren(poster(rel, heading, 'poster big'));
+    const desc = rel.description ? h('p', { class: 'desc' }, rel.description) : null;
     fill(info,
-      h('h1', null, title),
+      compact ? null : h('h1', null, heading),
       h('div', { class: 'muted sub' }, [rel.original, rel.year || null].filter(Boolean).join(' · ')),
       h('div', { class: 'tags' },
         rel.kinopoisk > 0 ? h('span', { class: 'tag strong' }, 'КП ' + rating(rel.kinopoisk)) : null,
@@ -213,18 +304,6 @@ export function render(root, r, ctx) {
         rel.trackerUrl ? h('a', { class: 'tag', href: rel.trackerUrl, target: '_blank', rel: 'noopener' }, 'На трекере', icon('open_in_new', 16)) : null),
       desc || (rel.detailsPending ? h('div', { class: 'lines', 'aria-label': 'Описание загружается' }, h('div', { class: 'skel', style: { width: '80%' } }), h('div', { class: 'skel', style: { width: '55%' } })) : null),
     );
-    // Описания t1 бывают на экран технических данных: свёрнуто до 8 строк, «Показать полностью» —
-    // если не влезло.
-    if (desc && !descOpen) {
-      requestAnimationFrame(() => {
-        if (desc.isConnected && desc.scrollHeight > desc.clientHeight + 2) {
-          desc.after(h('button', { class: 'link', type: 'button', onclick: () => {
-            descOpen = true;
-            drawHead();
-          } }, 'Показать полностью'));
-        }
-      });
-    }
   }
 
   // files — видеофайлы: после «Скачать» — с прогрессом из движка, до — список из .torrent t1.
@@ -241,8 +320,11 @@ export function render(root, r, ctx) {
     keepFocus(root, () => {
       live.replaceChildren(series ? episodes(fs, label) : '');
       fill(side, panel(fs, label)); // «Следить» у не сериала — null: replaceChildren напечатал бы его
+      if (compact) {
+        extra.replaceChildren(...side.querySelectorAll('[data-key="follow"], [data-key="remove"], [data-key^="seen-"]'));
+      }
     });
-    preload.hidden = !pendingWatch;
+    preload.hidden = !pendingWatch && !pendingExternal;
     // Фокус остаётся в текущем навигационном столбце.
     if (focusNext && (!document.activeElement || document.activeElement === document.body)) {
       const el = focusNext === 'watch' ? side.querySelector('[data-key^="watch-"]') : root.querySelector(`[data-key="${focusNext}"]`);
@@ -258,10 +340,8 @@ export function render(root, r, ctx) {
     const total = stored.reduce((n, f) => n + f.size, 0);
     const done = stored.reduce((n, f) => n + (f.done || 0), 0);
     const current = downloading() ? panelFile(fs) : null;
-    return h('section', { class: 'episodes', 'aria-label': 'Серии' },
-      h('div', { class: 'row' }, h('h2', { class: 'grow' }, 'Серии'),
-        downloading() ? h('span', { class: 'muted small' }, `${size(done)} из ${size(total)}` + (st.speed > 0 ? ` · ${speed(st.speed)}` : '')) : null),
-      fs.map((f, n) => {
+    const groups = fileSeasonGroups(fs);
+    const render = (f, n) => {
         const rd = ready[f.readiness || 'none'] || ready.none;
         const on = current && f.index === current.index;
         return h('div', { class: on ? 'ep on' : 'ep', style: on && rd.color ? { borderColor: rd.color } : null },
@@ -272,19 +352,24 @@ export function render(root, r, ctx) {
           f.stored ? h('div', { class: 'track' }, h('div', { style: { width: `${f.percent}%`, background: rd.color || 'var(--buffer)' } })) : null,
           positionLine(progressOf(f))),
           watchButton(f, 'btn', 'Смотреть серию ' + (n + 1)));
-      }));
+      };
+    const body = groups.length > 1 ? groups.flatMap((g) => [h('h3', { class: 'episode-season' }, g.title), ...g.items.map((f) => render(f, fs.indexOf(f)))])
+      : fs.map((f, n) => render(f, n));
+    return h('section', { class: 'episodes', 'aria-label': 'Серии' },
+      h('div', { class: 'row' }, h('h2', { class: 'grow' }, 'Серии'),
+        downloading() ? h('span', { class: 'muted small' }, `${size(done)} из ${size(total)}` + (st.speed > 0 ? ` · ${speed(st.speed)}` : '')) : null),
+      body);
   }
 
   // panelFile — файл панели: выбранный человеком, иначе тот, что продолжать (история устройства), иначе
   // в фокусе загрузки, иначе первый.
   function panelFile(fs) {
-    const resume = resumeIndex(fs.map((f) => f.index), progress);
-    return fs.find((f) => f.index === chosen) || fs.find((f) => f.index === resume) || (st && fs.find((f) => f.index === st.focus)) || fs[0] || null;
+    return bestFile(fs, progress, chosen, st && st.focus);
   }
 
   function panel(fs, label) {
     const out = [];
-    const sl = seasonLabel(rel && rel.season);
+    const sl = seasonLabel(rel && rel.season) || fileSeasonLabel(fs);
     if (sl) out.push(h('div', { class: 'season-big', 'data-key': 'season' }, sl));
     const f = panelFile(fs);
     const failed = st && st.state === 'error';
@@ -294,7 +379,11 @@ export function render(root, r, ctx) {
       const target = rel.series || fs.length > 1 ? (fs[0] || f) : f;
       // Списка файлов ещё нет (страница трекера его не отдаёт) — кнопка активна: «Смотреть» добавит
       // раздачу, дождётся списка и запустит первый готовый файл (watchOrPrepare без файла).
-      out.push(h('button', { class: 'btn inv big', type: 'button', disabled: busy || waiting, 'data-key': 'watch', 'data-nav-main': true, onclick: () => watchOrPrepare(target) }, icon('play_arrow'), 'Смотреть'), followControl());
+      out.push(h('button', { class: 'btn inv big', type: 'button', disabled: busy || waiting, 'data-key': 'watch', 'data-nav-main': true, onclick: () => watchOrPrepare(target) }, icon('play_arrow'), 'Смотреть'),
+        // В вебе загрузка — отдельное действие: она ставит раздачу в очередь и не запускает плеер.
+        compact ? null : h('button', { class: 'btn', type: 'button', disabled: busy || waiting, 'data-key': 'download-release',
+          'aria-label': 'Скачать раздачу', onclick: () => download({}) }, icon('download'), 'Скачать'),
+        compact ? null : externalButton(target), followControl());
       if (webBlockedFormat(rel.format)) out.push(h('div', { class: 'muted small' }, icon('warning', 16),
         ` ${rel.format.toUpperCase()} в браузере не играется — «Смотреть» откроет внешний плеер или приложение.`));
       if (waiting) out.push(h('div', { class: 'muted' }, st.state === 'connecting' ? 'Ищем раздающих…' : 'Получаем список файлов…'));
@@ -313,7 +402,7 @@ export function render(root, r, ctx) {
       h('span', { class: 'grow' }, `${f.percent} %` + (inFocus && st.speed > 0 ? ` · ${speed(st.speed)}` : '')),
       h('span', { class: 'muted' }, plural(st.peers, 'пир', 'пира', 'пиров'))));
     if (f.readiness === 'wait' && f.waitSec > 0) out.push(h('div', { class: 'eta' }, `Без остановок через ${minutes(f.waitSec)}`));
-    out.push(watchButton(f, 'btn big wide'), followControl());
+    out.push(watchButton(f, 'btn big wide'), compact ? null : externalButton(f, 'Во внешнем плеере'), followControl());
     if (ctx.canEdit && rel.hash) {
       const seen = !!(p && p.watched);
       out.push(h('button', { class: 'btn', type: 'button', 'data-key': `seen-${f.index}`, onclick: () => mark(f, !seen) },
@@ -366,6 +455,26 @@ export function render(root, r, ctx) {
     icon('play_arrow'), label);
   }
 
+  // externalButton — явный внешний запуск для веб-версии. Он использует тот же серверный
+  // контракт, что и обычный просмотр, но не открывает встроенный браузерный плеер.
+  function externalButton(f, label = 'Во внешнем плеере') {
+    if (!f || !rel) return null;
+    return h('button', { class: 'btn', type: 'button', disabled: busy, 'data-key': `external-${f.index}`,
+      'aria-label': `${label}: ${f.name || ''}`, onclick: () => externalOrPrepare(f) }, icon('open_in_new'), label);
+  }
+
+  function externalOrPrepare(f, fromStart = false) {
+    if (!f || busy) return;
+    if (f.readiness && f.readiness !== 'none' && rel && rel.hash) {
+      externalWatch(f, fromStart);
+      return;
+    }
+    pendingExternal = { index: f.index, fromStart };
+    chosen = f.index;
+    drawLive();
+    download({ file: f.index, prepare: true });
+  }
+
   // pickEpisode — OK на строке серии: до «Скачать» — окно «Скачать «…» — размер?» (замечание № 3 этапа
   // 11b), «Да» — очередь с этой серии; после «Скачать» — файл панели.
   async function pickEpisode(f) {
@@ -404,7 +513,21 @@ export function render(root, r, ctx) {
     const next = pendingWatch; pendingWatch = null; watch(f, next.fromStart);
   }
 
-  // download — внутренняя подготовка файла для единой кнопки «Смотреть».
+  function maybeStartPendingExternal() {
+    if (!pendingExternal || !st || st.state === 'error') {
+      if (pendingExternal && st && st.state === 'error') pendingExternal = null;
+      return;
+    }
+    const all = st.files || [];
+    const f = all.find((item) => item.index === pendingExternal.index);
+    if (!f || !f.readiness || f.readiness === 'none') return;
+    const next = pendingExternal;
+    pendingExternal = null;
+    externalWatch(f, next.fromStart);
+  }
+
+  // download — постановка раздачи или файла в очередь. Для отдельной веб-кнопки без параметров
+  // ставится вся раздача и плеер не запускается; {prepare} используется кнопками просмотра.
   // {file} — одна серия: удалённую (например, при нехватке места) можно скачать снова; {from} — все
   // серии, первой — эта.
   async function download(what = {}) {
@@ -477,6 +600,36 @@ export function render(root, r, ctx) {
     drawLive();
   }
 
+  // externalWatch — получить актуальную ссылку и открыть внешний плеер. На ПК с
+  // зарегистрированным обработчиком используется kinodom://, на остальных устройствах
+  // открывается ссылка-плейлист или Android intent.
+  async function externalWatch(f, fromStart = false) {
+    if (!f || !rel || !rel.hash || busy) return;
+    busy = true;
+    actionError = '';
+    chosen = f.index;
+    drawLive();
+    try {
+      const res = await post(`/torrents/${rel.hash}/files/${f.index}/watch`, fromStart ? { fromStart: true } : {});
+      if (ctx.local && res.launchUrl) {
+        openPlayer(res.launchUrl, res.m3uUrl, ctx.status && ctx.status.protocol);
+      } else {
+        const direct = res.play && res.play.url;
+        const title = res.play && res.play.title;
+        location.href = direct
+          ? externalLink({ direct, m3uUrl: res.m3uUrl, title, startSec: res.startSec || 0 }, navigator.userAgent)
+          : res.m3uUrl;
+      }
+    } catch (e) {
+      actionError = e.message;
+    }
+    busy = false;
+    if (!alive) return;
+    if (torrentPoll) torrentPoll.now();
+    else watchTorrent();
+    drawLive();
+  }
+
   // drawOthers — «Другие раздачи»: раздачи того же фильма на обоих трекерах (текущая отмечена), под
   // ними — «Искать на трекерах» и состояние трекеров (спека этапа 7, разделы 10.4, 10.5 и 10.7).
   function drawOthers() {
@@ -485,7 +638,9 @@ export function render(root, r, ctx) {
     const out = [];
     if (items.length > 1 || searched) {
       out.push(h('h2', null, 'Другие раздачи'));
-      out.push(h('div', { class: 'var-list' }, items.map(variantRow)));
+      out.push(h('div', { class: 'var-season-list' }, variantSeasonGroups(items).map((g) =>
+        h('section', { class: 'var-season', 'aria-label': g.title },
+          h('h3', null, g.title), h('div', { class: 'var-list' }, g.items.map(variantRow))))));
     }
     out.push(h('div', { class: 'row gap10' },
       h('button', { class: 'btn', type: 'button', disabled: !!searchPoll, 'data-key': 'search-others', onclick: searchOthers },

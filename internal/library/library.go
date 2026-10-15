@@ -98,9 +98,10 @@ type Options struct {
 	// Writable — служба может писать в папку (папки «Фильмов» и «Сериалов» — для скачанного); nil — проба файлом.
 	Writable func(dir string) bool
 	// Remove — удаление файла или папки своей единицы («Удалить»); nil — os.RemoveAll (тесты подменяют отказ).
-	Remove func(path string) error
-	Log    *slog.Logger
-	Now    func() time.Time
+	Remove    func(path string) error
+	CanDelete func(context.Context, string) bool
+	Log       *slog.Logger
+	Now       func() time.Time
 }
 
 // Library — модуль «library».

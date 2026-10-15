@@ -84,7 +84,7 @@ func OfflineConfig(dataDir string) *torrent.ClientConfig {
 // NewSeeder раздаёт mi из dataDir (там уже лежат файлы из MakeTorrent). Хранилище — без
 // part-файлов, иначе готовые файлы не считались бы скачанными; закрывается вместе с клиентом,
 // чтобы Windows отпустила файл отметок до удаления временной папки.
-func NewSeeder(t testing.TB, dataDir string, mi metainfo.MetaInfo) (*torrent.Client, *torrent.Torrent) {
+func NewSeeder(t testing.TB, dataDir string, mi metainfo.MetaInfo, configure ...func(*torrent.ClientConfig)) (*torrent.Client, *torrent.Torrent) {
 	t.Helper()
 	st := storage.NewFileOpts(storage.NewFileClientOpts{ClientBaseDir: dataDir, UsePartFiles: g.Some(false)})
 	cfg := OfflineConfig(dataDir)
@@ -97,6 +97,9 @@ func NewSeeder(t testing.TB, dataDir string, mi metainfo.MetaInfo) (*torrent.Cli
 		t.Fatal(err)
 	}
 	cfg.ListenPort = port
+	for _, setup := range configure {
+		setup(cfg)
+	}
 	cl, err := torrent.NewClient(cfg)
 	if err != nil {
 		st.Close()

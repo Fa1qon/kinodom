@@ -51,31 +51,39 @@ type TorrentStatus struct {
 
 // session — всё, что сервис знает об открытой раздаче.
 type session struct {
-	t            *torrent.Torrent
-	stored       bool // есть хранимые файлы: правила «нет пиров» не применяются
-	noPeersSince time.Time
-	peersSince   time.Time
-	state        TorrentState
-	errText      string
-	lastBytes    int64
-	lastSample   time.Time
-	speed        float64 // байт/с, сглаженная
-	upSpeed      float64 // отдача, байт/с, сглаженная
-	lastUp       int64
-	prepared     map[int]*prepared
-	storedFiles  map[int]bool      // файлы, которые хранятся и докачиваются (в том числе до перезапуска)
-	readers      map[int]int       // открытые потоки по файлам: такой файл «сейчас смотрят»
-	touched      map[int]time.Time // когда просмотр файла последний раз записан в базу
-	paused       map[int]bool      // докачка на паузе: мало места (этап 6)
-	quiet        bool              // раздача молчит: не входит в раздаваемые (этап 6)
-	verifyQ      map[int]bool      // куски, ждущие перепроверки по хэшу (и проверяемый сейчас)
-	raw          []byte            // содержимое .torrent, пока метаинфо не сохранена
-	metaSaved    bool              // метаинфо в базе
-	lastSeen     time.Time         // когда раздачу последний раз открывали или спрашивали о ней
-	focus        int               // файл, который качается сейчас (очередь загрузки, этап 7); −1 — никакой
-	wantAll      bool              // «Скачать» до получения списка файлов: скачать всё, когда он придёт
-	downloadErr  string            // отложенное «Скачать» не удалось (мало места)
-	upgradedFrom metainfo.Hash     // перешла с прежней версии: после проверки перенесённого снять пометку перехода
+	t              *torrent.Torrent
+	stored         bool // есть хранимые файлы: правила «нет пиров» не применяются
+	noPeersSince   time.Time
+	peersSince     time.Time
+	state          TorrentState
+	errText        string
+	lastBytes      int64
+	lastSample     time.Time
+	speed          float64 // байт/с, сглаженная
+	upSpeed        float64 // отдача, байт/с, сглаженная
+	lastUp         int64
+	prepared       map[int]*prepared
+	playPriorities map[int]torrent.PiecePriority // явные приоритеты окна просмотра и заголовков
+	storedFiles    map[int]bool                  // файлы, которые хранятся и докачиваются (в том числе до перезапуска)
+	readers        map[int]int                   // открытые потоки по файлам: такой файл «сейчас смотрят»
+	readerPos      map[uint64]readerPosition     // позиции открытых потоков для арбитража границы буфера
+	nextReaderID   uint64
+	touched        map[int]time.Time // когда просмотр файла последний раз записан в базу
+	paused         map[int]bool      // докачка на паузе: мало места (этап 6)
+	quiet          bool              // раздача молчит: не входит в раздаваемые (этап 6)
+	verifyQ        map[int]bool      // куски, ждущие перепроверки по хэшу (и проверяемый сейчас)
+	raw            []byte            // содержимое .torrent, пока метаинфо не сохранена
+	metaSaved      bool              // метаинфо в базе
+	lastSeen       time.Time         // когда раздачу последний раз открывали или спрашивали о ней
+	focus          int               // файл, который качается сейчас (очередь загрузки, этап 7); −1 — никакой
+	wantAll        bool              // «Скачать» до получения списка файлов: скачать всё, когда он придёт
+	downloadErr    string            // отложенное «Скачать» не удалось (мало места)
+	upgradedFrom   metainfo.Hash     // перешла с прежней версии: после проверки перенесённого снять пометку перехода
+}
+
+type readerPosition struct {
+	index int
+	pos   int64
 }
 
 // prepared — файл, выбранный для просмотра.
@@ -122,6 +130,7 @@ type Service struct {
 	watch         WatchTracker   // история просмотров; nil — без неё (этап 8c)
 	durTried      sync.Map       // durationKey → длительность уже пробовали узнать
 	tracker       *watch.Tracker // сеансы просмотра для истории; nil — без истории
+	deleteAllowed func(context.Context, string) bool
 }
 
 func NewService(eng *Engine, reg *Registry, log *slog.Logger) *Service {
@@ -151,6 +160,10 @@ func NewLazyService(newEngine func() (*Engine, error), reg *Registry, log *slog.
 }
 
 func (s *Service) Name() string { return "torrents" }
+
+// SetDeleteAllowed lets the host app apply an active family profile to destructive actions.
+// A nil callback keeps the historical single-user behaviour.
+func (s *Service) SetDeleteAllowed(fn func(context.Context, string) bool) { s.deleteAllowed = fn }
 
 // Engine — движок или nil, если он ещё не создан.
 func (s *Service) Engine() *Engine {
@@ -429,7 +442,7 @@ func (s *Service) sessionFor(t *torrent.Torrent) *session {
 	if ss, ok := s.sessions[ih]; ok && ss.t == t {
 		return ss
 	}
-	ss := &session{t: t, prepared: map[int]*prepared{}, storedFiles: map[int]bool{}, readers: map[int]int{},
+	ss := &session{t: t, prepared: map[int]*prepared{}, storedFiles: map[int]bool{}, readers: map[int]int{}, readerPos: map[uint64]readerPosition{},
 		touched: map[int]time.Time{}, paused: map[int]bool{}, verifyQ: map[int]bool{}, lastSeen: s.now(), focus: -1}
 	if s.uploadOff {
 		t.DisallowDataUpload()
@@ -553,6 +566,7 @@ func (s *Service) sample() {
 		if s.advanceLocked(ss) {
 			advanced = true
 		}
+		s.refreshPlayPrioritiesLocked(ss)
 	}
 	s.mu.Unlock()
 	for _, ss := range unsaved { // запись в базу — без s.mu

@@ -19,7 +19,8 @@ export function render(root, r, ctx) {
   let sub = null;
   let subAbort = null;
   let starting = 0; // номер запуска: ответ ключевого кадра старого запуска не перебивает новый
-  let retried = false; // поток уже перезапускали после обрыва
+  let retryCount = 0; // сколько восстановлений подряд после обрыва
+  let retryTimer = 0;
   let seek = null; // накопленная перемотка стрелками
   let seekTimer = 0;
   let lastReport = 0;
@@ -32,9 +33,12 @@ export function render(root, r, ctx) {
   let tapTimer = 0;
   let lastTouch = 0; // последнее касание: мышиные события вслед за ним — не мышь
   let lastStat = 0; // последняя статистика mpegts.js: нет дольше STALL_MS при просмотре — загрузка встала
+  let lastProgress = 0;
+  let lastVideoTime = 0;
   let pendingAt = -1; // поток с этого места запускается
   let played = false; // что-то посмотрели — можно сообщать место
   let lastTap = 0;
+  let diagTimer = 0;
 
   const video = h('video', { class: 'pl-video', playsinline: true });
   video.addEventListener('error', () => {
@@ -57,6 +61,9 @@ export function render(root, r, ctx) {
   const vol = h('input', { class: 'pl-vol', type: 'range', min: '0', max: '1', step: '0.05',
     'aria-label': 'Громкость', 'data-key': 'pl-vol', oninput: () => setVolume(Number(vol.value)) });
   const fullBtn = btn('fullscreen', 'Во весь экран', 'pl-full', () => toggleFull());
+  const externalBtn = h('button', { class: 'btn pl-external', type: 'button', 'data-key': 'pl-external', hidden: true,
+    onclick: openExternal }, icon('open_in_new'), 'Во внешнем плеере');
+  const diagBtn = btn('info', 'Сведения о потоке', 'pl-info', () => { diagBox.hidden = !diagBox.hidden; });
   // Кнопки «назад/вперёд» — соседние серии, когда они есть; иначе — прокрутка (просьба 2026-10-08).
   const back10Btn = btn('fast_rewind', 'Назад', 'pl-back10', () => backStep());
   const fwd30Btn = btn('fast_forward', 'Вперёд', 'pl-fwd30', () => fwdStep());
@@ -64,12 +71,13 @@ export function render(root, r, ctx) {
   const menuBox = h('div', { class: 'pl-menu', role: 'menu', hidden: true });
   const nextBox = h('div', { class: 'pl-box', hidden: true });
   const msg = h('div', { class: 'pl-box', hidden: true });
+  const diagBox = h('div', { class: 'pl-diagnostics', role: 'status', hidden: true });
   const ui = h('div', { class: 'pl-ui' },
-    h('div', { class: 'pl-top' }, backBtn, title),
+    h('div', { class: 'pl-top' }, backBtn, title, h('div', { class: 'grow' }), externalBtn),
     h('div', { class: 'pl-bottom' }, bar,
       h('div', { class: 'pl-row' }, prevBtn, playBtn, back10Btn, fwd30Btn,
-        time, h('div', { class: 'grow' }), audioBtn, subsBtn, nextBtn, muteBtn, vol, fullBtn)));
-  const wrap = h('div', { class: 'player' }, video, load, ui, menuBox, nextBox, msg);
+        time, h('div', { class: 'grow' }), diagBtn, audioBtn, subsBtn, nextBtn, muteBtn, vol, fullBtn)));
+  const wrap = h('div', { class: 'player' }, video, load, ui, menuBox, nextBox, msg, diagBox);
   root.append(wrap);
   audioBtn.hidden = subsBtn.hidden = prevBtn.hidden = nextBtn.hidden = true;
 
@@ -91,6 +99,13 @@ export function render(root, r, ctx) {
     }
     if (!alive) return;
     title.textContent = info.title;
+    externalBtn.hidden = false;
+    diagBtn.hidden = !info.hash || String(info.hash).startsWith('lib-');
+    if (!diagBtn.hidden) {
+      refreshDiagnostics();
+      clearInterval(diagTimer);
+      diagTimer = setInterval(refreshDiagnostics, 2000);
+    }
     bar.max = String(Math.floor(dur()));
     audioBtn.hidden = info.audio.length < 2;
     subsBtn.hidden = P.textSubs(info.subs).length === 0;
@@ -121,6 +136,8 @@ export function render(root, r, ctx) {
   // start — поток с ключевого кадра не позже at.
   async function start(at) {
     const n = ++starting;
+    clearTimeout(retryTimer);
+    retryTimer = 0;
     stop();
     parkedAt = -1;
     pendingAt = Math.max(at, 0);
@@ -156,11 +173,14 @@ export function render(root, r, ctx) {
     // Позади держим 10–30 с (по умолчанию 2–3 мин — лишнее место в MSE, ревью 18Б). Stash-буфер
     // включён: без него сетевые микрозадержки сразу бьют в декодер — просмотр дёргался (2026-10-08).
     mp = mpegts.createPlayer({ type: 'mpegts', isLive: false, url: P.streamURL(src, k, audio, sid) },
-      { enableWorker: false, enableStashBuffer: true, stashInitialSize: 384, lazyLoad: false, autoCleanupSourceBuffer: true,
+      { enableWorker: false, enableStashBuffer: true, stashInitialSize: 384,
+        lazyLoad: false, autoCleanupSourceBuffer: true,
         autoCleanupMaxBackwardDuration: 30, autoCleanupMinBackwardDuration: 10 });
     mp.on(mpegts.Events.ERROR, (type, detail, data) => onError(data));
     mp.on(mpegts.Events.STATISTICS_INFO, () => { lastStat = Date.now(); });
     lastStat = Date.now();
+    lastProgress = lastStat;
+    lastVideoTime = 0;
     mp.attachMediaElement(video);
     mp.load();
     video.play().catch(() => {
@@ -207,6 +227,17 @@ export function render(root, r, ctx) {
     }
   }
 
+  async function refreshDiagnostics() {
+    if (!alive || !info || diagBtn.hidden) return;
+    try {
+      const d = await get(`/torrents/${info.hash}/files/${info.index}`);
+      if (!alive) return;
+      diagBox.replaceChildren(h('span', { class: 'muted small' }, P.playbackStatusText(d)));
+    } catch {
+      if (alive) diagBox.replaceChildren(h('span', { class: 'muted small' }, 'Сведения о потоке пока недоступны'));
+    }
+  }
+
   function clearCues() {
     for (const c of Array.from(track.cues || [])) track.removeCue(c);
   }
@@ -241,15 +272,22 @@ export function render(root, r, ctx) {
   function onError(data) {
     report(); // место — до перезапуска или сообщения (ревью 18Б, I4)
     if (data && data.code === 429) return fail('Сейчас смотрят на трёх устройствах — закройте один плеер', true);
-    if (!retried) {
-      retried = true;
-      start(pos());
+    if (retryTimer) return;
+    if (retryCount < P.MAX_RETRIES) {
+      retryCount += 1;
+      const at = pos();
+      retryTimer = setTimeout(() => {
+        retryTimer = 0;
+        if (alive) start(at);
+      }, P.retryDelay(retryCount));
       return;
     }
     fail('Поток оборвался', true);
   }
 
   function fail(text, external) {
+    clearTimeout(retryTimer);
+    retryTimer = 0;
     stop();
     load.hidden = true;
     msg.replaceChildren(h('div', { class: 'pl-msg-text' }, text), h('div', { class: 'row gap10' },
@@ -293,7 +331,7 @@ export function render(root, r, ctx) {
 
   function seekTo(t) {
     report();
-    retried = false;
+    retryCount = 0;
     start(P.clampPos(t, dur()));
   }
 
@@ -313,7 +351,7 @@ export function render(root, r, ctx) {
       start(parkedAt);
       return;
     }
-    if (video.paused && mp && Date.now() - lastStat >= P.STALL_MS) {
+    if (video.paused && mp && P.bufferedAhead(video.buffered, video.currentTime) < 1 && Date.now() - lastStat >= P.STALL_MS) {
       start(pos()); // на паузе буфер переполнился, загрузка встала (ревью 18Б, C1)
       return;
     }
@@ -534,9 +572,11 @@ export function render(root, r, ctx) {
   });
   video.addEventListener('timeupdate', () => {
     if (seek || !mp) return;
+    if (video.currentTime > lastVideoTime) lastProgress = Date.now();
+    lastVideoTime = video.currentTime;
     if (video.currentTime > 0.5) played = true;
     showTime(pos());
-    if (video.currentTime > 30) retried = false;
+    if (video.currentTime > 30) retryCount = 0;
     if (!video.paused && P.reportDue(lastReport, Date.now())) report();
   });
   video.addEventListener('ended', onEnded);
@@ -582,9 +622,8 @@ export function render(root, r, ctx) {
   const idle = setInterval(() => {
     const now = Date.now();
     if (P.hideDue(!video.paused, lastActivity, now, !!menu || dragging)) wrap.classList.add('idle');
-    // Смотрим, а статистики mpegts.js давно нет — полный буфер MSE остановил загрузку насовсем: заново с того же места,
-    // повтор не тратится (ревью 18Б, C1).
-    if (mp && msg.hidden && nextBox.hidden && P.loaderStalled(lastStat, now, !video.paused)) start(pos());
+    if (mp && msg.hidden && nextBox.hidden && P.loaderStalled(lastStat, now, !video.paused,
+      P.bufferedAhead(video.buffered, video.currentTime), lastProgress)) start(pos());
   }, 1000);
 
   begin();
@@ -594,9 +633,11 @@ export function render(root, r, ctx) {
     alive = false;
     stop();
     clearInterval(idle);
+    clearInterval(diagTimer);
     clearInterval(nextTimer);
     clearTimeout(seekTimer);
     clearTimeout(tapTimer);
+    clearTimeout(retryTimer);
     window.removeEventListener('keydown', onKey, true);
     window.removeEventListener('pagehide', onHide);
     document.removeEventListener('fullscreenchange', onFull);

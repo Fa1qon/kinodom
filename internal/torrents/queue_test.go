@@ -14,6 +14,28 @@ import (
 	"kinodom/internal/torrents/torrenttest"
 )
 
+func TestPlaybackPriorityOrdering(t *testing.T) {
+	if got := playbackPriority(false, false); got != torrent.PiecePriorityNormal {
+		t.Fatalf("фоновая загрузка: %v", got)
+	}
+	if got := playbackPriority(true, false); got <= torrent.PiecePriorityNormal {
+		t.Fatalf("просмотр не выше фоновой загрузки: %v", got)
+	}
+	if got := playbackPriority(true, true); got != torrent.PiecePriorityNow {
+		t.Fatalf("граница буфера не получила срочный приоритет: %v", got)
+	}
+}
+
+func TestPlaybackBoundaryUsesBitrateAndMinimum(t *testing.T) {
+	if got := playbackBoundaryBytes(1); got < int64(playbackBoundaryMinBytes) {
+		t.Fatalf("малый битрейт дал слишком маленькую границу: %d", got)
+	}
+	want := int64(playbackBoundarySeconds * (1 << 20))
+	if got := playbackBoundaryBytes(1 << 20); got != want {
+		t.Fatalf("граница буфера %d, ждали %d", got, want)
+	}
+}
+
 // Цвет кнопки «Смотреть» (спека этапа 7, раздел 5.5): не хранится — кнопки нет; скачан — зелёная;
 // успеет докачаться, пока смотрят, — синяя; иначе жёлтая и через сколько можно смотреть.
 func TestReadinessRules(t *testing.T) {

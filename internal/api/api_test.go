@@ -146,6 +146,20 @@ func TestMutatingRequestNeedsJSON(t *testing.T) {
 	}
 }
 
+func TestInvalidDeviceHeaderIsNotPersisted(t *testing.T) {
+	s, _ := newTestServer(t)
+	s.Handle("GET /api/v1/device", "", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(http.StatusNoContent) }))
+	req := httptest.NewRequest("GET", "/api/v1/device", nil)
+	req.Header.Set("X-Kinodom-Device", "bad id")
+	rec := do(s.Handler(), req)
+	if rec.Code != http.StatusNoContent {
+		t.Fatalf("код %d", rec.Code)
+	}
+	if got := rec.Header().Get("Set-Cookie"); got != "" {
+		t.Fatalf("недопустимый ID попал в cookie: %q", got)
+	}
+}
+
 // ownAddr — сетевой (не loopback) адрес этого ПК: пульт, открытый на ПК по адресу в сети. "" — адресов
 // в сети нет.
 func ownAddr(t *testing.T) string {

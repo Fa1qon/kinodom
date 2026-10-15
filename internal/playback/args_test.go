@@ -119,8 +119,27 @@ func TestBurstFor(t *testing.T) {
 	if a := streamArgs(streamOpts{Input: "x", Video: 0, Format: "ts", Burst: 27}); !pair(a, "-readrate_initial_burst", "27") {
 		t.Errorf("запас из сведений: %v", a)
 	}
-	// скачанный целиком — без темпа загрузки (просьба 2026-10-08)
-	if a := streamArgs(streamOpts{Input: "x", Video: 0, Format: "ts", Complete: true}); slices.Contains(a, "-readrate") {
-		t.Errorf("скачанный файл — без темпа: %v", a)
+	// Скачанный файл не должен переполнять MSE браузера; native Matroska читает без ограничения.
+	for _, format := range []string{"ts", "webm"} {
+		if a := streamArgs(streamOpts{Input: "x", Video: 0, Format: format, Complete: true, Burst: 27}); !pair(a, "-readrate", "1") || !pair(a, "-readrate_initial_burst", "27") {
+			t.Errorf("скачанный файл в браузере — с запасом и темпом: %v", a)
+		}
+	}
+	if a := streamArgs(streamOpts{Input: "x", Video: 0, Format: "mkv", Complete: true}); slices.Contains(a, "-readrate") {
+		t.Errorf("скачанный файл в Android — без темпа: %v", a)
+	}
+}
+
+func TestMkvBurstForUsesPlaybackWindow(t *testing.T) {
+	for _, c := range []struct {
+		bits int64
+		want int
+	}{{0, 300}, {20_000_000, 107}, {100_000_000, 21}} {
+		if got := burstForMkv(c.bits); got != c.want {
+			t.Errorf("burstForMkv(%d) = %d, ждали %d", c.bits, got, c.want)
+		}
+	}
+	if a := streamArgs(streamOpts{Input: "x", Video: 0, Format: "mkv", Burst: burstForMkv(20_000_000)}); !pair(a, "-readrate_initial_burst", "107") {
+		t.Errorf("расширенный запас MKV: %v", a)
 	}
 }

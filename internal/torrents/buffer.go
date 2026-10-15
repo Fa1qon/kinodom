@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"net/url"
 
-	"github.com/anacrolix/torrent"
 	"github.com/anacrolix/torrent/metainfo"
 )
 
@@ -23,6 +22,12 @@ const (
 type FileStatus struct {
 	State         FileState `json:"state"`
 	BufferPercent int       `json:"bufferPercent"`
+	HeadPercent   int       `json:"headPercent"` // непрерывно от начала файла
+	TailPercent   int       `json:"tailPercent"` // непрерывно с конца файла
+	Done          int64     `json:"done"`
+	Total         int64     `json:"total"`
+	Focus         bool      `json:"focus"`    // файл сейчас в фокусе очереди
+	Watching      bool      `json:"watching"` // поток открыт на сервере
 	Peers         int       `json:"peers"`
 	Speed         int64     `json:"speed"`       // байт/с
 	SmoothInSec   int       `json:"smoothInSec"` // −1 — скорость нулевая, оценить нельзя
@@ -102,12 +107,6 @@ func (s *Service) prepare(ctx context.Context, ih metainfo.Hash, index int) erro
 	}
 	s.applyLocked(ss)
 	ss.downloadErr = ""
-	// Начало и конец — первыми: без конца файла MKV/AVI/MP4 плеер не может перематывать.
-	for _, sp := range []pieceSpan{p.head, p.tail} {
-		for i := sp.begin; i < sp.end; i++ {
-			t.Piece(i).SetPriority(torrent.PiecePriorityHigh)
-		}
-	}
 	return nil
 }
 
@@ -142,11 +141,16 @@ func (s *Service) FileStatus(ih metainfo.Hash, index int) (FileStatus, bool) {
 	st := FileStatus{
 		State:         FileBuffering,
 		BufferPercent: bufferPercent(done, total),
+		Done:          min(f.BytesCompleted(), f.Length()),
+		Total:         f.Length(),
+		Focus:         ss.focus == index,
+		Watching:      ss.readers[index] > 0,
 		Peers:         t.Stats().ActivePeers,
 		Speed:         int64(ss.speed),
 		SmoothInSec:   smoothInSec(f.Length()-f.BytesCompleted(), f.Length(), p.bitrate, ss.speed),
 		StreamPath:    streamPath(ih, index, f.DisplayPath()),
 	}
+	st.HeadPercent, st.TailPercent = contiguous(t, f)
 	switch {
 	case done == total:
 		st.State = FileReady

@@ -8,6 +8,30 @@ import (
 	"github.com/anacrolix/torrent/metainfo"
 )
 
+// playbackBoundarySeconds — если непрерывно скачанный участок подошёл к позиции
+// просмотра ближе этого времени, следующий участок получает срочный приоритет.
+// Небольшое окно оставляет остальным зрителям равный обычный приоритет и не даёт
+// одному потоку забрать весь канал.
+const playbackBoundarySeconds = 4
+const playbackBoundaryMinBytes = 1 << 20
+
+func playbackBoundaryBytes(bitrate float64) int64 {
+	if bitrate <= 0 {
+		return playbackBoundaryMinBytes
+	}
+	return max(playbackBoundaryMinBytes, int64(bitrate*playbackBoundarySeconds))
+}
+
+func playbackPriority(watching, atBoundary bool) torrent.PiecePriority {
+	if atBoundary {
+		return torrent.PiecePriorityNow
+	}
+	if watching {
+		return torrent.PiecePriorityHigh
+	}
+	return torrent.PiecePriorityNormal
+}
+
 // Очередь загрузки (спека этапа 7, раздел 5.5): «Скачать» делает файлы раздачи хранимыми, а качается
 // из них в каждый момент один — «в фокусе»; остальные ждут очереди в порядке серий. «Смотреть»
 // переносит фокус на свой файл. Файл, который смотрят с другого телевизора, качается тоже.
@@ -205,7 +229,7 @@ func (s *Service) nextFocusLocked(ss *session) int {
 	start := slices.Index(order, ss.focus) + 1 // фокуса нет (−1) — с начала
 	for k := range order {
 		i := order[(start+k)%len(order)]
-		if !fileDone(files[i]) {
+		if !ss.paused[i] && !fileDone(files[i]) {
 			return i
 		}
 	}
@@ -244,6 +268,81 @@ func (s *Service) applyLocked(ss *session) {
 			f.SetPriority(torrent.PiecePriorityNone)
 		}
 	}
+	s.refreshPlayPrioritiesLocked(ss)
+}
+
+// До открытия HTTP-потока качаем непрерывный участок, а не случайные куски тела файла.
+// При просмотре окно задаёт Reader самого плеера — оно следует и за перемоткой.
+// Вызывать под s.mu; явные приоритеты снимаются при паузе и смене файла очереди.
+func (s *Service) refreshPlayPrioritiesLocked(ss *session) {
+	if ss.t.Info() == nil {
+		return
+	}
+	want := map[int]torrent.PiecePriority{}
+	raise := func(sp pieceSpan, priority torrent.PiecePriority) {
+		for i := sp.begin; i < sp.end; i++ {
+			want[i] = max(want[i], priority)
+		}
+	}
+	if len(ss.verifyQ) == 0 {
+		for index, p := range ss.prepared {
+			if !ss.storedFiles[index] || ss.paused[index] {
+				continue
+			}
+			// Заголовок и индекс должны прийти до продвижения окна по телу файла.
+			windowPriority := torrent.PiecePriorityReadahead
+			if ss.readers[index] > 0 {
+				windowPriority = playbackPriority(true, false)
+			}
+			raise(p.head, windowPriority)
+			raise(p.tail, windowPriority)
+			// Если поток приблизился к непрерывно скачанному краю, его ближайшие
+			// куски должны обойти фоновые очереди. Позиции потоков обновляются
+			// обёрткой Reader, а сам расчёт выполняется раз в секунду под общей
+			// блокировкой сервиса.
+			if ss.readers[index] > 0 {
+				f := ss.t.Files()[index]
+				head := contiguousPrefix(ss.t, f)
+				urgent := playbackBoundaryBytes(p.bitrate)
+				for _, rp := range ss.readerPos {
+					if rp.index != index || head-rp.pos > urgent {
+						continue
+					}
+					start := max(int64(0), min(rp.pos, f.Length()))
+					// Срочное окно короткое: большое окно остаётся Readahead и
+					// не превращает весь фильм в равноприоритетный пул кусков.
+					raise(spanFor(ss.t.Info().PieceLength, f.Offset()+start, min(playbackBoundaryBytes(p.bitrate), f.Length()-start)), playbackPriority(true, true))
+				}
+			}
+			if index != ss.focus || ss.readers[index] > 0 {
+				continue
+			}
+			f := ss.t.Files()[index]
+			first := f.BeginPieceIndex()
+			for first < f.EndPieceIndex() && ss.t.PieceState(first).Complete {
+				first++
+			}
+			if first == f.EndPieceIndex() {
+				continue
+			}
+			// Не меньше 8 МБ и до десяти минут показа; окно ограничено 256 МБ,
+			// чтобы несколько параллельных просмотров не забрали весь канал.
+			ahead := max(int64(minHead), streamAheadBytes(p.bitrate))
+			offset := max(f.Offset(), int64(first)*ss.t.Info().PieceLength)
+			raise(spanFor(ss.t.Info().PieceLength, offset, min(ahead, f.Offset()+f.Length()-offset)), torrent.PiecePriorityHigh)
+		}
+	}
+	for index := range ss.playPriorities {
+		if _, ok := want[index]; !ok {
+			ss.t.Piece(index).SetPriority(torrent.PiecePriorityNone)
+		}
+	}
+	for index, priority := range want {
+		if ss.playPriorities[index] != priority {
+			ss.t.Piece(index).SetPriority(priority)
+		}
+	}
+	ss.playPriorities = want
 }
 
 // advanceLocked — фокус докачался: следующий файл очереди. true — фокус перешёл на новый файл:

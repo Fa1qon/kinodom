@@ -8,6 +8,7 @@ import java.net.InetAddress
 import java.net.MulticastSocket
 import java.net.SocketTimeoutException
 import java.net.URL
+import java.io.OutputStreamWriter
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
@@ -33,6 +34,13 @@ class ServerFinder(private val context: Context) {
         } finally {
             lock?.release()
         }
+    }
+
+    // findByCode — SSDP находит серверы в домашней сети, затем короткий код выбирает нужный.
+    // Код не передаётся в SSDP и не нужен интернету: проверка идёт обычным POST только найденным Kinodom.
+    suspend fun findByCode(code: String, timeoutMs: Long = 5000): Found? = withContext(Dispatchers.IO) {
+        val candidates = find(timeoutMs)
+        candidates.firstOrNull { verify(it.base, code) }
     }
 
     // search — адреса описаний из ответов Kinodom; запрос повторяется через секунду (UDP теряется).
@@ -75,5 +83,22 @@ class ServerFinder(private val context: Context) {
         }
     } catch (e: Exception) {
         null
+    }
+
+    private fun verify(base: String, code: String): Boolean = try {
+        val c = URL(base.trimEnd('/') + "/api/v1/pairing/verify").openConnection() as HttpURLConnection
+        c.connectTimeout = 1500
+        c.readTimeout = 1500
+        c.requestMethod = "POST"
+        c.doOutput = true
+        c.setRequestProperty("Content-Type", "application/json")
+        OutputStreamWriter(c.outputStream, Charsets.UTF_8).use { it.write("{\"code\":\"${code.replace("\"", "") }\"}") }
+        try {
+            c.responseCode == 200
+        } finally {
+            c.disconnect()
+        }
+    } catch (e: Exception) {
+        false
     }
 }

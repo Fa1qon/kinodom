@@ -66,8 +66,8 @@
 }
 
 * { box-sizing: border-box; }
-html { background: var(--bg); }
-body { margin: 0; background: var(--bg); color: var(--text); font: 15px/1.4 var(--font); }
+html { background: var(--bg); overflow-x: hidden; }
+body { margin: 0; background: var(--bg); color: var(--text); font: 15px/1.4 var(--font); overflow-x: hidden; }
 a { color: var(--text); text-decoration: none; }
 a:hover { color: #FFFFFF; }
 button, input { font: inherit; color: inherit; }
@@ -164,6 +164,65 @@ h2 { margin: 0; font-size: 20px; font-weight: 700; }
 /* Раздача */
 .back { display: inline-flex; align-items: center; gap: 4px; font-size: 14px; color: var(--muted); align-self: flex-start; }
 .release { gap: 18px; }
+/* Компактная страница раздачи только в Android-клиенте. */
+.client-ui .client-release { gap: 12px; padding: 20px 28px; font-size: 13px; }
+.client-release [hidden] { display: none !important; }
+.client-release .client-release-title { margin: 0; font-size: 20px; line-height: 1.3; overflow-wrap: anywhere; }
+.client-release .tabs { align-self: flex-start; }
+.client-release .tabs button { height: 34px; padding: 0 16px; background: transparent; border: 0; font: inherit; cursor: pointer; }
+.client-release .tabs button + button { border-left: 1px solid var(--line-strong); }
+.client-release .tabs button.on { background: var(--inv-bg); color: var(--inv-text); }
+.client-ui .client-release .rel-grid { display: grid; grid-template-columns: minmax(0, 1fr) 240px; gap: 18px; }
+.client-ui .client-release .rel-grid.client-details { grid-template-columns: 160px minmax(0, 1fr); }
+.client-release .rel-main { gap: 12px; }
+.client-release .panel { padding: 14px; gap: 10px; }
+.client-release .panel-title, .client-release .season-big { font-size: 15px; }
+.client-release .season-big { margin-bottom: 4px; }
+.client-release .btn { min-width: 0; height: 34px; padding: 0 10px; font-size: 13px; }
+.client-release .btn.big { height: 40px; font-size: 14px; }
+.client-release .ep { gap: 8px; padding: 6px 8px; }
+.client-release .ep-title { font-size: 14px; }
+.client-release .ep-main { gap: 4px; }
+.client-release .ep .btn { width: auto; max-width: 150px; }
+.client-release .episodes { gap: 6px; }
+.client-release .episodes h2 { font-size: 17px; }
+.client-release-extra { display: flex; flex-wrap: wrap; gap: 8px; }
+/* Клиент ТВ и телефон используют один WebView: на ширине телефона две колонки
+   раздачи сжимают заголовок и кнопку друг на друга. У клиента один вертикальный
+   поток, а длинные имена занимают только доступную ширину. */
+.client-ui .screen { min-width: 0; }
+.client-ui .client-release .rel-grid,
+.client-ui .client-release .rel-grid.client-details { min-width: 0; }
+.client-ui .client-release .ep { min-width: 0; }
+.client-ui .client-release .ep-main,
+.client-ui .client-release .ep-title,
+.client-ui .client-release .ep-name { min-width: 0; max-width: 100%; }
+.client-ui .client-release .ep-name { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+@media (max-width: 900px) {
+  .client-ui .client-release { padding: 14px max(14px, 4vw); }
+  .client-ui .client-release .rel-grid { display: flex; flex-direction: column; gap: 14px; }
+  .client-ui .client-release .rel-grid.client-details { flex-direction: column; }
+  .client-ui .client-release .ep { grid-template-columns: 34px minmax(0, 1fr) auto; }
+  .client-ui .client-release .ep .btn { max-width: 124px; }
+}
+@media (min-width: 901px) {
+  .client-ui .top { min-height: 64px; height: 64px; }
+  .client-ui .screen { padding-top: 24px; }
+  .client-ui .client-release { max-width: 1280px; margin: 0 auto; width: 100%; }
+  .client-ui .client-release .rel-grid { grid-template-columns: 170px minmax(0, 1fr) 250px; gap: 18px; }
+  .client-ui .client-release .ep-title { min-width: 0; }
+  /* WebView на ТВ часто сообщает CSS-ширину около 960 px при физическом Full HD.
+     Клиенту нужна та же плотность каталога, что и в desktop-эмуляторе. */
+  .client-ui .grid { grid-template-columns: repeat(6, minmax(0, 1fr)); gap: 20px 14px; }
+  .client-ui .poster { padding: 9px; }
+  .client-ui .etitle { font-size: 14px; }
+  .client-ui .stat { font-size: 12px; }
+}
+@media (max-width: 640px) {
+  .client-ui .client-release { padding: 14px; }
+  .client-ui .client-release .rel-grid { display: flex; flex-direction: column-reverse; }
+  .client-ui .client-release .rel-grid.client-details { flex-direction: column; }
+}
 .rel-grid { display: grid; grid-template-columns: 240px minmax(0, 1fr) 320px; gap: 28px; align-items: start; }
 .poster.big { padding: 14px; }
 .poster.big .ptitle { font-size: 24px; }
@@ -183,6 +242,7 @@ h2 { margin: 0; font-size: 20px; font-weight: 700; }
 .release-preload .ic { animation: pl-spin 1s linear infinite; }
 .episodes { display: flex; flex-direction: column; gap: 8px; }
 .episodes h2 { margin-bottom: 4px; }
+.episodes .episode-season { margin: 10px 0 0; font-size: 16px; color: var(--muted); }
 .others { display: flex; flex-direction: column; gap: 12px; }
 .var-list { border: 1px solid var(--line-soft); }
 .var-row { display: grid; grid-template-columns: minmax(0, 1fr) minmax(56px, max-content) minmax(76px, max-content) minmax(56px, max-content); gap: 14px; align-items: center; padding: 10px 14px; border-bottom: 1px solid #1E2226; font-size: 15px; }
@@ -211,6 +271,7 @@ a.var-row:hover { background: var(--hover); }
 .eta { font-size: 17px; font-weight: 700; color: var(--yellow); }
 .wide { width: 100%; }
 .pair { gap: 8px; }
+.pair-code { font-size: 2rem; font-weight: 700; letter-spacing: .24em; color: var(--blue); }
 
 /* Поиск */
 .tag.ok-tag .ic { color: var(--green); }
@@ -235,6 +296,8 @@ a.res-row:hover { background: var(--hover); }
 /* Загрузки */
 .total { font-size: 15px; }
 .dl-list { border: 1px solid var(--line-soft); }
+.dl-section-title { margin: 16px 0 0; padding: 0 4px; font-size: 1rem; color: var(--muted); }
+.dl-section-title:first-child { margin-top: 0; }
 .dl-list:has(> p) { border: 0; }
 .dl { display: flex; align-items: center; gap: 18px; padding: 14px 18px; border-bottom: 1px solid #1E2226; }
 .dl:last-child { border-bottom: 0; }
@@ -338,6 +401,15 @@ a.res-row:hover { background: var(--hover); }
 .film-head .col { gap: 4px; }
 /* Сезон сериала у «Скачать» (план 14А): крупно — какой сезон скачается. */
 .season-big { font-size: 20px; font-weight: 700; margin-bottom: 12px; }
+.season-summary { margin-top: 16px; display: flex; flex-direction: column; gap: 8px; }
+.season-summary h2 { margin: 0; font-size: 17px; }
+.season-summary-list { display: flex; flex-direction: column; gap: 6px; max-width: 680px; }
+.season-summary-row { display: grid; grid-template-columns: minmax(100px, .8fr) minmax(150px, 1fr) minmax(100px, 1.2fr); gap: 10px; align-items: center; padding: 9px 11px; border: 1px solid var(--line); background: var(--bg-raised); color: var(--text); text-align: left; cursor: pointer; }
+.season-summary-row:hover, .season-summary-row:focus-visible { border-color: var(--text); }
+.season-summary-row .muted { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.var-season-list { display: flex; flex-direction: column; gap: 14px; }
+.var-season { display: flex; flex-direction: column; gap: 6px; }
+.var-season h3 { margin: 0; font-size: 16px; }
 /* Формат в приоритете (план 14А): синий, как «DOM» логотипа. */
 .fmt.pref { color: var(--blue); font-weight: 700; }
 .tag.pref { color: var(--blue); border-color: var(--blue); }
@@ -456,6 +528,44 @@ a.res-row:hover { background: var(--hover); }
 .cont-row { display: flex; flex-direction: column; gap: 12px; }
 .cont-list { display: flex; gap: 16px; overflow-x: auto; padding: 4px 4px 10px; margin: -4px; scrollbar-width: thin; }
 .cont { flex: 0 0 150px; display: flex; flex-direction: column; gap: 6px; padding: 0; background: transparent; border: 0; color: var(--text); text-align: left; cursor: pointer; }
+.cont .poster.small { width: 100%; aspect-ratio: 2 / 3; min-height: 0; }
+.home { max-width: 1480px; margin: 0 auto; }
+.home-body { display: flex; flex-direction: column; gap: 28px; }
+.home-section { display: flex; flex-direction: column; gap: 12px; }
+.home-section-head { display: flex; align-items: end; justify-content: space-between; gap: 16px; }
+.home-section-head h2 { font-size: 22px; }
+.eyebrow { display: block; margin-bottom: 6px; color: var(--blue); font-size: 11px; font-weight: 700; letter-spacing: .12em; }
+.home-count { color: var(--muted); font-size: 13px; white-space: nowrap; }
+.home-hero { min-height: 260px; display: grid; grid-template-columns: 180px minmax(0, 1fr); gap: 26px; padding: 22px; border: 1px solid var(--line); background: linear-gradient(120deg, #182536, var(--bg-raised) 52%, #161a20); }
+.home-hero-art, .poster.hero-poster { width: 180px; }
+.poster.hero-poster { aspect-ratio: 2 / 3; padding: 14px; }
+.home-hero-copy { display: flex; min-width: 0; flex-direction: column; align-items: flex-start; justify-content: center; gap: 10px; }
+.home-hero-copy h3 { margin: 0; font: 700 clamp(24px, 3vw, 42px)/1.1 var(--display); overflow-wrap: anywhere; }
+.home-hero-meta { margin: 0; color: var(--soft); font-size: 18px; }
+.home-hero-copy .btn { margin-top: 8px; }
+.home-columns { display: grid; grid-template-columns: minmax(0, 1.1fr) minmax(0, .9fr); gap: 22px; align-items: start; }
+.home-columns .home-section { min-width: 0; }
+.home-stats { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; }
+.home-stat { display: grid; grid-template-columns: auto 1fr; column-gap: 10px; row-gap: 2px; padding: 14px 16px; border: 1px solid var(--line); background: var(--bg-raised); }
+.home-stat:hover, .home-quick-link:hover { background: var(--hover); }
+.home-stat-icon { grid-row: span 2; color: var(--blue); }
+.home-stat-value { font-size: 22px; font-weight: 700; }
+.home-stat-title { color: var(--muted); font-size: 13px; }
+.home-quick { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; }
+.home-quick-link { display: grid; grid-template-columns: auto 1fr; column-gap: 10px; row-gap: 2px; align-items: center; padding: 13px 14px; border: 1px solid var(--line); background: var(--bg-raised); }
+.home-quick-link .ic { grid-row: span 2; color: var(--blue); }
+.home-new { min-width: 0; }
+.home-tabs { display: flex; gap: 8px; overflow-x: auto; padding-bottom: 2px; scrollbar-width: thin; }
+.home-tab { flex: 0 0 auto; min-height: 42px; padding: 0 15px; border: 1px solid var(--line); background: var(--bg-raised); color: var(--muted); cursor: pointer; font: inherit; }
+.home-tab:hover, .home-tab.on { border-color: var(--blue); color: var(--text); background: var(--focus-fill); }
+.home-rail { display: flex; gap: 14px; overflow-x: auto; padding: 2px 4px 10px; margin: -2px -4px; scrollbar-width: thin; }
+.home-new-card { flex: 0 0 154px; min-width: 0; display: flex; flex-direction: column; gap: 6px; color: var(--text); }
+.home-new-card:hover .etitle { color: var(--blue); }
+.home-new-card .poster { width: 154px; aspect-ratio: 2 / 3; padding: 10px; }
+.home-new-card .etitle { font-size: 14px; }
+.home-list { display: flex; flex-direction: column; gap: 8px; max-width: 900px; }
+.home-item { display: flex; align-items: center; gap: 14px; min-height: 52px; padding: 10px 14px; border: 1px solid var(--line); background: var(--bg-raised); }
+.home-item-main { display: flex; flex-direction: column; gap: 4px; min-width: 0; flex: 1; }
 .poster.small { padding: 10px; }
 .poster.small .ptitle { font-size: 13px; }
 .versions { display: flex; flex-direction: column; gap: 8px; }
@@ -464,6 +574,11 @@ a.res-row:hover { background: var(--hover); }
 .path { overflow-wrap: anywhere; }
 .input.year { width: 90px; flex: 0 0 90px; }
 .btn.on { border-color: var(--text); }
+
+@media (max-width: 600px) {
+  .season-summary-row { grid-template-columns: minmax(100px, 1fr) minmax(130px, 1.2fr); }
+  .season-summary-row .season-source { grid-column: 1 / -1; }
+}
 
 @media (max-width: 1200px) {
   :root { --pad: 24px; }
@@ -499,9 +614,9 @@ a.res-row:hover { background: var(--hover); }
   .top .narrow-only { display: inline-flex; width: 44px; height: 44px; }
   .nav { display: none; }
   .search-btn { width: 44px; min-height: 44px; padding: 0; justify-content: center; }
-  .top.open .nav { display: flex; flex-direction: column; position: absolute; top: 54px; left: 0; right: 0; z-index: 10; background: var(--bg); border-bottom: 1px solid var(--line); }
-  .top.open .nav a, .top.open .nav .soon { height: 52px; padding: 0 var(--pad); border-bottom: 1px solid var(--line-soft); margin: 0; }
-  .top.open .nav a.on { border-bottom-color: var(--line-soft); box-shadow: inset 3px 0 0 var(--text); }
+  .top.open .nav { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; position: fixed; top: 64px; left: 10px; right: 10px; z-index: 10; max-height: calc(100vh - 74px); overflow: auto; padding: 12px; background: var(--bg-raised); border: 1px solid var(--line-strong); box-shadow: 0 12px 36px #000b; }
+  .top.open .nav a, .top.open .nav .soon { height: 48px; padding: 0 12px; margin: 0; border: 1px solid var(--line); background: var(--bg); font-size: 14px; }
+  .top.open .nav a.on { border-color: var(--blue); box-shadow: inset 3px 0 0 var(--blue); background: var(--focus-fill); }
   .btn, .page, .field, .input { min-height: 44px; }
   .sq { width: 44px; height: 44px; }
   .screen { padding: 16px var(--pad) 32px; gap: 14px; }
@@ -533,10 +648,13 @@ a.res-row:hover { background: var(--hover); }
   .desc { font-size: 15px; }
   .desc.clamp { -webkit-line-clamp: 4; }
   .wide-only { display: none; }
-  .ep { gap: 10px; padding: 10px; }
-  .num { width: 18px; }
-  .ep-title { flex-direction: column; gap: 2px; font-size: 15px; }
-  .ep .btn { width: auto; padding: 0 12px; }
+  .ep { display: grid; grid-template-columns: 40px minmax(0, 1fr) auto; align-items: center; gap: 8px 10px; padding: 10px; }
+  .num { width: auto; grid-column: 1; grid-row: 1 / span 3; }
+  .ep-main { grid-column: 2; min-width: 0; }
+  .ep-title { flex-direction: column; gap: 2px; min-width: 0; font-size: 15px; }
+  .ep-name { max-width: 100%; }
+  .ep > .track { grid-column: 2 / -1; width: 100%; }
+  .ep .btn { grid-column: 3; grid-row: 1 / span 2; width: auto; max-width: 120px; overflow: hidden; padding: 0 10px; text-overflow: ellipsis; }
 
   /* Поиск */
   .res-head { display: none; }
@@ -553,6 +671,8 @@ a.res-row:hover { background: var(--hover); }
   .dl-state .track { width: 100%; }
   .dl-size { order: 6; width: auto; text-align: left; }
   .dl-when { order: 7; width: auto; flex-grow: 1; text-align: right; }
+  .dl-actions { order: 8; width: 100%; min-width: 0; justify-content: flex-end; }
+  .dl-name .strong { font-size: 14px; line-height: 1.25; }
 
   /* Настройки */
   .set-grid { flex-direction: column; gap: 16px; }
@@ -563,7 +683,7 @@ a.res-row:hover { background: var(--hover); }
   .tile .v { font-size: 22px; }
   .two-cols, .sections-grid, .two { grid-template-columns: minmax(0, 1fr); }
   .three { gap: 8px; }
-  .card { padding: 16px; }
+  .card { padding: 13px; }
   .mod-name { width: 100px; }
   .checks { flex-wrap: wrap; gap: 16px; }
 
@@ -579,6 +699,31 @@ a.res-row:hover { background: var(--hover); }
   .sel { flex-grow: 1; min-width: 0; }
   .pl { flex-wrap: wrap; }
   .pl-name { flex-basis: 100%; }
+
+  .home-body { gap: 20px; }
+  .home-stats { gap: 8px; }
+  .home-stat { display: flex; flex-direction: column; align-items: flex-start; gap: 3px; padding: 11px; }
+  .home-stat-value { font-size: 20px; }
+  .home-stat-title { font-size: 11px; line-height: 1.2; }
+  .home-hero { min-height: 0; grid-template-columns: 100px minmax(0, 1fr); gap: 14px; padding: 14px; }
+  .home-hero-art, .poster.hero-poster { width: 100px; }
+  .home-hero-copy h3 { font-size: 20px; }
+  .home-hero-meta { font-size: 14px; }
+  .home-hero-copy .muted { font-size: 12px; }
+  .home-hero-copy .btn { height: 44px; font-size: 13px; }
+  .home-columns { grid-template-columns: minmax(0, 1fr); gap: 14px; }
+  .home-tabs { gap: 6px; }
+  .home-tab { min-height: 44px; padding: 0 12px; font-size: 13px; }
+  .home-new-card { flex-basis: 118px; }
+  .home-new-card .poster { width: 118px; }
+  .home-quick { gap: 8px; }
+  .home-quick-link { grid-template-columns: 1fr; gap: 5px; padding: 10px; font-size: 13px; }
+  .home-quick-link .ic { grid-row: auto; }
+  .home-section-head h2 { font-size: 18px; }
+  .home-item { align-items: flex-start; padding: 11px; gap: 9px; }
+  .home-item .btn { align-self: center; padding: 0 9px; font-size: 12px; }
+  .cont-list { gap: 10px; }
+  .cont { flex-basis: 118px; }
 }
 
 /* Телефон стоя: в строках модулей и трекеров пояснение — под именем, во всю ширину; время проблемы — под
@@ -639,6 +784,7 @@ body.playing #top { display: none; }
 }
 
 .player .pl-btn:focus-visible, .player .pl-bar:focus-visible, .player .pl-back:focus-visible, .player .pl-vol:focus-visible { outline: 3px solid #4aa3ff; outline-offset: 3px; }
+.player .pl-diagnostics { position: absolute; left: 18px; bottom: 76px; max-width: min(720px, calc(100vw - 36px)); padding: 8px 12px; border: 1px solid rgba(255,255,255,.22); border-radius: 6px; background: rgba(8,12,18,.88); color: var(--text); }
 
 /* Плеер канала (план 2026-10-06, Task A): текущая передача и метрики под видео, список каналов справа. */
 .player .cp-now { font-size: 17px; }

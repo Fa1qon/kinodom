@@ -3,7 +3,9 @@ import { h, icon, clear, poll, store, carryFocus } from './ui.js';
 import { NAV } from './app-nav.js';
 import { get } from './api.js';
 import { initNav } from './nav.js';
+import { isClient, initClientUI } from './client-ui.js';
 import * as catalog from './views/catalog.js';
+import * as home from './views/home.js';
 import { catalogHome } from './views/catalog.js';
 import * as release from './views/release.js';
 import * as search from './views/search.js';
@@ -27,7 +29,7 @@ import * as channelPlayer from './views/channel-player.js';
 import { settingsRoute } from './views/settings-layout.js';
 
 // views — экраны по первой части адреса; у «Настроек» — по второй.
-const views = { catalog, release, search, downloads, channels, channel, history, library, setup, updates, play: player, 'channel-play': channelPlayer };
+const views = { home, catalog, release, search, downloads, channels, channel, history, library, setup, updates, play: player, 'channel-play': channelPlayer };
 const settingsViews = { status: settingsStatus, params: settingsParams, sections: settingsSections, iptv: settingsIPTV, unrecognized: settingsUnrecognized,
   library: settingsLibrary, app: settingsApp };
 
@@ -57,8 +59,12 @@ function route() {
   return { parts: p.split('/').filter(Boolean).map(decodeURIComponent), query: new URLSearchParams(q) };
 }
 
-function defaultRoute() {
+function catalogRoute() {
   return catalogHome(store.get('catalog'));
+}
+
+function defaultRoute() {
+  return '#/home';
 }
 
 
@@ -87,7 +93,7 @@ function buildHeader() {
   const helpBtn = h('button', { class: 'sq', type: 'button', 'aria-label': 'Справка', title: 'Справка', 'data-key': 'help', onclick: openHelp }, icon('help_outline'));
   top.append(
     // Логотип заказчика: иконка, затем надпись (нарезка — assets/logo/cut.py).
-    h('a', { class: 'logo', href: '#/', 'aria-label': 'Kinodom' },
+    h('a', { class: 'logo', href: '#/home', 'aria-label': 'Kinodom' },
       h('img', { class: 'logo-icon', src: 'logo-icon.png', alt: '' }), h('img', { class: 'logo-text', src: 'logo-text.png', alt: '' })),
     nav,
     h('div', { class: 'grow' }),
@@ -108,7 +114,7 @@ function setMenu(open) {
 function updateHeader(r) {
   document.body.classList.toggle('playing', r.parts[0] === 'play' || r.parts[0] === 'channel-play'); // плеер — во всё окно, без шапки (план 18Б)
   const current = { release: 'catalog', channel: 'channels' }[r.parts[0]] || r.parts[0];
-  navLinks.catalog.href = defaultRoute();
+  navLinks.catalog.href = catalogRoute();
   for (const [id, a] of Object.entries(navLinks)) {
     a.classList.toggle('on', id === current);
     if (id === current) a.setAttribute('aria-current', 'page');
@@ -126,6 +132,7 @@ function updateHeader(r) {
 
 let cleanup = null;
 let lastView = null;
+let initialClientFocus = isClient();
 
 function render() {
   const r = route();
@@ -160,10 +167,29 @@ function render() {
   lastView = view;
   cleanup = view.render(main, r, ctx) || null;
   carryFocus(main, key);
+  if (initialClientFocus) {
+    initialClientFocus = false;
+    if (!navLinks.home.getClientRects().length) setMenu(true);
+    navLinks.home.focus({ preventScroll: true });
+  }
 }
 
 buildHeader();
+initClientUI();
 initNav();
+// Фокус, поставленный экраном напрямую (а не через стрелочную навигацию), тоже
+// прокручивается плавно и с небольшим запасом у нижнего края.
+window.addEventListener('focusin', (e) => {
+  const el = e.target;
+  if (!el || !el.getBoundingClientRect) return;
+  requestAnimationFrame(() => {
+    if (!el.isConnected) return;
+    const r = el.getBoundingClientRect();
+    const edge = Math.max(24, window.innerHeight * 0.025);
+    const delta = r.top < edge ? r.top - edge : r.bottom > window.innerHeight - edge ? r.bottom - (window.innerHeight - edge) : 0;
+    if (delta) window.scrollBy({ top: delta, behavior: 'smooth' });
+  });
+}, { passive: true });
 window.addEventListener('hashchange', (e) => {
   const at = e.oldURL.indexOf('#');
   ctx.prev = at < 0 ? '' : e.oldURL.slice(at).split('?')[0];

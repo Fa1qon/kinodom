@@ -3,7 +3,9 @@ package catalog
 import (
 	"cmp"
 	"context"
+	"fmt"
 	"slices"
+	"strings"
 	"time"
 
 	"kinodom/internal/meta"
@@ -80,6 +82,104 @@ func (c *Catalog) List(ctx context.Context, o ListOptions) (entries []Entry, tot
 	}
 	entries, err = c.cards(ctx, filtered[o.Offset:min(total, o.Offset+o.Limit)], kp, size)
 	return entries, total, err
+}
+
+// NewReleases — последние раздачи каталога, сгруппированные по произведению.
+// group — «our-film», «our-series», «foreign-film» или «foreign-series».
+// Сначала учитывается дата добавления на трекер, затем номер записи.
+// Для одного произведения остаётся самая свежая раздача, чтобы ряд не заполняли разные рипы.
+func (c *Catalog) NewReleases(ctx context.Context, group string, limit int) ([]Entry, error) {
+	if limit <= 0 {
+		limit = 6
+	}
+	limit = min(limit, PageSize)
+	if group != "our-film" && group != "our-series" && group != "foreign-film" && group != "foreign-series" {
+		return nil, fmt.Errorf("неизвестная группа новинок %q", group)
+	}
+	rs, err := c.st.catalogRows(ctx, c.enabled())
+	if err != nil {
+		return nil, err
+	}
+	series := strings.HasSuffix(group, "series")
+	names, err := c.st.categoryNames(ctx, rs)
+	if err != nil {
+		return nil, err
+	}
+	filtered := make([]row, 0, len(rs))
+	seenHash := map[string]bool{}
+	for _, r := range rs {
+		if r.Title == "" || r.Added.IsZero() || meta.ParseTitle(r.Title).Series != series || releaseGroup(r, names) != group {
+			continue
+		}
+		// Один и тот же infohash может быть в нескольких активных разделах или на двух трекерах.
+		// Ряд новинок показывает его один раз, сохраняя первую (самую новую) запись.
+		if r.InfoHash != "" && seenHash[r.InfoHash] {
+			continue
+		}
+		if r.InfoHash != "" {
+			seenHash[r.InfoHash] = true
+		}
+		filtered = append(filtered, r)
+	}
+	slices.SortStableFunc(filtered, func(a, b row) int {
+		if d := b.Added.Compare(a.Added); d != 0 {
+			return d
+		}
+		switch {
+		case b.ID > a.ID:
+			return 1
+		case b.ID < a.ID:
+			return -1
+		default:
+			return 0
+		}
+	})
+	// films() уже умеет связывать раздачи по номеру Кинопоиска и ключу названия. Позиция здесь
+	// задана свежестью, поэтому byPlace оставляет самую новую раздачу произведения.
+	for i := range filtered {
+		filtered[i].Pos = i
+	}
+	kp, err := c.kinopoiskIDs(ctx, filtered)
+	if err != nil {
+		return nil, err
+	}
+	grouped, size, _ := films(filtered, kp, c.PreferredFormat(), false, true)
+	if len(grouped) > limit {
+		grouped = grouped[:limit]
+	}
+	return c.cards(ctx, grouped, kp, size)
+}
+
+// releaseGroup связывает раздачу с четырьмя вкладками главной. Для стандартных разделов используем
+// стабильные идентификаторы трекеров; названия категорий покрывают вручную выбранные подразделы.
+func releaseGroup(r row, names map[CategoryRef]string) string {
+	name := strings.ToLower(names[CategoryRef{r.Tracker, r.CategoryID}])
+	our := strings.Contains(name, "наше") || strings.Contains(name, "русск") || strings.Contains(name, "россий") || strings.Contains(name, "отечеств") || strings.Contains(name, "советск")
+	foreign := strings.Contains(name, "зарубеж") || strings.Contains(name, "иностран")
+	if !our && !foreign {
+		switch r.Tracker {
+		case "t1":
+			our = r.CategoryID == "5" || r.CategoryID == "16"
+			foreign = r.CategoryID == "1" || r.CategoryID == "4" || r.CategoryID == "17"
+		case "t2":
+			our = r.Section == "22" || r.Section == "9"
+			foreign = r.Section == "7" || r.Section == "189"
+		}
+	}
+	if !our && !foreign {
+		// Неопознанные видеокатегории остаются в зарубежной вкладке, чтобы новинка не пропадала.
+		foreign = true
+	}
+	if our {
+		if meta.ParseTitle(r.Title).Series {
+			return "our-series"
+		}
+		return "our-film"
+	}
+	if meta.ParseTitle(r.Title).Series {
+		return "foreign-series"
+	}
+	return "foreign-film"
 }
 
 // cards — карточки строк: название раздела, рейтинг, раздач фильма на обоих трекерах.

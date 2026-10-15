@@ -13,11 +13,73 @@ import (
 	"testing"
 	"time"
 
+	"github.com/anacrolix/torrent"
 	"github.com/anacrolix/torrent/metainfo"
+	"golang.org/x/time/rate"
 
 	"kinodom/internal/power"
 	"kinodom/internal/torrents/torrenttest"
 )
+
+func TestStreamAheadBytesIsLongButBounded(t *testing.T) {
+	if got := streamAheadBytes(1_000_000); got != streamAheadMaxBytes {
+		t.Fatalf("1 МБ/с: окно %d, ждали %d", got, streamAheadMaxBytes)
+	}
+	if got := streamAheadBytes(100_000_000); got != streamAheadMaxBytes {
+		t.Fatalf("ограничение: окно %d, ждали %d", got, streamAheadMaxBytes)
+	}
+	if got := streamAheadBytes(0); got != streamAheadMinBytes {
+		t.Fatalf("неизвестный битрейт: окно %d, ждали %d", got, streamAheadMinBytes)
+	}
+}
+
+func TestProgressReadSeekerReportsSeekAndReadPosition(t *testing.T) {
+	var got []int64
+	r := &progressReadSeeker{ReadSeeker: bytes.NewReader([]byte("0123456789")), onPosition: func(pos int64) { got = append(got, pos) }}
+	if _, err := r.Seek(4, io.SeekStart); err != nil {
+		t.Fatal(err)
+	}
+	buf := make([]byte, 3)
+	if n, err := r.Read(buf); err != nil || n != 3 {
+		t.Fatalf("чтение: n=%d err=%v", n, err)
+	}
+	if len(got) != 2 || got[0] != 4 || got[1] != 7 {
+		t.Fatalf("позиции потока: %v", got)
+	}
+}
+
+// Ограниченный раздающий не успеет скачать весь файл: начало уже доступно плееру.
+func TestStreamStartsBeforeTorrentCompletes(t *testing.T) {
+	s := newTestService(t)
+	runService(t, s)
+	src := t.TempDir()
+	mi, root := torrenttest.MakeTorrent(t, src, "film.mkv", 64<<10, torrenttest.File{Path: "film.mkv", Size: 32 << 20})
+	want, err := os.ReadFile(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	seeder, _ := torrenttest.NewSeeder(t, src, mi, func(cfg *torrent.ClientConfig) {
+		cfg.UploadRateLimiter = rate.NewLimiter(512<<10, 16<<10)
+	})
+	ih, err := s.Open(context.Background(), Source{Torrent: torrentBytes(t, mi)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	must(t, s.Prepare(context.Background(), ih, 0))
+	connect(t, s, ih, seeder)
+	mux := http.NewServeMux()
+	mux.Handle("GET /stream/{hash}/{index}/{name}", s.StreamHandler())
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+	code, _, body := get(t, srv.URL+streamPath(ih, 0, "film.mkv"), "bytes=0-65535")
+	if code != http.StatusPartialContent || !bytes.Equal(body, want[:65536]) {
+		t.Fatal("начало файла не отдаётся во время загрузки")
+	}
+	tt, _ := s.eng.cl.Torrent(ih)
+	if fileDone(tt.Files()[0]) {
+		t.Fatal("тест должен читать начало до завершения загрузки всего файла")
+	}
+}
 
 // streamFixture — раздача с одним файлом, раздающий и HTTP-сервер с маршрутом потока.
 func streamFixture(t *testing.T, name string, size int) (srv *httptest.Server, ih metainfo.Hash, want []byte) {

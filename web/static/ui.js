@@ -1,5 +1,6 @@
 // Общие помощники пульта: элементы DOM, иконки, числа по-русски, опрос сервера.
 import { paths } from './icons.js';
+import { prepareClientInput } from './client-ui.js';
 
 const SVG = 'http://www.w3.org/2000/svg';
 // Свойства, которые задаются полем элемента, а не атрибутом.
@@ -17,6 +18,7 @@ export function h(tag, attrs, ...kids) {
     else el.setAttribute(k, v === true ? '' : String(v));
   }
   append(el, kids);
+  if (tag === 'input' || tag === 'textarea') prepareClientInput(el);
   return el;
 }
 

@@ -5,7 +5,8 @@
 // «Сохранить» отправляет только изменённые поля; ошибка поля — под полем; не из домашней сети — только
 // чтение (спека этапа 7, разделы 5.1, 6.3, 10.1 и 10.3).
 import { h, icon, store } from '../ui.js';
-import { appBridge } from './tvkit.js';
+import { appBridge, installedPlayers } from './tvkit.js';
+import { isClient } from '../client-ui.js';
 import { get, put, post } from '../api.js';
 import { layout, remoteNote } from './settings-layout.js';
 import { pickFolder } from './folders.js';
@@ -41,6 +42,7 @@ export const kpKeyPatch = keyPatch;
 export const searchKeyPatch = keyPatch;
 
 export function render(root, r, ctx) {
+  const client = isClient();
   const saveBtn = h('button', { class: 'btn inv', type: 'submit', form: 'params', 'data-key': 'save' }, icon('save'), 'Сохранить');
   const saved = h('span', { class: 'muted small', role: 'status' });
   const wizardBtn = h('a', { class: 'btn', href: '#/setup', 'data-key': 'wizard', hidden: true }, 'Открыть мастер');
@@ -106,7 +108,7 @@ export function render(root, r, ctx) {
     inputs.player = players;
     // Какие плееры реально есть на ПК: не установленный выбрать нельзя (просьба 2026-10-07).
     const found = h('div', { class: 'muted small', 'data-key': 'players-found' }, 'Проверяю установленные плееры…');
-    get('/players').then((list) => {
+    if (!client) get('/players').then((list) => {
       if (!alive) return;
       const state = Object.fromEntries(list.map((p) => [p.id, p.found]));
       found.textContent = 'На этом ПК: ' + list.map((p) => `${p.name} — ${p.found ? 'есть' : 'нет'}`).join(', ');
@@ -197,9 +199,9 @@ export function render(root, r, ctx) {
             uploadHint,
             field('Серий позади при нехватке места', 'keepBehind', input('keepBehind', String(v.storage.keepBehind), { inputmode: 'numeric' }))),
           deviceCards(),
-          h('div', { class: 'card' }, h('div', { class: 'h' }, 'Внешний плеер'),
+          client ? clientPlayerCard() : h('div', { class: 'card' }, h('div', { class: 'h' }, 'Внешний плеер'),
             h('p', { class: 'muted small' }, 'Чем открывать раздачи на этом компьютере, когда в «На этом устройстве» выбран внешний плеер.'), players, found, errs.player),
-          h('div', { class: 'card' }, h('div', { class: 'h' }, 'Запуск при старте ОС'),
+          client ? null : h('div', { class: 'card' }, h('div', { class: 'h' }, 'Запуск при старте ОС'),
             h('label', { class: 'check' }, autorun, 'Запускать Kinodom при входе в Windows',
               h('p', { class: 'muted small' }, 'Значок в трее при входе и служба, качающая и раздающая в фоне.'))),
           h('div', { class: 'card' }, h('div', { class: 'h' }, 'Каталог'),
@@ -210,6 +212,14 @@ export function render(root, r, ctx) {
   }
 
   // «На этом устройстве» (план 18Б): где смотреть фильмы — выбор этого браузера; в приложении — своя настройка.
+  function clientPlayerCard() {
+    const list = installedPlayers(appBridge());
+    return h('div', { class: 'card' }, h('div', { class: 'h' }, 'Плееры на этом устройстве'),
+      h('p', { class: 'muted small' }, list === null ? 'Список плееров недоступен.'
+        : list.length ? list.map(p => p.name).join(', ') : 'Внешние плееры не установлены.'),
+      h('a', { class: 'btn', href: '#/settings/app', 'data-key': 'device-player-settings' }, 'Настроить плеер приложения'));
+  }
+
   function deviceCards() {
     if (appBridge()) return null;
     const card = (key, title) => {
@@ -326,9 +336,11 @@ export function render(root, r, ctx) {
       if (up !== '' && (n === null || n < 0)) bad.upload = 'Раздача, МБ/с: нужно число от 0 или пустое поле';
       else set('storage', 'uploadLimitMBps', n);
     }
-    const player = inputs.player.querySelector('input:checked').value;
-    if (player !== v.player) p.player = player;
-    if (inputs.autorun.checked !== v.autorun) p.autorun = inputs.autorun.checked;
+    if (!client) {
+      const player = inputs.player.querySelector('input:checked').value;
+      if (player !== v.player) p.player = player;
+      if (inputs.autorun.checked !== v.autorun) p.autorun = inputs.autorun.checked;
+    }
     const format = inputs.preferredFormat.querySelector('input:checked').value;
     if (format !== (v.catalog.preferredFormat || '')) set('catalog', 'preferredFormat', format);
     const order = inputs.catalogOrder.querySelector('input:checked').value;

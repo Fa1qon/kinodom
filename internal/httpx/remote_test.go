@@ -173,3 +173,13 @@ func TestDeviceStableID(t *testing.T) {
 		t.Fatalf("cookie device after IP change = %q", got)
 	}
 }
+
+func TestDeviceRejectsInvalidHeaderID(t *testing.T) {
+	setOwn(t, "192.168.0.26/24")
+	r := httptest.NewRequest("GET", "/", nil)
+	r.RemoteAddr = "192.168.0.50:5000"
+	r.Header.Set(DeviceHeader, "bad id")
+	if got := Device(r); got != "192.168.0.50" {
+		t.Fatalf("недопустимый ID не должен менять устройство: %q", got)
+	}
+}

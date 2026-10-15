@@ -108,7 +108,23 @@ const rectOf = (el) => {
 
 function focusOn(el) {
   el.focus({ preventScroll: true });
-  el.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+  const apply = () => {
+    if (!el.isConnected || typeof window === 'undefined') return;
+    const r = el.getBoundingClientRect();
+    const edge = Math.max(24, window.innerHeight * 0.025);
+    const delta = r.top < edge ? r.top - edge : r.bottom > window.innerHeight - edge ? r.bottom - (window.innerHeight - edge) : 0;
+    if (delta) window.scrollBy({ top: delta, behavior: 'smooth' });
+  };
+  if (typeof requestAnimationFrame === 'function') requestAnimationFrame(apply); else apply();
+}
+
+// Объём прокрутки для фокуса: держим 2,5% экрана между активным элементом и краем,
+// чтобы ТВ-пульт не оставлял выбранную строку частично за экраном.
+export function focusScrollDelta(rect, viewportHeight, edgeRatio = 0.025) {
+  const edge = Math.max(24, viewportHeight * edgeRatio);
+  if (rect.top < edge) return rect.top - edge;
+  if (rect.bottom > viewportHeight - edge) return rect.bottom - (viewportHeight - edge);
+  return 0;
 }
 
 // firstFocus — куда первая стрелка, когда фокуса нет: первый элемент экрана, но не поле ввода (ревью 16Б: на странице
@@ -152,6 +168,7 @@ function typing(el) {
 // arrowMoves — стрелка dir уводит фокус с el (а не двигает курсор в поле). escaped — поле, из которого
 // вышли Escape (хвост Х25): фокус остался на нём, и стрелки снова ходят по экрану.
 export function arrowMoves(dir, el, escaped) {
+  if (el && el.dataset && el.dataset.clientInput && el.readOnly) return true;
   if (!typing(el) || dir === 'up' || dir === 'down' || escaped === el) return true;
   return dir === 'left' ? el.selectionStart === 0 && el.selectionEnd === 0 : el.selectionEnd === el.value.length;
 }

@@ -4,9 +4,11 @@ import (
 	"context"
 	"io"
 	"net/http"
+	"os"
 	"strconv"
 	"time"
 
+	"github.com/anacrolix/torrent"
 	"github.com/anacrolix/torrent/metainfo"
 
 	"kinodom/internal/httpx"
@@ -16,10 +18,26 @@ import (
 // StreamHandler отдаёт файл раздачи с поддержкой Range: GET /stream/{hash}/{index}/{name}.
 // Перемотка — это новый Range-запрос; движок сам качает нужное место первым.
 
-// streamAheadSeconds — на сколько секунд показа впереди позиции читать при потоке: окно
-// приоритетов кусков вокруг просмотра. 30 с из очереди загрузки мало для плеера — на
-// медленной раздаче упирался в край скачанного и дёргался (просьба 2026-10-10).
-const streamAheadSeconds = 120
+// streamAheadSeconds — на сколько секунд показа впереди позиции читать при потоке. Большое
+// окно нужно телевизору: при кратком падении скорости он продолжает читать уже скачанное,
+// как TorServer/LAMPA. Верхняя граница по байтам не даёт одному потоку занять весь канал.
+const streamAheadSeconds = 600
+const streamAheadMaxBytes = 256 << 20
+const streamAheadMinBytes = 32 << 20
+
+func streamAheadBytes(bitrate float64) int64 {
+	if bitrate <= 0 {
+		return streamAheadMinBytes
+	}
+	n := int64(bitrate * streamAheadSeconds)
+	if n < streamAheadMinBytes {
+		return streamAheadMinBytes
+	}
+	if n > streamAheadMaxBytes {
+		return streamAheadMaxBytes
+	}
+	return n
+}
 
 func (s *Service) StreamHandler() http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -51,33 +69,102 @@ func (s *Service) StreamHandler() http.Handler {
 		}
 		s.activeStreams.Add(1)
 		defer s.activeStreams.Add(-1)
-		defer s.openReader(ih, index)()
+		release, progress := s.openPlaybackReader(ih, index)
+		defer release()
 		defer s.keeper.Acquire()() // ПК не засыпает, пока смотрят (спека, раздел 9)
 		s.touchStream(r.Context(), ih, index)
 
 		// Свой читатель на каждый запрос: у каждого телевизора своя позиция.
 		rd := f.NewReader()
-		defer rd.Close()
 		rd.SetContext(r.Context()) // зритель ушёл — чтение прерывается и не держит приоритеты кусков
 		rd.SetResponsive()         // отдавать данные, не дожидаясь проверки целого куска — быстрая перемотка
-		rd.SetReadahead(int64(streamAheadSeconds * s.bitrateOf(ih, index, f.Length())))
+		rd.SetReadahead(streamAheadBytes(s.bitrateOf(ih, index, f.Length())))
+		var bodyClose io.Closer = rd
+		var body io.ReadSeeker = rd
+		// Уже проверенное непрерывное начало лежит на диске быстрее, чем его повторное
+		// чтение через torrent.Reader. Ограничиваем размер, чтобы обычный GET не заливал
+		// клиент сотнями мегабайт до первого кадра.
+		prefix := contiguousPrefix(t, f)
+		maxPrefix := streamAheadBytes(s.bitrateOf(ih, index, f.Length()))
+		prefix = min(prefix, maxPrefix)
+		if prefix > 0 {
+			path := enginePath(s.eng.TorrentDir(ih), t.Info(), ih, f.FileInfo())
+			if disk, err := os.Open(path); err == nil {
+				body = &prefixReader{disk: disk, tail: rd, prefix: prefix, length: f.Length()}
+				bodyClose = body.(io.Closer)
+			}
+		}
+		defer bodyClose.Close()
+		// Buffer the source, but keep the history tracker outside it so short
+		// Range requests report only bytes actually sent to the player.
+		buffered := io.ReadSeeker(newBufferedReadSeeker(body, 1<<20))
 
 		ct := videoTypes[extOf(f.DisplayPath())]
 		if ct == "" {
 			ct = "application/octet-stream"
 		}
 		w.Header().Set("Content-Type", ct) // иначе ServeContent стал бы угадывать тип по байтам
-		var body io.ReadSeeker = rd
-		if s.watch != nil { // место по чтению — в историю устройства (спека этапа 8, раздел 7.2)
+		if s.watch != nil {                // место по чтению — в историю устройства (спека этапа 8, раздел 7.2)
 			s.learnDuration(ih, index, f)
 			if !httpx.OwnPlayer(r) { // свой плеер сообщает место сам (спека цикла 18, раздел 4)
 				var done func()
-				body, done = s.tracker.Wrap(watch.Key{Device: httpx.Device(r), Hash: ih.HexString(), Index: index}, f.Length(), rd)
+				body, done = s.tracker.Wrap(watch.Key{Device: httpx.Device(r), Hash: ih.HexString(), Index: index}, f.Length(), buffered)
 				defer done()
+			} else {
+				body = buffered
 			}
+		} else {
+			body = buffered
 		}
+		// ServeContent делает Seek перед первым Read и плееры часто присылают
+		// новые Range-запросы. Отслеживаем фактическую позицию, чтобы на границе
+		// непрерывного буфера поднять только ближайшее окно этого зрителя.
+		body = &progressReadSeeker{ReadSeeker: body, onPosition: progress}
 		http.ServeContent(w, r, "", time.Time{}, body)
 	})
+}
+
+type progressReadSeeker struct {
+	io.ReadSeeker
+	onPosition func(int64)
+	pos        int64
+}
+
+func (r *progressReadSeeker) Read(p []byte) (int, error) {
+	n, err := r.ReadSeeker.Read(p)
+	if n > 0 && r.onPosition != nil {
+		r.pos += int64(n)
+		r.onPosition(r.pos)
+	}
+	return n, err
+}
+
+func (r *progressReadSeeker) Seek(offset int64, whence int) (int64, error) {
+	pos, err := r.ReadSeeker.Seek(offset, whence)
+	if err == nil && r.onPosition != nil {
+		r.pos = pos
+		r.onPosition(pos)
+	}
+	return pos, err
+}
+
+// contiguousPrefix — длина проверенного участка файла с начала. BytesCompleted
+// считает и куски в середине, поэтому для безопасного чтения разрежённого файла
+// нужны именно последовательные Complete-куски.
+func contiguousPrefix(t *torrent.Torrent, f *torrent.File) int64 {
+	info := t.Info()
+	if info == nil {
+		return 0
+	}
+	overlap := func(i int) int64 {
+		p := info.Piece(i)
+		return max(0, min(p.Offset()+p.Length(), f.Offset()+f.Length())-max(p.Offset(), f.Offset()))
+	}
+	var got int64
+	for i := f.BeginPieceIndex(); i < f.EndPieceIndex() && t.PieceState(i).Complete; i++ {
+		got += overlap(i)
+	}
+	return min(got, f.Length())
 }
 
 // ActiveStreams — сколько потоков идёт прямо сейчас (запрет сна и урезание отдачи — этап 6).
@@ -135,22 +222,40 @@ func (s *Service) touchStream(ctx context.Context, ih metainfo.Hash, index int) 
 // openReader отмечает открытый поток к файлу (такой файл «сейчас смотрят», не удаляется и
 // докачивается вне очереди); возвращает отметку закрытия.
 func (s *Service) openReader(ih metainfo.Hash, index int) func() {
+	release, _ := s.openPlaybackReader(ih, index)
+	return release
+}
+
+func (s *Service) openPlaybackReader(ih metainfo.Hash, index int) (func(), func(int64)) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	ss := s.sessions[ih]
 	if ss == nil {
-		return func() {}
+		return func() {}, func(int64) {}
 	}
+	ss.nextReaderID++
+	id := ss.nextReaderID
+	ss.readerPos[id] = readerPosition{index: index}
 	if ss.readers[index]++; ss.readers[index] == 1 {
 		s.applyLocked(ss) // первый зритель — файл качается, даже если он не в фокусе очереди
 	}
-	return func() {
+	release := func() {
 		s.mu.Lock()
 		defer s.mu.Unlock()
+		delete(ss.readerPos, id)
 		if ss.readers[index]--; ss.readers[index] == 0 {
 			s.applyLocked(ss)
 		}
 	}
+	progress := func(pos int64) {
+		s.mu.Lock()
+		defer s.mu.Unlock()
+		if rp, ok := ss.readerPos[id]; ok {
+			rp.pos = max(0, pos)
+			ss.readerPos[id] = rp
+		}
+	}
+	return release, progress
 }
 
 // streaming — к какому-то файлу раздачи открыт поток. Вызывать под s.mu.

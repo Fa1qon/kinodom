@@ -136,6 +136,10 @@ func (l *Library) handleUnrecognized(w http.ResponseWriter, r *http.Request) {
 
 // handleUnitDelete — «Удалить» свою единицу медиатеки (план 14В): {deleted: true}.
 func (l *Library) handleUnitDelete(w http.ResponseWriter, r *http.Request) {
+	if l.o.CanDelete != nil && !l.o.CanDelete(r.Context(), httpx.Device(r)) {
+		httpx.WriteError(w, http.StatusForbidden, "профиль не может удалять файлы")
+		return
+	}
 	id, ok := pathID(w, r)
 	if !ok {
 		return

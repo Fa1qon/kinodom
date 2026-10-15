@@ -287,7 +287,7 @@ export function render(root, r) {
       if (panelOpen) {
         sel = ((sel + dir) % list.length + list.length) % list.length;
         focusItem(sel);
-        if (panel.children[sel]) panel.children[sel].scrollIntoView({ block: 'nearest' });
+        if (panel.children[sel]) panel.children[sel].scrollIntoView({ block: 'nearest', behavior: 'smooth' });
       } else if (!boxOpen) {
         loadChannel(idx + dir);
       }

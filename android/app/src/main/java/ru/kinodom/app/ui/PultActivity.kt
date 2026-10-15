@@ -4,6 +4,7 @@ import android.annotation.SuppressLint
 import android.app.Activity
 import android.content.ActivityNotFoundException
 import android.content.Intent
+import android.content.pm.PackageManager
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
@@ -30,6 +31,8 @@ import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
 import java.io.File
+import org.json.JSONArray
+import org.json.JSONObject
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.MainScope
 import kotlinx.coroutines.cancel
@@ -423,7 +426,7 @@ class PultActivity : Activity() {
 
     // checkUpdate — на сервере новее и «Позже» не нажимали — окно «Есть новая версия Kinodom».
     private fun checkUpdate() {
-        if (BuildConfig.FLAVOR != "full") return // «Клиент» обновляется не с сервера: там full-APK другого пакета
+        if (!UpdateDecision.checksServer(BuildConfig.FLAVOR)) return // full-APK обновляется отдельным каналом
         updateCheckedAt = SystemClock.elapsedRealtime()
         scope.launch {
             if (overlay != null || postponed) return@launch
@@ -578,6 +581,28 @@ class PultActivity : Activity() {
     // Bridge — объект KinodomApp для пульта (спека этапа 13, раздел 5.2): версия, плеер каналов и его настройка.
     // Методы зовутся не с главного потока.
     private inner class Bridge {
+        @JavascriptInterface
+        fun distribution(): String = BuildConfig.FLAVOR
+
+        @JavascriptInterface
+        fun installedPlayers(): String {
+            val apps = linkedMapOf<String, String>()
+            for (mime in listOf("video/*", "video/x-matroska", "application/vnd.apple.mpegurl")) {
+                val intent = Intent(Intent.ACTION_VIEW).setDataAndType(Uri.parse("http://kinodom.invalid/video"), mime)
+                @Suppress("DEPRECATION")
+                val handlers = packageManager.queryIntentActivities(intent, PackageManager.MATCH_DEFAULT_ONLY)
+                for (handler in handlers) {
+                    val id = handler.activityInfo.packageName
+                    if (id != packageName) apps[id] = handler.loadLabel(packageManager).toString()
+                }
+            }
+            return JSONArray().apply {
+                apps.toList().sortedBy { it.second.lowercase() }.forEach { (id, name) ->
+                    put(JSONObject().put("id", id).put("name", name))
+                }
+            }.toString()
+        }
+
         @JavascriptInterface
         fun version(): String = BuildConfig.VERSION_NAME
 

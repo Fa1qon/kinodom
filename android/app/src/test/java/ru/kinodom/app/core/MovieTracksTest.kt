@@ -1,7 +1,9 @@
 package ru.kinodom.app.core
 
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
+import org.junit.Assert.assertTrue
 import org.junit.Test
 
 // Подписи и выбор дорожек (план 18В) — те же правила, что у плеера в браузере (план 18Б).
@@ -23,6 +25,13 @@ class MovieTracksTest {
         assertEquals(2, MovieTracks.pickAudio(a, Mem.of("LostFilm", "rus"))?.id)
         assertEquals(3, MovieTracks.pickAudio(a, Mem.of("Кубик", "eng"))?.id)
         assertNull(MovieTracks.pickAudio(emptyList(), null))
+    }
+
+    @Test
+    fun multichannelAudioUsesStableServerRemix() {
+        assertTrue(MovieTracks.needsServerRemix(MovieTrack(1, "rus", "", "aac", 6, true)))
+        assertFalse(MovieTracks.needsServerRemix(MovieTrack(1, "rus", "", "aac", 2, true)))
+        assertFalse(MovieTracks.needsServerRemix(null))
     }
 
     @Test

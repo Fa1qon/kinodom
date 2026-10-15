@@ -387,7 +387,14 @@ func (m *Module) stream(format string) handler {
 			fail(w, err)
 			return
 		}
-		o := streamOpts{Input: m.input(s), From: t, Video: md.Video.ID, Format: format, Burst: burstFor(md.BitRate),
+		// Браузерный MSE имеет ограниченный буфер. Даже скачанный файл отдаём с запасом,
+		// затем в темпе просмотра: иначе весь фильм заливается в MSE за секунды.
+		// Пауза/возобновление HTTP-загрузчика здесь невозможна: ffmpeg-поток не поддерживает Range.
+		burst := burstFor(md.BitRate)
+		if format == "mkv" {
+			burst = burstForMkv(md.BitRate)
+		}
+		o := streamOpts{Input: m.input(s), From: t, Video: md.Video.ID, Format: format, Burst: burst,
 			Complete: s.Complete}
 		if o.Audio, ok = pickAudio(md.Audio, q.Get("a")); !ok {
 			httpx.WriteError(w, http.StatusBadRequest, "такой озвучки в файле нет")

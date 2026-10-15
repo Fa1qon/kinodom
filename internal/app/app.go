@@ -90,18 +90,20 @@ type App struct {
 	DB       *store.DB
 	Sup      *supervisor.Supervisor
 	API      *api.Server
-	Power    *power.Keeper         // запрет сна, пока идёт поток любого модуля (спека, раздел 9)
-	Torrents *torrents.Service     // nil, если движок не запустился (см. проблему torrents.engine)
-	Ratings  *meta.Ratings         // рейтинги Кинопоиска (модуль ratings)
-	Images   *meta.Images          // картинки, которые сервер отдаёт по /img/{key}
-	Catalog  *catalog.Catalog      // каталог и поиск (модуль catalog)
-	Settings *settings.Service     // настройки из пульта: меняются без перезапуска (этап 7)
-	IPTV     *iptv.Module          // каналы (модуль iptv, этап 8)
-	History  *history.Service      // история просмотров по устройствам (этап 8c)
-	Library  *library.Library      // медиатека: скачанное и папки заказчика (модуль library, этап 9)
-	Follow   *follow.Module        // подписка на новые серии (модуль follow, этап 11b-В)
-	KPCat    *kpcat.Module         // каталог «Кинопоиск» (модуль kpcat, план 14Г)
-	Playback *playback.Module      // свой плеер фильмов (цикл 18)
+	Power    *power.Keeper     // запрет сна, пока идёт поток любого модуля (спека, раздел 9)
+	Torrents *torrents.Service // nil, если движок не запустился (см. проблему torrents.engine)
+	Ratings  *meta.Ratings     // рейтинги Кинопоиска (модуль ratings)
+	Images   *meta.Images      // картинки, которые сервер отдаёт по /img/{key}
+	Catalog  *catalog.Catalog  // каталог и поиск (модуль catalog)
+	Settings *settings.Service // настройки из пульта: меняются без перезапуска (этап 7)
+	IPTV     *iptv.Module      // каналы (модуль iptv, этап 8)
+	History  *history.Service  // история просмотров по устройствам (этап 8c)
+	Library  *library.Library  // медиатека: скачанное и папки заказчика (модуль library, этап 9)
+	Follow   *follow.Module    // подписка на новые серии (модуль follow, этап 11b-В)
+	KPCat    *kpcat.Module     // каталог «Кинопоиск» (модуль kpcat, план 14Г)
+	Playback *playback.Module  // свой плеер фильмов (цикл 18)
+	pairing  *pairingState
+	p1       *p1State
 	writable func(dir string) bool // служба может писать в папку медиатеки; nil — Library.Writable (тесты подменяют)
 
 	version   string
@@ -168,6 +170,9 @@ func New(ctx context.Context, o Options) (*App, error) {
 		addr = fmt.Sprintf(":%d", boot.APIPort)
 	}
 	a.API = api.New(addr, api.Deps{Log: log, DB: db, Sup: a.Sup, Web: web.Static})
+	a.pairing = newPairing()
+	a.API.HandleLocal("GET /api/v1/pairing", "", http.HandlerFunc(a.handlePairing))
+	a.API.HandleHome("POST /api/v1/pairing/verify", "", http.HandlerFunc(a.handlePairingVerify))
 	// Порт занимаем сразу: занятый порт — отказ запуска, а не сервер «наполовину».
 	if err := a.API.Listen(); err != nil {
 		return fail(err)
@@ -190,6 +195,7 @@ func New(ctx context.Context, o Options) (*App, error) {
 	a.initLibrary(ctx)
 	a.initPlayback(o)
 	a.initFollow(ctx)
+	a.initP1()
 	a.initKPCat(ctx)
 	a.initSetup()
 	a.initDiscovery(ctx, o)

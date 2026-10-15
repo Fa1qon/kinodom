@@ -153,7 +153,7 @@ export function openFilters({ trackers = [], sections = [], orders = [] }) {
   const focus = box.querySelector('a.drow.on[data-key^="sec-"]') || box.querySelector('a.drow.on') || box.querySelector('a.drow');
   if (focus) {
     focus.focus({ preventScroll: true });
-    focus.scrollIntoView({ block: 'center' });
+    focus.scrollIntoView({ block: 'center', behavior: 'smooth' });
   }
   return modal;
 }

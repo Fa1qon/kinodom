@@ -13,9 +13,14 @@ const seekPad = 0.15
 // затянул бы фильм в память целиком (замер 2026-10-03: 700 МБ за секунды). Тесты меняют.
 var Burst = 60
 
+// MkvBurst — запас для приложения и внешнего плеера. В отличие от MSE браузера
+// нативный Matroska-плеер может держать большой входной буфер и переживает провалы Wi‑Fi.
+var MkvBurst = 300
+
 // burstBytes — сколько отдать сразу: MSE браузера держит около 150 МБ видео вперёд, а mpegts.js при переполнении
 // останавливает загрузку насовсем (ревью 18Б, C1) — запас считается по объёму, а не по секундам.
 const burstBytes = 64 << 20
+const mkvBurstBytes = 256 << 20
 
 // burstFor — запас потока в секундах для файла с битрейтом bits: около 64 МБ, не меньше 10 с и не больше Burst.
 func burstFor(bits int64) int {
@@ -24,6 +29,14 @@ func burstFor(bits int64) int {
 	}
 	sec := int(math.Round(float64(burstBytes) * 8 / float64(bits)))
 	return max(10, min(sec, Burst))
+}
+
+func burstForMkv(bits int64) int {
+	if bits <= 0 {
+		return MkvBurst
+	}
+	sec := int(math.Round(float64(mkvBurstBytes) * 8 / float64(bits)))
+	return max(20, min(sec, MkvBurst))
 }
 
 // seekAt — куда ffmpeg ищет для потока с ключевого кадра from (0 — без поиска). Время потока начинается с кадра
@@ -62,7 +75,7 @@ func pace(burst int, complete bool) []string {
 
 // streamArgs — ffmpeg: с ключевого кадра, видео как есть, звук — AAC стерео (AAC стерео — как есть).
 func streamArgs(o streamOpts) []string {
-	a := append([]string{"-hide_banner", "-loglevel", "error", "-nostdin"}, pace(o.Burst, o.Complete)...)
+	a := append([]string{"-hide_banner", "-loglevel", "error", "-nostdin"}, pace(o.Burst, o.Complete && o.Format == "mkv")...)
 	if at := seekAt(o.From); at > 0 {
 		a = append(a, "-ss", secs(at))
 	}

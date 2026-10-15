@@ -273,10 +273,38 @@ export function nearEnd(pos, dur) {
 // STALL_MS — mpegts.js шлёт статистику каждые 0,6 с, пока загрузка жива; полный буфер MSE останавливает загрузку насовсем
 // и статистику тоже (ревью 18Б, C1). Медленная раздача шлёт статистику и с нулевой скоростью — её не трогаем.
 export const STALL_MS = 4000;
+export const MAX_RETRIES = 3;
 
-// loaderStalled — смотрим, а статистики давно нет: загрузка встала, поток — заново с того же места.
-export function loaderStalled(lastStat, now, playing) {
-  return playing && now - lastStat >= STALL_MS;
+// retryDelay — короткая экспоненциальная пауза после сетевого обрыва. Плеер не должен
+// мгновенно долбить сервер, но и не оставлять пользователя ждать десятки секунд.
+export function retryDelay(attempt) {
+  return Math.min(3000, 500 * (2 ** Math.max(0, attempt - 1)));
+}
+
+export function bufferedAhead(ranges, position) {
+  for (let i = 0; i < ranges.length; i++) {
+    if (ranges.start(i) <= position && ranges.end(i) > position) return ranges.end(i) - position;
+  }
+  return 0;
+}
+
+// playbackStatusText — короткая диагностика для плеера и ТВ: человек видит, почему поток
+// ждёт, не открывая технические журналы.
+export function playbackStatusText(d) {
+  if (!d) return '';
+  const state = d.state === 'ready' ? 'буфер готов' : d.state === 'error' ? (d.error || 'ошибка потока') : 'буферизация';
+  const head = Number.isFinite(d.headPercent) ? `начало ${d.headPercent} %` : null;
+  const tail = Number.isFinite(d.tailPercent) ? `конец ${d.tailPercent} %` : null;
+  const peers = Number.isFinite(d.peers) ? `${d.peers} ${d.peers === 1 ? 'пир' : d.peers < 5 ? 'пира' : 'пиров'}` : null;
+  const rate = d.speed > 0 ? `${Math.round(d.speed / 1024 / 1024 * 10) / 10} МБ/с` : null;
+  const wait = d.smoothInSec > 0 ? `без остановок через ${Math.ceil(d.smoothInSec / 60)} мин` : null;
+  return [state, head, tail, peers, rate, wait].filter(Boolean).join(' · ');
+}
+
+// Отсутствие сетевой статистики нормально при полном буфере или завершённой загрузке.
+// Перезапуск нужен лишь когда остановились и загрузка, и воспроизведение, а запас исчерпан.
+export function loaderStalled(lastStat, now, playing, ahead = 0, lastProgress = lastStat) {
+  return playing && ahead < 1 && now - lastStat >= STALL_MS && now - lastProgress >= STALL_MS;
 }
 
 // playButton — вид кнопки по состоянию видео: отказ автозапуска не даёт события pause (ревью 18Б, I1).

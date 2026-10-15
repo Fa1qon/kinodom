@@ -13,6 +13,15 @@
 
     <!-- Выбор файла логотипа в пульте: видимость приложений выбора (Android 11+). -->
     <queries>
+        <!-- Список внешних видеоплееров на самом устройстве, включая Android 11+. -->
+        <intent>
+            <action android:name="android.intent.action.VIEW" />
+            <data android:scheme="http" android:mimeType="video/*" />
+        </intent>
+        <intent>
+            <action android:name="android.intent.action.VIEW" />
+            <data android:scheme="http" android:mimeType="application/vnd.apple.mpegurl" />
+        </intent>
         <!-- «Открыть в VLC» из плеера фильмов (план 18В): с Android 11 без этого VLC приложению не виден (ревью 18В). -->
         <package android:name="org.videolan.vlc" />
         <!-- голосовой поиск: системное распознавание речи (план 17В) -->

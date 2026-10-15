@@ -141,8 +141,20 @@ class StartActivity : Activity() {
             layoutParams = LinearLayout.LayoutParams(Screens.fieldWidth(this@StartActivity), LinearLayout.LayoutParams.WRAP_CONTENT)
         }
         c.addView(field)
+        val code = EditText(this).apply {
+            hint = getString(R.string.pair_code_hint)
+            setHintTextColor(getColor(R.color.muted))
+            setTextColor(getColor(R.color.text))
+            setTextSize(TypedValue.COMPLEX_UNIT_SP, 22f)
+            inputType = InputType.TYPE_CLASS_NUMBER
+            imeOptions = EditorInfo.IME_ACTION_GO
+            isSingleLine = true
+            layoutParams = LinearLayout.LayoutParams(Screens.fieldWidth(this@StartActivity), LinearLayout.LayoutParams.WRAP_CONTENT)
+        }
+        c.addView(code)
         if (error != null) c.addView(Screens.note(this, error, error = true))
         val connect = { connect(field.text.toString()) }
+        val connectByCode = { connectByCode(code.text.toString()) }
         field.setOnEditorActionListener { _, action, event ->
             if (action == EditorInfo.IME_ACTION_GO || event?.keyCode == KeyEvent.KEYCODE_ENTER) {
                 connect()
@@ -151,10 +163,12 @@ class StartActivity : Activity() {
                 false
             }
         }
-        c.addView(Screens.button(this, getString(R.string.connect)) { connect() })
+        val connectButton = Screens.button(this, getString(R.string.connect)) { connect() }
+        c.addView(connectButton)
+        c.addView(Screens.button(this, getString(R.string.connect_code)) { connectByCode() })
         c.addView(Screens.button(this, getString(R.string.search_again)) { go(Step.Search) })
         setContentView(c)
-        field.requestFocus()
+        connectButton.requestFocus()
     }
 
     private fun connect(input: String) {
@@ -166,6 +180,19 @@ class StartActivity : Activity() {
                     if (Status.ok(p.base)) open(p.base) else ask(getString(R.string.no_answer_at, input.trim()), input)
                 }
             }
+        }
+    }
+
+    private fun connectByCode(input: String) {
+        val code = input.trim()
+        if (!Regex("\\d{6}").matches(code)) {
+            ask(getString(R.string.bad_pair_code), null)
+            return
+        }
+        waiting(getString(R.string.searching))
+        scope.launch {
+            val found = withContext(Dispatchers.IO) { ServerFinder(this@StartActivity).findByCode(code) }
+            if (found != null) open(found.base) else ask(getString(R.string.no_server_by_code), null)
         }
     }
 

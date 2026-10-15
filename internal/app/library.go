@@ -18,6 +18,7 @@ func (a *App) initLibrary(ctx context.Context) {
 		return fs[id].Type, err
 	}}
 	o := library.Options{DB: a.DB, KP: kp, KPPoster: a.kp.PosterURL, Ratings: a.Ratings, Downloads: libraryDownloads{a}, History: a.History, Power: a.Power,
+		CanDelete:    a.canDelete,
 		DownloadsDir: func() string { return a.Settings.Current().DownloadsDir },
 		KeepDays:     func() int { return a.Settings.Current().KeepDays },
 		TorrentFolders: func(ctx context.Context) ([]string, error) { // скачанное в папку медиатеки — единицей раздачи (план 14В)

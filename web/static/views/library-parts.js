@@ -24,7 +24,7 @@ export function libPoster(c, cls = 'poster') {
     c.dupes ? h('span', { class: 'vars' }, 'есть дубли') : null,
     h('div', { class: 'ptitle' }, c.title || ''));
   if (c.poster) {
-    const img = h('img', { src: cls.includes('big') ? c.poster : thumb(c.poster), alt: '', loading: 'lazy', decoding: 'async' });
+    const img = h('img', { src: cls.includes('big') || cls.includes('hero') ? c.poster : thumb(c.poster), alt: '', loading: 'lazy', decoding: 'async' });
     img.addEventListener('load', () => box.classList.add('has-img'));
     img.addEventListener('error', () => img.remove());
     box.prepend(img);

@@ -50,7 +50,7 @@ func jsonGuard(next http.Handler) http.Handler {
 func deviceCookie(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if _, err := r.Cookie(httpx.DeviceCookie); err != nil {
-			if id := r.Header.Get(httpx.DeviceHeader); id != "" {
+			if id := r.Header.Get(httpx.DeviceHeader); httpx.ValidDeviceID(id) {
 				http.SetCookie(w, &http.Cookie{Name: httpx.DeviceCookie, Value: id, Path: "/", MaxAge: 365 * 24 * 60 * 60, SameSite: http.SameSiteLaxMode})
 			}
 		}

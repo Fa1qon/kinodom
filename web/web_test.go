@@ -1,4 +1,4 @@
-﻿package web
+package web
 
 import (
 	"bytes"
@@ -20,7 +20,7 @@ var required = []string{
 	"fonts/golos-text-cyrillic.woff2", "fonts/golos-text-latin.woff2",
 	"fonts/unbounded-cyrillic.woff2", "fonts/unbounded-latin.woff2",
 	"fonts/OFL-golos-text.txt", "fonts/OFL-unbounded.txt",
-	"views/catalog.js", "views/release.js", "views/search.js", "views/downloads.js",
+	"views/home.js", "views/catalog.js", "views/release.js", "views/search.js", "views/downloads.js",
 	"views/settings-layout.js", "views/settings-status.js", "views/settings-params.js", "views/settings-sections.js", "views/updates.js",
 	"views/channels.js", "views/channel.js", "views/channel-settings.js", "views/tvkit.js", "views/settings-iptv.js", "views/settings-unrecognized.js",
 	"views/history.js", "views/library.js", "views/library-card.js", "views/library-parts.js", "views/catalog-parts.js", "views/settings-library.js", "views/folders.js", "views/setup.js",
@@ -74,6 +74,61 @@ func TestPultImportsResolve(t *testing.T) {
 				t.Errorf("%s: импорт %s — файла %s нет", file, m[1], target)
 			}
 		}
+	}
+}
+
+func TestClientReleaseLayoutKeepsDescriptionAndRemovesTabs(t *testing.T) {
+	src, err := fs.ReadFile(Static, "views/release.js")
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := string(src)
+	if strings.Contains(text, "['Просмотр', 'Подробнее']") || strings.Contains(text, "desc.clamp") {
+		t.Fatal("client release still hides content behind the view/details tabs")
+	}
+	css, err := fs.ReadFile(Static, "style.css")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(css), ".client-ui .grid { grid-template-columns: repeat(6") {
+		t.Fatal("TV client catalog density rule is missing")
+	}
+}
+
+func TestWebReleaseHasSeparateDownloadAction(t *testing.T) {
+	src, err := fs.ReadFile(Static, "views/release.js")
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := string(src)
+	for _, want := range []string{"'data-key': 'download-release'", "onclick: () => download({})", "icon('download')", "'Скачать'"} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("release page misses separate download action marker %q", want)
+		}
+	}
+}
+
+func TestHomeShowsNewFilmsAndSeries(t *testing.T) {
+	src, err := fs.ReadFile(Static, "views/home.js")
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := string(src)
+	for _, want := range []string{"/catalog/new?group=our-series", "/catalog/new?group=our-film", "/catalog/new?group=foreign-series", "/catalog/new?group=foreign-film", "Наши сериалы", "Наше кино", "Зарубежные сериалы", "Зарубежное кино", "home-new-card"} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("home page misses %q", want)
+		}
+	}
+	if strings.Contains(text, "h('div', { class: 'home-columns' }, updatesSection(), downloadsSection())") {
+		t.Fatal("downloads block must not be rendered on the home page")
+	}
+	css, err := fs.ReadFile(Static, "style.css")
+	if err != nil {
+		t.Fatal(err)
+	}
+	cssText := string(css)
+	if !strings.Contains(cssText, ".home-new-card") || !strings.Contains(cssText, ".home-tabs") || !strings.Contains(cssText, ".home-tab") || !strings.Contains(cssText, ".cont .poster.small") {
+		t.Fatal("new releases rails style is missing")
 	}
 }
 
@@ -159,7 +214,7 @@ for (const [got, want] of checks) {
 func TestPultDownloadGroups(t *testing.T) {
 	node := lookNode(t)
 	script := `
-import { groupDownloads, groupLine } from './views/downloads.js';
+import { groupDownloads, groupLine, downloadSections } from './views/downloads.js';
 const f = (hash, index, state, size, done, extra = {}) =>
   ({ hash, index, state, size, done, file: hash + index + '.mkv', release: null, canDelete: true, ...extra });
 const gs = groupDownloads([
@@ -172,11 +227,17 @@ const gs = groupDownloads([
   f('d', 0, 'done', 10, 10, { file: 'S01E10.mkv' }),
   f('d', 1, 'done', 10, 10, { file: 'S01E02.mkv' }),
   f('d', 2, 'done', 10, 10, { file: 'S01E01.mkv' }),
+  f('e', 0, 'queued', 50, 10),
 ]);
 const got = gs.map((g) => [g.hash, g.items.map((d) => d.index).join(''), g.state, g.size, g.percent, g.speed, g.canDelete].join(' ')).join(' | ');
-const want = 'a 012 downloading 300 50 10 true | b 0 done 300 100 0 true | c 01 watching 400 5 0 false | d 210 done 30 100 0 true';
+const want = 'a 012 downloading 300 50 10 true | b 0 done 300 100 0 true | c 01 watching 400 5 0 false | d 210 done 30 100 0 true | e 0 queued 50 20 0 true';
 if (got !== want) {
   console.error(got, '≠', want);
+  process.exitCode = 1;
+}
+const sections = downloadSections(gs).map((s) => [s.key, s.items.map((g) => g.hash).join('')].join(':')).join(' | ');
+if (sections !== 'now:ac | next:e | background:bd') {
+  console.error('очередь', sections);
   process.exitCode = 1;
 }
 // Вторая строка раздачи различает сезоны и качество одного сериала; у фильма из одного файла — файл.
@@ -331,11 +392,22 @@ for (const [got, want] of checks) {
     process.exitCode = 1;
   }
 }
+
 `
 	cmd := exec.Command(node, "--input-type=module", "--no-warnings", "-e", script)
 	cmd.Dir = "static"
 	if out, err := cmd.CombinedOutput(); err != nil {
 		t.Errorf("%v\n%s", err, out)
+	}
+}
+
+func TestPultHomeView(t *testing.T) {
+	src := scripts(t)
+	s := src["views/home.js"]
+	for _, want := range []string{"get('/library')", "get('/updates')", "get('/downloads')", "dashboardStats()", "quickLinks()", "home-hero", "Продолжить просмотр", "Новые серии", "Загрузки", "playFile(c.file"} {
+		if !strings.Contains(s, want) {
+			t.Errorf("home.js: нет %q", want)
+		}
 	}
 }
 
@@ -639,6 +711,27 @@ for (const [name, got, want] of checks) {
 	}
 }
 
+// P0: «Смотреть» берёт готовую серию, даже если первой в раздаче стоит ещё не готовая.
+func TestPultReleaseBestFile(t *testing.T) {
+	node := lookNode(t)
+	script := `
+import { bestFile } from './views/release.js';
+const files = [
+  { index: 0, readiness: 'none' },
+  { index: 1, readiness: 'done' },
+  { index: 2, readiness: 'smooth' },
+];
+if (bestFile(files, [], null, 0)?.index !== 1) throw new Error('готовая серия не выбрана');
+if (bestFile(files, [], 2, 0)?.index !== 2) throw new Error('явный выбор проигнорирован');
+if (bestFile([{ index: 4, readiness: 'none' }], [], null, 4)?.index !== 4) throw new Error('фокус потерян');
+`
+	cmd := exec.Command(node, "--input-type=module", "--no-warnings", "-e", script)
+	cmd.Dir = "static"
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Errorf("%v\n%s", err, out)
+	}
+}
+
 // Адреса настроек (замечание № 5 этапа 11b): «Не распознано» — вкладка «Каналов»; старый адрес
 // переадресуется, пустой — «Состояние».
 func TestPultSettingsRoutes(t *testing.T) {
@@ -900,13 +993,19 @@ func TestPultLibrary(t *testing.T) {
 	node := lookNode(t)
 	script := `
 import { libraryTabs, continueLabel } from './views/library.js';
-import { seasonsOf, episodeLabel, defaultVersion, libraryPlayerLink } from './views/library-card.js';
+import { seasonsOf, seasonOverview, seasonAvailability, episodeLabel, defaultVersion, libraryPlayerLink } from './views/library-card.js';
 const tabs = (v) => libraryTabs(v).map((x) => x.id + ':' + x.name + ':' + x.count).join(' ');
 const ep = (file, season, section, episode, name) => ({ file, season, section, episode, name });
 const eps = [ep(5, 2, '', 1, 'S02E01.mkv'), ep(1, 1, '', 1, 'S01E01.mkv'), ep(2, 1, '', 2, 'S01E02.mkv'), ep(9, 0, '1. О курсе', 0, 'a.mp4'), ep(8, 0, '', 0, 'intro.mp4')];
 const groups = (list) => seasonsOf(list).map((g) => g.title + '=' + g.items.map((e) => e.file).join(',')).join(' | ');
 const android = 'Mozilla/5.0 (Linux; Android 12) Chrome/120';
 const res = { streamUrl: 'http://192.168.0.2:8090/media/7/film.mkv', m3uUrl: 'http://192.168.0.2:8090/m3u/library/7.m3u8?start=600', title: 'Фильм', startSec: 600 };
+const versions = [
+  { unit: 10, source: 'Скачано', episodes: [{ ...ep(1, 1, '', 1, 'S01E01.mkv'), readiness: 'done' }, { ...ep(2, 1, '', 2, 'S01E02.mkv'), readiness: 'smooth' }] },
+  { unit: 11, source: 'Скачано', episodes: [{ ...ep(3, 2, '', 1, 'S02E01.mkv'), readiness: 'done' }] },
+  { unit: 12, source: 't1', episodes: [ep(4, 1, '', 1, 'S01E01.mkv')] },
+];
+const season = seasonOverview(versions);
 const checks = [
   [tabs({ categories: [{ id: 1, name: 'Фильмы', count: 3 }, { id: 2, name: 'Сериалы', count: 2 }], unrecognized: 0 }), 'all:Все:5 1:Фильмы:3 2:Сериалы:2'],
   [tabs({ categories: [{ id: 1, name: 'Фильмы', count: 3 }], unrecognized: 2 }), 'all:Все:3 1:Фильмы:3 unrecognized:Не распознано:2'],
@@ -917,6 +1016,7 @@ const checks = [
   // Без сезона — первыми (вступление курса), потом сезоны по номеру, потом главы — как на сервере.
   [groups(eps), '=8 | Сезон 1=1,2 | Сезон 2=5 | 1. О курсе=9'],
   [groups([ep(3, 0, '', 0, 'film.mkv')]), '=3'],
+  [season.map((g) => g.title + ':' + seasonAvailability(g)).join(' | '), 'Сезон 1:доступен частично · 2 из 2 | Сезон 2:доступен · 1 серия'],
   [episodeLabel(ep(2, 1, '', 2, 'S01E02.mkv')), '1×02'],
   [episodeLabel(ep(2, 0, '', 7, 'Серия 7.mp4')), '7'],
   [episodeLabel(ep(2, 0, 'Глава', 0, 'Урок про слайсы.mp4')), 'Урок про слайсы'],
@@ -1517,7 +1617,7 @@ body.append(root);
 const stop = render(root, { parts: ['release', '7'], query: new URLSearchParams() }, { canEdit: true, listeners: new Set(), status: null, go() {}, refreshStatus() {} });
 await new Promise((r) => setTimeout(r, 300));
 const text = root.textContent;
-if (!text.includes('Смотреть') || text.includes('Скачать') || text.includes('null')) {
+if (!text.includes('Смотреть') || !text.includes('Скачать') || text.includes('null')) {
   console.error('текст экрана:', text);
   process.exitCode = 1;
 }
@@ -1817,7 +1917,7 @@ const tag = (f, p) => { const e = formatTag(f, p); return e ? e.className + ':' 
 const alt = (f) => { const e = altFormatTag(f); return e ? e.className + ':' + e.textContent : null; };
 const gf = (items) => JSON.stringify(groupFormat({ items }));
 const checks = [
-  [NAV.map((x) => x[0]).join(' '), 'catalog channels library downloads history settings'],
+  [NAV.map((x) => x[0]).join(' '), 'home catalog channels library downloads history settings'],
   [tag('MKV', true), 'fmt pref:MKV'],
   [tag('AVI, MKV', false), 'fmt:AVI, MKV'],
   [tag('', true), null],
@@ -2168,7 +2268,7 @@ for (const [got, want] of checks) {
 func TestPultSeasonLabel(t *testing.T) {
 	node := lookNode(t)
 	script := `
-const { seasonLabel } = await import('./views/release.js');
+const { seasonLabel, variantSeasonGroups, fileSeasonGroups, fileSeasonLabel } = await import('./views/release.js');
 const checks = [
   [seasonLabel('S01'), 'Сезон 1'],
   [seasonLabel('S02E01-08'), 'Сезон 2 · серии 1–8'],
@@ -2187,6 +2287,9 @@ const checks = [
   [seasonLabel('01-07 из 08'), 'Серии 1–7 из 8'],
   [seasonLabel('001-270 из 270'), 'Серии 1–270 из 270'],
   [seasonLabel('05 из 10'), 'Серия 5 из 10'],
+  [variantSeasonGroups([{ id: 1, season: 'S02' }, { id: 2, season: 'S01' }, { id: 3, season: '' }]).map((g) => g.title + '=' + g.items.map((e) => e.id).join(',')).join(' | '), 'Сезон 1=2 | Сезон 2=1 | Без сезона=3'],
+  [fileSeasonGroups([{ name: 'Show/S02/S02E01.mkv' }, { name: 'Show/S01/S01E01.mkv' }, { name: 'Show/bonus.mp4' }]).map((g) => g.title + '=' + g.items.length).join(' | '), 'Сезон 1=1 | Сезон 2=1 | Без сезона=1'],
+  [fileSeasonLabel([{ name: 'Show/S02/S02E01.mkv' }, { name: 'Show/S01/S01E01.mkv' }]), 'Сезоны 1–2'],
 ];
 for (const [got, want] of checks) {
   if (got !== want) {
@@ -2646,6 +2749,12 @@ eq(P.memOf(polden[1]), { title: '', lang: 'rus', codec: 'eac3' }, 'память 
 eq(P.pickTrack(polden, P.memOf(polden[1])).id, 2, 'тот же язык — по кодеку');
 // Ревью 18Б, C1: буфер MSE полон — mpegts.js останавливает загрузку и отчёты статистики; играем, а их нет дольше STALL_MS — перезапуск.
 eq([P.loaderStalled(0, 4000, true), P.loaderStalled(0, 3999, true), P.loaderStalled(0, 9000, false)], [true, false, false], 'загрузка встала');
+eq(P.loaderStalled(0, 10000, true, 20, 0), false, 'полный буфер — не перезапускать');
+eq(P.loaderStalled(0, 10000, true, 0.5, 9900), false, 'видео продолжает играть — не перезапускать');
+eq(P.loaderStalled(0, 10000, true, 0, 0), true, 'загрузка и воспроизведение остановились');
+eq([P.MAX_RETRIES, P.retryDelay(1), P.retryDelay(2), P.retryDelay(3), P.retryDelay(9)], [3, 500, 1000, 2000, 3000], 'сетевые повторы с ограничением');
+const ranges = { length: 2, start: i => [0, 100][i], end: i => [30, 120][i] };
+eq([P.bufferedAhead(ranges, 10), P.bufferedAhead(ranges, 50), P.bufferedAhead(ranges, 110)], [20, 0, 10], 'запас только в текущем диапазоне');
 // I1: кнопка — по состоянию видео (отказ автозапуска не даёт события pause).
 eq([P.playButton(true), P.playButton(false)], [{ icon: 'play_arrow', label: 'Смотреть' }, { icon: 'pause', label: 'Пауза' }], 'кнопка');
 // I2, I3: мышиные события, которые Chrome шлёт вслед за касанием, — не мышь.
@@ -2760,6 +2869,19 @@ func TestPultWatchGoesToPlayer(t *testing.T) {
 		!strings.Contains(s, "внешний плеер или приложение") {
 		t.Error("release.js: нет предупреждения о формате и внешней маршрутизации")
 	}
+	// В веб-версии внешний запуск доступен отдельной кнопкой даже когда встроенный плеер
+	// может проиграть файл; клиентский ТВ-режим эту кнопку скрывает.
+	if s := src["views/release.js"]; !strings.Contains(s, "externalButton(f") ||
+		!strings.Contains(s, "externalWatch(f") || !strings.Contains(s, "externalLink({ direct") {
+		t.Error("release.js: нет отдельной кнопки внешнего плеера")
+	}
+	if s := src["views/player.js"]; !strings.Contains(s, "Во внешнем плеере") ||
+		!strings.Contains(s, "'data-key': 'pl-external'") {
+		t.Error("player.js: внешний запуск не доступен из основного экрана плеера")
+	}
+	if s := src["views/library-card.js"]; !strings.Contains(s, "playExternalFile") || !strings.Contains(s, "external-watch") {
+		t.Error("library-card.js: нет отдельного внешнего запуска")
+	}
 	// Громкость — ползунком, не только мьют (просьба 2026-10-06).
 	if s := src["views/player.js"]; !strings.Contains(s, "'data-key': 'pl-vol'") ||
 		!strings.Contains(s, "'aria-label': 'Громкость'") || !strings.Contains(s, "active === vol") {
@@ -2825,6 +2947,15 @@ func TestPultPlayerSplitModesAndEpisodeControls(t *testing.T) {
 			}
 		}
 	}
+	if !strings.Contains(src["views/player.js"], "refreshDiagnostics") || !strings.Contains(src["views/player.js"], "pl-info") {
+		t.Error("player.js: нет диагностики буфера")
+	}
+	if !strings.Contains(src["views/player-parts.js"], "playbackStatusText") {
+		t.Error("player-parts.js: нет форматирования диагностики")
+	}
+	if !strings.Contains(src["views/downloads.js"], "queueButton") || !strings.Contains(src["views/downloads.js"], "resume' : 'pause") {
+		t.Error("downloads.js: нет управления паузой очереди")
+	}
 }
 
 // Полноэкранный плеер канала — один движок с окном проверки источников (план 2026-10-06, Task A):
@@ -2862,4 +2993,3 @@ func TestPultChannelPlayerUnified(t *testing.T) {
 		t.Error("app.js: маршрут channel-play не зарегистрирован")
 	}
 }
-

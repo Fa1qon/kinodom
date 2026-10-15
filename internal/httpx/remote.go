@@ -108,11 +108,16 @@ const (
 
 var deviceID = regexp.MustCompile(`^[A-Za-z0-9_-]{16,80}$`)
 
+// ValidDeviceID accepts the stable identifier format used by app clients.
+// Keep this check shared by the request classifier and cookie middleware so an
+// arbitrary header value can never be persisted as a device cookie.
+func ValidDeviceID(v string) bool { return deviceID.MatchString(v) }
+
 func stableDevice(r *http.Request) string {
 	if c, err := r.Cookie(DeviceCookie); err == nil && deviceID.MatchString(c.Value) {
 		return c.Value
 	}
-	if v := r.Header.Get(DeviceHeader); deviceID.MatchString(v) {
+	if v := r.Header.Get(DeviceHeader); ValidDeviceID(v) {
 		return v
 	}
 	return ""

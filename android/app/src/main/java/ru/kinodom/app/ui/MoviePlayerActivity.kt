@@ -39,9 +39,12 @@ import androidx.media3.common.Player
 import androidx.media3.common.TrackSelectionOverride
 import androidx.media3.common.Tracks
 import androidx.media3.common.util.UnstableApi
+import androidx.media3.datasource.DefaultHttpDataSource
 import androidx.media3.datasource.HttpDataSource
 import androidx.media3.exoplayer.ExoPlayer
+import androidx.media3.exoplayer.DefaultLoadControl
 import androidx.media3.exoplayer.analytics.AnalyticsListener
+import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
 import androidx.media3.ui.AspectRatioFrameLayout
 import androidx.media3.ui.PlayerView
 import kotlinx.coroutines.CoroutineStart
@@ -52,6 +55,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import ru.kinodom.app.R
 import ru.kinodom.app.core.DropWatch
+import ru.kinodom.app.core.BufferWatch
 import ru.kinodom.app.core.Foreground
 import ru.kinodom.app.core.Hold
 import ru.kinodom.app.core.Mem
@@ -60,6 +64,7 @@ import ru.kinodom.app.core.MovieSub
 import ru.kinodom.app.core.MovieTrack
 import ru.kinodom.app.core.MovieTracks
 import ru.kinodom.app.core.MovieUrls
+import ru.kinodom.app.core.PlayerBufferPolicy
 import ru.kinodom.app.core.TechInfo
 import ru.kinodom.app.core.TrackMap
 import ru.kinodom.app.net.Api
@@ -87,6 +92,7 @@ class MoviePlayerActivity : Activity() {
     private var fallback = false // поток сервера вместо исходного файла
     private var dropped = 0 // пропущенные кадры текущего источника (техпанель и DropWatch, план 2026-10-06)
     private val drops = DropWatch() // решение «пора на запасной путь» (план 2026-10-06, Task C)
+    private val rebuffers = BufferWatch()
     private var k = 0.0 // кадр начала потока запасного пути
     private var audio: MovieTrack? = null
     private var sub: MovieSub? = null
@@ -312,7 +318,20 @@ class MoviePlayerActivity : Activity() {
         super.onStart()
         Foreground.app.start() // плеер поверх пульта — не вход в приложение
         if (!::src.isInitialized) return
-        player = ExoPlayer.Builder(this).build().also {
+        val b = PlayerBufferPolicy.vod()
+        val loadControl = DefaultLoadControl.Builder()
+            .setBufferDurationsMs(b.minBufferMs, b.maxBufferMs, b.bufferForPlaybackMs, b.bufferForPlaybackAfterRebufferMs)
+            // На высоком битрейте лимит байт не должен обрезать пятиминутное окно.
+            .setPrioritizeTimeOverSizeThresholds(true)
+            .build()
+        val http = DefaultHttpDataSource.Factory()
+            .setConnectTimeoutMs(15_000)
+            .setReadTimeoutMs(30_000)
+            .setAllowCrossProtocolRedirects(true)
+        player = ExoPlayer.Builder(this)
+            .setLoadControl(loadControl)
+            .setMediaSourceFactory(DefaultMediaSourceFactory(http))
+            .build().also {
             it.addListener(listener)
             it.addAnalyticsListener(analytics)
             video.player = it
@@ -377,6 +396,7 @@ class MoviePlayerActivity : Activity() {
         decided = false
         dropped = 0 // у нового источника — свой счёт (техпанель и запасной путь)
         drops.onStart(SystemClock.uptimeMillis())
+        rebuffers.onStart(SystemClock.uptimeMillis())
         box.visibility = View.GONE
         tech.hide()
         load.visibility = View.VISIBLE
@@ -427,8 +447,9 @@ class MoviePlayerActivity : Activity() {
         if (!fallback) {
             val want = audio
             val g = want?.let { audioGroups.getOrNull(i.audio.indexOf(it)) }
-            if (want != null && (g == null || !g.isTrackSupported(0))) {
-                Log.i(TAG, "озвучка ${want.codec} не поддерживается — поток сервера")
+            if (want != null && (g == null || !g.isTrackSupported(0) || MovieTracks.needsServerRemix(want))) {
+                val reason = if (MovieTracks.needsServerRemix(want)) "многоканальный звук" else "дорожка не поддерживается"
+                Log.i(TAG, "озвучка ${want.codec} ${want.channels}ch: $reason — поток сервера")
                 val at = pos()
                 fallback = true
                 open(at)
@@ -465,6 +486,19 @@ class MoviePlayerActivity : Activity() {
 
         override fun onPlaybackStateChanged(state: Int) {
             load.visibility = if (state == Player.STATE_BUFFERING) View.VISIBLE else View.GONE
+            if (state == Player.STATE_BUFFERING) {
+                val p = player
+                if (!fallback && opened && (p?.currentPosition ?: 0L) > 5_000L) {
+                    rebuffers.onBuffer(SystemClock.uptimeMillis())
+                    if (rebuffers.shouldFallback(SystemClock.uptimeMillis())) {
+                        Log.i(TAG, "повторная буферизация — поток сервера")
+                        val at = pos()
+                        fallback = true
+                        open(at)
+                        return
+                    }
+                }
+            }
             if (state == Player.STATE_ENDED) ended()
         }
 

@@ -10,10 +10,14 @@
     <string name="other_address">Другой адрес</string>
     <string name="address_title">Адрес Kinodom</string>
     <string name="address_hint">192.168.0.10 или 192.168.0.10:8090</string>
+    <string name="pair_code_hint">Код с компьютера (6 цифр)</string>
     <string name="connect">Подключиться</string>
+    <string name="connect_code">Подключиться по коду</string>
     <string name="search_again">Искать снова</string>
     <string name="bad_address">Неверный адрес</string>
     <string name="no_answer_at">Kinodom по адресу %1$s не отвечает</string>
+    <string name="bad_pair_code">Введите шестизначный код</string>
+    <string name="no_server_by_code">Сервер с таким кодом не найден</string>
     <string name="no_answer">Kinodom не отвечает</string>
     <string name="retry">Повторить</string>
     <string name="webview_old">Обновите Android System WebView</string>

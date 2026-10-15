@@ -9,6 +9,11 @@ import org.junit.Test
 // Обновление с сервера (спека этапа 13, раздел 6; план 13a, Review Focus 4): новее и не отложено — предложить;
 // та же, старше, нет сведений, «Позже» — нет.
 class UpdateDecisionTest {
+    @Test
+    fun serverUpdateBelongsToClientFlavor() {
+        assertTrue(UpdateDecision.checksServer("client"))
+        assertFalse(UpdateDecision.checksServer("full"))
+    }
     private fun app(code: Int) = ServerApp("0.11.0-x", code, "/app/kinodom.apk", 1000)
 
     @Test

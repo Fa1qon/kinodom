@@ -34,6 +34,7 @@ class Updater(private val context: Context, private val base: String) {
 
     // download — APK в cacheDir/update; progress(0..100); файл не целый (оборвалось, не ZIP) — null.
     suspend fun download(app: ServerApp, progress: (Int) -> Unit): File? = withContext(Dispatchers.IO) {
+        if (!ApkCheck.validSize(app.size)) return@withContext null
         val dir = File(context.cacheDir, "update").apply { mkdirs() }
         val f = File(dir, "kinodom.apk")
         f.delete()
@@ -52,6 +53,10 @@ class Updater(private val context: Context, private val base: String) {
                         while (true) {
                             val n = input.read(buf)
                             if (n < 0) break
+                            if (!ApkCheck.chunkFits(got, n, app.size)) {
+                                f.delete()
+                                return@withContext null
+                            }
                             for (i in 0 until n) {
                                 val at = got + i
                                 if (at >= 2) break
@@ -68,11 +73,15 @@ class Updater(private val context: Context, private val base: String) {
                     }
                 }
                 val zip = head[0] == 'P'.code && head[1] == 'K'.code
-                if (ApkCheck.ok(got, app.size, zip)) f else null
+                if (ApkCheck.ok(got, app.size, zip)) f else {
+                    f.delete()
+                    null
+                }
             } finally {
                 c.disconnect()
             }
         } catch (e: Exception) {
+            f.delete()
             null
         }
     }

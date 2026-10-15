@@ -113,6 +113,9 @@ func (s *Service) deleteLocked(ctx context.Context, ih metainfo.Hash, index int,
 	f.SetPriority(torrent.PiecePriorityNone)
 	for i := f.BeginPieceIndex(); i < f.EndPieceIndex(); i++ {
 		t.Piece(i).SetPriority(torrent.PiecePriorityNone)
+		if ss != nil {
+			delete(ss.playPriorities, i) // общий граничный кусок получит приоритет соседнего файла снова
+		}
 	}
 	path := enginePath(s.eng.TorrentDir(ih), info, ih, info.UpvertedFiles()[index])
 	// Освобождаются только скачанные куски целиком внутри файла: сначала отметка «не скачан»
@@ -163,8 +166,8 @@ func (s *Service) deleteLocked(ctx context.Context, ih metainfo.Hash, index int,
 		}
 		if ss.focus == index { // удалили файл в фокусе — качается следующий
 			s.setFocusLocked(ss, s.nextFocusLocked(ss))
-			s.applyLocked(ss)
 		}
+		s.applyLocked(ss)
 	}
 	left, err := s.reg.StoredFiles(ctx, ih)
 	if err != nil {

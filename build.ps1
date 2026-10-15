@@ -79,15 +79,18 @@ $sdk = if ($env:ANDROID_HOME) { $env:ANDROID_HOME } else { [Environment]::GetEnv
 if ($jdk -and $sdk -and (Test-Path "$jdk\bin\java.exe") -and (Test-Path "$sdk\platforms")) {
     $env:JAVA_HOME, $env:ANDROID_HOME = $jdk, $sdk
     & .\android\make-key.ps1
-    # Номер сборки — 1000 + число коммитов: после чистки истории перед публикацией (2026-10-01) коммитов стало
-    # меньше, чем номер уже установленных приложений (до 445), а Android ставит обновление, только если номер больше.
-    $code = 1000 + [int](git rev-list --count HEAD)
-    if (git status --porcelain) { $code++ }
+    # Номер сборки — Unix-время в секундах. Число коммитов не подходит для повторных сборок
+    # одного рабочего дерева: Android тогда считает новый APK той же версией и не предлагает его.
+    # Текущее значение (~1.8 млрд) безопасно помещается в signed int Android versionCode.
+    $code = [int][DateTimeOffset]::UtcNow.ToUnixTimeSeconds()
     Push-Location android
     # Свойства — в кавычках: PowerShell режет «-PversionName=0.11.0-…» на два аргумента. Gradle пишет
     # предупреждения в поток ошибок — судим по коду выхода.
     $ErrorActionPreference = 'Continue'
-    & .\gradlew.bat assembleFullRelease assembleClientRelease "`"-PversionName=$version`"" "`"-PversionCode=$code`"" --console=plain -q
+    # Release APK must be assembled from the current jniLibs tree. A previous
+    # emulator build can leave an old ABI in Gradle intermediates; without a
+    # clean build that stale server library may ship without matching ffmpeg.
+    & .\gradlew.bat clean assembleFullRelease assembleClientRelease "`"-PversionName=$version`"" "`"-PversionCode=$code`"" --console=plain -q
     $rc = $LASTEXITCODE
     $ErrorActionPreference = 'Stop'
     Pop-Location

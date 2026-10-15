@@ -12,9 +12,67 @@ import (
 
 	"github.com/anacrolix/torrent"
 	"github.com/anacrolix/torrent/metainfo"
+	"golang.org/x/time/rate"
 
 	"kinodom/internal/torrents/torrenttest"
 )
+
+func TestPreparedDownloadWindowMovesAndYieldsToReader(t *testing.T) {
+	s := newTestService(t)
+	src := t.TempDir()
+	mi, _ := torrenttest.MakeTorrent(t, src, "film.mkv", 64<<10, torrenttest.File{Path: "film.mkv", Size: 32 << 20})
+	limit := rate.NewLimiter(2<<20, 16<<10)
+	seeder, _ := torrenttest.NewSeeder(t, src, mi, func(cfg *torrent.ClientConfig) { cfg.UploadRateLimiter = limit })
+	ih, err := s.Open(context.Background(), Source{Torrent: torrentBytes(t, mi)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	must(t, s.Prepare(context.Background(), ih, 0))
+	tt, _ := s.eng.cl.Torrent(ih)
+	connect(t, s, ih, seeder)
+	deadline := time.Now().Add(20 * time.Second)
+	for {
+		ready := true
+		for i := 0; i < minHead/(64<<10); i++ {
+			if !tt.PieceState(i).Complete {
+				ready = false
+				break
+			}
+		}
+		if ready {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("не скачано непрерывное начало")
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	limit.SetLimit(0) // сохраняем недокачанный файл для проверки продвижения окна
+	s.sample()
+	s.mu.Lock()
+	ss := s.sessions[ih]
+	first := tt.Files()[0].BeginPieceIndex()
+	for first < tt.Files()[0].EndPieceIndex() && tt.PieceState(first).Complete {
+		first++
+	}
+	if first >= ss.prepared[0].tail.begin || ss.playPriorities[first] != torrent.PiecePriorityHigh {
+		s.mu.Unlock()
+		t.Fatal("окно не перешло на недостающий участок после начала файла")
+	}
+	s.mu.Unlock()
+	closeReader := s.openReader(ih, 0)
+	if tt.PieceState(first).Priority != torrent.PiecePriorityNormal {
+		t.Fatal("при просмотре окно загрузки должно уступать приоритеты читателю плеера")
+	}
+	closeReader()
+	s.mu.Lock()
+	ss.paused[0] = true
+	s.applyLocked(ss)
+	s.mu.Unlock()
+	if tt.PieceState(first).Priority != torrent.PiecePriorityNone || tt.PieceState(ss.prepared[0].tail.begin).Priority != torrent.PiecePriorityNone {
+		t.Fatal("пауза должна снимать приоритеты тела и индекса")
+	}
+}
 
 func waitFileReady(t *testing.T, s *Service, ih metainfo.Hash, index int) FileStatus {
 	t.Helper()
@@ -105,6 +163,24 @@ func TestPrepareTwiceFromTwoTVs(t *testing.T) {
 	}
 	if _, ok := s.FileStatus(ih, 0); !ok {
 		t.Fatal("нет состояния файла")
+	}
+}
+
+func TestFileStatusContainsPlaybackDiagnostics(t *testing.T) {
+	s := newTestService(t)
+	ih, ep := archive(t, s)
+	if err := s.Prepare(context.Background(), ih, ep[0]); err != nil {
+		t.Fatal(err)
+	}
+	fs, ok := s.FileStatus(ih, ep[0])
+	if !ok {
+		t.Fatal("нет статуса выбранного файла")
+	}
+	if fs.Total <= 0 || fs.Done < 0 || fs.Done > fs.Total || !fs.Focus {
+		t.Fatalf("некорректная диагностика: %+v", fs)
+	}
+	if fs.HeadPercent < 0 || fs.HeadPercent > 100 || fs.TailPercent < 0 || fs.TailPercent > 100 {
+		t.Fatalf("некорректный буфер: %+v", fs)
 	}
 }
 

@@ -31,6 +31,7 @@ func (c *Catalog) Register(r Router) {
 	r.Handle("GET /api/v1/sources/{tracker}/categories", c.Name(), http.HandlerFunc(c.handleTree))
 	r.Handle("GET /api/v1/catalog/sections", c.Name(), http.HandlerFunc(c.handleSections))
 	r.Handle("GET /api/v1/catalog", c.Name(), http.HandlerFunc(c.handleList))
+	r.Handle("GET /api/v1/catalog/new", c.Name(), http.HandlerFunc(c.handleNew))
 	r.Handle("GET /api/v1/catalog/cards", c.Name(), http.HandlerFunc(c.handleCards))
 	r.Handle("GET /api/v1/releases/{id}/variants", c.Name(), http.HandlerFunc(c.handleVariants))
 	r.Handle("GET /api/v1/search", c.Name(), http.HandlerFunc(c.handleSearch))
@@ -40,6 +41,31 @@ func (c *Catalog) Register(r Router) {
 		c.Refresh()
 		httpx.WriteJSON(w, http.StatusAccepted, struct{}{})
 	}))
+}
+
+// handleNew — свежие записи каталога для главной страницы. group обязателен: одна из четырёх вкладок.
+func (c *Catalog) handleNew(w http.ResponseWriter, r *http.Request) {
+	group := r.URL.Query().Get("group")
+	if group != "our-film" && group != "our-series" && group != "foreign-film" && group != "foreign-series" {
+		httpx.WriteError(w, http.StatusBadRequest, "group должен быть our-film, our-series, foreign-film или foreign-series")
+		return
+	}
+	limit := 6
+	if n, err := strconv.Atoi(r.URL.Query().Get("limit")); err == nil && n > 0 {
+		limit = min(n, PageSize)
+	}
+	es, err := c.NewReleases(r.Context(), group, limit)
+	if err != nil {
+		httpx.WriteError(w, http.StatusInternalServerError, "новинки не читаются: "+err.Error())
+		return
+	}
+	out := struct {
+		Entries []EntryView `json:"entries"`
+	}{Entries: make([]EntryView, 0, len(es))}
+	for _, e := range es {
+		out.Entries = append(out.Entries, e.View())
+	}
+	httpx.WriteJSON(w, http.StatusOK, out)
 }
 
 // EntryView — раздача в списке каталога и поиска для пульта и телевизора.

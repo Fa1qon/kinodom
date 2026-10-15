@@ -8,6 +8,7 @@ import { libPoster, continueLabel } from './library-parts.js';
 import { skippedText } from './downloads.js';
 import { watchTarget, playHash } from './player-parts.js';
 import { appBridge } from './tvkit.js';
+import { isClient } from '../client-ui.js';
 
 // deleteRequest — «Удалить» версии карточки (план 14В): скачанное — как в «Загрузках» (вся раздача), своё —
 // файл или папка с диска через медиатеку. {path, text} — запрос и вопрос подтверждения.
@@ -43,6 +44,52 @@ export function seasonsOf(episodes) {
   }
   const rank = (g) => (g.key === '' ? 0 : g.season > 0 ? 1 : 2);
   return [...groups.values()].sort((a, b) => rank(a) - rank(b) || (a.season - b.season));
+}
+
+// seasonOverview — сводка по сезонам всей карточки, а не только выбранной раздачи.
+// Один торрент может содержать несколько папок S01/S02, а один сезон — несколько раздач;
+// серии с одинаковым номером считаются одной серией и получают лучший статус из вариантов.
+export function seasonOverview(versions) {
+  const groups = new Map();
+  const keyOf = (e) => e.season > 0 ? `s${e.season}` : e.section ? `x${e.section}` : 'none';
+  const titleOf = (e) => e.season > 0 ? `Сезон ${e.season}` : e.section || 'Без сезона';
+  const rank = (g) => g.season > 0 ? g.season : g.key === 'none' ? -1 : 10000;
+  for (const v of versions || []) {
+    for (const e of v.episodes || []) {
+      const key = keyOf(e);
+      let g = groups.get(key);
+      if (!g) {
+        g = { key, season: e.season || 0, title: titleOf(e), episodes: new Map(), sources: new Set(), units: new Set() };
+        groups.set(key, g);
+      }
+      g.sources.add(v.source || 'Раздача');
+      g.units.add(v.unit);
+      const epKey = e.episode > 0 ? `e${e.episode}` : `f${String(e.name || e.file).toLowerCase()}`;
+      const local = v.source === 'Скачано';
+      const readiness = local ? (e.readiness || 'none') : 'none';
+      const current = g.episodes.get(epKey);
+      const score = { done: 3, smooth: 2, wait: 1, none: 0 }[readiness] || 0;
+      const oldScore = current ? ({ done: 3, smooth: 2, wait: 1, none: 0 }[current.readiness] || 0) : -1;
+      if (!current || score > oldScore) g.episodes.set(epKey, { readiness, local, episode: e.episode || 0 });
+    }
+  }
+  return [...groups.values()].sort((a, b) => rank(a) - rank(b)).map((g) => {
+    const all = [...g.episodes.values()];
+    const total = all.length;
+    const done = all.filter((e) => e.readiness === 'done').length;
+    const playable = all.filter((e) => e.readiness === 'done' || e.readiness === 'smooth').length;
+    const waiting = all.filter((e) => e.readiness === 'wait').length;
+    return { key: g.key, season: g.season, title: g.title, total, done, playable, waiting,
+      available: playable > 0, complete: total > 0 && done === total, sources: [...g.sources], units: [...g.units] };
+  });
+}
+
+export function seasonAvailability(g) {
+  if (!g || !g.total) return 'нет серий';
+  if (g.complete) return `доступен · ${g.total} ${g.total === 1 ? 'серия' : 'серий'}`;
+  if (g.playable) return `доступен частично · ${g.playable} из ${g.total}`;
+  if (g.waiting) return `скачивается · ${g.waiting} из ${g.total}`;
+  return `есть раздача · ${g.total} ${g.total === 1 ? 'серия' : 'серий'}`;
 }
 
 // episodeLabel — «1×02», «7» или имя файла без расширения.
@@ -83,6 +130,15 @@ export async function playFile(file, ctx, fromStart = false, hasNext = true) {
     return null;
   }
   if (to === 'app' && appBridge().playMovie(`library/${file}`, fromStart)) return null;
+  const res = await get(`/library/files/${file}/play` + (fromStart ? '?fromStart=1' : ''));
+  if (ctx.local && res.launchUrl) openPlayer(res.launchUrl, res.m3uUrl, ctx.status && ctx.status.protocol);
+  else location.href = libraryPlayerLink(res, hasNext);
+  return res;
+}
+
+// playExternalFile — явный внешний запуск в веб-версии. Сохраняет ту же позицию,
+// что и обычная кнопка «Смотреть», но не открывает встроенный браузерный плеер.
+export async function playExternalFile(file, ctx, fromStart = false, hasNext = true) {
   const res = await get(`/library/files/${file}/play` + (fromStart ? '?fromStart=1' : ''));
   if (ctx.local && res.launchUrl) openPlayer(res.launchUrl, res.m3uUrl, ctx.status && ctx.status.protocol);
   else location.href = libraryPlayerLink(res, hasNext);
@@ -165,7 +221,8 @@ export function render(root, r, ctx) {
           c.ratingImdb > 0 ? h('span', { class: 'tag' }, 'IMDb ' + rating(c.ratingImdb)) : null,
           c.dupes ? h('span', { class: 'tag' }, 'Есть дубли') : null,
           c.deleteInDays !== null && c.deleteInDays !== undefined ? h('span', { class: 'tag' }, `удалится через ${c.deleteInDays} дн.`) : null),
-        desc);
+        desc,
+        seasonSummary());
       if (desc && !descOpen) {
         requestAnimationFrame(() => {
           if (desc.isConnected && desc.scrollHeight > desc.clientHeight + 2) {
@@ -192,10 +249,28 @@ export function render(root, r, ctx) {
         if (w) {
           w.focus({ preventScroll: true });
           // На ТВ (540 CSS px) кнопка под постером — чуть ниже экрана; на телефоне панель ниже описания — не листать.
-          if (window.matchMedia('(min-width: 901px)').matches) w.scrollIntoView({ block: 'nearest' });
+          if (window.matchMedia('(min-width: 901px)').matches) w.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
         }
       }
     }
+  }
+
+  function seasonSummary() {
+    const groups = seasonOverview(c.versions);
+    if (groups.length < 2 && !(groups[0] && groups[0].season > 0)) return null;
+    return h('section', { class: 'season-summary', 'aria-label': 'Сезоны и раздачи' },
+      h('h2', null, 'Сезоны'),
+      h('div', { class: 'season-summary-list' }, groups.map((g) => h('button', {
+        class: 'season-summary-row', type: 'button', 'data-key': `season-summary-${g.key}`,
+        onclick: () => {
+          const u = g.units.find((x) => c.versions.some((v) => v.unit === x));
+          if (u) unit = u;
+          group = g.key;
+          draw();
+        }
+      }, h('span', { class: 'strong' }, g.title),
+      h('span', { class: 'muted small' }, seasonAvailability(g)),
+      h('span', { class: 'season-source muted small ellipsis' }, g.sources.join(' · '))))));
   }
 
   // resumeEp — серия, которую продолжать на этом устройстве (правило 8c), иначе первая.
@@ -216,6 +291,8 @@ export function render(root, r, ctx) {
     return h('div', { class: 'row wrap gap10' },
       h('button', { class: 'btn inv big watch-btn', type: 'button', 'data-key': 'watch', 'data-nav-main': true, title: label, onclick: () => act(() => playFile(ep.file, ctx, false, !film)) },
         icon('play_arrow'), h('span', { class: 'btn-label' }, label)),
+      !isClient() ? h('button', { class: 'btn big', type: 'button', 'data-key': 'external-watch', title: 'Во внешнем плеере',
+        onclick: () => act(() => playExternalFile(ep.file, ctx, false, !film)) }, icon('open_in_new'), 'Во внешнем плеере') : null,
       at > 0 ? h('button', { class: 'btn big', type: 'button', 'data-key': 'from-start', onclick: () => act(() => playFile(ep.file, ctx, true, !film)) },
         icon('history'), 'С начала') : null);
   }
@@ -256,13 +333,15 @@ export function render(root, r, ctx) {
       const v = c.versions[0];
       return v ? [h('div', { class: 'muted small' }, [v.source, v.quality, v.format, size(v.size)].filter(Boolean).join(' · ')), h('div', { class: 'muted small path' }, v.path)] : [];
     }
-    return [h('div', { class: 'h' }, 'Есть дубли'), h('div', { class: 'versions' }, c.versions.map((v) => h('button', {
+    return [h('div', { class: 'h' }, 'Раздачи и варианты'), h('div', { class: 'versions' }, c.versions.map((v) => h('button', {
       class: v.unit === unit ? 'ver on' : 'ver', type: 'button', 'aria-pressed': String(v.unit === unit), 'data-key': `ver-${v.unit}`,
       onclick: () => {
         unit = v.unit;
         group = null;
         draw();
-      } }, h('span', { class: 'strong' }, [v.source, v.quality, v.format, size(v.size)].filter(Boolean).join(' · ')), h('span', { class: 'muted small path' }, v.path))))];
+      } }, h('span', { class: 'strong' }, [v.source, v.quality, v.format, size(v.size)].filter(Boolean).join(' · ')),
+      h('span', { class: 'muted small' }, seasonsOf(v.episodes).map((g) => g.title || 'Другое').join(' · ')),
+      h('span', { class: 'muted small path' }, v.path))))];
   }
 
   function edits(v) {
