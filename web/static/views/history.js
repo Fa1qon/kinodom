@@ -91,7 +91,7 @@ export function render(root, r, ctx) {
     const main = h('span', { class: 'dl-name' }, h('span', { class: 'strong ellipsis', title }, title),
       h('span', { class: 'muted small ellipsis' }, lines[0]), h('span', { class: 'muted small' }, lines[1]));
     const conf = confirm === it.hash;
-    return h('div', { class: 'dl' },
+    return h('div', { class: 'dl simple' },
       lib || rel ? h('a', { class: 'hist-link', href: lib ? `#/library/${encodeURIComponent(lib.key)}` : `#/release/${rel.id}`, 'data-key': `open-${it.hash}` }, thumb, main)
         : h('div', { class: 'hist-link' }, thumb, main),
       ctx.canEdit ? h('button', { class: conf ? 'btn danger' : 'sq', type: 'button', 'data-key': `forget-${it.hash}`,

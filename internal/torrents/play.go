@@ -5,6 +5,7 @@ import (
 	"net"
 	"net/http"
 	"path"
+	"regexp"
 	"strconv"
 	"strings"
 
@@ -14,6 +15,8 @@ import (
 	"kinodom/internal/playback"
 	"kinodom/internal/player"
 )
+
+var seasonFolder = regexp.MustCompile(`(?i)^(?:(?:s|season|сезон)[ ._-]*\d+(?:[ ._-]*-?[ ._-]*\d+)?|\d{1,2}[ ._-]*(?:season|сезон)?)$`)
 
 // PlaySource — файл раздачи для своего плеера (спека 18, 3.2). prepare — как «Смотреть» (выбрать файл, качать
 // первым, место из истории); без него — только уже выбранный файл (поток, ключевой кадр, субтитры).
@@ -50,13 +53,20 @@ func (s *Service) PlaySource(r *http.Request, hash string, index int, prepare, f
 			out.Launch = &l
 		}
 	}
-	if n, ok := prevPlayable(s.fileInfos(ih), index); ok {
+	all := s.fileInfos(ih)
+	if n, ok := prevPlayable(all, index); ok {
 		out.Prev = &playback.Ref{Kind: "torrent", Hash: ih.HexString(), Index: n.Index}
 		out.PrevTitle = strings.TrimSuffix(baseName(n.Name), extOf(n.Name))
 	}
-	if n, ok := nextPlayable(s.fileInfos(ih), index); ok {
+	if n, ok := nextPlayable(all, index); ok {
 		out.Next = &playback.Ref{Kind: "torrent", Hash: ih.HexString(), Index: n.Index}
 		out.NextTitle = strings.TrimSuffix(baseName(n.Name), extOf(n.Name))
+	}
+	for _, f := range playlistPlayable(all, index) {
+		out.Playlist = append(out.Playlist, playback.Choice{
+			Ref:   playback.Ref{Kind: "torrent", Hash: ih.HexString(), Index: f.Index},
+			Title: strings.TrimSuffix(baseName(f.Name), extOf(f.Name)),
+		})
 	}
 	return out, nil
 }
@@ -77,25 +87,77 @@ func (s *Service) fileInfos(ih metainfo.Hash) []FileInfo {
 	return out
 }
 
-// nextPlayable — следующая серия после index: следующий видеофайл в порядке страницы раздачи (playableFiles) в
-// той же папке — папка как сезон (спека 18, 3.2).
+// PlayableFiles — видеофайлы уже открытой раздачи в порядке серий. Плеер использует
+// этот снимок для перехода между сезонами, которые лежат отдельными раздачами;
+// неоткрытые раздачи намеренно не запускаются автоматически.
+func (s *Service) PlayableFiles(hash string) []FileInfo {
+	var ih metainfo.Hash
+	if err := ih.FromHexString(strings.TrimSpace(hash)); err != nil {
+		return nil
+	}
+	return playableFiles(s.fileInfos(ih))
+}
+
+// episodeGroup — папка произведения для навигации. Папки S01/Season 1/Сезон 1 считаются
+// сезонами одного произведения, поэтому переход между ними не обрывает сериал.
+func episodeGroup(name string) string {
+	n := strings.ReplaceAll(name, `\`, "/")
+	dir := path.Dir(n)
+	if seasonFolder.MatchString(path.Base(dir)) {
+		return "season:" + path.Dir(dir)
+	}
+	return "flat:" + dir
+}
+
+// nextPlayable — следующая серия после index: следующий видеофайл в порядке страницы раздачи (playableFiles)
+// в группе произведения, включая первый файл следующей папки сезона.
 func prevPlayable(all []FileInfo, index int) (FileInfo, bool) {
 	ps := playableFiles(all)
-	dir := func(n string) string { return path.Dir(strings.ReplaceAll(n, `\`, "/")) }
 	for i, f := range ps {
-		if f.Index == index && i > 0 && dir(ps[i-1].Name) == dir(f.Name) {
-			return ps[i-1], true
+		if f.Index == index && i > 0 {
+			for j := i - 1; j >= 0; j-- {
+				if episodeGroup(ps[j].Name) == episodeGroup(f.Name) {
+					return ps[j], true
+				}
+			}
 		}
 	}
 	return FileInfo{}, false
 }
 func nextPlayable(all []FileInfo, index int) (FileInfo, bool) {
 	ps := playableFiles(all)
-	dir := func(n string) string { return path.Dir(strings.ReplaceAll(n, `\`, "/")) }
 	for i, f := range ps {
-		if f.Index == index && i+1 < len(ps) && dir(ps[i+1].Name) == dir(f.Name) {
-			return ps[i+1], true
+		if f.Index == index {
+			for j := i + 1; j < len(ps); j++ {
+				if episodeGroup(ps[j].Name) == episodeGroup(f.Name) {
+					return ps[j], true
+				}
+			}
 		}
 	}
 	return FileInfo{}, false
+}
+
+// playlistPlayable — серии произведения в порядке имени. Папки S01/Season 1/Сезон 1
+// считаются сезонами одного произведения; в список попадают те же файлы, что доступны
+// как «Смотреть», включая текущий.
+func playlistPlayable(all []FileInfo, index int) []FileInfo {
+	ps := playableFiles(all)
+	var current string
+	for _, f := range ps {
+		if f.Index == index {
+			current = episodeGroup(f.Name)
+			break
+		}
+	}
+	if current == "" {
+		return nil
+	}
+	out := make([]FileInfo, 0, len(ps))
+	for _, f := range ps {
+		if episodeGroup(f.Name) == current {
+			out = append(out, f)
+		}
+	}
+	return out
 }

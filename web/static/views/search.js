@@ -1,6 +1,6 @@
 // Поиск: недавние запросы, состояние каждого трекера, таблица найденного (спека этапа 7, разделы
 // 5.4 и 6.3).
-import { h, icon, size, poll, keepFocus, offWarn, store, formatTag } from '../ui.js';
+import { h, icon, size, poll, keepFocus, offWarn, store, formatTag, plural } from '../ui.js';
 import { get, del } from '../api.js';
 import { poster } from './catalog.js';
 import { filmHeader } from './kpcat.js';
@@ -35,8 +35,8 @@ export function backTo(rel, savedCatalog, savedSearch) {
 
 // searchMemory — запомненный поиск для «назад» с раздачи: пришли с фильма «Кинопоиска» — с ним, шапка фильма
 // вернётся (ревью 14Г).
-export function searchMemory(q, kp) {
-  return '#/search?q=' + encodeURIComponent(q) + (kp > 0 ? `&kp=${kp}` : '');
+export function searchMemory(q, kp, where = '') {
+  return '#/search?q=' + encodeURIComponent(q) + (kp > 0 ? `&kp=${kp}` : '') + (where === 'description' ? '&where=description' : '');
 }
 
 // Результаты — порциями (план 17Б): 700 строк перестраивались раз в секунду, пока догружаются постеры, — до 7,7 с
@@ -58,7 +58,7 @@ export function rebuildCount(total, built, focusIndex) {
 
 // resSig — подпись того, что видно в строке результата: строка пересоздаётся, только если она изменилась.
 export function resSig(e) {
-  return JSON.stringify([e.imageKey, e.name, e.title, e.tracker, e.quality, e.format, e.preferred, e.size, e.seeders]);
+  return JSON.stringify([e.imageKey, e.name, e.title, e.tracker, e.quality, e.format, e.preferred, e.size, e.seeders, e.variants]);
 }
 
 // searchParts — что на странице поиска (план 16Б): поле всегда; без запроса — история списком и «Очистить
@@ -110,7 +110,8 @@ export function forgetFocus(queries, i) {
 export function render(root, r, ctx) {
   const q = (r.query.get('q') || '').trim();
   const kp = Number(r.query.get('kp')) || 0;
-  if (q) store.set('search', searchMemory(q, kp));
+  const where = r.query.get('where') === 'description' ? 'description' : '';
+  if (q) store.set('search', searchMemory(q, kp, where));
   let alive = true;
   const history = h('div', { class: 'hist-list' });
   const trackers = h('div', { class: 'tags' });
@@ -137,6 +138,7 @@ export function render(root, r, ctx) {
   const form = h('form', { class: 'search-here', role: 'search', onsubmit: (e) => {
     e.preventDefault();
     const v = field.value.trim();
+    // Набранный запрос — обычный поиск по трекерам: режим описаний открывается только ссылкой (актёр).
     if (v) ctx.go('#/search?q=' + encodeURIComponent(v));
   } }, h('label', { class: 'field' }, icon('search'), field), voiceButton());
   // Поле «только для чтения», пока его не открыли: фокус на нём не вызывает клавиатуру ТВ; OK, касание или символ —
@@ -160,7 +162,7 @@ export function render(root, r, ctx) {
       if (alive) film.replaceChildren(filmHeader(f));
     }, () => {});
   }
-  root.append(h('div', { class: 'screen' }, form, h('h1', null, q ? `Поиск: «${q}»` : 'Поиск'), film, history, off, trackers, table, resTail));
+  root.append(h('div', { class: 'screen' }, form, h('h1', null, q ? (where === 'description' ? `Поиск по описаниям: «${q}»` : `Поиск: «${q}»`) : 'Поиск'), film, history, off, trackers, table, resTail));
   const onStatus = (status) => {
     const tr = (status && status.trackers) || {};
     keepFocus(off, () => off.replaceChildren(...OWN.filter((t) => tr[t] && tr[t].state === 'off').map((t) => offWarn(tr[t].text))));
@@ -226,7 +228,7 @@ export function render(root, r, ctx) {
   const search = poll(async () => {
     let res;
     try {
-      res = await get('/search?q=' + encodeURIComponent(q) + (first ? '' : '&poll=1'));
+      res = await get('/search?q=' + encodeURIComponent(q) + (where === 'description' ? '&where=description' : '') + (first ? '' : '&poll=1'));
     } catch (e) {
       search.stop();
       resetRows(); // без этого под ошибкой достраивались старые строки с 21-й (ревью 17Б)
@@ -247,7 +249,7 @@ export function render(root, r, ctx) {
   const refs = new Map();
 
   function draw(res) {
-    trackers.replaceChildren(...trackerTags(res.trackers, res.results));
+    trackers.replaceChildren(...(where === 'description' ? [h('span', { class: 'tag' }, 'Поиск по описаниям')] : trackerTags(res.trackers, res.results)));
     if (!res.results.length) {
       table.replaceChildren(res.complete ? h('p', { class: 'muted' }, 'Ничего не нашлось') : '');
       resetRows();
@@ -274,7 +276,7 @@ export function render(root, r, ctx) {
     built = 0;
     refs.clear();
     table.replaceChildren(
-      h('div', { class: 'res-row res-head', 'aria-hidden': 'true' }, h('span', null, ''), h('span', null, 'Раздача'), h('span', null, 'Трекер'), h('span', null, 'Качество'), h('span', null, 'Формат'), h('span', null, 'Размер'), h('span', null, 'Раздают')),
+      h('div', { class: 'res-row res-head', 'aria-hidden': 'true' }, h('span', null, ''), h('span', null, where === 'description' ? 'Фильм' : 'Раздача'), h('span', null, where === 'description' ? 'Раздачи' : 'Трекер'), h('span', null, 'Качество'), h('span', null, 'Формат'), h('span', null, 'Размер'), h('span', null, 'Раздают')),
       ...buildRows(portionEnd(rows.length, 0, want)));
     drawn = rows;
     rewatch();
@@ -303,7 +305,7 @@ export function render(root, r, ctx) {
     return h('a', { class: 'res-row', href: `#/release/${e.id}`, 'data-key': `res-${e.id}` },
       poster(e, e.name || e.title, 'poster thumb'),
       h('span', { class: 'res-title' }, h('span', { class: 'strong ellipsis' }, e.name || e.title), h('span', { class: 'muted small ellipsis' }, e.title)),
-      h('span', { class: 'muted' }, trackerLabel(e.tracker)),
+      h('span', { class: 'muted' }, where === 'description' ? `${e.variants || 1} ${plural(e.variants || 1, 'раздача', 'раздачи', 'раздач')}` : trackerLabel(e.tracker)),
       h('span', { class: 'muted' }, e.quality || ''),
       h('span', { class: 'muted' }, formatTag(e.format, e.preferred) || ''),
       h('span', null, size(e.size)),

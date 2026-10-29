@@ -51,30 +51,53 @@ func (l *Library) PlaySource(r *http.Request, id int64, fromStart bool) (playbac
 		}
 	}
 	if files, err := l.d.files(ctx, f.Unit); err == nil {
+		unit := l.unitTitle(ctx, f)
 		if n, ok := prevLibFile(files, f.libFile); ok {
 			nf := f
 			nf.libFile = n
 			out.Prev = &playback.Ref{Kind: "library", File: n.ID}
-			out.PrevTitle = l.fileTitle(ctx, nf)
+			out.PrevTitle = fileTitleIn(unit, nf)
 		}
 		if n, ok := nextLibFile(files, f.libFile); ok {
 			nf := f
 			nf.libFile = n
 			out.Next = &playback.Ref{Kind: "library", File: n.ID}
-			out.NextTitle = l.fileTitle(ctx, nf)
+			out.NextTitle = fileTitleIn(unit, nf)
+		}
+		if f.Episode > 0 {
+			for _, x := range files {
+				if x.Section != f.Section || x.Episode <= 0 {
+					continue
+				}
+				nf := f
+				nf.libFile = x
+				out.Playlist = append(out.Playlist, playback.Choice{
+					Ref: playback.Ref{Kind: "library", File: x.ID}, Title: fileTitleIn(unit, nf),
+				})
+			}
 		}
 	}
 	return out, nil
 }
 
-// nextLibFile — следующий файл единицы по правилу .m3u8 (handleM3U): тот же сезон; у серий с номером — тот же раздел.
+// prevLibFile — предыдущий видеоэпизод единицы. Для сериалов переход через границу сезона разрешён,
+// но чужой раздел и файлы без номера серии пропускаются.
 func prevLibFile(files []libFile, f libFile) (libFile, bool) {
 	for i, x := range files {
 		if x.ID != f.ID || i == 0 {
 			continue
 		}
+		if f.Episode > 0 {
+			for j := i - 1; j >= 0; j-- {
+				n := files[j]
+				if n.Episode > 0 && n.Section == f.Section {
+					return n, true
+				}
+			}
+			return libFile{}, false
+		}
 		n := files[i-1]
-		if n.Season != f.Season || (n.Section != f.Section && f.Episode > 0) {
+		if n.Season != f.Season {
 			return libFile{}, false
 		}
 		return n, true
@@ -82,13 +105,24 @@ func prevLibFile(files []libFile, f libFile) (libFile, bool) {
 	return libFile{}, false
 }
 
+// nextLibFile — следующий файл единицы по тому же правилу, что .m3u8 внешнего плеера (handleM3U): для
+// сериала — следующий эпизод того же раздела, включая первый эпизод следующего сезона.
 func nextLibFile(files []libFile, f libFile) (libFile, bool) {
 	for i, x := range files {
 		if x.ID != f.ID || i+1 >= len(files) {
 			continue
 		}
+		if f.Episode > 0 {
+			for j := i + 1; j < len(files); j++ {
+				n := files[j]
+				if n.Episode > 0 && n.Section == f.Section {
+					return n, true
+				}
+			}
+			return libFile{}, false
+		}
 		n := files[i+1]
-		if n.Season != f.Season || (n.Section != f.Section && f.Episode > 0) {
+		if n.Season != f.Season {
 			return libFile{}, false
 		}
 		return n, true

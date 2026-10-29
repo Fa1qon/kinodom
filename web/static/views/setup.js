@@ -218,7 +218,7 @@ export function render(root, r, ctx) {
         h('div', { class: 'card' }, h('div', { class: 'h' }, 't1'), field('Адрес сайта или зеркала', f.t1Address),
           h('div', { class: 'row gap10' }, checkBtn('check-t1', check('t1', t1Result)), t1Result)),
         h('div', { class: 'card' }, h('div', { class: 'h' }, 'Поиск раздач'), field('Адрес сервиса поиска', f.searchAddress),
-          h('p', { class: 'muted small' }, 'Jacred или Jackett: поиск сразу по многим трекерам. Пусто — поиск выключен.')),
+          h('p', { class: 'muted small' }, 'Jacred или Jackett: поиск сразу по многим трекерам. Пусто — поиск выключен. Ключ выдаёт сервис Jacred или администратор Jackett; для публичного сервиса обычно оставляйте ключ пустым.')),
         h('div', { class: 'card' }, h('div', { class: 'h' }, 'Разделы каталога'),
           h('p', { class: 'muted small' }, 'Какие разделы показывать в «Каталоге». По умолчанию отмечены все.'),
           groups ? groupBox : h('p', { class: 'muted small' }, 'Разделы t2 не загрузились — сохранённый выбор не изменится.'),

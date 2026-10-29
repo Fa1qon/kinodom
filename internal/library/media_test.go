@@ -241,8 +241,9 @@ func TestM3USeries(t *testing.T) {
 	e.d.R.QueryRow(`SELECT id FROM lib_files WHERE season = 1 AND episode = 2`).Scan(&e2)
 	w := get(t, mediaMux(e.l), "/m3u/library/"+strconv.FormatInt(e2, 10)+".m3u8?start=90", fromPhone)
 	body := w.Body.String()
-	if w.Code != 200 || strings.Count(body, "http://") != 2 || !strings.Contains(body, "Show.S01E02.mkv") ||
-		!strings.Contains(body, "Show.S01E03.mkv") || strings.Contains(body, "S02E01") || strings.Count(body, "start-time=90") != 1 ||
+	// Плейлист идёт и через границу сезона, как свой плеер (решение заказчика 2026-10-29).
+	if w.Code != 200 || strings.Count(body, "http://") != 3 || !strings.Contains(body, "Show.S01E02.mkv") ||
+		!strings.Contains(body, "Show.S01E03.mkv") || !strings.Contains(body, "S02E01") || strings.Count(body, "start-time=90") != 1 ||
 		strings.Index(body, "start-time") > strings.Index(body, "Show.S01E02.mkv") {
 		t.Errorf(".m3u8 серий:\n%s", body)
 	}

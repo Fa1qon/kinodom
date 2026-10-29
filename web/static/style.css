@@ -141,7 +141,8 @@ h2 { margin: 0; font-size: 20px; font-weight: 700; }
 .small { font-size: 13px; }
 
 /* Каталог */
-.filters { display: flex; gap: 6px; overflow-x: auto; scrollbar-width: thin; scrollbar-color: var(--line-strong) transparent; margin: -8px; padding: 8px 8px 10px; }
+.filters { display: flex; gap: 6px; overflow-x: auto; scrollbar-width: none; margin: -8px; padding: 8px 8px 10px; }
+.filters::-webkit-scrollbar { display: none; }
 .fil { display: inline-flex; align-items: center; height: 36px; padding: 0 14px; border: 1px solid var(--line); color: var(--muted); font-size: 14px; white-space: nowrap; }
 .fil.on { background: var(--inv-bg); border-color: var(--inv-bg); color: var(--inv-text); font-weight: 600; }
 .grid { display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); gap: 28px 20px; padding-top: 8px; }
@@ -234,6 +235,7 @@ h2 { margin: 0; font-size: 20px; font-weight: 700; }
 .tags { display: flex; flex-wrap: wrap; gap: 6px; }
 .tag.strong { font-weight: 700; color: var(--text); }
 .desc { margin: 0; max-width: 760px; font-size: 15px; line-height: 1.5; color: var(--prose); white-space: pre-line; overflow-wrap: anywhere; }
+.desc .person-link { color: var(--blue); text-decoration: underline; text-decoration-color: color-mix(in srgb, var(--blue) 55%, transparent); text-underline-offset: 2px; }
 .desc.clamp { display: -webkit-box; -webkit-line-clamp: 8; -webkit-box-orient: vertical; overflow: hidden; }
 .link { align-self: flex-start; margin-top: -8px; padding: 0; background: transparent; border: 0; color: var(--muted); text-decoration: underline; cursor: pointer; }
 .rel-live:empty { display: none; }
@@ -257,7 +259,7 @@ a.var-row:hover { background: var(--hover); }
 .ep-main { flex-grow: 1; min-width: 0; display: flex; flex-direction: column; gap: 8px; padding: 4px 0; background: transparent; border: 0; text-align: left; cursor: pointer; }
 .ep-title { display: flex; align-items: baseline; gap: 12px; min-width: 0; font-size: 16px; font-weight: 600; }
 .ep-name { flex-grow: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.ep-title .small { flex-shrink: 0; font-weight: 400; white-space: nowrap; }
+.ep-title .small { flex: 0 1 48%; min-width: 0; overflow: hidden; text-overflow: ellipsis; font-weight: 400; white-space: nowrap; }
 .ep .btn { width: 140px; flex-shrink: 0; }
 .panel { position: sticky; top: 16px; display: flex; flex-direction: column; gap: 16px; padding: 22px; border: 1px solid var(--line); background: var(--bg-raised); }
 .panel:focus-within { border-color: var(--focus); background: #182B3D; }
@@ -272,6 +274,18 @@ a.var-row:hover { background: var(--hover); }
 .wide { width: 100%; }
 .pair { gap: 8px; }
 .pair-code { font-size: 2rem; font-weight: 700; letter-spacing: .24em; color: var(--blue); }
+
+/* На широком экране описание и панель занимают верхнюю строку, а серии и варианты
+   используют всю ширину под ними. Иначе список серий остаётся в средней колонке
+   шириной около 600 px и длинные метаданные выталкивают название в нулевую ширину. */
+@media (min-width: 901px) {
+  .rel-main { display: contents; }
+  .rel-cover { grid-column: 1; grid-row: 1; }
+  .rel-info { grid-column: 2; grid-row: 1; min-width: 0; }
+  .rel-grid > .panel { grid-column: 3; grid-row: 1; }
+  .rel-live { grid-column: 2 / 4; grid-row: 2; min-width: 0; }
+  .others { grid-column: 2 / 4; grid-row: 3; min-width: 0; }
+}
 
 /* Поиск */
 .tag.ok-tag .ic { color: var(--green); }
@@ -299,20 +313,24 @@ a.res-row:hover { background: var(--hover); }
 .dl-section-title { margin: 16px 0 0; padding: 0 4px; font-size: 1rem; color: var(--muted); }
 .dl-section-title:first-child { margin-top: 0; }
 .dl-list:has(> p) { border: 0; }
-.dl { display: flex; align-items: center; gap: 18px; padding: 14px 18px; border-bottom: 1px solid #1E2226; }
+.dl { display: grid; grid-template-columns: 52px minmax(260px, 1fr) 220px 90px 150px max-content; align-items: center; gap: 14px 16px; padding: 12px 16px; border-bottom: 1px solid #1E2226; }
 .dl:last-child { border-bottom: 0; }
+/* История и «Новые серии»: строка из ссылки (постер и название) и кнопок — без колонок «Загрузок». */
+.dl.simple { display: flex; gap: 18px; }
+.dl.simple > :not(.hist-link) { flex: none; } /* кнопки не сжимаются длинным названием */
 .thumb { position: relative; width: 44px; height: 64px; flex-shrink: 0; overflow: hidden; background: #1A1D21; }
 .thumb img { width: 100%; height: 100%; object-fit: cover; }
-.dl-name { flex-grow: 1; min-width: 0; display: flex; flex-direction: column; gap: 4px; }
+.dl-name { min-width: 0; display: flex; flex-direction: column; gap: 4px; }
+.dl-name > .strong { display: block; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .dl-name .strong { font-size: 16px; }
-.dl-state { width: 240px; flex-shrink: 0; display: flex; flex-direction: column; gap: 8px; }
+.dl-state { width: 100%; min-width: 0; display: flex; flex-direction: column; gap: 8px; }
 .state { display: inline-flex; align-items: center; gap: 6px; align-self: flex-start; height: 28px; padding: 0 10px; border: 1px solid; font-size: 13px; font-weight: 600; white-space: nowrap; }
 .dl-state .track { width: 200px; }
-.dl-size { width: 90px; flex-shrink: 0; text-align: right; }
-.dl-when { width: 190px; flex-shrink: 0; line-height: 1.4; }
+.dl-size { width: 100%; min-width: 0; text-align: right; }
+.dl-when { width: 100%; min-width: 0; line-height: 1.4; }
 .btn.danger { border-color: var(--yellow); color: var(--yellow); width: 96px; }
-.dl-actions { display: flex; justify-content: flex-end; gap: 8px; min-width: 96px; flex-shrink: 0; }
-.dl.child { padding-left: 80px; background: #121417; }
+.dl-actions { display: flex; align-items: center; justify-content: flex-end; gap: 8px; min-width: 0; }
+.dl.child { grid-template-columns: minmax(260px, 1fr) 220px 90px 150px max-content; padding-left: 72px; background: #121417; }
 
 /* Настройки */
 .set-grid { display: flex; gap: 40px; align-items: flex-start; }
@@ -352,12 +370,19 @@ a.res-row:hover { background: var(--hover); }
 .dlg { width: 100%; max-width: 560px; max-height: calc(100vh - 32px); background: var(--bg-raised); }
 /* Справка «?» (просьба 2026-10-06): два столбца «где/что», на телефоне — в столбик. */
 .dlg.help { display: flex; flex-direction: column; gap: 14px; overflow-y: auto; }
+.help-modes { align-self: flex-start; }
+.help-modes button { display: inline-flex; align-items: center; justify-content: center; height: 40px; padding: 0 18px; border: 0; background: transparent; color: var(--muted); font: inherit; font-size: 15px; font-weight: 600; cursor: pointer; }
+.help-modes button + button { border-left: 1px solid var(--line-strong); }
+.help-modes button.on { background: var(--inv-bg); color: var(--inv-text); }
+.help-content { display: flex; flex-direction: column; gap: 14px; }
 .help-part { display: flex; flex-direction: column; gap: 6px; }
 .help-title { font-weight: 700; color: var(--muted); font-size: 14px; text-transform: uppercase; letter-spacing: 0.04em; }
 .help-row { display: flex; gap: 10px; align-items: baseline; }
 .help-key { flex: 0 0 120px; font-weight: 600; }
 .help-val { color: var(--soft); }
 @media (max-width: 480px) {
+  .help-modes { align-self: stretch; }
+  .help-modes button { flex: 1; padding: 0 10px; }
   .help-row { flex-direction: column; gap: 0; }
   .help-key { flex-basis: auto; }
 }
@@ -591,6 +616,8 @@ a.res-row:hover { background: var(--hover); }
   .pair { flex-wrap: wrap; }
   .res-row { grid-template-columns: 48px minmax(0, 1fr) 90px 130px 70px 90px 80px; gap: 12px; }
   .dl { gap: 14px; }
+  .dl { grid-template-columns: 52px minmax(220px, 1fr) 180px 80px 120px max-content; }
+  .dl.child { grid-template-columns: minmax(220px, 1fr) 180px 80px 120px max-content; }
   .dl-state { width: 180px; }
   .dl-state .track { width: 160px; }
   .dl-when { width: 120px; }
@@ -652,6 +679,7 @@ a.res-row:hover { background: var(--hover); }
   .num { width: auto; grid-column: 1; grid-row: 1 / span 3; }
   .ep-main { grid-column: 2; min-width: 0; }
   .ep-title { flex-direction: column; gap: 2px; min-width: 0; font-size: 15px; }
+  .ep-title .small { flex: 0 1 auto; max-width: 100%; }
   .ep-name { max-width: 100%; }
   .ep > .track { grid-column: 2 / -1; width: 100%; }
   .ep .btn { grid-column: 3; grid-row: 1 / span 2; width: auto; max-width: 120px; overflow: hidden; padding: 0 10px; text-overflow: ellipsis; }
@@ -664,14 +692,18 @@ a.res-row:hover { background: var(--hover); }
   .res-title { grid-column: 2 / -1; }
 
   /* Загрузки */
-  .dl { flex-wrap: wrap; gap: 10px 12px; padding: 12px; }
-  .dl-name { flex: 1 1 0; }
-  .dl.child { padding-left: 12px; }
-  .dl-state { order: 5; width: 100%; }
+  .dl { grid-template-columns: 44px minmax(0, 1fr) auto; gap: 8px 10px; padding: 12px; }
+  .dl.child { grid-template-columns: minmax(0, 1fr) auto; padding-left: 12px; }
+  .dl .thumb { grid-column: 1; grid-row: 1 / span 2; }
+  .dl .dl-name { grid-column: 2; grid-row: 1; }
+  .dl .dl-actions { grid-column: 3; grid-row: 1; }
+  .dl.child .dl-name { grid-column: 1; }
+  .dl.child .dl-actions { grid-column: 2; }
+  .dl-state { grid-column: 1 / -1; grid-row: 2; width: 100%; }
   .dl-state .track { width: 100%; }
-  .dl-size { order: 6; width: auto; text-align: left; }
-  .dl-when { order: 7; width: auto; flex-grow: 1; text-align: right; }
-  .dl-actions { order: 8; width: 100%; min-width: 0; justify-content: flex-end; }
+  .dl-size { grid-column: 1; grid-row: 3; width: auto; text-align: left; }
+  .dl-when { grid-column: 2; grid-row: 3; width: auto; text-align: left; }
+  .dl-actions { min-width: 0; }
   .dl-name .strong { font-size: 14px; line-height: 1.25; }
 
   /* Настройки */
@@ -784,7 +816,6 @@ body.playing #top { display: none; }
 }
 
 .player .pl-btn:focus-visible, .player .pl-bar:focus-visible, .player .pl-back:focus-visible, .player .pl-vol:focus-visible { outline: 3px solid #4aa3ff; outline-offset: 3px; }
-.player .pl-diagnostics { position: absolute; left: 18px; bottom: 76px; max-width: min(720px, calc(100vw - 36px)); padding: 8px 12px; border: 1px solid rgba(255,255,255,.22); border-radius: 6px; background: rgba(8,12,18,.88); color: var(--text); }
 
 /* Плеер канала (план 2026-10-06, Task A): текущая передача и метрики под видео, список каналов справа. */
 .player .cp-now { font-size: 17px; }

@@ -6,6 +6,7 @@ import (
 	"errors"
 	"strings"
 	"time"
+	"unicode"
 
 	"kinodom/internal/source"
 	"kinodom/internal/store"
@@ -374,6 +375,62 @@ func (s catalogStore) rowsWhere(ctx context.Context, where string, args ...any) 
 		out = append(out, r)
 	}
 	return out, rows.Err()
+}
+
+// rowsByDescription — живые раздачи, в описании которых встречаются все слова запроса.
+// Описания уже сохранены в локальном каталоге и обычно невелики, поэтому ищем в Go:
+// это сохраняет корректное Unicode-сопоставление и не требует leading-wildcard индекса SQLite.
+// Слова сопоставляются независимо от порядка и знаков препинания: «Райан Гослинг»,
+// «Гослинг, Райан» и «Райан / Гослинг» считаются одним запросом.
+func (s catalogStore) rowsByDescription(ctx context.Context, query string) ([]row, error) {
+	needles := descriptionWords(query)
+	if len(needles) == 0 {
+		return nil, nil
+	}
+	rows, err := s.db.R.QueryContext(ctx,
+		`SELECT `+rowColumns+`, r.description FROM releases r WHERE r.removed = 0 AND r.description <> '' ORDER BY r.seeders DESC, r.id`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []row
+	for rows.Next() {
+		var description string
+		r, err := scanRow(rows, &description)
+		if err != nil {
+			return nil, err
+		}
+		if descriptionContainsWords(description, needles) {
+			out = append(out, r)
+		}
+	}
+	return out, rows.Err()
+}
+
+func descriptionWords(s string) []string {
+	s = strings.NewReplacer("ё", "е", "Ё", "Е").Replace(strings.ToLower(s))
+	var b strings.Builder
+	for _, r := range s {
+		if unicode.IsLetter(r) || unicode.IsDigit(r) {
+			b.WriteRune(r)
+		} else {
+			b.WriteByte(' ')
+		}
+	}
+	return strings.Fields(b.String())
+}
+
+func descriptionContainsWords(description string, needles []string) bool {
+	have := map[string]bool{}
+	for _, word := range descriptionWords(description) {
+		have[word] = true
+	}
+	for _, word := range needles {
+		if !have[word] {
+			return false
+		}
+	}
+	return true
 }
 
 // rowsByKinopoisk — живые раздачи с номером Кинопоиска из описания.

@@ -30,8 +30,20 @@ data class MovieInfo(
             val o = JSONObject(json)
             val a = o.getJSONArray("audio")
             val s = o.getJSONArray("subs")
-            val prev = o.optJSONObject("prev")
-            val next = o.optJSONObject("next")
+            var prev = o.optJSONObject("prev")
+            var next = o.optJSONObject("next")
+            // Совместимость со старыми ответами: список эпизодов уже позволяет
+            // определить соседей, даже если отдельные prev/next ещё не пришли.
+            val episodes = o.optJSONArray("episodes")
+            if (episodes != null && (prev == null || next == null)) {
+                val current = (0 until episodes.length()).firstOrNull { i ->
+                    episodes.optJSONObject(i)?.optString("src") == o.optString("src")
+                } ?: -1
+                if (current >= 0) {
+                    if (prev == null && current > 0) prev = episodes.optJSONObject(current - 1)
+                    if (next == null && current + 1 < episodes.length()) next = episodes.optJSONObject(current + 1)
+                }
+            }
             MovieInfo(
                 src = o.getString("src"), title = o.getString("title"), hash = o.getString("hash"), index = o.getInt("index"),
                 durationSec = o.getDouble("durationSec"), startSec = o.optInt("startSec"), direct = o.getString("direct"),

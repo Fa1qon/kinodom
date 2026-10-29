@@ -1,5 +1,5 @@
-// Раздача: единая кнопка «Смотреть» подготавливает файл и запускает плеер; ниже — серии,
-// «Другие раздачи» и поиск на трекерах.
+// Раздача: «Смотреть» подготавливает файл и запускает плеер, а «Скачать» ставит раздачу
+// в очередь без запуска; ниже — серии, «Другие раздачи» и поиск на трекерах.
 import { h, icon, size, speed, rating, minutes, ready, poll, copyText, store, plural, shortNames, keepFocus, fileFormat, formatTag, openPlayer, confirmDialog, fill } from '../ui.js';
 import { get, post, put, del } from '../api.js';
 import { whereStopped, resumeIndex } from './history.js';
@@ -24,6 +24,47 @@ const FORMATS_FOR = 120000; // формат найденных ждём не д�
 const MISSING_EVERY = 3000; // раздача не открыта (404) — её могут открыть с другого устройства: проверяем раз в 3 с
 const OTHERS_EVERY = 10000; // «Другие раздачи» перечитываются, пока экран открыт
 const COPIED_FOR = 2000; // «Скопировано» видно 2 с, перерисовка панели его не сбивает (Х25)
+const DOWNLOAD_RETRY_FOR = 700; // краткий рестарт сервера/службы не должен терять нажатие «Скачать»
+
+// descriptionSearchHref — локальный поиск по полю описания, а не по названию раздачи.
+export function descriptionSearchHref(name) {
+  return '#/search?q=' + encodeURIComponent(String(name || '').trim()) + '&where=description';
+}
+
+// postDownload — постановка торрент-раздачи идемпотентна, поэтому краткий сетевой сбой
+// (например, перезапуск локальной службы после обновления) безопасно переживаем повтором.
+// Ошибки HTTP не повторяем: сервер уже ответил и показал причину.
+async function postDownload(path, body) {
+  try {
+    return await post(path, body);
+  } catch (e) {
+    if (!e || e.status !== 0) throw e;
+    await new Promise((resolve) => setTimeout(resolve, DOWNLOAD_RETRY_FOR));
+    return post(path, body);
+  }
+}
+
+const PEOPLE_LINE = /^\s*((?:Режисс(?:е|ё)р(?:ы)?|Director|В\s+ролях|Акт(?:е|ё)ры|Cast)\s*:\s*)(.+)$/i;
+
+function descriptionPeople(value) {
+  return String(value).split(/(\s*[,;/]\s*|\s+и\s+)/i).map((part) => {
+    if (/^\s*[,;/]\s*$/.test(part) || /^\s+и\s+$/i.test(part) || /^др\.?$/i.test(part.trim())) return part;
+    const name = part.trim();
+    if (!name) return part;
+    const start = part.indexOf(name);
+    return [part.slice(0, start), h('a', { class: 'person-link', href: descriptionSearchHref(name) }, name), part.slice(start + name.length)];
+  });
+}
+
+// descriptionView — описание остаётся обычным текстом, но строки с актёрами и режиссёром получают ссылки.
+export function descriptionView(text) {
+  const lines = String(text || '').split(/\r?\n/);
+  return h('div', { class: 'desc' }, lines.map((line, i) => {
+    const m = line.match(PEOPLE_LINE);
+    const content = m ? [m[1], ...descriptionPeople(m[2])] : [line];
+    return i < lines.length - 1 ? [...content, h('br')] : content;
+  }));
+}
 
 // seasonLabel — какой сезон и какие серии в раздаче — крупно у «Скачать» (заказчик 2026-10-01): строка сезона
 // из заголовка («S01», «S02E01-08», «02x13 из 13», «Сезон: 1-3, Серии: 1-24 из 24», «1-5 серий из 5», у t1 —
@@ -128,6 +169,13 @@ export function episodeAction(downloadingNow, busyNow) {
   return downloadingNow ? 'pick' : 'confirm';
 }
 
+// watchDownloadRequest — просмотр серии сериалов одновременно ставит в очередь всю раздачу,
+// начиная с выбранной серии. Для фильма сохраняем точечную подготовку одного файла.
+export function watchDownloadRequest(rel, f) {
+  if (!f) return {};
+  return rel && rel.series ? { from: f.index, prepare: true } : { file: f.index, prepare: true };
+}
+
 // bestFile — единый выбор серии для главной кнопки: явный выбор и продолжение важнее
 // автоматического выбора, но готовый файл всегда выигрывает у файла, который только стоит
 // в очереди. Так «Смотреть» не отправляет человека ждать первый файл раздачи, если другая
@@ -179,7 +227,7 @@ export function render(root, r, ctx) {
   const back = h('div');
   const cover = h('div', { class: 'rel-cover' });
   const info = h('div', { class: 'rel-info' });
-  const live = h('div', { class: 'rel-live' });
+  const live = h('div', { class: 'rel-live', 'data-nav-column': true });
   const side = h('aside', { class: 'panel', 'aria-label': 'Просмотр', 'data-nav-column': true });
   const others = h('section', { class: 'others', 'aria-label': 'Другие раздачи' });
   const preload = h('div', { class: 'release-preload', hidden: true, 'aria-live': 'polite' }, icon('progress_activity'), h('span', null, 'Подготавливаем просмотр…'));
@@ -291,7 +339,7 @@ export function render(root, r, ctx) {
     }
     back.replaceChildren(link);
     cover.replaceChildren(poster(rel, heading, 'poster big'));
-    const desc = rel.description ? h('p', { class: 'desc' }, rel.description) : null;
+    const desc = rel.description ? descriptionView(rel.description) : null;
     fill(info,
       compact ? null : h('h1', null, heading),
       h('div', { class: 'muted sub' }, [rel.original, rel.year || null].filter(Boolean).join(' · ')),
@@ -357,7 +405,8 @@ export function render(root, r, ctx) {
       : fs.map((f, n) => render(f, n));
     return h('section', { class: 'episodes', 'aria-label': 'Серии' },
       h('div', { class: 'row' }, h('h2', { class: 'grow' }, 'Серии'),
-        downloading() ? h('span', { class: 'muted small' }, `${size(done)} из ${size(total)}` + (st.speed > 0 ? ` · ${speed(st.speed)}` : '')) : null),
+        downloading() ? h('span', { class: 'muted small' }, `${size(done)} из ${size(total)}` + (st.speed > 0 ? ` · ${speed(st.speed)}` : '')) : null,
+        compact ? null : downloadButton('Скачать всё', !!(st && st.state !== 'error' && !(st.files && st.files.length)), 'download-episodes')),
       body);
   }
 
@@ -381,8 +430,7 @@ export function render(root, r, ctx) {
       // раздачу, дождётся списка и запустит первый готовый файл (watchOrPrepare без файла).
       out.push(h('button', { class: 'btn inv big', type: 'button', disabled: busy || waiting, 'data-key': 'watch', 'data-nav-main': true, onclick: () => watchOrPrepare(target) }, icon('play_arrow'), 'Смотреть'),
         // В вебе загрузка — отдельное действие: она ставит раздачу в очередь и не запускает плеер.
-        compact ? null : h('button', { class: 'btn', type: 'button', disabled: busy || waiting, 'data-key': 'download-release',
-          'aria-label': 'Скачать раздачу', onclick: () => download({}) }, icon('download'), 'Скачать'),
+        downloadButton('Скачать', waiting),
         compact ? null : externalButton(target), followControl());
       if (webBlockedFormat(rel.format)) out.push(h('div', { class: 'muted small' }, icon('warning', 16),
         ` ${rel.format.toUpperCase()} в браузере не играется — «Смотреть» откроет внешний плеер или приложение.`));
@@ -402,7 +450,7 @@ export function render(root, r, ctx) {
       h('span', { class: 'grow' }, `${f.percent} %` + (inFocus && st.speed > 0 ? ` · ${speed(st.speed)}` : '')),
       h('span', { class: 'muted' }, plural(st.peers, 'пир', 'пира', 'пиров'))));
     if (f.readiness === 'wait' && f.waitSec > 0) out.push(h('div', { class: 'eta' }, `Без остановок через ${minutes(f.waitSec)}`));
-    out.push(watchButton(f, 'btn big wide'), compact ? null : externalButton(f, 'Во внешнем плеере'), followControl());
+    out.push(watchButton(f, 'btn big wide'), compact ? null : downloadButton(rel.series ? 'Скачать всё' : 'Скачать'), compact ? null : externalButton(f, 'Во внешнем плеере'), followControl());
     if (ctx.canEdit && rel.hash) {
       const seen = !!(p && p.watched);
       out.push(h('button', { class: 'btn', type: 'button', 'data-key': `seen-${f.index}`, onclick: () => mark(f, !seen) },
@@ -463,16 +511,38 @@ export function render(root, r, ctx) {
       'aria-label': `${label}: ${f.name || ''}`, onclick: () => externalOrPrepare(f) }, icon('open_in_new'), label);
   }
 
+  // key — свой у каждой кнопки на экране: фокус после перерисовки возвращается по нему (ревью 2026-10-29).
+  function downloadButton(label = 'Скачать', disabled = false, key = 'download-release') {
+    if (compact) return null;
+    return h('button', { class: 'btn', type: 'button', disabled: busy || disabled, 'data-key': key,
+      'aria-label': label + ' без запуска просмотра', onclick: () => download({}) }, icon('download'), label);
+  }
+
+  // queueSeriesFrom — если серия уже готова, просмотр запускается сразу, а очередь следующих
+  // серий заполняется параллельно. Повторный вызов безопасен: серверная DownloadFrom идемпотентна.
+  function queueSeriesFrom(f) {
+    if (!rel || !rel.series || !f || !rel.hash) return;
+    postDownload(`/releases/${id}/download`, watchDownloadRequest(rel, f)).then((res) => {
+      if (res && res.hash) rel.hash = res.hash;
+      if (alive && torrentPoll) torrentPoll.now();
+    }).catch((e) => {
+      if (!alive) return;
+      actionError = e.message;
+      drawLive();
+    });
+  }
+
   function externalOrPrepare(f, fromStart = false) {
     if (!f || busy) return;
     if (f.readiness && f.readiness !== 'none' && rel && rel.hash) {
+      queueSeriesFrom(f);
       externalWatch(f, fromStart);
       return;
     }
     pendingExternal = { index: f.index, fromStart };
     chosen = f.index;
     drawLive();
-    download({ file: f.index, prepare: true });
+    download(watchDownloadRequest(rel, f));
   }
 
   // pickEpisode — OK на строке серии: до «Скачать» — окно «Скачать «…» — размер?» (замечание № 3 этапа
@@ -493,11 +563,15 @@ export function render(root, r, ctx) {
       download({});
       return;
     }
-    if (f.readiness && f.readiness !== 'none') { watch(f, fromStart); return; }
+    if (f.readiness && f.readiness !== 'none') {
+      queueSeriesFrom(f);
+      watch(f, fromStart);
+      return;
+    }
     pendingWatch = { index: f.index, fromStart };
     chosen = f.index;
     drawLive();
-    download({ file: f.index, prepare: true });
+    download(watchDownloadRequest(rel, f));
   }
 
   function maybeStartPendingWatch() {
@@ -536,7 +610,7 @@ export function render(root, r, ctx) {
     actionError = '';
     drawLive();
     try {
-      const res = await post(`/releases/${id}/download`, what);
+      const res = await postDownload(`/releases/${id}/download`, what);
       rel.hash = res.hash;
       if (fromHere && !pendingWatch) focusNext = what.file !== undefined ? 'watch-row-' + what.file : 'watch';
     } catch (e) {

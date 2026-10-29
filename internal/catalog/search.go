@@ -56,6 +56,38 @@ func (c *Catalog) Search(ctx context.Context, query string) (SearchState, error)
 	return c.search(ctx, query, false)
 }
 
+// DescriptionSearch ищет по уже загруженным описаниям раздач. В отличие от Search
+// не обращается к трекерам: это быстрый фильтр локального каталога по актёру,
+// режиссёру или любой другой строке описания.
+func (c *Catalog) DescriptionSearch(ctx context.Context, query string) (SearchState, error) {
+	q := strings.Join(strings.Fields(query), " ")
+	if q == "" {
+		return SearchState{}, errors.New("пустой поисковый запрос")
+	}
+	rs, err := c.st.rowsByDescription(ctx, q)
+	if err != nil {
+		return SearchState{}, err
+	}
+	rs = c.collapse(rs)
+	// Один результат — одно произведение. Для группировки используем уже известные
+	// номера Кинопоиска и нормализованный ключ названия, не обращаясь к внешнему API.
+	kp := make(map[int64]int, len(rs))
+	for _, r := range rs {
+		if r.KinopoiskID > 0 {
+			kp[r.ID] = r.KinopoiskID
+		}
+	}
+	grouped, counts, _ := films(rs, kp, c.PreferredFormat(), true, false)
+	es, err := c.entries(ctx, grouped)
+	if err != nil {
+		return SearchState{}, err
+	}
+	for i, r := range grouped {
+		es[i].Variants = max(1, counts[r.ID])
+	}
+	return SearchState{Query: q, Results: es, Complete: true}, nil
+}
+
 // search — Search; poll — повторный опрос того же поиска (законченный с ошибкой трекера не ищет заново).
 func (c *Catalog) search(ctx context.Context, query string, poll bool) (SearchState, error) {
 	run, q, err := c.startSearch(query, poll, true)

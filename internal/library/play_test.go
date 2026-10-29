@@ -36,11 +36,17 @@ func TestPlaySourceSeries(t *testing.T) {
 		src.Next == nil || src.Next.Kind != "library" || src.Next.File != id(1, 2) || !strings.Contains(src.NextTitle, "1×02") || src.Launch != nil {
 		t.Errorf("1×01: %+v", src)
 	}
+	if len(src.Playlist) != 3 || src.Playlist[0].Ref.File != id(1, 1) || src.Playlist[1].Ref.File != id(1, 2) || src.Playlist[2].Ref.File != id(2, 1) || !strings.Contains(src.Playlist[1].Title, "1×02") {
+		t.Errorf("список серий: %+v", src.Playlist)
+	}
 	if len(src.SubFiles) != 2 || !strings.HasSuffix(src.SubFiles[0], "Show.S01E01.rus.srt") || !strings.HasSuffix(src.SubFiles[1], filepath.Join("Subs", "Show.S01E01.eng.ass")) {
 		t.Errorf("субтитры рядом (без .sup и чужой серии): %v", src.SubFiles)
 	}
-	if src, _ := e.l.PlaySource(r, id(1, 2), false); src.Next != nil {
-		t.Errorf("1×02 → следующий сезон: %+v", src.Next)
+	if src, _ := e.l.PlaySource(r, id(1, 2), false); src.Next == nil || src.Next.File != id(2, 1) || !strings.Contains(src.NextTitle, "2×01") {
+		t.Errorf("1×02 → первый эпизод следующего сезона: %+v %s", src.Next, src.NextTitle)
+	}
+	if src, _ := e.l.PlaySource(r, id(2, 1), false); src.Prev == nil || src.Prev.File != id(1, 2) || !strings.Contains(src.PrevTitle, "1×02") {
+		t.Errorf("2×01 → последний эпизод предыдущего сезона: %+v %s", src.Prev, src.PrevTitle)
 	}
 	var se *playback.StatusError
 	if _, err := e.l.PlaySource(r, 999, false); !errors.As(err, &se) || se.Code != 404 {

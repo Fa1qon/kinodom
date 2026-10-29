@@ -12,6 +12,7 @@ var (
 	reEpRangeOf  = regexp.MustCompile(`(?:^|[^\d])(\d{1,3})\s*[-–]\s*(\d{1,3})\s+из\s+(\d{1,3})(?:[^\d]|$)`)
 	reEpOneOf    = regexp.MustCompile(`сери[яи]\s*:?\s*(\d{1,3})\s+из\s+(\d{1,3})(?:[^\d]|$)`)
 	reEpCountOf  = regexp.MustCompile(`(?:^|[^\d])(\d{1,3})\s+сери[йияю]\s+из\s+(\d{1,3})(?:[^\d]|$)`)
+	reEpSxWord   = regexp.MustCompile(`(?i)s\d{1,2}[^0-9]{0,8}(\d{1,3})\s*[._ -]*(?:seriya|серия)`)
 	reEpSxE      = regexp.MustCompile(`(?:^|[^\p{L}\d])s\d{1,2}e(\d{1,3})(?:\s*[-–]\s*(?:e)?(\d{1,3}))?(?:[^\d]|$)`)
 	reEpRangeRaw = regexp.MustCompile(`сери[яи]\s*:?\s*(\d{1,3})\s*[-–]\s*(\d{1,3})(?:[^\d]|$)`)
 )
@@ -29,6 +30,9 @@ func Episodes(title string) (from, to, total int) {
 	}
 	if m := reEpCountOf.FindStringSubmatch(s); m != nil && n(m[1]) > 0 {
 		return 1, n(m[1]), n(m[2])
+	}
+	if m := reEpSxWord.FindStringSubmatch(s); m != nil {
+		return n(m[1]), n(m[1]), 0
 	}
 	if m := reEpSxE.FindStringSubmatch(s); m != nil {
 		from = n(m[1])

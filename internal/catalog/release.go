@@ -1,6 +1,7 @@
 package catalog
 
 import (
+	"cmp"
 	"context"
 	"database/sql"
 	"errors"
@@ -48,6 +49,67 @@ type ReleaseRef struct {
 	ImageKey string `json:"imageKey"`
 	Season   string `json:"season"`  // «S01», «Сезон: 1, Серии: 1-8 из 10»; "" — нет
 	Quality  string `json:"quality"` // «WEB-DL 1080p»; "" — не найдено
+}
+
+// SeriesRelease — доступная в каталоге раздача сезона/серии того же сериала.
+// InfoHash нужен плееру, чтобы перейти между отдельными раздачами сезонов.
+type SeriesRelease struct {
+	InfoHash    string
+	Title       string
+	Season      int
+	EpisodeFrom int
+	EpisodeTo   int
+}
+
+// SeriesReleasesByHash возвращает раздачи одного сериала, найденные по infohash текущей раздачи.
+// Варианты качества одного сезона сохраняются: вызывающий код выбирает тот, который уже открыт
+// торрент-движком и потому доступен без повторной постановки в очередь.
+func (c *Catalog) SeriesReleasesByHash(ctx context.Context, hash string) ([]SeriesRelease, error) {
+	hash = strings.ToLower(strings.TrimSpace(hash))
+	if hash == "" {
+		return nil, nil
+	}
+	var id int64
+	err := c.db.R.QueryRowContext(ctx, `SELECT id FROM releases WHERE lower(infohash) = ? AND removed = 0 ORDER BY seeders DESC LIMIT 1`, hash).Scan(&id)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	_, rows, err := c.variantsOf(ctx, id)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]SeriesRelease, 0, len(rows))
+	seen := map[string]bool{}
+	for _, r := range rows {
+		if r.InfoHash == "" || seen[strings.ToLower(r.InfoHash)] {
+			continue
+		}
+		t := meta.ParseTitle(r.Title)
+		season := meta.SeasonNumber(t.Season)
+		if season == 0 {
+			season = meta.SeasonNumber(r.Title)
+		}
+		if !t.Series && season == 0 {
+			continue
+		}
+		from, to, _ := meta.Episodes(r.Title)
+		out = append(out, SeriesRelease{InfoHash: strings.ToLower(r.InfoHash), Title: r.Title,
+			Season: season, EpisodeFrom: from, EpisodeTo: to})
+		seen[strings.ToLower(r.InfoHash)] = true
+	}
+	slices.SortStableFunc(out, func(a, b SeriesRelease) int {
+		if a.Season != b.Season {
+			return cmp.Compare(a.Season, b.Season)
+		}
+		if a.EpisodeFrom != b.EpisodeFrom {
+			return cmp.Compare(a.EpisodeFrom, b.EpisodeFrom)
+		}
+		return strings.Compare(a.InfoHash, b.InfoHash)
+	})
+	return out, nil
 }
 
 // ReleasesByHash — раздачи каталога по infohash (нижний регистр); одинаковый infohash у двух

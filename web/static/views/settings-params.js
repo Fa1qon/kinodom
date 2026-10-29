@@ -185,6 +185,7 @@ export function render(root, r, ctx) {
           h('div', { class: 'card' }, h('div', { class: 'h' }, 'Источник поиска'),
             field('Адрес', 'searchAddress', input('searchAddress', v.search.address, { autocomplete: 'off', inputmode: 'url' })),
             field('Ключ', 'searchKey', h('div', { class: 'row gap10' }, secret('searchKey', v.search.keySet), searchErase)),
+            h('p', { class: 'muted small' }, 'Ключ выдаёт сам сервис Jacred или администратор Jackett. Для публичного сервиса обычно оставляйте поле пустым; если сервис требует ключ, его нужно получить у владельца сервиса.'),
             h('div', { class: 'row gap10' },
               h('button', { class: 'btn', type: 'button', disabled: !canEdit, 'data-key': 'search-check', onclick: checkSearch }, icon('network_check'), 'Проверить'),
               searchResult)),

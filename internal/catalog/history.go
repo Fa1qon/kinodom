@@ -93,12 +93,21 @@ func (c *Catalog) handleSearch(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	poll := r.URL.Query().Get("poll") == "1"
-	st, err := c.search(r.Context(), q, poll)
+	where := r.URL.Query().Get("where")
+	var st SearchState
+	var err error
+	if where == "description" {
+		st, err = c.DescriptionSearch(r.Context(), q)
+	} else {
+		st, err = c.search(r.Context(), q, poll)
+	}
 	if err != nil {
 		httpx.WriteError(w, http.StatusInternalServerError, "поиск не удался: "+err.Error())
 		return
 	}
-	if !poll {
+	// Поиск по описаниям (переход по актёру) в общую историю не пишется: история хранит только запрос, и
+	// её ссылка открыла бы поиск по трекерам (ревью 2026-10-29).
+	if !poll && where != "description" {
 		if err := c.rememberQuery(r.Context(), q); err != nil {
 			c.log.Error("поиск: запрос не записался в историю", "err", err)
 		}

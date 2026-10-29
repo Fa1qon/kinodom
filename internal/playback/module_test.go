@@ -40,7 +40,8 @@ func (f fakeRes) Resolve(r *http.Request, ref Ref, prepare, fromStart bool) (Sou
 		p = "/files/sample.mkv"
 	}
 	return Source{Title: "Пример — 1×01", Hash: "lib-1", Index: 7, Path: p, M3U: "/m3u/library/7.m3u8", StartSec: start,
-		SubFiles: []string{filepath.Join("testdata", "sample.rus.srt")}, Next: &Ref{Kind: "library", File: 8}, NextTitle: "Пример — 1×02"}, nil
+		SubFiles: []string{filepath.Join("testdata", "sample.rus.srt")}, Next: &Ref{Kind: "library", File: 8}, NextTitle: "Пример — 1×02",
+		Playlist: []Choice{{Ref: Ref{Kind: "library", File: 7}, Title: "Пример — 1×01"}, {Ref: Ref{Kind: "library", File: 8}, Title: "Пример — 1×02"}}}, nil
 }
 
 // fixture — модуль плеера на httptest: файлы testdata — по /files/ того же сервера (как поток на этом ПК).
@@ -89,12 +90,14 @@ func TestInfo(t *testing.T) {
 		Audio                            []Track
 		Subs                             []Sub
 		Next                             *struct{ Src, Title string }
+		Episodes                         []struct{ Src, Title string }
 	}
 	json.Unmarshal([]byte(body), &out)
 	host := strings.TrimPrefix(srv.URL, "http://")
 	if code != 200 || out.Src != "library/7" || out.Title != "Пример — 1×01" || out.Hash != "lib-1" || out.Index != 7 || out.StartSec != 3 ||
 		out.DurationSec < 11.9 || out.Direct != "http://"+host+"/files/sample.mkv?own=1" || out.M3UURL != "http://"+host+"/m3u/library/7.m3u8" ||
-		out.Video.Mime != "avc1.640028" || len(out.Audio) != 2 || out.Next == nil || out.Next.Src != "library/8" || out.Next.Title != "Пример — 1×02" {
+		out.Video.Mime != "avc1.640028" || len(out.Audio) != 2 || out.Next == nil || out.Next.Src != "library/8" || out.Next.Title != "Пример — 1×02" ||
+		len(out.Episodes) != 2 || out.Episodes[1].Src != "library/8" || out.Episodes[1].Title != "Пример — 1×02" {
 		t.Fatalf("сведения: %d %s", code, body)
 	}
 	if len(out.Subs) != 2 || out.Subs[0].ID != "3" || out.Subs[1].ID != "f0" || out.Subs[1].Lang != "rus" || out.Subs[1].Title != "sample.rus.srt" {

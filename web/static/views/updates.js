@@ -88,7 +88,7 @@ export function render(root, r, ctx) {
     if (u.imageKey) thumb.append(h('img', { src: thumbOf(`/img/${u.imageKey}`), alt: '', loading: 'lazy' }));
     const main = h('span', { class: 'dl-name' }, h('span', { class: 'strong ellipsis', title: u.title }, updateLabel(u)),
       h('span', { class: 'muted small' }, day(u.at)));
-    return h('div', { class: 'dl' },
+    return h('div', { class: 'dl simple' },
       h('a', { class: 'hist-link', href: `#/release/${u.releaseId}`, 'data-key': `open-${u.id}` }, thumb, main),
       h('div', { class: 'dl-actions' },
         u.kind === 'episodes' && u.files.length ? h('button', { class: 'btn', type: 'button', disabled: busy === u.id, 'data-key': `watch-${u.id}`,

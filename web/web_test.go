@@ -95,16 +95,49 @@ func TestClientReleaseLayoutKeepsDescriptionAndRemovesTabs(t *testing.T) {
 	}
 }
 
+func TestReleaseDesktopLayoutKeepsEpisodeTitles(t *testing.T) {
+	css, err := fs.ReadFile(Static, "style.css")
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := string(css)
+	for _, want := range []string{".ep-title .small { flex: 0 1 48%;", ".rel-main { display: contents; }", ".rel-live { grid-column: 2 / 4;"} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("release layout misses %q", want)
+		}
+	}
+}
+
 func TestWebReleaseHasSeparateDownloadAction(t *testing.T) {
 	src, err := fs.ReadFile(Static, "views/release.js")
 	if err != nil {
 		t.Fatal(err)
 	}
 	text := string(src)
-	for _, want := range []string{"'data-key': 'download-release'", "onclick: () => download({})", "icon('download')", "'Скачать'"} {
+	for _, want := range []string{"key = 'download-release'", "onclick: () => download({})", "icon('download')", "'Скачать'", "postDownload", "DOWNLOAD_RETRY_FOR"} {
 		if !strings.Contains(text, want) {
 			t.Fatalf("release page misses separate download action marker %q", want)
 		}
+	}
+}
+
+func TestSeriesWatchQueuesFromSelectedEpisode(t *testing.T) {
+	node := lookNode(t)
+	script := `
+import { watchDownloadRequest } from './views/release.js';
+const series = { series: true };
+const film = { series: false };
+const gotSeries = JSON.stringify(watchDownloadRequest(series, { index: 3 }));
+const gotFilm = JSON.stringify(watchDownloadRequest(film, { index: 3 }));
+if (gotSeries !== '{"from":3,"prepare":true}' || gotFilm !== '{"file":3,"prepare":true}') {
+  console.error(gotSeries, gotFilm);
+  process.exitCode = 1;
+}
+`
+	cmd := exec.Command(node, "--input-type=module", "--no-warnings", "-e", script)
+	cmd.Dir = "static"
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Errorf("%v\n%s", err, out)
 	}
 }
 
@@ -129,6 +162,19 @@ func TestHomeShowsNewFilmsAndSeries(t *testing.T) {
 	cssText := string(css)
 	if !strings.Contains(cssText, ".home-new-card") || !strings.Contains(cssText, ".home-tabs") || !strings.Contains(cssText, ".home-tab") || !strings.Contains(cssText, ".cont .poster.small") {
 		t.Fatal("new releases rails style is missing")
+	}
+}
+
+func TestDownloadsLayoutUsesResponsiveColumns(t *testing.T) {
+	css, err := fs.ReadFile(Static, "style.css")
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := string(css)
+	for _, want := range []string{".dl { display: grid;", ".dl.child { grid-template-columns:", ".dl-actions { display: flex; align-items: center;"} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("downloads layout misses %q", want)
+		}
 	}
 }
 
@@ -993,7 +1039,7 @@ func TestPultLibrary(t *testing.T) {
 	node := lookNode(t)
 	script := `
 import { libraryTabs, continueLabel } from './views/library.js';
-import { seasonsOf, seasonOverview, seasonAvailability, episodeLabel, defaultVersion, libraryPlayerLink } from './views/library-card.js';
+import { seasonsOf, seasonOverview, seasonAvailability, mergedEpisodes, resumeEpisode, episodeLabel, defaultVersion, libraryPlayerLink } from './views/library-card.js';
 const tabs = (v) => libraryTabs(v).map((x) => x.id + ':' + x.name + ':' + x.count).join(' ');
 const ep = (file, season, section, episode, name) => ({ file, season, section, episode, name });
 const eps = [ep(5, 2, '', 1, 'S02E01.mkv'), ep(1, 1, '', 1, 'S01E01.mkv'), ep(2, 1, '', 2, 'S01E02.mkv'), ep(9, 0, '1. О курсе', 0, 'a.mp4'), ep(8, 0, '', 0, 'intro.mp4')];
@@ -1006,6 +1052,16 @@ const versions = [
   { unit: 12, source: 't1', episodes: [ep(4, 1, '', 1, 'S01E01.mkv')] },
 ];
 const season = seasonOverview(versions);
+const merged = mergedEpisodes([
+  { source: 'Скачано', episodes: [{ ...ep(10, 1, '', 1, 'S01E01.mkv'), readiness: 'done', progress: { watched: true, fraction: 1 } }, { ...ep(11, 1, '', 2, 'S01E02.mkv'), readiness: 'done', progress: { watched: false, fraction: .25 } }] },
+  { source: 'Скачано', episodes: [{ ...ep(12, 1, '', 3, 'S01E03.mkv'), readiness: 'smooth' }] },
+  { source: 't1', episodes: [{ ...ep(13, 1, '', 2, 'S01E02-alt.mkv'), readiness: 'none' }] },
+]);
+const resumed = resumeEpisode([
+  { file: 's01e01', index: 0, hash: 'h1', progress: { watched: true, updatedAt: '2026-10-20T10:00:00Z' } },
+  { file: 's02e01', index: 0, hash: 'h2', progress: null },
+  { file: 's02e02', index: 1, hash: 'h2', progress: { watched: false, fraction: .4, updatedAt: '2026-10-20T11:00:00Z' } },
+]);
 const checks = [
   [tabs({ categories: [{ id: 1, name: 'Фильмы', count: 3 }, { id: 2, name: 'Сериалы', count: 2 }], unrecognized: 0 }), 'all:Все:5 1:Фильмы:3 2:Сериалы:2'],
   [tabs({ categories: [{ id: 1, name: 'Фильмы', count: 3 }], unrecognized: 2 }), 'all:Все:3 1:Фильмы:3 unrecognized:Не распознано:2'],
@@ -1017,6 +1073,9 @@ const checks = [
   [groups(eps), '=8 | Сезон 1=1,2 | Сезон 2=5 | 1. О курсе=9'],
   [groups([ep(3, 0, '', 0, 'film.mkv')]), '=3'],
   [season.map((g) => g.title + ':' + seasonAvailability(g)).join(' | '), 'Сезон 1:доступен частично · 2 из 2 | Сезон 2:доступен · 1 серия'],
+  [merged.map((e) => e.file).join(','), '10,11,12'],
+  [merged[1].progress.fraction, .25],
+  [resumed.ep.file + ':' + resumed.resumed, 's02e02:true'],
   [episodeLabel(ep(2, 1, '', 2, 'S01E02.mkv')), '1×02'],
   [episodeLabel(ep(2, 0, '', 7, 'Серия 7.mp4')), '7'],
   [episodeLabel(ep(2, 0, 'Глава', 0, 'Урок про слайсы.mp4')), 'Урок про слайсы'],
@@ -1114,7 +1173,7 @@ for (const [got, want] of checks) {
 	for file, needles := range map[string][]string{
 		"views/setup.js": {"p.search = { address:", "Разделы каталога", "encodeGroups(groups, sel)", "Папка загрузок",
 			"storage: { downloadsDir: dir }", "все ${ids.length}", "Promise.allSettled"},
-		"views/help.js": {"Как пользоваться Kinodom", "С пульта ТВ", "Плеер канала", "openModal"},
+		"views/help.js": {"Как пользоваться Kinodom", "Веб-версия", "Приложение", "С пульта ТВ", "Плеер канала", "selectHelpMode", "isClient", "openModal"},
 		"app.js":        {"openHelp", "help_outline", "'data-key': 'help'"},
 	} {
 		for _, needle := range needles {
@@ -2398,11 +2457,33 @@ const checks = [
 for (const [got, want] of checks) {
   if (JSON.stringify(got) !== JSON.stringify(want)) { console.error(JSON.stringify(got), '≠', JSON.stringify(want)); process.exitCode = 1; }
 }
+
 `
 	cmd := exec.Command(node, "--input-type=module", "--no-warnings", "-e", script)
 	cmd.Dir = "static"
 	if out, err := cmd.CombinedOutput(); err != nil {
 		t.Errorf("%v\n%s", err, out)
+	}
+}
+
+func TestPultDescriptionSearchLinks(t *testing.T) {
+	node := lookNode(t)
+	script := `
+const { descriptionSearchHref } = await import('./views/release.js');
+const got = descriptionSearchHref('Райан Гослинг');
+const want = '#/search?q=' + encodeURIComponent('Райан Гослинг') + '&where=description';
+if (got !== want) { console.error(got, '≠', want); process.exitCode = 1; }
+`
+	cmd := exec.Command(node, "--input-type=module", "--no-warnings", "-e", script)
+	cmd.Dir = "static"
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Errorf("%v\n%s", err, out)
+	}
+	src := scripts(t)["views/release.js"]
+	for _, want := range []string{"descriptionView", "Режисс", "В\\s+ролях", "where=description"} {
+		if !strings.Contains(src, want) {
+			t.Fatalf("release page misses description link marker %q", want)
+		}
 	}
 }
 
@@ -2711,8 +2792,8 @@ for (const [got, want] of checks) {
 	}
 }
 
-// Плеер фильмов в браузере (план 18Б): подписи и выбор дорожек по памяти раздачи, время, перемотка стрелками
-// (нажатия подряд — одна), адреса потока, разбор WebVTT кусками, ссылка внешнего плеера, где смотреть.
+// Плеер фильмов в браузере (план 18Б): подписи и выбор дорожек по памяти раздачи, время, перемотка стрелками,
+// адреса потока, разбор WebVTT кусками, громкость и навигация по сериям.
 func TestPultPlayerParts(t *testing.T) {
 	node := lookNode(t)
 	script := `
@@ -2875,17 +2956,26 @@ func TestPultWatchGoesToPlayer(t *testing.T) {
 		!strings.Contains(s, "externalWatch(f") || !strings.Contains(s, "externalLink({ direct") {
 		t.Error("release.js: нет отдельной кнопки внешнего плеера")
 	}
-	if s := src["views/player.js"]; !strings.Contains(s, "Во внешнем плеере") ||
-		!strings.Contains(s, "'data-key': 'pl-external'") {
-		t.Error("player.js: внешний запуск не доступен из основного экрана плеера")
+	if s := src["views/player.js"]; strings.Contains(s, "Во внешнем плеере") || strings.Contains(s, "pl-external") {
+		t.Error("player.js: кнопка внешнего плеера должна быть только на странице раздачи")
 	}
 	if s := src["views/library-card.js"]; !strings.Contains(s, "playExternalFile") || !strings.Contains(s, "external-watch") {
 		t.Error("library-card.js: нет отдельного внешнего запуска")
 	}
 	// Громкость — ползунком, не только мьют (просьба 2026-10-06).
 	if s := src["views/player.js"]; !strings.Contains(s, "'data-key': 'pl-vol'") ||
-		!strings.Contains(s, "'aria-label': 'Громкость'") || !strings.Contains(s, "active === vol") {
+		!strings.Contains(s, "'aria-label': 'Громкость'") || !strings.Contains(s, "active === vol") || !strings.Contains(s, "addEventListener('wheel'") ||
+		!strings.Contains(s, "P.volumeStep") || !strings.Contains(s, "const step = e.deltaY < 0 ? 0.1 : -0.1") {
 		t.Error("player.js: нет ползунка громкости")
+	}
+	if s := src["views/player.js"]; strings.Contains(s, "Сведения о потоке") || strings.Contains(s, "refreshDiagnostics") || strings.Contains(s, "pl-info") {
+		t.Error("player.js: диагностика потока должна быть удалена из веб-плеера")
+	}
+	if s := src["views/player.js"]; !strings.Contains(s, "!mp && !trans") || !strings.Contains(s, "if (seek || (!mp && !trans)) return") {
+		t.Error("player.js: перекодируемый поток не сохраняет прогресс")
+	}
+	if s := src["views/library-card.js"]; !strings.Contains(s, "data-key': 'edit-toggle'") || !strings.Contains(s, "editOpen") {
+		t.Error("library-card.js: действия правки не свернуты под одну кнопку")
 	}
 }
 
@@ -2938,7 +3028,7 @@ func TestPultPlayerSplitModesAndEpisodeControls(t *testing.T) {
 		"views/settings-app.js": {"moviePlaybackMode", "channelPlaybackMode", "Плеер фильмов", "Плеер каналов",
 			// Сервер на устройстве (полный порт): карточка видна, только если он есть в сборке.
 			"localServer", "Сервер на этом устройстве"},
-		"views/player.js": {"pl-prev", "pl-next", "ArrowUp", "ArrowDown", "pl-bar"},
+		"views/player.js": {"pl-prev", "pl-next", "pl-episodes", "playlist_play", "info.episodes", "ArrowUp", "ArrowDown", "pl-bar"},
 	}
 	for file, needles := range checks {
 		for _, needle := range needles {
@@ -2947,11 +3037,17 @@ func TestPultPlayerSplitModesAndEpisodeControls(t *testing.T) {
 			}
 		}
 	}
-	if !strings.Contains(src["views/player.js"], "refreshDiagnostics") || !strings.Contains(src["views/player.js"], "pl-info") {
-		t.Error("player.js: нет диагностики буфера")
+	if !strings.Contains(src["views/player.js"], "menu === kind") || !strings.Contains(src["views/player.js"], "menuBox.contains") ||
+		!strings.Contains(src["views/player.js"], "onMenuPointerDown") {
+		t.Error("player.js: меню дорожек не закрывается повторной кнопкой или кликом снаружи")
 	}
-	if !strings.Contains(src["views/player-parts.js"], "playbackStatusText") {
-		t.Error("player-parts.js: нет форматирования диагностики")
+	if s := src["views/player.js"]; strings.Contains(s, "fast_rewind") || strings.Contains(s, "fast_forward") ||
+		!strings.Contains(s, "openEpisodes()") || !strings.Contains(s, "selectEpisode(ep)") {
+		t.Error("player.js: кнопки серий должны быть рядом с Play/Pause, а список — отдельной кнопкой")
+	}
+	if s := src["views/player.js"]; !strings.Contains(s, "findIndex((ep) => ep && ep.src === info.src)") ||
+		!strings.Contains(s, "if (!info.prev && current > 0)") || !strings.Contains(s, "if (!info.next && current + 1 < info.episodes.length)") {
+		t.Error("player.js: соседние серии не восстанавливаются из списка episodes")
 	}
 	if !strings.Contains(src["views/downloads.js"], "queueButton") || !strings.Contains(src["views/downloads.js"], "resume' : 'pause") {
 		t.Error("downloads.js: нет управления паузой очереди")

@@ -42,6 +42,19 @@ class MovieInfoTest {
     }
 
     @Test
+    fun derivesNeighboursFromEpisodesWhenLinksAreMissing() {
+        val withEpisodes = json.replace(Regex(""""prev":\{[^}]*},\s*"""), "")
+            .replace(Regex(""""next":\{[^}]*}"""), """"next":null""")
+            .replace(
+                """"next":null""",
+                """"episodes":[{"src":"library/6","title":"Полдень — 1×00"},{"src":"library/7","title":"Полдень — 1×01"},{"src":"library/8","title":"Полдень — 1×02"}],"next":null""",
+            )
+        val i = MovieInfo.parse(withEpisodes)!!
+        assertEquals("library/6", i.prevSrc)
+        assertEquals("library/8", i.nextSrc)
+    }
+
+    @Test
     fun garbage() {
         assertNull(MovieInfo.parse("не json"))
         assertNull(MovieInfo.parse("""{"src":"library/7"}"""))

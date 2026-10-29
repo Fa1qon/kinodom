@@ -1,6 +1,6 @@
 // Плеер фильмов в браузере (спека цикла 18, раздел 5; план 18Б): поток сервера (MPEG-TS, mpegts.js) с ключевого
-// кадра, своя шкала на весь файл, озвучка и субтитры, точное место — серверу, следующая серия.
-import { h, icon, store, openPlayer } from '../ui.js';
+// кадра, своя шкала на весь файл, озвучка и субтитры, точное место — серверу, список серий.
+import { h, icon, store } from '../ui.js';
 import { get } from '../api.js';
 import { loadLib } from './preview.js';
 import * as P from './player-parts.js';
@@ -26,6 +26,7 @@ export function render(root, r, ctx) {
   let lastReport = 0;
   let lastActivity = Date.now();
   let menu = null; // открытое меню: 'audio' или 'subs'
+  let episodesOpen = false;
   let dragging = false;
   let nextTimer = 0;
   let parkTimer = 0;
@@ -38,7 +39,6 @@ export function render(root, r, ctx) {
   let pendingAt = -1; // поток с этого места запускается
   let played = false; // что-то посмотрели — можно сообщать место
   let lastTap = 0;
-  let diagTimer = 0;
 
   const video = h('video', { class: 'pl-video', playsinline: true });
   video.addEventListener('error', () => {
@@ -52,34 +52,30 @@ export function render(root, r, ctx) {
   const time = h('div', { class: 'pl-time' }, '0:00 / 0:00');
   const btn = (name, label, key, onclick) => h('button', { class: 'sq pl-btn', type: 'button', 'aria-label': label, title: label, 'data-key': key, onclick }, icon(name));
   const playBtn = btn('play_arrow', 'Смотреть', 'pl-play', () => togglePause());
-  const audioBtn = btn('audiotrack', 'Озвучка', 'pl-audio', () => openMenu('audio'));
-  const subsBtn = btn('subtitles', 'Субтитры', 'pl-subs', () => openMenu('subs'));
   const prevBtn = btn('skip_previous', 'Предыдущая серия', 'pl-prev', () => goPrev());
   const nextBtn = btn('skip_next', 'Следующая серия', 'pl-next', () => goNext());
+  const audioBtn = btn('audiotrack', 'Озвучка', 'pl-audio', () => openMenu('audio'));
+  const subsBtn = btn('subtitles', 'Субтитры', 'pl-subs', () => openMenu('subs'));
+  const episodeBtn = btn('playlist_play', 'Список серий', 'pl-episodes', () => openEpisodes());
   const muteBtn = btn('volume_up', 'Звук', 'pl-mute', () => toggleMute());
   // Громкость — ползунком (просьба 2026-10-06): не только мьют; на ТВ ←/→ у ползунка меняют её.
   const vol = h('input', { class: 'pl-vol', type: 'range', min: '0', max: '1', step: '0.05',
     'aria-label': 'Громкость', 'data-key': 'pl-vol', oninput: () => setVolume(Number(vol.value)) });
   const fullBtn = btn('fullscreen', 'Во весь экран', 'pl-full', () => toggleFull());
-  const externalBtn = h('button', { class: 'btn pl-external', type: 'button', 'data-key': 'pl-external', hidden: true,
-    onclick: openExternal }, icon('open_in_new'), 'Во внешнем плеере');
-  const diagBtn = btn('info', 'Сведения о потоке', 'pl-info', () => { diagBox.hidden = !diagBox.hidden; });
-  // Кнопки «назад/вперёд» — соседние серии, когда они есть; иначе — прокрутка (просьба 2026-10-08).
-  const back10Btn = btn('fast_rewind', 'Назад', 'pl-back10', () => backStep());
-  const fwd30Btn = btn('fast_forward', 'Вперёд', 'pl-fwd30', () => fwdStep());
+  // Предыдущая/следующая серия — рядом с Play/Pause; список остаётся отдельным выбором справа.
   const backBtn = h('button', { class: 'btn pl-back', type: 'button', 'data-key': 'pl-back', onclick: () => leave() }, icon('arrow_back'), 'Назад');
   const menuBox = h('div', { class: 'pl-menu', role: 'menu', hidden: true });
+  const episodeBox = h('div', { class: 'pl-menu pl-episodes-box', role: 'listbox', hidden: true });
   const nextBox = h('div', { class: 'pl-box', hidden: true });
   const msg = h('div', { class: 'pl-box', hidden: true });
-  const diagBox = h('div', { class: 'pl-diagnostics', role: 'status', hidden: true });
   const ui = h('div', { class: 'pl-ui' },
-    h('div', { class: 'pl-top' }, backBtn, title, h('div', { class: 'grow' }), externalBtn),
+    h('div', { class: 'pl-top' }, backBtn, title, h('div', { class: 'grow' })),
     h('div', { class: 'pl-bottom' }, bar,
-      h('div', { class: 'pl-row' }, prevBtn, playBtn, back10Btn, fwd30Btn,
-        time, h('div', { class: 'grow' }), diagBtn, audioBtn, subsBtn, nextBtn, muteBtn, vol, fullBtn)));
-  const wrap = h('div', { class: 'player' }, video, load, ui, menuBox, nextBox, msg, diagBox);
+      h('div', { class: 'pl-row' }, prevBtn, playBtn, nextBtn,
+        time, h('div', { class: 'grow' }), audioBtn, subsBtn, episodeBtn, muteBtn, vol, fullBtn)));
+  const wrap = h('div', { class: 'player' }, video, load, ui, menuBox, episodeBox, nextBox, msg);
   root.append(wrap);
-  audioBtn.hidden = subsBtn.hidden = prevBtn.hidden = nextBtn.hidden = true;
+  audioBtn.hidden = subsBtn.hidden = episodeBtn.hidden = prevBtn.hidden = nextBtn.hidden = true;
 
   const vol0 = Number(store.get('player.volume'));
   if (store.get('player.volume') !== null && vol0 >= 0 && vol0 <= 1) video.volume = vol0;
@@ -91,42 +87,41 @@ export function render(root, r, ctx) {
   const pos = () => P.positionNow({ parkedAt, pendingAt, k, currentTime: video.currentTime });
 
   async function begin() {
-    if (!src) return fail('Такого файла нет', false);
+    if (!src) return fail('Такого файла нет');
     try {
       info = await get(`/play/${src}` + (fromStart ? '?fromStart=1' : ''));
     } catch (e) {
-      return fail(e.message, false);
+      return fail(e.message);
     }
     if (!alive) return;
-    title.textContent = info.title;
-    externalBtn.hidden = false;
-    diagBtn.hidden = !info.hash || String(info.hash).startsWith('lib-');
-    if (!diagBtn.hidden) {
-      refreshDiagnostics();
-      clearInterval(diagTimer);
-      diagTimer = setInterval(refreshDiagnostics, 2000);
+    // Некоторые старые серверы и ответы для раздельно подготовленных серий
+    // отдавали episodes, но не заполняли prev/next. Список уже содержит
+    // текущую серию, поэтому соседей можно безопасно восстановить из него.
+    if (Array.isArray(info.episodes)) {
+      const current = info.episodes.findIndex((ep) => ep && ep.src === info.src);
+      if (current >= 0) {
+        if (!info.prev && current > 0) info.prev = info.episodes[current - 1];
+        if (!info.next && current + 1 < info.episodes.length) info.next = info.episodes[current + 1];
+      }
     }
+    title.textContent = info.title;
     bar.max = String(Math.floor(dur()));
     audioBtn.hidden = info.audio.length < 2;
     subsBtn.hidden = P.textSubs(info.subs).length === 0;
+    episodeBtn.hidden = !Array.isArray(info.episodes) || info.episodes.length < 2;
     prevBtn.hidden = !info.prev;
     nextBtn.hidden = !info.next;
-    // Кнопки «назад/вперёд» теперь серии — заголовок по тому, что они делают (просьба 2026-10-08).
-    back10Btn.title = info.prev ? 'Предыдущая серия' : 'Назад на 10 с';
-    back10Btn.setAttribute('aria-label', back10Btn.title);
-    fwd30Btn.title = info.next ? 'Следующая серия' : 'Вперёд на 30 с';
-    fwd30Btn.setAttribute('aria-label', fwd30Btn.title);
     const mse = window.MediaSource && MediaSource.isTypeSupported.bind(MediaSource);
     trans = !P.canShow(info.video.mime, mse);
-    if (trans && !info.trans) return fail('Браузер не покажет этот файл', true);
+    if (trans && !info.trans) return fail('Браузер не покажет этот файл');
     if (!trans) {
       try {
         mpegts = await loadLib('vendor/mpegts.js', 'mpegts');
       } catch (e) {
-        return fail(e.message, true);
+        return fail(e.message);
       }
       if (!alive) return;
-      if (!mpegts.isSupported()) return fail('Браузер не покажет этот файл', true);
+      if (!mpegts.isSupported()) return fail('Браузер не покажет этот файл');
     }
     audio = P.pickTrack(info.audio, P.readMem(store.get(P.memKey(info.hash, 'audio'))));
     sub = P.pickSub(info.subs, P.readMem(store.get(P.memKey(info.hash, 'subs'))));
@@ -149,7 +144,7 @@ export function render(root, r, ctx) {
       try {
         t = (await get(`/play/${src}/keyframe?t=${Math.floor(at)}`)).t;
       } catch (e) {
-        if (alive && n === starting) fail(e.message, true);
+        if (alive && n === starting) fail(e.message);
         return;
       }
     }
@@ -227,17 +222,6 @@ export function render(root, r, ctx) {
     }
   }
 
-  async function refreshDiagnostics() {
-    if (!alive || !info || diagBtn.hidden) return;
-    try {
-      const d = await get(`/torrents/${info.hash}/files/${info.index}`);
-      if (!alive) return;
-      diagBox.replaceChildren(h('span', { class: 'muted small' }, P.playbackStatusText(d)));
-    } catch {
-      if (alive) diagBox.replaceChildren(h('span', { class: 'muted small' }, 'Сведения о потоке пока недоступны'));
-    }
-  }
-
   function clearCues() {
     for (const c of Array.from(track.cues || [])) track.removeCue(c);
   }
@@ -271,7 +255,7 @@ export function render(root, r, ctx) {
 
   function onError(data) {
     report(); // место — до перезапуска или сообщения (ревью 18Б, I4)
-    if (data && data.code === 429) return fail('Сейчас смотрят на трёх устройствах — закройте один плеер', true);
+    if (data && data.code === 429) return fail('Сейчас смотрят на трёх устройствах — закройте один плеер');
     if (retryTimer) return;
     if (retryCount < P.MAX_RETRIES) {
       retryCount += 1;
@@ -282,33 +266,18 @@ export function render(root, r, ctx) {
       }, P.retryDelay(retryCount));
       return;
     }
-    fail('Поток оборвался', true);
+    fail('Поток оборвался');
   }
 
-  function fail(text, external) {
+  function fail(text) {
     clearTimeout(retryTimer);
     retryTimer = 0;
     stop();
     load.hidden = true;
     msg.replaceChildren(h('div', { class: 'pl-msg-text' }, text), h('div', { class: 'row gap10' },
-      external && info ? h('button', { class: 'btn inv', type: 'button', 'data-key': 'pl-external', onclick: openExternal }, icon('open_in_new'), 'Открыть во внешнем плеере') : null,
       h('button', { class: 'btn', type: 'button', 'data-key': 'pl-leave', onclick: () => leave() }, icon('arrow_back'), 'Назад')));
     msg.hidden = false;
     msg.querySelector('button').focus({ preventScroll: true });
-  }
-
-  // openExternal — внешний плеер с того места, где оборвалось: место — серверу, ссылки — свежие (в первых сведениях — место
-  // открытия страницы, ревью 18Б, I4).
-  async function openExternal() {
-    let at = info;
-    try {
-      await report();
-      at = await get(`/play/${src}`);
-    } catch {
-      // сервер не ответил — ссылки первых сведений
-    }
-    if (ctx.local && at.launchUrl) openPlayer(at.launchUrl, at.m3uUrl, ctx.status && ctx.status.protocol);
-    else location.href = P.externalLink(at, navigator.userAgent);
   }
 
   function showTime(t) {
@@ -337,7 +306,10 @@ export function render(root, r, ctx) {
 
   // report — место серверу (спека 18, раздел 4).
   function report(final = false) {
-    if (!info || !(dur() > 0) || !P.shouldReport(played, final) || (!mp && parkedAt < 0 && pendingAt < 0 && !final)) return Promise.resolve();
+    // В режиме перекодирования mp=null, но обычный <video> всё равно сообщает точное место.
+    // Раньше условие ниже отбрасывало все отчёты для AVI/прочих форматов, и медиатека не
+    // запоминала ни серию, ни тайминг.
+    if (!info || !(dur() > 0) || !P.shouldReport(played, final) || (!mp && !trans && parkedAt < 0 && pendingAt < 0 && !final)) return Promise.resolve();
     lastReport = Date.now();
     const body = P.reportBody(final ? dur() : pos(), dur());
     return fetch(`/api/v1/history/${encodeURIComponent(info.hash)}/${info.index}`, {
@@ -378,6 +350,11 @@ export function render(root, r, ctx) {
 
   function openMenu(kind) {
     if (!info) return;
+    closeEpisodes();
+    if (menu === kind) {
+      closeMenu();
+      return;
+    }
     const subs = P.textSubs(info.subs);
     const labels = P.trackLabels(kind === 'audio' ? info.audio : subs);
     const items = kind === 'audio'
@@ -397,6 +374,47 @@ export function render(root, r, ctx) {
   function closeMenu() {
     menu = null;
     menuBox.hidden = true;
+  }
+
+  function openEpisodes() {
+    if (!info || !Array.isArray(info.episodes) || info.episodes.length < 2) return;
+    if (episodesOpen) {
+      closeEpisodes();
+      return;
+    }
+    closeMenu();
+    episodesOpen = true;
+    episodeBox.replaceChildren(
+      h('div', { class: 'pl-menu-h' }, 'Серии'),
+      ...info.episodes.map((ep, i) => {
+        const current = ep.src === info.src;
+        return h('button', { class: current ? 'pl-item on' : 'pl-item', type: 'button', role: 'option',
+          'aria-selected': String(current), 'data-key': `pl-episode-${i}`, onclick: () => selectEpisode(ep) },
+        current ? icon('check', 18) : h('span', { class: 'pl-item-ic' }), ep.title);
+      }),
+    );
+    episodeBox.hidden = false;
+    (episodeBox.querySelector('.on') || episodeBox.querySelector('button')).focus({ preventScroll: true });
+    showUI();
+  }
+
+  function closeEpisodes() {
+    episodesOpen = false;
+    episodeBox.hidden = true;
+  }
+
+  function selectEpisode(ep) {
+    closeEpisodes();
+    if (!info || !ep || ep.src === info.src) return;
+    report();
+    location.replace(P.playHash(ep.src, false));
+  }
+
+  function onMenuPointerDown(e) {
+    if (menu && !menuBox.hidden && (menuBox.contains(e.target) || audioBtn.contains(e.target) || subsBtn.contains(e.target))) return;
+    if (episodesOpen && !episodeBox.hidden && (episodeBox.contains(e.target) || episodeBtn.contains(e.target) || audioBtn.contains(e.target) || subsBtn.contains(e.target))) return;
+    if (menu) closeMenu();
+    if (episodesOpen) closeEpisodes();
   }
 
   function setAudio(t) {
@@ -446,15 +464,11 @@ export function render(root, r, ctx) {
     leave();
   }
 
-  // backStep/fwdStep — серии, если они есть, иначе прокрутка на 10/30 с.
-  function backStep() {
-    if (info && info.prev) { goPrev(); return; }
-    jump(-10);
-  }
-
-  function fwdStep() {
-    if (info && info.next) { goNext(); return; }
-    jump(30);
+  function goNext() {
+    clearInterval(nextTimer);
+    if (!info || !info.next) return;
+    report();
+    location.replace(P.playHash(info.next.src, false));
   }
 
   function goPrev() {
@@ -464,19 +478,12 @@ export function render(root, r, ctx) {
     location.replace(P.playHash(info.prev.src, false));
   }
 
-  function goNext() {
-    clearInterval(nextTimer);
-    if (!info || !info.next) return;
-    report();
-    location.replace(P.playHash(info.next.src, false));
-  }
-
   function leave() {
     if (ctx.prev) history.back();
     else location.replace(P.backHash(src));
   }
 
-  function controls() { return [prevBtn, playBtn, back10Btn, fwd30Btn, nextBtn, audioBtn, subsBtn, muteBtn, vol, fullBtn].filter(x => x && !x.hidden && !x.disabled); }
+  function controls() { return [prevBtn, playBtn, nextBtn, audioBtn, subsBtn, episodeBtn, muteBtn, vol, fullBtn].filter(x => x && !x.hidden && !x.disabled); }
 
   function focusControl(delta) {
     const xs = controls();
@@ -523,10 +530,11 @@ export function render(root, r, ctx) {
       e.preventDefault();
       e.stopPropagation();
     };
-    if (!msg.hidden || !nextBox.hidden) {
+    if (!msg.hidden || !nextBox.hidden || !episodeBox.hidden) {
       if (e.key === 'Escape') {
         take();
         if (!nextBox.hidden) cancelNext();
+        else if (!episodeBox.hidden) closeEpisodes();
         else leave();
       }
       return; // стрелки и OK — по кнопкам окна
@@ -565,13 +573,13 @@ export function render(root, r, ctx) {
   });
   video.addEventListener('pause', () => {
     syncPlayBtn();
-    if (!alive || !mp) return; // пауза от stop() при уходе или перезапуске — не пауза человека
+    if (!alive || (!mp && !trans)) return; // пауза от stop() при уходе или перезапуске — не пауза человека
     report();
     showUI();
     armPark();
   });
   video.addEventListener('timeupdate', () => {
-    if (seek || !mp) return;
+    if (seek || (!mp && !trans)) return;
     if (video.currentTime > lastVideoTime) lastProgress = Date.now();
     lastVideoTime = video.currentTime;
     if (video.currentTime > 0.5) played = true;
@@ -607,6 +615,19 @@ export function render(root, r, ctx) {
   wrap.addEventListener('mousemove', () => {
     if (!P.fromTouch(Date.now(), lastTouch)) showUI(); // mousemove вслед за касанием сразу показывал кнопки (ревью 18Б, I2)
   });
+  wrap.addEventListener('wheel', (e) => {
+    if (!info || !Number.isFinite(e.deltaY) || e.deltaY === 0) return;
+    // Над прокручиваемым меню (список серий, дорожки) колесо листает его, а не меняет громкость.
+    if (e.target instanceof Element && e.target.closest('.pl-menu')) return;
+    e.preventDefault();
+    showUI();
+    // volumeStep округляет до десятых; шаг 0.05 после округления мог превращаться в то же
+    // значение (например, 0.5 - 0.05 снова давал 0.5), поэтому колесо должно менять на 10%.
+    const step = e.deltaY < 0 ? 0.1 : -0.1;
+    const next = P.volumeStep(video.volume, step);
+    if (video.muted && step > 0) video.muted = false;
+    setVolume(next);
+  }, { passive: false });
   bar.addEventListener('input', () => {
     dragging = true;
     time.textContent = `${P.fmtTime(Number(bar.value))} / ${P.fmtTime(dur())}`;
@@ -617,12 +638,13 @@ export function render(root, r, ctx) {
     seekTo(Number(bar.value));
   });
   window.addEventListener('keydown', onKey, true);
+  document.addEventListener('pointerdown', onMenuPointerDown);
   window.addEventListener('pagehide', onHide);
   document.addEventListener('fullscreenchange', onFull);
   const idle = setInterval(() => {
     const now = Date.now();
-    if (P.hideDue(!video.paused, lastActivity, now, !!menu || dragging)) wrap.classList.add('idle');
-    if (mp && msg.hidden && nextBox.hidden && P.loaderStalled(lastStat, now, !video.paused,
+    if (P.hideDue(!video.paused, lastActivity, now, !!menu || episodesOpen || dragging)) wrap.classList.add('idle');
+    if (mp && msg.hidden && nextBox.hidden && episodeBox.hidden && P.loaderStalled(lastStat, now, !video.paused,
       P.bufferedAhead(video.buffered, video.currentTime), lastProgress)) start(pos());
   }, 1000);
 
@@ -633,12 +655,12 @@ export function render(root, r, ctx) {
     alive = false;
     stop();
     clearInterval(idle);
-    clearInterval(diagTimer);
     clearInterval(nextTimer);
     clearTimeout(seekTimer);
     clearTimeout(tapTimer);
     clearTimeout(retryTimer);
     window.removeEventListener('keydown', onKey, true);
+    document.removeEventListener('pointerdown', onMenuPointerDown);
     window.removeEventListener('pagehide', onHide);
     document.removeEventListener('fullscreenchange', onFull);
     if (document.fullscreenElement) document.exitFullscreen().catch(() => {});

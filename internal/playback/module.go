@@ -28,6 +28,12 @@ type Ref struct {
 	File  int64
 }
 
+// Choice — файл, который можно выбрать из списка серий в веб-плеере.
+type Choice struct {
+	Ref   Ref
+	Title string
+}
+
 // Src — адрес файла в маршрутах: torrent/<hash>/<index> или library/<file>.
 func (r Ref) Src() string {
 	if r.Kind == "torrent" {
@@ -51,6 +57,7 @@ type Source struct {
 
 	Next      *Ref
 	NextTitle string
+	Playlist  []Choice // серии произведения, включая текущую; для сериалов — все сезоны
 
 	Complete bool // файл уже целиком на диске — поток плееру без темпа загрузки
 }
@@ -284,21 +291,22 @@ type nextJSON struct {
 }
 
 type infoResponse struct {
-	Src         string    `json:"src"`
-	Title       string    `json:"title"`
-	Hash        string    `json:"hash"`
-	Index       int       `json:"index"`
-	DurationSec float64   `json:"durationSec"`
-	StartSec    int       `json:"startSec"`
-	Direct      string    `json:"direct"`
-	M3UURL      string    `json:"m3uUrl"`
-	LaunchURL   *string   `json:"launchUrl"`
-	Video       Video     `json:"video"`
-	Audio       []Track   `json:"audio"`
-	Subs        []Sub     `json:"subs"`
-	Trans       bool      `json:"trans"` // сервер умеет перекод видео: браузер может открыть stream.webm
-	Prev        *nextJSON `json:"prev"`
-	Next        *nextJSON `json:"next"`
+	Src         string     `json:"src"`
+	Title       string     `json:"title"`
+	Hash        string     `json:"hash"`
+	Index       int        `json:"index"`
+	DurationSec float64    `json:"durationSec"`
+	StartSec    int        `json:"startSec"`
+	Direct      string     `json:"direct"`
+	M3UURL      string     `json:"m3uUrl"`
+	LaunchURL   *string    `json:"launchUrl"`
+	Video       Video      `json:"video"`
+	Audio       []Track    `json:"audio"`
+	Subs        []Sub      `json:"subs"`
+	Trans       bool       `json:"trans"` // сервер умеет перекод видео: браузер может открыть stream.webm
+	Prev        *nextJSON  `json:"prev"`
+	Next        *nextJSON  `json:"next"`
+	Episodes    []nextJSON `json:"episodes,omitempty"`
 }
 
 func (m *Module) info(w http.ResponseWriter, r *http.Request, ref Ref) {
@@ -326,6 +334,12 @@ func (m *Module) info(w http.ResponseWriter, r *http.Request, ref Ref) {
 
 		out.Next = &nextJSON{Src: s.Next.Src(), Title: s.NextTitle}
 
+	}
+	if len(s.Playlist) > 1 {
+		out.Episodes = make([]nextJSON, 0, len(s.Playlist))
+		for _, item := range s.Playlist {
+			out.Episodes = append(out.Episodes, nextJSON{Src: item.Ref.Src(), Title: item.Title})
+		}
 	}
 	httpx.WriteJSON(w, http.StatusOK, out)
 }

@@ -28,6 +28,49 @@ func waitSearch(t *testing.T, c *Catalog, q string) SearchState {
 	}
 }
 
+func TestDescriptionSearch(t *testing.T) {
+	t1 := newFake("t1")
+	c, _ := newCatalog(t, openDB(t), nil, t1)
+	r := rel("t1", "42", "Жизнь Райана (2026) WEB-DL", 12, 1, "hash-description")
+	r2 := rel("t2", "43", "Жизнь Райана (2026) BDRip", 30, 2, "hash-description-2")
+	ids, err := c.st.saveFound(ctx, []source.Release{r, r2}, c.now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := c.st.saveDescription(ctx, ids[0], "Режиссёр: Дэмьен Шазелл\nВ ролях: Райан Гослинг, Эмма Стоун"); err != nil {
+		t.Fatal(err)
+	}
+	if err := c.st.saveDescription(ctx, ids[1], "Режиссёр: Дэмьен Шазелл\nВ ролях: Райан Гослинг, Джон Гослинг"); err != nil {
+		t.Fatal(err)
+	}
+	st, err := c.DescriptionSearch(ctx, "  райан   гослинг ")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !st.Complete || len(st.Results) != 1 || st.Results[0].ID != ids[1] || st.Results[0].Variants != 2 {
+		t.Fatalf("поиск по описанию вернул %+v", st)
+	}
+	st, err = c.DescriptionSearch(ctx, "неизвестный актёр")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(st.Results) != 0 {
+		t.Fatalf("ложное совпадение: %+v", st.Results)
+	}
+}
+
+func TestDescriptionSearchMatchesWordsRegardlessOfOrder(t *testing.T) {
+	if !descriptionContainsWords("В ролях: Гослинг, Райан; Эмма Стоун", descriptionWords("Райан Гослинг")) {
+		t.Fatal("имя с обратным порядком и пунктуацией не найдено")
+	}
+	if !descriptionContainsWords("Ryan Gosling", descriptionWords("Ryan Gosling")) {
+		t.Fatal("латинское написание не найдено")
+	}
+	if descriptionContainsWords("Райан Гослинг", descriptionWords("Райан Питт")) {
+		t.Fatal("ложное совпадение по одному слову")
+	}
+}
+
 // Поиск сразу отвечает тем, что есть: t1 уже ответил, t2 ещё ищет. Потом результаты
 // объединяются, одинаковый infohash схлопывается, всё — по раздающим (спека, раздел 7).
 func TestSearchShowsPartialResultsThenAll(t *testing.T) {

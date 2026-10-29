@@ -3,7 +3,7 @@
 // правки из домашней сети — «Это другой фильм», «Разметить вручную», «Перенести в категорию».
 import { h, fill, icon, keepFocus, rating, size, openPlayer, poll, ready, confirmDialog, store } from '../ui.js';
 import { get, put, del } from '../api.js';
-import { whereStopped, resumeIndex } from './history.js';
+import { whereStopped } from './history.js';
 import { libPoster, continueLabel } from './library-parts.js';
 import { skippedText } from './downloads.js';
 import { watchTarget, playHash } from './player-parts.js';
@@ -92,6 +92,50 @@ export function seasonAvailability(g) {
   return `есть раздача · ${g.total} ${g.total === 1 ? 'серия' : 'серий'}`;
 }
 
+// mergedEpisodes — объединяет серии всех версий карточки. Это важно для скачанных сериалов,
+// где каждый сезон или даже отдельная серия часто лежит отдельной раздачей.
+export function mergedEpisodes(versions) {
+  const best = new Map();
+  const score = (v, e) => {
+    const p = e.progress;
+    const progress = p && p.watched ? 40 : p && p.fraction > 0 ? 20 : 0;
+    const ready = { done: 6, smooth: 4, wait: 2, none: 0 }[e.readiness] || 0;
+    return progress + ready + (v.source === 'Скачано' ? 3 : 0);
+  };
+  const keyOf = (e) => e.episode > 0
+    ? `e:${e.season || 0}:${e.episode}`
+    : `f:${e.season || 0}:${e.section || ''}:${String(e.name || e.file).toLowerCase()}`;
+  for (const v of versions || []) {
+    for (const e of v.episodes || []) {
+      const item = { ...e, downloaded: v.source === 'Скачано' };
+      const key = keyOf(item);
+      const old = best.get(key);
+      if (!old || score(v, e) > old.score) best.set(key, { item, score: score(v, e) });
+    }
+  }
+  return [...best.values()].map((x) => x.item).sort((a, b) =>
+    (a.season - b.season) || (a.episode - b.episode) || String(a.name).localeCompare(String(b.name), 'ru', { numeric: true }));
+}
+
+// resumeEpisode выбирает продолжение по прогрессу самой серии, а не по одному только index.
+// Индексы обычно начинаются с нуля в каждой раздаче, поэтому для объединённых сезонов карта
+// «index → progress» могла принять прогресс S01E01 за прогресс S02E01.
+export function resumeEpisode(episodes) {
+  if (!episodes.length) return { ep: null, resumed: false };
+  const recent = episodes.filter((e) => e.progress).sort((a, b) =>
+    new Date(b.progress.updatedAt || 0) - new Date(a.progress.updatedAt || 0));
+  const started = recent.find((e) => !e.progress.watched && e.progress.fraction > 0);
+  if (started) return { ep: started, resumed: true };
+  const lastWatched = recent.find((e) => e.progress.watched);
+  if (lastWatched) {
+    const from = episodes.indexOf(lastWatched);
+    for (let i = from + 1; i < episodes.length; i++) {
+      if (!episodes[i].progress || !episodes[i].progress.watched) return { ep: episodes[i], resumed: true };
+    }
+  }
+  return { ep: episodes[0], resumed: false };
+}
+
 // episodeLabel — «1×02», «7» или имя файла без расширения.
 export function episodeLabel(e) {
   if (e.episode > 0) return e.season > 0 ? `${e.season}×${String(e.episode).padStart(2, '0')}` : String(e.episode);
@@ -163,6 +207,7 @@ export function render(root, r, ctx) {
   let group = null; // выбранный сезон или раздел; null — где продолжать
   let descOpen = false;
   let cats = null;
+  let editOpen = false;
   let editing = ''; // открытая правка: link, manual, move
   const link = h('input', { class: 'input', name: 'kinopoisk', placeholder: 'Ссылка на Кинопоиск', 'aria-label': 'Ссылка на Кинопоиск', 'data-key': 'kp-link' });
   const title = h('input', { class: 'input', name: 'title', placeholder: 'Название', 'aria-label': 'Название', 'data-key': 'manual-title' });
@@ -233,12 +278,13 @@ export function render(root, r, ctx) {
           }
         });
       }
-      fill(eps, v.episodes.length > 1 ? episodes(v) : null);
+      const allEpisodes = mergedEpisodes(c.versions);
+      fill(eps, allEpisodes.length > 1 ? episodes(allEpisodes) : null);
       // Панель под постером (на широком экране — справа): первым «Смотреть», как «Скачать» у раздачи (план 16Б:
       // на ТВ «вниз-вниз-вниз», а потом «вправо» к кнопке было неудобно).
-      const blocks = { watch: () => [watchBlock(v)], empty: () => [watchBlock(v)], error: () => [h('p', { class: 'error' }, failed || error)],
+      const blocks = { watch: () => [watchBlock(allEpisodes)], empty: () => [watchBlock(allEpisodes)], error: () => [h('p', { class: 'error' }, failed || error)],
         versions, edits: () => edits(v) };
-      fill(side, ...panelOrder(v.episodes.length > 0, !!(error || failed)).flatMap((b) => blocks[b]()));
+      fill(side, ...panelOrder(allEpisodes.length > 0, !!(error || failed)).flatMap((b) => blocks[b]()));
     });
     // Пришли из «Медиатеки» — фокуса на экране нет: он встаёт на «Смотреть» (OK — и пошло).
     if (!focusPlaced) {
@@ -275,17 +321,15 @@ export function render(root, r, ctx) {
 
   // resumeEp — серия, которую продолжать на этом устройстве (правило 8c), иначе первая.
   function resumeEp(v) {
-    const progress = v.episodes.map((e) => e.progress).filter(Boolean);
-    const i = resumeIndex(v.episodes.map((e) => e.index), progress);
-    return { ep: v.episodes.find((e) => e.index === i) || v.episodes[0], resumed: i !== null };
+    return resumeEpisode(v.episodes);
   }
 
-  function watchBlock(v) {
-    if (!v.episodes.length) return h('p', { class: 'muted' }, 'Файлов нет');
-    const { ep, resumed } = resumeEp(v);
+  function watchBlock(episodeList) {
+    if (!episodeList.length) return h('p', { class: 'muted' }, 'Файлов нет');
+    const { ep, resumed } = resumeEp({ episodes: episodeList });
     const p = ep.progress;
     const at = p && !p.watched ? p.positionSec : 0;
-    const film = v.episodes.length === 1;
+    const film = episodeList.length === 1;
     const label = film ? (at > 0 ? `Продолжить ${continueLabel({ positionSec: at })}` : 'Смотреть')
       : resumed ? `Продолжить: ${continueLabel({ season: ep.season, episode: ep.episode, positionSec: at })}` : `Смотреть: ${episodeLabel(ep)}`;
     return h('div', { class: 'row wrap gap10' },
@@ -297,9 +341,9 @@ export function render(root, r, ctx) {
         icon('history'), 'С начала') : null);
   }
 
-  function episodes(v) {
-    const groups = seasonsOf(v.episodes);
-    const { ep } = resumeEp(v);
+  function episodes(episodeList) {
+    const groups = seasonsOf(episodeList);
+    const { ep } = resumeEp({ episodes: episodeList });
     const cur = groups.find((g) => g.key === group) || groups.find((g) => g.items.includes(ep)) || groups[0];
     const tabs = groups.length > 1 ? h('div', { class: 'filters', role: 'tablist', 'aria-label': 'Сезоны' }, groups.map((g) => h('a', {
       class: g === cur ? 'fil on' : 'fil', href: '#', role: 'tab', 'aria-selected': String(g === cur), 'data-key': `season-${g.key || 'none'}`,
@@ -308,11 +352,10 @@ export function render(root, r, ctx) {
         group = g.key;
         draw();
       } }, g.title || 'Другое'))) : null;
-    const downloaded = v.source === 'Скачано';
     return h('section', { class: 'episodes', 'aria-label': 'Серии' }, h('h2', null, 'Серии'), tabs,
       cur.items.map((e) => {
         const p = e.progress;
-        const rd = downloaded ? ready[e.readiness || 'none'] || ready.none : ready.done;
+        const rd = e.downloaded ? ready[e.readiness || 'none'] || ready.none : ready.done;
         const seen = !!(p && p.watched);
         return h('div', { class: 'ep' },
           h('span', { class: 'num' }, episodeLabel(e).length <= 5 ? episodeLabel(e) : ''),
@@ -320,7 +363,7 @@ export function render(root, r, ctx) {
             h('span', { class: 'ep-title' }, seen ? icon('check', 18, 'просмотрено') : null, h('span', { class: 'ep-name', title: e.name }, episodeLabel(e).length > 5 ? episodeLabel(e) : e.name)),
             h('span', { class: 'muted small' }, [size(e.size), whereStopped(p)].filter(Boolean).join(' · ')),
             p && !p.watched && p.fraction > 0 ? h('div', { class: 'track pos-track' }, h('div', { style: { width: `${Math.round(p.fraction * 100)}%`, background: 'var(--text)' } })) : null),
-          h('button', { class: 'btn', type: 'button', style: downloaded && rd.color ? { borderColor: rd.color, color: rd.color } : null,
+          h('button', { class: 'btn', type: 'button', style: e.downloaded && rd.color ? { borderColor: rd.color, color: rd.color } : null,
             'data-key': `watch-${e.file}`, 'aria-label': `Смотреть ${episodeLabel(e)}`, onclick: () => act(() => playFile(e.file, ctx, false, true)) }, icon('play_arrow'), 'Смотреть'),
           ctx.canEdit ? h('button', { class: 'sq', type: 'button', 'data-key': `seen-${e.file}`, 'aria-pressed': String(seen),
             'aria-label': seen ? 'Не просмотрено' : 'Отметить просмотренной', onclick: () => act(() => put(`/history/${e.hash}/${e.index}`, { watched: !seen })) },
@@ -358,7 +401,14 @@ export function render(root, r, ctx) {
         }
         draw();
       } }, icon(ic), text);
-    const out = [h('div', { class: 'h' }, 'Правка'), toggle('link', 'Это другой фильм', 'swap_horiz')];
+    const head = h('button', { class: editOpen ? 'btn on' : 'btn', type: 'button', 'data-key': 'edit-toggle', 'aria-expanded': String(editOpen),
+      onclick: () => {
+        editOpen = !editOpen;
+        if (!editOpen) editing = '';
+        draw();
+      } }, icon('tune'), 'Правка');
+    if (!editOpen) return [head];
+    const out = [head, toggle('link', 'Это другой фильм', 'swap_horiz')];
     if (editing === 'link') {
       out.push(h('form', { class: 'row gap10', onsubmit: (e) => {
         e.preventDefault();

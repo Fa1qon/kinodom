@@ -16,17 +16,18 @@ func TestNewReleasesSeparatesKindsAndKeepsLatestWork(t *testing.T) {
 		rel("t1", "3", "Новый сериал [S01] (2026) WEB-DL 1080p", 30, 3<<30, "series-new"),
 		rel("t1", "4", "Старый фильм (2025) WEB-DL 1080p", 40, 4<<30, "film-old"),
 		rel("t1", "5", "Наш сериал [S01] (2026) WEB-DL 1080p", 50, 5<<30, "series-our"),
+		rel("t1", "6", "Наш сериал без номера (2026) WEB-DL 1080p", 45, 6<<30, "series-our-no-marker"),
 	}
 	c, _ := newCatalog(t, openDB(t), nil, t1)
 	refresh(t, c, false)
 
 	now := time.Date(2026, 10, 15, 12, 0, 0, 0, time.UTC)
 	if _, err := c.st.db.W.Exec(`UPDATE releases SET added_at = CASE topic_id
-		WHEN '1' THEN ? WHEN '2' THEN ? WHEN '3' THEN ? WHEN '4' THEN ? WHEN '5' THEN ? ELSE added_at END`,
-		now.Add(-time.Hour).UnixMilli(), now.Add(-2*time.Hour).UnixMilli(), now.Add(-30*time.Minute).UnixMilli(), now.Add(-24*time.Hour).UnixMilli(), now.Add(-45*time.Minute).UnixMilli()); err != nil {
+		WHEN '1' THEN ? WHEN '2' THEN ? WHEN '3' THEN ? WHEN '4' THEN ? WHEN '5' THEN ? WHEN '6' THEN ? ELSE added_at END`,
+		now.Add(-time.Hour).UnixMilli(), now.Add(-2*time.Hour).UnixMilli(), now.Add(-30*time.Minute).UnixMilli(), now.Add(-24*time.Hour).UnixMilli(), now.Add(-45*time.Minute).UnixMilli(), now.Add(-15*time.Minute).UnixMilli()); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := c.st.db.W.Exec(`UPDATE releases SET category_id = '16' WHERE topic_id = '5'`); err != nil {
+	if _, err := c.st.db.W.Exec(`UPDATE releases SET category_id = '16' WHERE topic_id IN ('5', '6')`); err != nil {
 		t.Fatal(err)
 	}
 
@@ -54,7 +55,7 @@ func TestNewReleasesSeparatesKindsAndKeepsLatestWork(t *testing.T) {
 	var ourSeries struct {
 		Entries []EntryView `json:"entries"`
 	}
-	if code := getJSON(t, mux, "/api/v1/catalog/new?group=our-series&limit=10", &ourSeries); code != http.StatusOK || len(ourSeries.Entries) != 1 || ourSeries.Entries[0].Name != "Наш сериал" {
+	if code := getJSON(t, mux, "/api/v1/catalog/new?group=our-series&limit=10", &ourSeries); code != http.StatusOK || len(ourSeries.Entries) != 2 || ourSeries.Entries[0].Name != "Наш сериал без номера" || ourSeries.Entries[1].Name != "Наш сериал" {
 		t.Fatalf("our series: %d %+v", code, ourSeries.Entries)
 	}
 }

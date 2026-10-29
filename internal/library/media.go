@@ -205,6 +205,14 @@ func (l *Library) learnDuration(ctx context.Context, hash string, index int, r i
 
 // fileTitle — название для плеера: карточка и серия («Малахит — 1×02»).
 func (l *Library) fileTitle(ctx context.Context, f mediaFile) string {
+	return fileTitleIn(l.unitTitle(ctx, f), f)
+}
+
+// unitName — название единицы для подписей файлов: считается один раз на список серий, а не на
+// каждую серию (ревью 2026-10-29: 2 запроса × 200 серий на каждый запуск).
+type unitName struct{ title, name string }
+
+func (l *Library) unitTitle(ctx context.Context, f mediaFile) unitName {
 	var title, manual, name, state string
 	l.d.R.QueryRowContext(ctx, `SELECT title, manual_title, name, state FROM lib_units WHERE id = ?`, f.Unit).Scan(&title, &manual, &name, &state)
 	var card string
@@ -218,6 +226,12 @@ func (l *Library) fileTitle(ctx context.Context, f mediaFile) string {
 			t = s
 		}
 	}
+	return unitName{t, name}
+}
+
+// fileTitleIn — подпись файла f единицы u: название и серия или имя файла.
+func fileTitleIn(u unitName, f mediaFile) string {
+	t, name := u.title, u.name
 	switch {
 	case f.Episode > 0 && f.Season > 0:
 		t += fmt.Sprintf(" — %d×%02d", f.Season, f.Episode)
@@ -293,6 +307,7 @@ func (l *Library) handleM3U(w http.ResponseWriter, r *http.Request) {
 	}
 	start, _ := strconv.Atoi(r.URL.Query().Get("start"))
 	var items []player.M3UItem
+	unit := l.unitTitle(r.Context(), f)
 	on := false
 	for _, x := range files {
 		if x.ID == f.ID {
@@ -301,14 +316,22 @@ func (l *Library) handleM3U(w http.ResponseWriter, r *http.Request) {
 		if !on {
 			continue
 		}
-		// Граница сезона обрывает плейлист; граница раздела — только у серий с номером: курс без номеров
-		// идёт через главы по порядку (хвост Х16).
-		if x.Season != f.Season || (x.Section != f.Section && f.Episode > 0) {
+		// Как у своего плеера (nextLibFile): серии с номером идут и через границу сезона, пока раздел тот же,
+		// файлы без номера в сериале пропускаются (решение заказчика 2026-10-29). У остального граница сезона
+		// обрывает плейлист, а курс без номеров идёт через главы по порядку (хвост Х16).
+		if f.Episode > 0 {
+			if x.Section != f.Section {
+				break
+			}
+			if x.Episode <= 0 {
+				continue
+			}
+		} else if x.Season != f.Season {
 			break
 		}
 		mf := f
 		mf.libFile = x
-		it := player.M3UItem{Title: l.fileTitle(r.Context(), mf), URL: "http://" + r.Host + mf.streamPath()}
+		it := player.M3UItem{Title: fileTitleIn(unit, mf), URL: "http://" + r.Host + mf.streamPath()}
 		if len(items) == 0 {
 			it.StartSec = max(start, 0)
 		}

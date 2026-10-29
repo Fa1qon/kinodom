@@ -9,8 +9,8 @@ import (
 	"kinodom/internal/playback"
 )
 
-// Следующая серия — в порядке страницы раздачи (playableFiles: «sample» и мелочь пропущены, 2 < 10), в той же
-// папке: «S2/…» не продолжает «S1/…».
+// Следующая серия — в порядке страницы раздачи (playableFiles: «sample» и мелочь пропущены, 2 < 10), включая
+// переход между папками сезонов.
 func TestNextPlayable(t *testing.T) {
 	fs := []FileInfo{
 		{0, "Сериал/Серия 1.mkv", 1000}, {1, "Сериал/Серия 2.mkv", 1000}, {2, "Сериал/sample.mkv", 1000},
@@ -22,9 +22,31 @@ func TestNextPlayable(t *testing.T) {
 			t.Errorf("после %d: %+v %v, ждали %d", c.index, n, ok, c.want)
 		}
 	}
-	seasons := []FileInfo{{0, "S1/e1.mkv", 1000}, {1, "S1/e2.mkv", 1000}, {2, "S2/e1.mkv", 1000}}
-	if _, ok := nextPlayable(seasons, 1); ok {
-		t.Error("из сезона 1 — в сезон 2")
+	seasons := []FileInfo{{0, "Show/S1/e1.mkv", 1000}, {1, "Show/S1/e2.mkv", 1000}, {2, "Show/S2/e1.mkv", 1000}}
+	if n, ok := nextPlayable(seasons, 1); !ok || n.Index != 2 {
+		t.Errorf("из сезона 1 в сезон 2: %+v %v", n, ok)
+	}
+	if n, ok := prevPlayable(seasons, 2); !ok || n.Index != 1 {
+		t.Errorf("из сезона 2 в сезон 1: %+v %v", n, ok)
+	}
+	playlist := playlistPlayable(seasons, 1)
+	if len(playlist) != 3 || playlist[0].Index != 0 || playlist[1].Index != 1 || playlist[2].Index != 2 {
+		t.Errorf("список сезонов: %+v", playlist)
+	}
+}
+
+func TestEpisodeGroupRecognizesSeasonFolders(t *testing.T) {
+	want := "season:Show"
+	for _, name := range []string{
+		"Show/S01/episode.mkv", "Show/Season 2/episode.mkv", "Show/Сезон 3/episode.mkv",
+		"Show/4/episode.mkv", "Show/5 сезон/episode.mkv",
+	} {
+		if got := episodeGroup(name); got != want {
+			t.Errorf("episodeGroup(%q) = %q, want %q", name, got, want)
+		}
+	}
+	if got := episodeGroup("Show/bonus.mkv"); got != "flat:Show" {
+		t.Errorf("flat episodeGroup = %q, want %q", got, "flat:Show")
 	}
 }
 
@@ -47,6 +69,9 @@ func TestPlaySource(t *testing.T) {
 	if src.Title != "Серия 1" || src.Hash != ih.HexString() || src.Index != one || !strings.HasPrefix(src.Path, "/stream/"+ih.HexString()+"/") ||
 		src.M3U == "" || src.Launch == nil || src.Next == nil || src.Next.Kind != "torrent" || src.Next.Index != two || src.NextTitle != "Серия 2" {
 		t.Errorf("серия 1: %+v", src)
+	}
+	if len(src.Playlist) != 3 || src.Playlist[0].Ref.Index != one || src.Playlist[1].Ref.Index != two || src.Playlist[1].Title != "Серия 2" {
+		t.Errorf("список серий: %+v", src.Playlist)
 	}
 	if _, err := s.PlaySource(r, ih.HexString(), one, false, false); err != nil {
 		t.Errorf("после prepare — без prepare: %v", err)

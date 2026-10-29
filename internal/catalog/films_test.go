@@ -134,6 +134,10 @@ func TestVariantsRoute(t *testing.T) {
 	if got, want := variants("7"), "t1:7(S01) t1:8(S02)"; got != want {
 		t.Fatalf("сериал: %s, нужно %s", got, want)
 	}
+	series, err := c.SeriesReleasesByHash(ctx, "h7")
+	if err != nil || len(series) != 2 || series[0].InfoHash != "h7" || series[0].Season != 1 || series[1].InfoHash != "h8" || series[1].Season != 2 {
+		t.Fatalf("навигация сезонов: %+v, %v", series, err)
+	}
 	if got, want := variants("4"), "t1:4"; got != want {
 		t.Fatalf("без номера КП: %s, нужно %s", got, want)
 	}

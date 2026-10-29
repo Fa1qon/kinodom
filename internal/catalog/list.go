@@ -105,10 +105,15 @@ func (c *Catalog) NewReleases(ctx context.Context, group string, limit int) ([]E
 	if err != nil {
 		return nil, err
 	}
+	seriesByCategory, err := c.seriesFlags(ctx, rs)
+	if err != nil {
+		return nil, err
+	}
 	filtered := make([]row, 0, len(rs))
 	seenHash := map[string]bool{}
 	for _, r := range rs {
-		if r.Title == "" || r.Added.IsZero() || meta.ParseTitle(r.Title).Series != series || releaseGroup(r, names) != group {
+		isSeries := seriesByCategory[CategoryRef{r.Tracker, r.CategoryID}] || meta.ParseTitle(r.Title).Series
+		if r.Title == "" || r.Added.IsZero() || isSeries != series || releaseGroup(r, names, isSeries) != group {
 			continue
 		}
 		// Один и тот же infohash может быть в нескольких активных разделах или на двух трекерах.
@@ -152,7 +157,7 @@ func (c *Catalog) NewReleases(ctx context.Context, group string, limit int) ([]E
 
 // releaseGroup связывает раздачу с четырьмя вкладками главной. Для стандартных разделов используем
 // стабильные идентификаторы трекеров; названия категорий покрывают вручную выбранные подразделы.
-func releaseGroup(r row, names map[CategoryRef]string) string {
+func releaseGroup(r row, names map[CategoryRef]string, series bool) string {
 	name := strings.ToLower(names[CategoryRef{r.Tracker, r.CategoryID}])
 	our := strings.Contains(name, "наше") || strings.Contains(name, "русск") || strings.Contains(name, "россий") || strings.Contains(name, "отечеств") || strings.Contains(name, "советск")
 	foreign := strings.Contains(name, "зарубеж") || strings.Contains(name, "иностран")
@@ -171,15 +176,55 @@ func releaseGroup(r row, names map[CategoryRef]string) string {
 		foreign = true
 	}
 	if our {
-		if meta.ParseTitle(r.Title).Series {
+		if series {
 			return "our-series"
 		}
 		return "our-film"
 	}
-	if meta.ParseTitle(r.Title).Series {
+	if series {
 		return "foreign-series"
 	}
 	return "foreign-film"
+}
+
+// seriesFlags classifies rows by both title and tracker category. A series release often has no
+// S01/E01 marker in its title, while the category tree still identifies it unambiguously. Load the
+// t2 tree once for the whole request instead of querying it once per release.
+func (c *Catalog) seriesFlags(ctx context.Context, rs []row) (map[CategoryRef]bool, error) {
+	out := make(map[CategoryRef]bool, len(rs))
+	needt2 := false
+	for _, r := range rs {
+		if r.Tracker == "t2" {
+			needt2 = true
+			break
+		}
+	}
+	parents := map[string]string{}
+	if needt2 {
+		tree, err := c.st.tree(ctx, "t2")
+		if err != nil {
+			return nil, err
+		}
+		for _, x := range tree {
+			parents[x.ID] = x.ParentID
+		}
+	}
+	for _, r := range rs {
+		isSeries := false
+		switch r.Tracker {
+		case "t1":
+			isSeries = t1Series[r.CategoryID]
+		case "t2":
+			for id, n := r.CategoryID, 0; id != "" && n < 20; id, n = parents[id], n+1 {
+				if id == "c18" {
+					isSeries = true
+					break
+				}
+			}
+		}
+		out[CategoryRef{r.Tracker, r.CategoryID}] = out[CategoryRef{r.Tracker, r.CategoryID}] || isSeries
+	}
+	return out, nil
 }
 
 // cards — карточки строк: название раздела, рейтинг, раздач фильма на обоих трекерах.
