@@ -115,7 +115,9 @@ func (s *Service) GenreTaste(ctx context.Context, owner string) ([]GenreScore, e
 	var out []GenreScore
 	for g, v := range liked {
 		b := max(base[g], genreMinBase)
-		if base[g] == 0 || total == 0 {
+		// только жанры из списка: «короткометражка» — формат, «детский» — для кого, а не вкус (шесть советских
+		// мультфильмов делали «Короткометражку» любимым жанром)
+		if _, ok := GenreTitles[g]; !ok || g == "детский" || base[g] == 0 || total == 0 {
 			continue
 		}
 		n := float64(count[g])
