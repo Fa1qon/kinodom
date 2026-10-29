@@ -145,6 +145,9 @@ func (l *Library) DeleteUnit(ctx context.Context, id int64) error {
 	} else if err := remove(key); err != nil {
 		return l.removeError(ctx, folder.Int64, root, err)
 	}
+	if l.o.Removed != nil { // до удаления записи: журнал ещё найдёт фильм единицы
+		l.o.Removed(ctx, fmt.Sprintf("lib-%d", id))
+	}
 	if _, err := l.d.W.ExecContext(ctx, `DELETE FROM lib_units WHERE id = ?`, id); err != nil {
 		return err
 	}

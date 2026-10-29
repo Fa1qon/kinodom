@@ -5,6 +5,7 @@ import (
 	"errors"
 	"net/http"
 
+	"kinodom/internal/history"
 	"kinodom/internal/library"
 	"kinodom/internal/meta"
 	"kinodom/internal/torrents"
@@ -19,6 +20,7 @@ func (a *App) initLibrary(ctx context.Context) {
 	}}
 	o := library.Options{DB: a.DB, KP: kp, KPPoster: a.kp.PosterURL, Ratings: a.Ratings, Downloads: libraryDownloads{a}, History: a.History, Power: a.Power,
 		CanDelete:    a.canDelete,
+		Removed:      func(ctx context.Context, hash string) { a.History.MarkEnded(ctx, hash, -1, history.EndedDeleted, "") },
 		DownloadsDir: func() string { return a.Settings.Current().DownloadsDir },
 		KeepDays:     func() int { return a.Settings.Current().KeepDays },
 		TorrentFolders: func(ctx context.Context) ([]string, error) { // скачанное в папку медиатеки — единицей раздачи (план 14В)

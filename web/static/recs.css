@@ -1,0 +1,32 @@
+/* «Что посмотреть» и строка «Для вас» на главной. */
+.recs-head { margin-bottom: 20px; gap: 16px; flex-wrap: wrap; }
+.recs-askrow { gap: 12px; margin-bottom: 14px; }
+.recs-ask { flex: 1; min-width: 0; height: 48px; padding: 0 14px; font-size: 16px; background: transparent; color: var(--text); border: 1px solid var(--line-strong); }
+.recs-chips { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 10px; align-items: center; }
+.btn.chip { height: 34px; padding: 0 12px; font-weight: 500; }
+.btn.chip.on { background: var(--inv-bg); border-color: var(--inv-bg); color: var(--inv-text); }
+.btn.sq { width: 40px; padding: 0; }
+.recs-with { margin-left: 12px; white-space: nowrap; flex: none; }
+.recs-grid { grid-template-columns: repeat(6, minmax(0, 1fr)); }
+.recs-grid.busy { opacity: .5; }
+.rec-reason { color: var(--muted); line-height: 1.35; }
+.recs-actions { display: flex; flex-wrap: wrap; gap: 4px; }
+.recs-actions .btn { height: 36px; padding: 0 10px; }
+.recs-actions .btn.sq { width: 36px; padding: 0; flex: none; }
+.recs-actions .btn.inv { flex: 1 1 auto; min-width: 0; }
+.recs-empty { max-width: 720px; }
+.recs-taste-cols { display: grid; grid-template-columns: 1fr 1fr; gap: 32px; }
+.recs-taste-item { display: flex; justify-content: space-between; gap: 12px; padding: 8px 0; border-bottom: 1px solid var(--line-soft); }
+.recs-setup input { height: 40px; padding: 0 12px; background: transparent; color: var(--text); border: 1px solid var(--line-strong); min-width: 260px; }
+.recs-setup .row { gap: 10px; flex-wrap: wrap; margin-bottom: 8px; }
+.recs-setup h2 { margin-top: 28px; }
+.home-recs .home-rail { display: grid; grid-auto-flow: column; grid-auto-columns: minmax(150px, 1fr); gap: 16px; overflow-x: auto; }
+@media (max-width: 1100px) { .recs-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); } }
+@media (max-width: 640px) {
+  .recs-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .recs-taste-cols { grid-template-columns: 1fr; }
+  .recs-askrow { flex-wrap: wrap; }
+  .recs-ask { flex-basis: 100%; }
+  .recs-chips { flex-wrap: nowrap; overflow-x: auto; padding-bottom: 4px; }
+  .recs-chips .btn.chip { flex: none; }
+}

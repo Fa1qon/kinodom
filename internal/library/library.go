@@ -100,8 +100,10 @@ type Options struct {
 	// Remove — удаление файла или папки своей единицы («Удалить»); nil — os.RemoveAll (тесты подменяют отказ).
 	Remove    func(path string) error
 	CanDelete func(context.Context, string) bool
-	Log       *slog.Logger
-	Now       func() time.Time
+	// Removed — человек удалил свою единицу («Удалить»): журнал рекомендаций, hash — lib-<единица>; nil — без него.
+	Removed func(ctx context.Context, hash string)
+	Log     *slog.Logger
+	Now     func() time.Time
 }
 
 // Library — модуль «library».

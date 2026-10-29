@@ -6,6 +6,7 @@ import { initNav } from './nav.js';
 import { isClient, initClientUI } from './client-ui.js';
 import * as catalog from './views/catalog.js';
 import * as home from './views/home.js';
+import * as recs from './views/recs.js';
 import { catalogHome } from './views/catalog.js';
 import * as release from './views/release.js';
 import * as search from './views/search.js';
@@ -29,7 +30,7 @@ import * as channelPlayer from './views/channel-player.js';
 import { settingsRoute } from './views/settings-layout.js';
 
 // views — экраны по первой части адреса; у «Настроек» — по второй.
-const views = { home, catalog, release, search, downloads, channels, channel, history, library, setup, updates, play: player, 'channel-play': channelPlayer };
+const views = { home, recs, catalog, release, search, downloads, channels, channel, history, library, setup, updates, play: player, 'channel-play': channelPlayer };
 const settingsViews = { status: settingsStatus, params: settingsParams, sections: settingsSections, iptv: settingsIPTV, unrecognized: settingsUnrecognized,
   library: settingsLibrary, app: settingsApp };
 
@@ -113,7 +114,7 @@ function setMenu(open) {
 // updateHeader — выбранный раздел и жёлтый значок у «Настроек», если есть хоть одна проблема.
 function updateHeader(r) {
   document.body.classList.toggle('playing', r.parts[0] === 'play' || r.parts[0] === 'channel-play'); // плеер — во всё окно, без шапки (план 18Б)
-  const current = { release: 'catalog', channel: 'channels' }[r.parts[0]] || r.parts[0];
+  const current = { release: 'catalog', channel: 'channels', recs: 'home' }[r.parts[0]] || r.parts[0];
   navLinks.catalog.href = catalogRoute();
   for (const [id, a] of Object.entries(navLinks)) {
     a.classList.toggle('on', id === current);

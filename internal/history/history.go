@@ -24,6 +24,9 @@ const (
 type Service struct {
 	db  *store.DB
 	now func() time.Time
+
+	owner  func(ctx context.Context, device string) string // журнал вкуса: профиль устройства (SetOwner)
+	filmOf func(ctx context.Context, hash string) int      // журнал вкуса: фильм раздачи (SetFilmOf)
 }
 
 func New(db *store.DB) *Service { return &Service{db: db, now: time.Now} }
@@ -66,7 +69,10 @@ func (s *Service) save(ctx context.Context, device, hash string, index int, frac
 		ON CONFLICT(device, hash, file_index) DO UPDATE SET fraction = excluded.fraction, position_sec = excluded.position_sec,
 		duration_sec = excluded.duration_sec, watched = watched OR excluded.watched, updated_at = excluded.updated_at`,
 		device, hash, index, fraction, pos, dur, watched, s.now().UnixMilli())
-	return err
+	if err != nil {
+		return err
+	}
+	return s.logView(ctx, device, hash, index, fraction, dur)
 }
 
 // Report — место по чтению потока (спека этапа 8, раздел 7.2): offset — докуда плеер дочитал файл
@@ -106,6 +112,9 @@ func (s *Service) SetWatched(ctx context.Context, device, hash string, index int
 			VALUES (?, ?, ?, 0, 0, ?, 1, ?)
 			ON CONFLICT(device, hash, file_index) DO UPDATE SET watched = 1, updated_at = excluded.updated_at`,
 			device, hash, index, dur, s.now().UnixMilli())
+		if err == nil {
+			err = s.logMarked(ctx, device, hash, index)
+		}
 	} else {
 		_, err = s.db.W.ExecContext(ctx, `UPDATE watch_progress SET watched = 0, fraction = 0, position_sec = 0, updated_at = ?
 			WHERE device = ? AND hash = ? AND file_index = ?`, s.now().UnixMilli(), device, hash, index)
@@ -188,8 +197,11 @@ func (s *Service) List(ctx context.Context, device string) ([]Item, error) {
 	return out, rows.Err()
 }
 
-// Remove — убрать раздачу из истории устройства.
+// Remove — убрать раздачу из истории устройства (журнал вкуса помнит, что смотрел, с отметкой «убрал»).
 func (s *Service) Remove(ctx context.Context, device, hash string) error {
-	_, err := s.db.W.ExecContext(ctx, `DELETE FROM watch_progress WHERE device = ? AND hash = ?`, device, hash)
-	return err
+	if _, err := s.db.W.ExecContext(ctx, `DELETE FROM watch_progress WHERE device = ? AND hash = ?`, device, hash); err != nil {
+		return err
+	}
+	// журнал вкуса остаётся: «убрал из истории» — не «не понравилось», только отметка
+	return s.MarkEnded(ctx, hash, -1, EndedRemoved, s.Owner(ctx, device))
 }

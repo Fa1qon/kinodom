@@ -128,6 +128,7 @@ type Service struct {
 
 	activeStreams atomic.Int32
 	watch         WatchTracker   // история просмотров; nil — без неё (этап 8c)
+	removed       RemovedHook    // журнал рекомендаций: файл удалён (SetRemovedHook); nil — без него
 	durTried      sync.Map       // durationKey → длительность уже пробовали узнать
 	tracker       *watch.Tracker // сеансы просмотра для истории; nil — без истории
 	deleteAllowed func(context.Context, string) bool

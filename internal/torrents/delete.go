@@ -34,7 +34,27 @@ const watchingFor = 6 * time.Hour
 func (s *Service) DeleteFile(ctx context.Context, ih metainfo.Hash, index int) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return s.deleteLocked(ctx, ih, index, false)
+	return s.noteRemoved(ctx, ih, index, RemovedByUser, s.deleteLocked(ctx, ih, index, false))
+}
+
+// RemovedHook — файл раздачи убран с диска: how — RemovedByUser (человек удалил сам) или RemovedByCleanup
+// (уборка по сроку или ради места). Журнал рекомендаций отличает «удалил, не досмотрев» от уборки.
+type RemovedHook func(ctx context.Context, hash string, index int, how string)
+
+const (
+	RemovedByUser    = "deleted"
+	RemovedByCleanup = "expired"
+)
+
+// SetRemovedHook подключает журнал рекомендаций; nil — без него. Вызывать до Run.
+func (s *Service) SetRemovedHook(h RemovedHook) { s.removed = h }
+
+// noteRemoved сообщает журналу об удачном удалении и возвращает err как есть.
+func (s *Service) noteRemoved(ctx context.Context, ih metainfo.Hash, index int, how string, err error) error {
+	if err == nil && s.removed != nil {
+		s.removed(ctx, ih.HexString(), index, how)
+	}
+	return err
 }
 
 type nothingStored struct{}
@@ -58,7 +78,7 @@ func (s *Service) DeleteRelease(ctx context.Context, ih metainfo.Hash) (deleted,
 		return 0, 0, ErrNothingStored
 	}
 	for _, i := range files {
-		switch err := s.deleteLocked(ctx, ih, i, false); {
+		switch err := s.noteRemoved(ctx, ih, i, RemovedByUser, s.deleteLocked(ctx, ih, i, false)); {
 		case errors.Is(err, ErrWatching):
 			skipped++
 		case err != nil:
@@ -76,7 +96,7 @@ func (s *Service) DeleteRelease(ctx context.Context, ih metainfo.Hash) (deleted,
 func (s *Service) deleteOld(ctx context.Context, ih metainfo.Hash, index int) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return s.deleteLocked(ctx, ih, index, true)
+	return s.noteRemoved(ctx, ih, index, RemovedByCleanup, s.deleteLocked(ctx, ih, index, true))
 }
 
 // deleteBehind — удаление просмотренной серии позади, когда места не хватает: правила 6 часов нет,
@@ -84,7 +104,7 @@ func (s *Service) deleteOld(ctx context.Context, ih metainfo.Hash, index int) er
 func (s *Service) deleteBehind(ctx context.Context, ih metainfo.Hash, index int) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return s.deleteLocked(ctx, ih, index, false)
+	return s.noteRemoved(ctx, ih, index, RemovedByCleanup, s.deleteLocked(ctx, ih, index, false))
 }
 
 // deleteLocked — удаление файла. recent — мешает и поток за последние 6 часов (уборка, deleteOld), иначе

@@ -36,6 +36,7 @@ import (
 	"kinodom/internal/netx"
 	"kinodom/internal/playback"
 	"kinodom/internal/power"
+	"kinodom/internal/recs"
 	"kinodom/internal/settings"
 	"kinodom/internal/source"
 	"kinodom/internal/source/jacred"
@@ -101,6 +102,7 @@ type App struct {
 	Library  *library.Library  // медиатека: скачанное и папки заказчика (модуль library, этап 9)
 	Follow   *follow.Module    // подписка на новые серии (модуль follow, этап 11b-В)
 	KPCat    *kpcat.Module     // каталог «Кинопоиск» (модуль kpcat, план 14Г)
+	Recs     *recs.Service     // «Что посмотреть»: рекомендации по журналу вкуса
 	Playback *playback.Module  // свой плеер фильмов (цикл 18)
 	pairing  *pairingState
 	p1       *p1State
@@ -197,6 +199,7 @@ func New(ctx context.Context, o Options) (*App, error) {
 	a.initFollow(ctx)
 	a.initP1()
 	a.initKPCat(ctx)
+	a.initRecs()
 	a.initSetup()
 	a.initDiscovery(ctx, o)
 	a.API.SetStatus(a.statusFields)
