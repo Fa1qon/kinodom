@@ -62,3 +62,13 @@ CREATE TABLE rec_cards (
     missing     INTEGER NOT NULL DEFAULT 0,
     fetched_at  INTEGER NOT NULL
 );
+
+-- Прежняя история — в журнал вкуса, чтобы подборка с первого дня учитывала, что уже смотрели. Перемоток
+-- в ней не видно: место остановки считается просмотренным подряд. Хозяин — профиль, на который сейчас
+-- переключено устройство, иначе устройство; фильм журнал узнаёт сам при первом чтении (ResolveFilms).
+INSERT INTO view_log (owner, hash, file_index, kp_id, first_at, last_at, sessions, seen, max_fraction, last_fraction, finished, times)
+SELECT COALESCE('p:' || d.profile_id, 'd:' || w.device), w.hash, w.file_index, 0, w.updated_at, w.updated_at, 1,
+       w.fraction, MAX(w.fraction, CASE WHEN w.watched THEN 1 ELSE 0 END), w.fraction, w.watched, w.watched
+FROM watch_progress w LEFT JOIN family_devices d ON d.device = w.device
+WHERE w.device != ''
+ON CONFLICT(owner, hash, file_index) DO NOTHING;
