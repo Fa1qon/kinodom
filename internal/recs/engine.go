@@ -25,8 +25,9 @@ type Service struct {
 	Wanted func(ctx context.Context, owner string) []int
 	Now    func() time.Time
 
-	model atomic.Pointer[Model]
-	cards *cardFetcher // дозапрос карточек (StartCards); nil — только карточки пакета
+	model    atomic.Pointer[Model]
+	cards    *cardFetcher     // дозапрос карточек (StartCards); nil — только карточки пакета
+	similars *similarsFetcher // дозапрос «Похожих» (StartSimilars); nil — только связи пакета
 }
 
 func (s *Service) now() time.Time {
@@ -84,6 +85,7 @@ const (
 	nicheShare     = 0.3
 	coldMinimum    = 3
 	coldQuality    = 0.5 // вес качества при холодном старте
+	kindSupport    = 5   // уверенность вида: n/(n+5) кандидатов с вкладом от любимого
 	groupMisery    = 0.30
 )
 
@@ -145,16 +147,24 @@ func (s *Service) score(ctx context.Context, m *Model, owner string, q Query) (*
 			significant++
 		}
 	}
-	err = m.Neighbors(ctx, ids, func(from, to int, w float64) {
+	linked := map[int]bool{} // у фильма профиля есть связи в пакете
+	link := func(from, to int, w float64) {
+		linked[from] = true
 		v := prof[from] * w
 		if prof[from] < 0 && v > 0 {
 			v *= dislikeLift // «не любит X — значит, полюбит Y» — слабое основание
 		}
 		get(to).add(from, v, prof[from] > 0)
-	})
-	if err != nil {
+	}
+	if err = m.Neighbors(ctx, ids, link); err != nil {
 		return nil, err
 	}
+	// «Похожие» Кинопоиска, дозапрошенные для фильмов без связей в пакете (сериалы, русское кино)
+	unlinked := slices.DeleteFunc(slices.Clone(ids), func(kp int) bool { return linked[kp] })
+	if err = s.localNeighbors(ctx, unlinked, link); err != nil {
+		return nil, err
+	}
+	s.needSimilars(ctx, prof, linked)
 	sc.cold = significant < coldMinimum && len(q.Like) == 0
 	if len(q.Moods) > 0 {
 		ms, err := m.MoodFilms(ctx, q.Moods, 600)
@@ -254,7 +264,34 @@ func (s *Service) rank(ctx context.Context, m *Model, sc *scored, q Query, exclu
 		cf[i], pop[i], mood[i] = r.c.cf, math.Log1p(r.film.Popularity), r.c.mood
 		quality[i] = max(r.film.RatingKP, r.film.RatingIMDb) + 0.3*pop[i]
 	}
-	zcf, zpop, zmood := zscore(cf), zscore(pop), zscore(mood)
+	// Похожесть и популярность — внутри своего вида: у фильма до 200 связей (EASE по MovieLens), у сериала
+	// — около 20 («Похожие» Кинопоиска), и сумма вкладов сериала всегда меньше; без этого в «Всё» сериал
+	// не обгонял даже средний фильм (на 246 оценках — 0 сериалов из 18).
+	kinds := make([]string, len(out))
+	for i, r := range out {
+		kinds[i] = r.film.Kind
+	}
+	zcf, zpop, zmood := zscore(topScaled(cf, kinds)), zscoreBy(pop, kinds), zscore(mood)
+	// Уверенность вида: сколько его кандидатов получили вклад от любимого — n/(n+5), относительно самого
+	// уверенного вида. Кто сериалы не смотрит, у того их похожесть — шум около нуля, и нормировка внутри
+	// вида не должна его раздувать.
+	support := map[string]int{}
+	for _, r := range out {
+		if r.c.contrib[0].v > 0 {
+			support[r.film.Kind]++
+		}
+	}
+	conf, best := map[string]float64{}, 0.0
+	for _, k := range kinds {
+		n := float64(support[k])
+		conf[k] = n / (n + kindSupport)
+		best = max(best, conf[k])
+	}
+	if best > 0 { // относительно самого уверенного вида: один вид в выдаче — множитель 1
+		for i, k := range kinds {
+			zcf[i] *= conf[k] / best
+		}
+	}
 	if sc.cold { // мало сигналов: к похожести — качество фильма (не вместо: одна оценка «10» не теряется)
 		zq := zscore(quality)
 		for i := range zcf {
@@ -454,6 +491,63 @@ func zscore(xs []float64) []float64 {
 	}
 	for i, x := range xs {
 		out[i] = (x - mean) / sd
+	}
+	return out
+}
+
+// topScaled — значения, делённые на среднее десяти лучших в своей группе: лучшие фильм и сериал оба около 1
+// (разброс тут не годится — у фильмов хвост длиннее, и лучший фильм всегда «сильнее» лучшего сериала).
+func topScaled(xs []float64, groups []string) []float64 {
+	idx := map[string][]int{}
+	for i, g := range groups {
+		idx[g] = append(idx[g], i)
+	}
+	out := make([]float64, len(xs))
+	for _, ii := range idx {
+		vals := make([]float64, len(ii))
+		for j, i := range ii {
+			vals[j] = xs[i]
+		}
+		slices.SortFunc(vals, cmpDesc)
+		// среднее лучших положительных: нули в среднем раздували бы одиночный вклад в разы
+		var top float64
+		n := 0
+		for _, v := range vals {
+			if n == 10 || v <= 0 {
+				break
+			}
+			top += v
+			n++
+		}
+		if n > 0 {
+			top /= float64(n)
+		}
+		for _, i := range ii {
+			if top > 0 {
+				out[i] = xs[i] / top
+			} else {
+				out[i] = xs[i]
+			}
+		}
+	}
+	return out
+}
+
+// zscoreBy — z-оценки внутри каждой группы (вида фильма); группа из одного — ноль.
+func zscoreBy(xs []float64, groups []string) []float64 {
+	idx := map[string][]int{}
+	for i, g := range groups {
+		idx[g] = append(idx[g], i)
+	}
+	out := make([]float64, len(xs))
+	for _, ii := range idx {
+		part := make([]float64, len(ii))
+		for j, i := range ii {
+			part[j] = xs[i]
+		}
+		for j, z := range zscore(part) {
+			out[ii[j]] = z
+		}
 	}
 	return out
 }

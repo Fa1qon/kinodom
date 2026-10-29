@@ -327,3 +327,108 @@ func TestCardsFetchedOnDemand(t *testing.T) {
 		t.Fatalf("повторные запросы: %v", asked)
 	}
 }
+
+// Сериалы в общей подборке: у сериала связей меньше (Кинопоиск, а не MovieLens), и сумма вкладов меньше.
+// Поклоннику сериалов они должны попадать в «Всё» наравне с фильмами, а тому, кто их не смотрит, —
+// не пролезать шумом.
+func TestSeriesMixFairly(t *testing.T) {
+	fs := map[int]string{}
+	var links [][3]float64
+	for i := 1; i <= 30; i++ { // фильмы 1..30: у любимых — много сильных связей
+		fs[i] = "Фильм"
+		for j := 1; j <= 30; j++ {
+			if i != j {
+				links = append(links, [3]float64{float64(i), float64(j), 0.02 / (1 + 0.1*float64(j))}) // убывающие, как в графе
+			}
+		}
+	}
+	for i := 101; i <= 110; i++ { // сериалы: связи слабее и короче
+		fs[i] = "Сериал"
+		for j := 101; j <= 110; j++ {
+			if i != j {
+				links = append(links, [3]float64{float64(i), float64(j), 0.005 / (1 + 0.1*float64(j-100))})
+			}
+		}
+	}
+	links = append(links, [3]float64{1, 105, 0.001}) // фильм тянет за собой один сериал — это шум
+	fx := newFixture(t, testPack(t, fs, links, nil))
+	for _, kp := range []int{1, 2, 3, 4} {
+		fx.s.Rate(fx.ctx, "p:fan", kp, 10, "kinodom")
+		fx.s.Rate(fx.ctx, "p:films", kp, 10, "kinodom")
+	}
+	for _, kp := range []int{101, 102} {
+		fx.s.Rate(fx.ctx, "p:fan", kp, 10, "kinodom")
+	}
+	count := func(owner string) int {
+		rs, err := fx.s.Recommend(fx.ctx, owner, Query{Limit: 10})
+		if err != nil {
+			t.Fatal(err)
+		}
+		n := 0
+		for _, r := range rs {
+			if r.Film.Kind == "series" {
+				n++
+			}
+		}
+		return n
+	}
+	if n := count("p:fan"); n < 2 {
+		t.Fatalf("поклоннику сериалов — сериалы в общей подборке: %d из 10", n)
+	}
+	if n := count("p:films"); n != 0 {
+		t.Fatalf("кто сериалы не смотрит — без шумных сериалов: %d из 10", n)
+	}
+}
+
+// Сериал из оценок, которого нет в пакете: Kinodom дозапрашивает его «Похожие», и похожий сериал вне
+// пакета попадает в подборку с причиной — «Похоже на „Папины дочки“».
+func TestSimilarsForUnlinked(t *testing.T) {
+	fx := newFixture(t, testPack(t, films, [][3]float64{{1, 2, 0.016}}, nil)) // вес — как у EASE в пакете
+	const daughters, kitchen = 900001, 900002 // «Папины дочки» и «Кухня»: ни того, ни другого в пакете нет
+	db := fx.s.DB
+	db.W.Exec(`INSERT INTO rec_cards (kp_id, kind, title, poster, full, fetched_at) VALUES (?, 'series', 'Папины дочки', 'https://x/d.jpg', 1, 1)`, daughters)
+	var mu sync.Mutex
+	asked := 0
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	fx.s.StartSimilars(ctx, func(_ context.Context, kp int) ([]SimilarItem, error) {
+		mu.Lock()
+		asked++
+		mu.Unlock()
+		if kp != daughters {
+			return nil, ErrNoCard
+		}
+		return []SimilarItem{{KP: kitchen, Title: "Кухня", Poster: "https://x/k.jpg"}}, nil
+	})
+	fx.s.Rate(fx.ctx, "d:tv", daughters, 10, "kp")
+	fx.s.Rate(fx.ctx, "d:tv", 1, 9, "kp")
+	fx.s.Recommend(fx.ctx, "d:tv", Query{Limit: 5}) // первая подборка ставит «Похожие» в очередь
+	deadline := time.Now().Add(10 * time.Second)
+	for {
+		var n int
+		db.R.QueryRow(`SELECT COUNT(*) FROM rec_similars WHERE kp_id = ?`, daughters).Scan(&n)
+		if n > 0 || time.Now().After(deadline) {
+			break
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	rs, err := fx.s.Recommend(fx.ctx, "d:tv", Query{Limit: 5})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var found *Rec
+	for i := range rs {
+		if rs[i].Film.KP == kitchen {
+			found = &rs[i]
+		}
+	}
+	if found == nil || found.Film.Title != "Кухня" || !slices.Contains(found.Because, daughters) {
+		t.Fatalf("сериал вне пакета из «Похожих»: %+v", rs)
+	}
+	// «Матрица» связана в пакете — её «Похожие» не спрашиваем: ключ общий с рейтингами каталога
+	mu.Lock()
+	defer mu.Unlock()
+	if asked != 1 {
+		t.Fatalf("запросов «Похожих»: %d, ждали 1", asked)
+	}
+}

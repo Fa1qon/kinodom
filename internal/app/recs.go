@@ -57,7 +57,30 @@ func (a *App) initRecs() {
 		ctx, cancel := context.WithCancel(context.Background())
 		a.closers = append(a.closers, closerFunc(func() error { cancel(); return nil }))
 		a.Recs.StartCards(ctx, a.recsCard)
+		// «Похожие» — по ключу Кинопоиска из настроек (без ключа — только связи пакета)
+		a.Recs.StartSimilars(ctx, a.recsSimilars)
 	}
+}
+
+// recsSimilars — «Похожие» Кинопоиска по ключу из настроек (общий суточный лимит с рейтингами каталога).
+func (a *App) recsSimilars(ctx context.Context, kp int) ([]recs.SimilarItem, error) {
+	if a.kp == nil || !a.kp.HasKey() {
+		return nil, recs.ErrSimilarsQuota // без ключа — как без лимита: до завтра не спрашивать
+	}
+	sims, err := a.kp.Similars(ctx, kp)
+	switch {
+	case errors.Is(err, meta.ErrQuota), errors.Is(err, meta.ErrNoKey):
+		return nil, recs.ErrSimilarsQuota
+	case errors.Is(err, meta.ErrNotFound):
+		return nil, recs.ErrNoCard
+	case err != nil:
+		return nil, err
+	}
+	out := make([]recs.SimilarItem, 0, len(sims))
+	for _, x := range sims {
+		out = append(out, recs.SimilarItem{KP: x.ID, Title: x.NameRu, TitleOrig: x.NameOrig, Poster: x.PosterURL})
+	}
+	return out, nil
 }
 
 // recsCard — карточка фильма для рекомендаций: фильм, а не нашёлся — сериал (и наоборот).

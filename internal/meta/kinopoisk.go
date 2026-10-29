@@ -193,6 +193,39 @@ func (k *Kinopoisk) Details(ctx context.Context, id int) (FilmDetails, error) {
 	return d, nil
 }
 
+// Similar — фильм из «Похожих» Кинопоиска.
+type Similar struct {
+	ID        int
+	NameRu    string
+	NameOrig  string
+	PosterURL string
+}
+
+// Similars — «Похожие» фильма по мнению зрителей Кинопоиска, по порядку (/api/v2.2/films/{id}/similars).
+func (k *Kinopoisk) Similars(ctx context.Context, id int) ([]Similar, error) {
+	var v struct {
+		Items []struct {
+			FilmID       int     `json:"filmId"`
+			NameRu       *string `json:"nameRu"`
+			NameEn       *string `json:"nameEn"`
+			NameOriginal *string `json:"nameOriginal"`
+			PosterURL    *string `json:"posterUrl"`
+		} `json:"items"`
+	}
+	if err := k.getJSON(ctx, "похожие "+strconv.Itoa(id), "/api/v2.2/films/"+strconv.Itoa(id)+"/similars", nil, &v); err != nil {
+		return nil, err
+	}
+	out := make([]Similar, 0, len(v.Items))
+	for _, it := range v.Items {
+		orig := str(it.NameOriginal)
+		if orig == "" {
+			orig = str(it.NameEn)
+		}
+		out = append(out, Similar{ID: it.FilmID, NameRu: str(it.NameRu), NameOrig: orig, PosterURL: str(it.PosterURL)})
+	}
+	return out, nil
+}
+
 // ByIMDb — фильм по номеру IMDb (/api/v2.2/films?imdbId=): точное совпадение одним запросом.
 func (k *Kinopoisk) ByIMDb(ctx context.Context, imdbID string) (Film, error) {
 	fs, err := k.films(ctx, "поиск по IMDb "+imdbID, url.Values{"imdbId": {imdbID}})
