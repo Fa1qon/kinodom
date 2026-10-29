@@ -34,6 +34,7 @@ type Film struct {
 	RatingKP    float64 `json:"kinopoisk"`
 	RatingIMDb  float64 `json:"imdb"`
 	Popularity  float64 `json:"-"`
+	carded      bool    // карточка уже дозапрошена у Кинопоиска (или его нет — неделю не спрашивать)
 }
 
 // Model — пакет модели только для чтения.

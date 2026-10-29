@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -269,5 +270,60 @@ func TestOpenNewest(t *testing.T) {
 	}
 	if _, err := OpenNewest(filepath.Join(t.TempDir(), "нет.db")); !errors.Is(err, ErrNoModel) {
 		t.Fatalf("без пакетов — ErrNoModel: %v", err)
+	}
+}
+
+// Пакет несёт карточки только популярных фильмов: остальным Kinodom дозапрашивает карточку сам, а
+// отсутствующие у Кинопоиска неделю не спрашивает.
+func TestCardsFetchedOnDemand(t *testing.T) {
+	pack := testPack(t, films, [][3]float64{{1, 2, 0.3}, {1, 3, 0.2}}, nil)
+	db, _ := sql.Open("sqlite", pack)
+	db.Exec(`UPDATE films SET poster = '', title_ru = '', title_orig = 'Inception' WHERE kp_id = 2`)
+	db.Exec(`UPDATE films SET poster = '' WHERE kp_id = 3`)
+	db.Close()
+	fx := newFixture(t, pack)
+	var mu sync.Mutex
+	asked := map[int]int{}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	fx.s.StartCards(ctx, func(_ context.Context, kp int, _ bool) (Card, error) {
+		mu.Lock()
+		asked[kp]++
+		mu.Unlock()
+		if kp == 3 {
+			return Card{}, ErrNoCard
+		}
+		return Card{Kind: "film", Title: "Начало", Poster: "https://x/inception.jpg", RatingKP: 8.7}, nil
+	})
+	fx.s.Rate(fx.ctx, "d:tv", 1, 10, "kinodom")
+	rs, _ := fx.s.Recommend(fx.ctx, "d:tv", Query{Limit: 2})
+	var show []Film
+	for _, r := range rs {
+		show = append(show, r.Film)
+	}
+	fx.s.needCards(show)
+	deadline := time.Now().Add(10 * time.Second)
+	for {
+		mu.Lock()
+		n := asked[2] + asked[3]
+		mu.Unlock()
+		if n >= 2 || time.Now().After(deadline) {
+			break
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	time.Sleep(100 * time.Millisecond)
+	f, ok := fx.s.film(fx.ctx, fx.s.Model(), 2)
+	if !ok || f.Title != "Начало" || f.Poster == "" || f.RatingKP != 8.7 {
+		t.Fatalf("дозапрошенная карточка не легла поверх пакета: %+v", f)
+	}
+	// второй показ: у «Начала» карточка есть, «Довода» нет у Кинопоиска — никого не спрашиваем снова
+	fs, _ := fx.s.films(fx.ctx, fx.s.Model(), []int{2, 3})
+	fx.s.needCards([]Film{fs[2], fs[3]})
+	time.Sleep(200 * time.Millisecond)
+	mu.Lock()
+	defer mu.Unlock()
+	if asked[2] != 1 || asked[3] != 1 {
+		t.Fatalf("повторные запросы: %v", asked)
 	}
 }

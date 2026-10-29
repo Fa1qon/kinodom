@@ -46,3 +46,19 @@ CREATE TABLE rec_shown (
     at    INTEGER NOT NULL,
     PRIMARY KEY (owner, kp_id)
 );
+-- Карточки фильмов, которых нет в пакете модели целиком (пакет несёт карточки популярных): дозапрошены
+-- с Кинопоиска, когда фильм попал в подборку. missing = 1 — Кинопоиск не отдал, не спрашивать до fetched_at + неделя.
+CREATE TABLE rec_cards (
+    kp_id       INTEGER PRIMARY KEY,
+    kind        TEXT NOT NULL DEFAULT '',
+    title       TEXT NOT NULL DEFAULT '',
+    title_orig  TEXT NOT NULL DEFAULT '',
+    year        INTEGER NOT NULL DEFAULT 0,
+    genres      TEXT NOT NULL DEFAULT '',
+    description TEXT NOT NULL DEFAULT '',
+    poster      TEXT NOT NULL DEFAULT '',
+    rating_kp   REAL NOT NULL DEFAULT 0,
+    rating_imdb REAL NOT NULL DEFAULT 0,
+    missing     INTEGER NOT NULL DEFAULT 0,
+    fetched_at  INTEGER NOT NULL
+);

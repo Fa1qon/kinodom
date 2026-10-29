@@ -26,6 +26,7 @@ type Service struct {
 	Now    func() time.Time
 
 	model atomic.Pointer[Model]
+	cards *cardFetcher // дозапрос карточек (StartCards); nil — только карточки пакета
 }
 
 func (s *Service) now() time.Time {
@@ -234,7 +235,7 @@ func (s *Service) rank(ctx context.Context, m *Model, sc *scored, q Query, exclu
 			keep = append(keep, kp)
 		}
 	}
-	fs, err := m.Films(ctx, keep)
+	fs, err := s.films(ctx, m, keep)
 	if err != nil {
 		return nil, err
 	}

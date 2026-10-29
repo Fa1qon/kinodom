@@ -51,6 +51,34 @@ func (a *App) initRecs() {
 		env.Posters = func(ctx context.Context, src string) (string, error) { return a.Images.Fetch(ctx, src, meta.Direct) }
 	}
 	a.Recs.Register(a.API, env)
+	// Карточки фильмов вне пакета (пакет несёт только популярные) — с Кинопоиска без ключа, фоновой очередью:
+	// каталог и правка в пульте идут раньше.
+	if a.kpweb != nil {
+		ctx, cancel := context.WithCancel(context.Background())
+		a.closers = append(a.closers, closerFunc(func() error { cancel(); return nil }))
+		a.Recs.StartCards(ctx, a.recsCard)
+	}
+}
+
+// recsCard — карточка фильма для рекомендаций: фильм, а не нашёлся — сериал (и наоборот).
+func (a *App) recsCard(ctx context.Context, kp int, series bool) (recs.Card, error) {
+	d, err := a.kpweb.Details(ctx, meta.KPBackground, kp, series)
+	if errors.Is(err, meta.ErrNotFound) {
+		d, err = a.kpweb.Details(ctx, meta.KPBackground, kp, !series)
+	}
+	if errors.Is(err, meta.ErrNotFound) {
+		return recs.Card{}, recs.ErrNoCard
+	}
+	if err != nil {
+		return recs.Card{}, err
+	}
+	c := recs.Card{Kind: "film", Title: d.NameRu, TitleOrig: d.NameOrig, Year: d.Year, Description: d.Description,
+		Poster: d.PosterURL, RatingKP: d.Rating, RatingIMDb: d.RatingIMDb, Genres: strings.ToLower(strings.Join(d.Genres, ", "))}
+	switch d.Type {
+	case "TV_SERIES", "MINI_SERIES", "TV_SHOW":
+		c.Kind = "series"
+	}
+	return c, nil
 }
 
 // recsOwner — профиль семьи, на который переключено устройство: «p:<номер>»; нет — "".

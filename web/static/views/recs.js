@@ -68,6 +68,7 @@ export function render(root, r, ctx) {
       items = v.items;
       note = v.note || '';
       moods = new Set(v.query.moods || []); // настроения, понятые из просьбы, — тоже подсвечены
+      refreshCards();
       error = '';
       done = new Map();
     } catch (e) {
@@ -75,6 +76,23 @@ export function render(root, r, ctx) {
     }
     busy = false;
     if (alive) draw();
+  }
+
+  // refreshCards — фильмы без постера Kinodom дозапрашивает у Кинопоиска после показа (по одному в 2–3 с): через
+  // 8, 25, 50 и 90 с их карточки подставляются на месте, порядок подборки не меняется.
+  let cardTimers = [];
+  function refreshCards() {
+    cardTimers.forEach(clearTimeout);
+    cardTimers = [8000, 25000, 50000, 90000].map((ms) => setTimeout(async () => {
+      const ids = (items || []).filter((it) => !it.film.poster).map((it) => it.film.id);
+      if (!alive || !ids.length) return;
+      try {
+        const v = await get('/recs/films?ids=' + ids.join(','));
+        const byId = new Map(v.items.map((f) => [f.id, f]));
+        items = items.map((it) => (byId.has(it.film.id) ? { ...it, film: byId.get(it.film.id) } : it));
+        if (alive) draw();
+      } catch { /* не страшно: постер появится при следующей подборке */ }
+    }, ms));
   }
 
   async function act(f, what, score) {
@@ -218,5 +236,5 @@ export function render(root, r, ctx) {
   }
 
   loadStatus();
-  return () => { alive = false; };
+  return () => { alive = false; cardTimers.forEach(clearTimeout); };
 }

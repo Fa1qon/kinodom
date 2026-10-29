@@ -71,6 +71,7 @@ func (s *Service) Register(rt Router, env Env) {
 	rt.Handle("GET /api/v1/recs/taste", "", http.HandlerFunc(h.taste))
 	rt.Handle("GET /api/v1/recs/quiz", "", http.HandlerFunc(h.quiz))
 	rt.Handle("GET /api/v1/recs/films/{id}/poster", "", http.HandlerFunc(h.poster))
+	rt.Handle("GET /api/v1/recs/films", "", http.HandlerFunc(h.cardsOf))
 	rt.HandleHome("POST /api/v1/recs/rate", "", http.HandlerFunc(h.rate))
 	rt.HandleHome("POST /api/v1/recs/mark", "", http.HandlerFunc(h.mark))
 	rt.HandleHome("POST /api/v1/recs/import-kp", "", http.HandlerFunc(h.importKP))
@@ -202,7 +203,7 @@ func (h *handlers) recs(w http.ResponseWriter, r *http.Request) {
 	for _, x := range list {
 		because = append(because, x.Because...)
 	}
-	titles, _ := m.Films(ctx, because)
+	titles, _ := h.s.films(ctx, m, because)
 	out := []recOut{}
 	var shown []int
 	for _, x := range list {
@@ -229,6 +230,11 @@ func (h *handlers) recs(w http.ResponseWriter, r *http.Request) {
 		out = append(out, o)
 		shown = append(shown, x.Film.KP)
 	}
+	var show []Film
+	for _, x := range list {
+		show = append(show, x.Film)
+	}
+	h.s.needCards(show) // фильмы без карточки — дозапросить: постер появится при следующем обновлении
 	if qs.Get("shown") != "0" {
 		h.s.MarkShown(ctx, owner, shown)
 	}
@@ -269,7 +275,7 @@ func (h *handlers) taste(w http.ResponseWriter, r *http.Request) {
 	}
 	var fs map[int]Film
 	if m := h.s.Model(); m != nil {
-		fs, _ = m.Films(ctx, ids)
+		fs, _ = h.s.films(ctx, m, ids)
 	}
 	var liked, disliked []item
 	for kp, x := range prof {
@@ -352,12 +358,43 @@ func (h *handlers) quiz(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 	}
-	fs, _ := m.Films(ctx, pick)
+	fs, _ := h.s.films(ctx, m, pick)
 	out := []FilmOut{}
+	var show []Film
 	for _, kp := range pick {
 		out = append(out, filmOut(fs[kp]))
+		show = append(show, fs[kp])
 	}
+	h.s.needCards(show)
 	httpx.WriteJSON(w, 200, map[string]any{"rated": len(sg.Ratings), "items": out})
+}
+
+// cardsOf — карточки фильмов ?ids=1,2,3: экран подставляет постеры, дозапрошенные после показа подборки
+// (повторный запрос подборки переставил бы её: показанное уходит ниже).
+func (h *handlers) cardsOf(w http.ResponseWriter, r *http.Request) {
+	m := h.s.Model()
+	if m == nil {
+		h.fail(w, ErrNoModel)
+		return
+	}
+	var ids []int
+	for _, x := range strings.Split(r.URL.Query().Get("ids"), ",") {
+		if id, err := strconv.Atoi(x); err == nil && id > 0 && len(ids) < 100 {
+			ids = append(ids, id)
+		}
+	}
+	fs, err := h.s.films(r.Context(), m, ids)
+	if err != nil {
+		h.fail(w, err)
+		return
+	}
+	out := []FilmOut{}
+	for _, id := range ids {
+		if f, ok := fs[id]; ok {
+			out = append(out, filmOut(f))
+		}
+	}
+	httpx.WriteJSON(w, 200, map[string]any{"items": out})
 }
 
 func (h *handlers) poster(w http.ResponseWriter, r *http.Request) {
@@ -367,7 +404,7 @@ func (h *handlers) poster(w http.ResponseWriter, r *http.Request) {
 		httpx.WriteError(w, http.StatusNotFound, "постера нет")
 		return
 	}
-	f, ok := m.Film(r.Context(), id)
+	f, ok := h.s.film(r.Context(), m, id)
 	if !ok || f.Poster == "" {
 		httpx.WriteError(w, http.StatusNotFound, "постера нет")
 		return
