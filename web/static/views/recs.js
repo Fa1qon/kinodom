@@ -97,8 +97,8 @@ export function render(root, r, ctx) {
     if (!status.installed) {
       fill(body, h('div', { class: 'recs-empty' },
         h('p', null, 'Рекомендации ещё не установлены.'),
-        h('p', { class: 'muted' }, 'Нужен пакет модели recs-model.db (его собирает kinosovet: обучение на MovieLens, связки с Кинопоиском). ' +
-          'Положите файл в папку данных Kinodom или установите командой на этом ПК: POST /api/v1/recs/model {"path": "…"}.')));
+        h('p', { class: 'muted' }, 'Пакет модели recs-model.db входит в установщик Kinodom — переустановите программу. ' +
+          'Свежий пакет можно поставить и вручную: положить в папку данных Kinodom и перезапустить службу.')));
       return;
     }
     keepFocus(root, () => fill(body,

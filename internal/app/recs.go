@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -26,8 +27,14 @@ func (a *App) initRecs() {
 		}
 	})
 	a.Recs = &recs.Service{DB: a.DB, Journal: resolvingJournal{a.History}, Wanted: a.recsWanted}
+	// Пакет модели приходит с установщиком рядом с программой; поставленный вручную (POST /recs/model) —
+	// в папке данных. Берётся более свежий: новый установщик не перекрывается старым ручным пакетом.
 	path := filepath.Join(a.Paths.Data, "recs-model.db")
-	switch m, err := recs.OpenModel(path); {
+	paths := []string{path}
+	if exe, err := os.Executable(); err == nil {
+		paths = append(paths, filepath.Join(filepath.Dir(exe), "recs-model.db"))
+	}
+	switch m, err := recs.OpenNewest(paths...); {
 	case err == nil:
 		a.Recs.SetModel(m)
 		a.closers = append(a.closers, closerFunc(func() error { a.Recs.SetModel(nil); return nil }))

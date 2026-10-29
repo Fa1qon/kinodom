@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"encoding/json"
+	"errors"
 
 	"kinodom/internal/history"
 	"kinodom/internal/store"
@@ -247,5 +248,26 @@ func TestHTTP(t *testing.T) {
 	resp.Body.Close()
 	if len(out.Items) == 0 || out.Items[0].Film.Title != "Начало" || out.Items[0].Reason != "Похоже на «Матрица»" {
 		t.Fatalf("без просьбы: %+v", out.Items)
+	}
+}
+
+// Пакет установщика и ручной: берётся более свежий по дате сборки, отсутствующий файл не мешает.
+func TestOpenNewest(t *testing.T) {
+	older, newer := testPack(t, films, nil, nil), testPack(t, map[int]string{1: "Новый"}, nil, nil)
+	for p, built := range map[string]string{older: "2026-10-01T00:00:00Z", newer: "2026-10-29T00:00:00Z"} {
+		db, _ := sql.Open("sqlite", p)
+		db.Exec(`INSERT INTO meta VALUES ('built', ?)`, built)
+		db.Close()
+	}
+	m, err := OpenNewest(filepath.Join(t.TempDir(), "нет.db"), older, newer)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer m.Close()
+	if f, ok := m.Film(context.Background(), 1); !ok || f.Title != "Новый" {
+		t.Fatalf("открыт не самый свежий пакет: %+v", f)
+	}
+	if _, err := OpenNewest(filepath.Join(t.TempDir(), "нет.db")); !errors.Is(err, ErrNoModel) {
+		t.Fatalf("без пакетов — ErrNoModel: %v", err)
 	}
 }

@@ -1976,7 +1976,7 @@ const tag = (f, p) => { const e = formatTag(f, p); return e ? e.className + ':' 
 const alt = (f) => { const e = altFormatTag(f); return e ? e.className + ':' + e.textContent : null; };
 const gf = (items) => JSON.stringify(groupFormat({ items }));
 const checks = [
-  [NAV.map((x) => x[0]).join(' '), 'home catalog channels library downloads history settings'],
+  [NAV.map((x) => x[0]).join(' '), 'home recs catalog channels library downloads history settings'],
   [tag('MKV', true), 'fmt pref:MKV'],
   [tag('AVI, MKV', false), 'fmt:AVI, MKV'],
   [tag('', true), null],

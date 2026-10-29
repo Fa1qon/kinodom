@@ -4,7 +4,9 @@
 # -Installer — ещё установщик dist\Kinodom-<версия>-setup.exe (Inno Setup 6:
 # winget install JRSoftware.InnoSetup). Есть JDK 17 и Android SDK (JAVA_HOME, ANDROID_HOME) — ещё приложение для
 # Android: bin\kinodom.apk и bin\kinodom.apk.json (версия и номер сборки — спека этапа 13, раздел 6).
-param([switch]$Installer)
+# -RecsModel — пакет рекомендаций (recs-model.db, собирает kinosovet): кладётся рядом с kinodom.exe и в
+# установщик. Не задан — KINODOM_RECS_MODEL, иначе ..\kinosovet\data\recs-model.db; нет файла — без рекомендаций.
+param([switch]$Installer, [string]$RecsModel)
 $ErrorActionPreference = 'Stop'
 Set-Location $PSScriptRoot
 $env:CGO_ENABLED = '0'
@@ -69,6 +71,16 @@ foreach ($t in 'ffprobe', 'ffmpeg') {
 Write-Host "$jni\libkinodomserver.so ($version)"
 # Свой плеер (план 18А): урезанный ffmpeg — рядом с kinodom.exe, там его ищет сервер.
 Copy-Item third_party\ffmpeg\ffmpeg.exe, third_party\ffmpeg\ffprobe.exe bin\ -Force
+# Рекомендации «Что посмотреть»: готовый пакет модели — рядом с программой (сервер ищет его там и в папке данных).
+if (-not $RecsModel) { $RecsModel = $env:KINODOM_RECS_MODEL }
+if (-not $RecsModel) { $RecsModel = Join-Path $PSScriptRoot '..\kinosovet\data\recs-model.db' }
+if (Test-Path $RecsModel) {
+    Copy-Item $RecsModel bin\recs-model.db -Force
+    Write-Host "bin\recs-model.db ($([math]::Round((Get-Item bin\recs-model.db).Length / 1MB)) MB)"
+} else {
+    Remove-Item bin\recs-model.db -ErrorAction SilentlyContinue
+    Write-Warning "No recommendations pack ($RecsModel): build without recommendations"
+}
 
 # Приложение для Android: версия — как у сервера, номер сборки — число коммитов; подпись — ключ из
 # %USERPROFILE%\.kinodom (make-key.ps1 создаёт его при первой сборке). Нет JDK или SDK — без APK.

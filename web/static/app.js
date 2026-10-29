@@ -114,7 +114,7 @@ function setMenu(open) {
 // updateHeader — выбранный раздел и жёлтый значок у «Настроек», если есть хоть одна проблема.
 function updateHeader(r) {
   document.body.classList.toggle('playing', r.parts[0] === 'play' || r.parts[0] === 'channel-play'); // плеер — во всё окно, без шапки (план 18Б)
-  const current = { release: 'catalog', channel: 'channels', recs: 'home' }[r.parts[0]] || r.parts[0];
+  const current = { release: 'catalog', channel: 'channels' }[r.parts[0]] || r.parts[0];
   navLinks.catalog.href = catalogRoute();
   for (const [id, a] of Object.entries(navLinks)) {
     a.classList.toggle('on', id === current);

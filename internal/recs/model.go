@@ -73,6 +73,37 @@ func OpenModel(path string) (*Model, error) {
 
 func (m *Model) Close() error { return m.db.Close() }
 
+// OpenNewest открывает самый свежий (по дате сборки в meta) из пакетов paths: пакет установщика рядом
+// с программой и поставленный вручную в папку данных. Ни одного — ErrNoModel.
+func OpenNewest(paths ...string) (*Model, error) {
+	var best *Model
+	var firstErr error
+	for _, p := range paths {
+		m, err := OpenModel(p)
+		if err != nil {
+			if !errors.Is(err, ErrNoModel) && firstErr == nil {
+				firstErr = err
+			}
+			continue
+		}
+		if best == nil || m.Info["built"] > best.Info["built"] {
+			if best != nil {
+				best.Close()
+			}
+			best = m
+		} else {
+			m.Close()
+		}
+	}
+	if best != nil {
+		return best, nil
+	}
+	if firstErr != nil {
+		return nil, firstErr
+	}
+	return nil, ErrNoModel
+}
+
 func ph(n int) string { return strings.TrimSuffix(strings.Repeat("?,", n), ",") }
 
 func ints(ids []int) []any {

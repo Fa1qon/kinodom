@@ -56,6 +56,8 @@ Source: "..\third_party\ffmpeg\LICENSE.LGPLv2.1.txt"; DestDir: "{app}"; DestName
 Source: "..\third_party\ffmpeg\LICENSE.vpx.txt"; DestDir: "{app}"; DestName: "ffmpeg-LICENSE.vpx.txt"; Flags: ignoreversion
 Source: "..\third_party\ffmpeg\LICENSE.opus.txt"; DestDir: "{app}"; DestName: "ffmpeg-LICENSE.opus.txt"; Flags: ignoreversion
 Source: "..\third_party\ffmpeg\README.md"; DestDir: "{app}"; DestName: "ffmpeg-README.md"; Flags: ignoreversion
+; Рекомендации «Что посмотреть»: готовый пакет модели (EASE по MovieLens, настроение, карточки Кинопоиска).
+Source: "..\bin\recs-model.db"; DestDir: "{app}"; Flags: ignoreversion skipifsourcedoesntexist
 ; Приложение для Android (спека этапа 13, 5.3): сервер раздаёт его по /app; сборка без Android SDK — без него.
 Source: "..\bin\kinodom.apk"; DestDir: "{app}"; Flags: ignoreversion skipifsourcedoesntexist
 Source: "..\bin\kinodom.apk.json"; DestDir: "{app}"; Flags: ignoreversion skipifsourcedoesntexist
