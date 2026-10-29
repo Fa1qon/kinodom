@@ -179,7 +179,7 @@ type topicURLer interface {
 // очередь) — она догружается вне очереди, первой (хвост 5c): пульт повторяет запрос, пока
 // DetailsPending. Нет картинки, а номер Кинопоиска известен — постер Кинопоиска догружается тоже.
 func (c *Catalog) Release(ctx context.Context, id int64) (Release, error) {
-	r, desc, magnet, torrent, removed, err := c.st.release(ctx, id)
+	r, desc, magnet, torrent, removed, download, err := c.st.release(ctx, id)
 	if errors.Is(err, sql.ErrNoRows) {
 		return Release{}, ErrNoRelease
 	}
@@ -208,6 +208,10 @@ func (c *Catalog) Release(ctx context.Context, id int64) (Release, error) {
 		c.enrichSoon(r.Tracker, r.ID)
 	}
 	if !r.DetailsAt.IsZero() && !removed && out.Torrent == nil && c.torrentOnOpen(r) {
+		out.DetailsPending = true
+	}
+	// Трекер из описаний (open2, open3…): magnet в поиске нет — .torrent по ссылке, когда раздачу открыли.
+	if out.Torrent == nil && out.Magnet == "" && download != "" && !removed && c.extraTorrentOnOpen(r, download) {
 		out.DetailsPending = true
 	}
 	if c.pageless(r) && !removed {
@@ -478,6 +482,63 @@ func (c *Catalog) torrentOnOpen(r row) bool {
 		}
 		if err != nil {
 			c.log.Warn("каталог: .torrent открытой раздачи не скачался — откроется по magnet", "tracker", r.Tracker, "topic", r.TopicID, "err", err)
+			c.failed("torrent", r.ID, c.now())
+			return
+		}
+		c.succeeded("torrent", r.ID)
+		if err := c.st.saveTorrent(context.WithoutCancel(base), r.ID, b); err != nil {
+			c.log.Warn("каталог: .torrent не записался", "err", err)
+		}
+	}()
+	return true
+}
+
+// extraTorrent — источник поиска, который умеет .torrent по ссылке из своей выдачи (трекеры из описаний).
+type extraTorrent interface {
+	Torrent(ctx context.Context, tracker, link string) ([]byte, error)
+}
+
+// extraTorrentOnOpen — .torrent раздачи из источника поиска в фоне; true — качается (экран повторит запрос).
+// Вместо файла нашлась magnet-ссылка — она и сохраняется.
+func (c *Catalog) extraTorrentOnOpen(r row, link string) bool {
+	tf, ok := c.extra.(extraTorrent)
+	if !ok || !c.due("torrent", r.ID, c.now()) {
+		return false
+	}
+	c.mu.Lock()
+	if c.torrentNow[r.ID] {
+		c.mu.Unlock()
+		return true
+	}
+	c.torrentNow[r.ID] = true
+	base := c.runCtx
+	c.mu.Unlock()
+	if base == nil {
+		base = context.Background()
+	}
+	c.posterWG.Add(1)
+	go func() {
+		defer c.posterWG.Done()
+		defer func() {
+			c.mu.Lock()
+			delete(c.torrentNow, r.ID)
+			c.mu.Unlock()
+		}()
+		ctx, cancel := context.WithTimeout(base, torrentWait)
+		b, err := tf.Torrent(ctx, r.Tracker, link)
+		cancel()
+		if base.Err() != nil {
+			return
+		}
+		var mf interface{ MagnetLink() string }
+		switch {
+		case errors.As(err, &mf):
+			if err := c.st.saveMagnet(context.WithoutCancel(base), r.ID, mf.MagnetLink()); err != nil {
+				c.log.Warn("каталог: magnet не записался", "err", err)
+			}
+			return
+		case err != nil:
+			c.log.Warn("каталог: .torrent раздачи не скачался", "tracker", r.Tracker, "link", link, "err", err)
 			c.failed("torrent", r.ID, c.now())
 			return
 		}

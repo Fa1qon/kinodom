@@ -148,8 +148,6 @@ export function render(root, r, ctx) {
     // Открыто, если что-то задано.
     const erase = v.kinopoisk.keySet && canEdit
       ? h('button', { class: 'btn', type: 'button', 'data-key': 'kp-erase', onclick: () => eraseKey('kinopoisk') }, icon('delete'), 'Стереть') : null;
-    const searchErase = v.search.keySet && canEdit
-      ? h('button', { class: 'btn', type: 'button', 'data-key': 'search-erase', onclick: () => eraseKey('search') }, icon('delete'), 'Стереть') : null;
     searchResult = h('div', { class: 'small check-result', role: 'status' });
     const extra = h('div', { class: 'col', hidden: !(v.t1.downloadAddress || v.t2.apiAddress || v.t2.feedAddress || v.kinopoisk.keySet) },
       field('Адрес .torrent t1', 't1Download', input('t1Download', v.t1.downloadAddress)),
@@ -182,10 +180,8 @@ export function render(root, r, ctx) {
           h('div', { class: 'card' }, h('div', { class: 'h' }, 'Прокси для трекеров'), proxyType,
             field('Адрес', 'proxyAddress', input('proxyAddress', v.proxy.address, { placeholder: '192.168.1.20:3128' })),
             h('div', { class: 'two' }, field('Логин', 'proxyLogin', input('proxyLogin', v.proxy.login, { autocomplete: 'off' })), field('Пароль', 'proxyPassword', secret('proxyPassword', v.proxy.passwordSet)))),
-          h('div', { class: 'card' }, h('div', { class: 'h' }, 'Источник поиска'),
-            field('Адрес', 'searchAddress', input('searchAddress', v.search.address, { autocomplete: 'off', inputmode: 'url' })),
-            field('Ключ', 'searchKey', h('div', { class: 'row gap10' }, secret('searchKey', v.search.keySet), searchErase)),
-            h('p', { class: 'muted small' }, 'Ключ выдаёт сам сервис Jacred или администратор Jackett. Для публичного сервиса обычно оставляйте поле пустым; если сервис требует ключ, его нужно получить у владельца сервиса.'),
+          h('div', { class: 'card' }, h('div', { class: 'h' }, 'Открытые трекеры'),
+            h('p', { class: 'muted small' }, 'Кроме t1 и t2, поиск идёт по открытым трекерам: open2, open3, open5.example и open4. Регистрация и настройки не нужны: Kinodom сам скачивает их описания и раз в неделю обновляет.'),
             h('div', { class: 'row gap10' },
               h('button', { class: 'btn', type: 'button', disabled: !canEdit, 'data-key': 'search-check', onclick: checkSearch }, icon('network_check'), 'Проверить'),
               searchResult)),
@@ -248,25 +244,13 @@ export function render(root, r, ctx) {
     if (alive) draw();
   }
 
-  // checkSearch — «Проверить» источник поиска: изменённые адрес и ключ сначала сохраняются — проверяется
-  // сохранённое (как «Проверить» в мастере).
+  // checkSearch — «Проверить» открытые трекеры: скачаны ли их описания (0.17: вместо источника Jacred).
   async function checkSearch(e) {
     const btn = e.currentTarget;
     const el = searchResult;
     btn.disabled = true;
-    errs.searchAddress.textContent = errs.general.textContent = '';
+    errs.general.textContent = '';
     try {
-      const p = {};
-      const addr = inputs.searchAddress.value.trim();
-      if (addr !== view.search.address) p.address = addr;
-      const key = searchKeyPatch(inputs.searchKey.value, false);
-      if (key) p.key = key.key;
-      if (Object.keys(p).length > 0) {
-        view = await put('/settings', { search: p });
-        inputs.searchAddress.value = view.search.address; // как сохранил сервер: «схема://хост»
-        inputs.searchKey.value = '';
-        inputs.searchKey.placeholder = view.search.keySet ? 'задан' : '';
-      }
       el.textContent = 'Проверяю…';
       el.classList.remove('good', 'bad');
       const res = await post('/setup/check', { source: 'search' });
@@ -319,9 +303,6 @@ export function render(root, r, ctx) {
     }
     const kpk = kpKeyPatch(val('kpKey'), false);
     if (kpk) p.kinopoisk = kpk;
-    if (val('searchAddress') !== v.search.address) set('search', 'address', val('searchAddress'));
-    const sk = searchKeyPatch(val('searchKey'), false);
-    if (sk) set('search', 'key', sk.key);
     if (val('downloadsDir') !== v.storage.downloadsDir) set('storage', 'downloadsDir', val('downloadsDir'));
     for (const [k, min, text] of [['keepDays', 1, 'Хранить, дней: нужно целое число от 1'], ['minFreeGB', 0, 'Запас места, ГБ: нужно целое число от 0'],
       ['keepBehind', 0, 'Серий позади при нехватке места: нужно целое число от 0']]) {

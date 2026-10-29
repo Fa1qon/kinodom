@@ -1171,7 +1171,7 @@ for (const [got, want] of checks) {
 	// Справка «?» — в шапке пульта.
 	src := scripts(t)
 	for file, needles := range map[string][]string{
-		"views/setup.js": {"p.search = { address:", "Разделы каталога", "encodeGroups(groups, sel)", "Папка загрузок",
+		"views/setup.js": {"Открытые трекеры", "Разделы каталога", "encodeGroups(groups, sel)", "Папка загрузок",
 			"storage: { downloadsDir: dir }", "все ${ids.length}", "Promise.allSettled"},
 		"views/help.js": {"Как пользоваться Kinodom", "Веб-версия", "Приложение", "С пульта ТВ", "Плеер канала", "selectHelpMode", "isClient", "openModal"},
 		"app.js":        {"openHelp", "help_outline", "'data-key': 'help'"},
@@ -1582,7 +1582,7 @@ import { trackerLabel, tagStates, backTo } from './views/search.js';
 const checks = [
   [trackerLabel('t1'), 't1'], [trackerLabel('t2'), 't2'], [trackerLabel('jacred'), 'Jacred'],
   [trackerLabel('tracker3'), 'tracker3'], [trackerLabel('open2'), 'open2'], [trackerLabel('lostfilm'), 'LostFilm'],
-  [trackerLabel('open3'), 'open3'], [trackerLabel('bitru'), 'Bitru'], [trackerLabel('ultradox'), 'Ultradox'],
+  [trackerLabel('open3'), 'open3'], [trackerLabel('open2'), 'open2'], [trackerLabel('bitru'), 'Bitru'], [trackerLabel('ultradox'), 'Ultradox'],
   [trackerLabel('newtracker'), 'Newtracker'], [trackerLabel(''), ''],
 ];
 const tags = tagStates({ jacred: 'нужен ключ', t1: 'ok', t2: 'идёт' }, [{ tracker: 't1' }, { tracker: 'tracker3' }, { tracker: 'open2' }]);

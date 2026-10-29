@@ -227,8 +227,9 @@ func (s catalogStore) saveExtra(ctx context.Context, rs []source.Release, own, w
 		}
 		if _, err := tx.ExecContext(ctx,
 			`UPDATE releases SET link = ?, magnet = CASE WHEN ? != '' THEN ? ELSE magnet END,
+			   download_url = CASE WHEN ? != '' THEN ? ELSE download_url END,
 			   details_at = CASE WHEN details_at = 0 THEN ? ELSE details_at END
-			 WHERE id = ?`, r.Link, r.Magnet, r.Magnet, ms(now), ids[i]); err != nil {
+			 WHERE id = ?`, r.Link, r.Magnet, r.Magnet, r.Download, r.Download, ms(now), ids[i]); err != nil {
 			return nil, err
 		}
 	}
@@ -483,12 +484,19 @@ func (s catalogStore) rowsByKeys(ctx context.Context, keys []string) ([]row, err
 	return out, nil
 }
 
-// release — раздача для экрана раздачи: строка, описание, magnet, .torrent и «удалена с трекера».
-func (s catalogStore) release(ctx context.Context, id int64) (r row, description, magnet string, torrent []byte, removed bool, err error) {
+// release — раздача для экрана раздачи: строка, описание, magnet, .torrent, «удалена с трекера» и ссылка на
+// .torrent (трекеры из описаний, у которых magnet в поиске нет).
+func (s catalogStore) release(ctx context.Context, id int64) (r row, description, magnet string, torrent []byte, removed bool, download string, err error) {
 	r, err = scanRow(s.db.R.QueryRowContext(ctx,
-		`SELECT `+rowColumns+`, r.description, r.magnet, r.torrent, r.removed FROM releases r WHERE r.id = ?`, id),
-		&description, &magnet, &torrent, &removed)
-	return r, description, magnet, torrent, removed, err
+		`SELECT `+rowColumns+`, r.description, r.magnet, r.torrent, r.removed, r.download_url FROM releases r WHERE r.id = ?`, id),
+		&description, &magnet, &torrent, &removed, &download)
+	return r, description, magnet, torrent, removed, download, err
+}
+
+// saveMagnet — magnet со страницы раздачи (трекер отдал её вместо .torrent).
+func (s catalogStore) saveMagnet(ctx context.Context, id int64, magnet string) error {
+	_, err := s.db.W.ExecContext(ctx, `UPDATE releases SET magnet = ? WHERE id = ?`, magnet, id)
+	return err
 }
 
 // missingPosters — раздачи без картинки (и без страницы: постер по номеру Кинопоиска — спека 11b, 5.4):

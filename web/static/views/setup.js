@@ -94,7 +94,6 @@ export function render(root, r, ctx) {
       const f = {
         rtAddress: input('rtAddress', v.t2.address, { inputmode: 'url' }), rtLogin: input('rtLogin', v.t2.login),
         rtPassword: secret('rtPassword', v.t2.passwordSet), t1Address: input('t1Address', v.t1.address, { inputmode: 'url' }),
-        searchAddress: input('searchAddress', v.search.address, { inputmode: 'url', placeholder: 'http://192.168.0.10:9000' }),
         proxyAddress: input('proxyAddress', v.proxy.address), proxyLogin: input('proxyLogin', v.proxy.login), proxyPassword: secret('proxyPassword', v.proxy.passwordSet),
       };
       const types = [['none', 'Нет'], ['http', 'HTTP'], ['socks5', 'SOCKS5']];
@@ -185,7 +184,6 @@ export function render(root, r, ctx) {
         if (f.rtPassword.value) p.t2.password = f.rtPassword.value;
         const sp = sectionsPatch();
         if (sp) p.catalog = { sections: sp };
-        p.search = { address: val('searchAddress') };
         const type = ptype.querySelector('input:checked').value;
         if (type !== v.proxy.type || val('proxyAddress') !== v.proxy.address || val('proxyLogin') !== v.proxy.login || f.proxyPassword.value) {
           p.proxy = type === 'none' ? { type } : { type, address: val('proxyAddress'), login: val('proxyLogin') };
@@ -194,7 +192,6 @@ export function render(root, r, ctx) {
         Object.assign(v, await put('/settings', p));
         f.rtAddress.value = v.t2.address; // адрес — как его сохранил сервер: «схема://хост»
         f.t1Address.value = v.t1.address;
-        f.searchAddress.value = v.search.address;
         f.rtPassword.value = f.proxyPassword.value = '';
         f.rtPassword.placeholder = v.t2.passwordSet ? 'задан' : '';
         f.proxyPassword.placeholder = v.proxy.passwordSet ? 'задан' : '';
@@ -217,8 +214,8 @@ export function render(root, r, ctx) {
           h('div', { class: 'row gap10' }, checkBtn('check-t2', check('t2', rtResult)), rtResult)),
         h('div', { class: 'card' }, h('div', { class: 'h' }, 't1'), field('Адрес сайта или зеркала', f.t1Address),
           h('div', { class: 'row gap10' }, checkBtn('check-t1', check('t1', t1Result)), t1Result)),
-        h('div', { class: 'card' }, h('div', { class: 'h' }, 'Поиск раздач'), field('Адрес сервиса поиска', f.searchAddress),
-          h('p', { class: 'muted small' }, 'Jacred или Jackett: поиск сразу по многим трекерам. Пусто — поиск выключен. Ключ выдаёт сервис Jacred или администратор Jackett; для публичного сервиса обычно оставляйте ключ пустым.')),
+        h('div', { class: 'card' }, h('div', { class: 'h' }, 'Открытые трекеры'),
+          h('p', { class: 'muted small' }, 'Поиск идёт и по открытым трекерам: open2, open3, open5.example и open4. Они подключаются сами, без регистрации и настроек.')),
         h('div', { class: 'card' }, h('div', { class: 'h' }, 'Разделы каталога'),
           h('p', { class: 'muted small' }, 'Какие разделы показывать в «Каталоге». По умолчанию отмечены все.'),
           groups ? groupBox : h('p', { class: 'muted small' }, 'Разделы t2 не загрузились — сохранённый выбор не изменится.'),

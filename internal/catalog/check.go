@@ -26,7 +26,7 @@ type Version struct {
 // source.ErrRemoved (и раздача помечена снятой); трекер выключен, на паузе или не ответил — ошибка,
 // повтор при следующей проверке.
 func (c *Catalog) CheckRelease(ctx context.Context, id int64) (Version, error) {
-	r, _, _, torrent, _, err := c.st.release(ctx, id)
+	r, _, _, torrent, _, _, err := c.st.release(ctx, id)
 	if errors.Is(err, sql.ErrNoRows) {
 		return Version{}, ErrNoRelease
 	}

@@ -17,7 +17,11 @@ require (
 	modernc.org/sqlite v1.59.0
 )
 
-require golang.org/x/image v0.33.0
+require (
+	github.com/dlclark/regexp2 v1.11.5
+	golang.org/x/image v0.33.0
+	gopkg.in/yaml.v3 v3.0.1
+)
 
 require (
 	github.com/RoaringBitmap/roaring v1.2.3 // indirect

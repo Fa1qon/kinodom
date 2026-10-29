@@ -11,6 +11,7 @@ import (
 	"maps"
 	"net/http"
 	"net/netip"
+	"path/filepath"
 	"reflect"
 	"strconv"
 	"strings"
@@ -39,6 +40,7 @@ import (
 	"kinodom/internal/recs"
 	"kinodom/internal/settings"
 	"kinodom/internal/source"
+	"kinodom/internal/source/cardigann"
 	"kinodom/internal/source/jacred"
 	"kinodom/internal/source/t1"
 	"kinodom/internal/source/t2"
@@ -113,9 +115,10 @@ type App struct {
 	kpweb     *meta.KPWeb // Кинопоиск без токена (11b-Б)
 	t1     *t1.t1
 	t2 *t2.t2
-	search    *jacred.Client // источник поиска Jacred / Jackett по адресу из настроек (11b-Д)
-	proxy     *netx.Proxy    // прокси для трекеров: один на всех, меняется в пульте на ходу
-	closers   []io.Closer    // закрываются в обратном порядке
+	search    *jacred.Client  // источник поиска Jacred / Jackett по адресу из настроек (11b-Д); в поиске — не участвует
+	trackers  *cardigann.Pool // открытые трекеры по описаниям Jackett (open2, open3…): источник поиска каталога
+	proxy     *netx.Proxy     // прокси для трекеров: один на всех, меняется в пульте на ходу
+	closers   []io.Closer     // закрываются в обратном порядке
 }
 
 func New(ctx context.Context, o Options) (*App, error) {
@@ -336,6 +339,15 @@ func (a *App) initCatalog(ctx context.Context, o Options, v settings.Values) err
 	}
 	a.t1 = t1Src
 	a.search = jacred.New(jacred.Options{Address: v.SearchAddress, Key: v.SearchKey, Proxy: a.proxy, Log: log})
+	// Вместо Jacred (публичные серверы закрылись или просят ключ): открытые трекеры по описаниям Jackett —
+	// сам Kinodom, без второй программы; описания скачиваются в папку данных и обновляются раз в неделю.
+	a.trackers = cardigann.NewPool(cardigann.PoolOptions{Dir: filepath.Join(a.Paths.Data, "trackers"),
+		Client: &http.Client{Transport: netx.NewTransport(a.proxy), Timeout: 40 * time.Second}, Log: log})
+	if !o.Offline {
+		trCtx, trCancel := context.WithCancel(context.Background())
+		a.closers = append(a.closers, closerFunc(func() error { trCancel(); return nil }))
+		go a.trackers.Run(trCtx)
+	}
 	rto := t2.Options{Proxy: a.proxy, Mirrors: oneAddress(v.t2Address), APIBase: v.t2API,
 		FeedBase: v.t2Feed, Rate: o.Trackers.Rate, Log: log,
 		Login: v.t2Login, Password: v.t2Password, OnLogin: a.t2Login}
@@ -371,7 +383,7 @@ func (a *App) initCatalog(ctx context.Context, o Options, v settings.Values) err
 		fs, err := a.Ratings.Films(ctx, []int{id})
 		return fs[id].Type, err
 	}}
-	a.Catalog = catalog.New(catalog.Options{DB: a.DB, Sources: []source.Source{t1Src, rtSrc}, Extra: a.search, Sections: sections,
+	a.Catalog = catalog.New(catalog.Options{DB: a.DB, Sources: []source.Source{t1Src, rtSrc}, Extra: a.trackers, Sections: sections,
 		FilmDescription: func(ctx context.Context, id int) (string, error) {
 			d, err := kp.Details(meta.Urgent(ctx), id) // человек открыл раздачу и ждёт
 			return d.Description, err

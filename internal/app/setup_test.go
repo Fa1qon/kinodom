@@ -241,40 +241,17 @@ func TestFolderBrowserDenied(t *testing.T) {
 
 // «Проверить» у источника поиска (спека 11b, раздел 8): Jacred, который просит ключ, — «Нужен ключ», с
 // ключом — «Jacred отвечает»; ключ — ни в ответе проверки, ни в настройках. Адрес и ключ — на ходу.
+// Источник поиска мастера — открытые трекеры по описаниям (Jacred в поиске больше не участвует, 0.17): пока
+// описания не скачались, мастер так и говорит; ключ старого источника в ответах настроек не светится.
 func TestSetupCheckSearchSource(t *testing.T) {
 	const key = "SECRET-jacred-5"
-	jac := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		switch r.URL.Path {
-		case "/api/v1.0/conf":
-			io.WriteString(w, `{"jacred":true,"apikey":true}`)
-		case "/api/v2.0/indexers/all/results":
-			if r.URL.Query().Get("apikey") != key {
-				io.WriteString(w, `{"Results":[],"jacred":true}`)
-				return
-			}
-			io.WriteString(w, `{"Results":[{"Tracker":"tracker3","Details":"https://tracker3.guru/details.php?id=1","Title":"Матрица / The Matrix / 1999 / ДБ / BDRip","Size":1,"Seeders":1,"MagnetUri":"magnet:?xt=urn:btih:1111111111111111111111111111111111111111"}],"jacred":true}`)
-		default:
-			http.NotFound(w, r)
-		}
-	}))
-	t.Cleanup(jac.Close)
 	a := startApp(t)
 	base := "http://" + a.API.Addr()
-	check := func() checkResult { t.Helper(); return setupCheck(t, base, map[string]string{"source": "search"}) }
-	if r := check(); r.OK || r.Text != "Укажите адрес источника" {
-		t.Fatalf("без адреса: %+v", r)
-	}
-	if code, body := putJSON(t, base+"/api/v1/settings", map[string]any{"search": map[string]any{"address": jac.URL}}); code != http.StatusOK {
-		t.Fatalf("адрес: %d %s", code, body)
-	}
-	if r := check(); r.OK || r.Text != "Нужен ключ" {
-		t.Fatalf("без ключа: %+v", r)
+	if r := setupCheck(t, base, map[string]string{"source": "search"}); r.OK || !strings.Contains(r.Text, "Описания трекеров") {
+		t.Fatalf("без описаний: %+v", r)
 	}
 	code, body := putJSON(t, base+"/api/v1/settings", map[string]any{"search": map[string]any{"key": key}})
-	if code != http.StatusOK || strings.Contains(body, key) || !strings.Contains(body, `"keySet":true`) {
+	if code != http.StatusOK || strings.Contains(body, key) {
 		t.Fatalf("ключ: %d %s", code, body)
-	}
-	if r := check(); !r.OK || r.Text != "Jacred отвечает" || strings.Contains(r.Text, key) {
-		t.Fatalf("с ключом: %+v", r)
 	}
 }

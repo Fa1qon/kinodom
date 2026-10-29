@@ -2,6 +2,7 @@ package app
 
 import (
 	"errors"
+	"fmt"
 	"net"
 	"net/http"
 	"strconv"
@@ -39,7 +40,12 @@ func (a *App) handleSetupCheck(w http.ResponseWriter, r *http.Request) {
 	var res setupCheckResult
 	switch {
 	case in.Source == "search":
-		res.OK, res.Text = a.search.Check(r.Context())
+		// Источник поиска — открытые трекеры по описаниям (Jacred больше не участвует)
+		if names := a.trackers.Trackers(); len(names) > 0 {
+			res.OK, res.Text = true, fmt.Sprintf("Открытые трекеры подключены: %d", len(names))
+		} else {
+			res.OK, res.Text = false, "Описания трекеров ещё скачиваются — поиск по ним начнётся через минуту"
+		}
 	case in.Tracker == "t1":
 		res = trackerCheck("t1", a.t1.Configured(), a.t1.Check(r.Context()))
 	case in.Tracker == "t2":

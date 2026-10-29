@@ -12,7 +12,7 @@ import { playSound } from '../nav.js';
 // трекеры его раздач (11b-Д).
 const OWN = ['t1', 't2'];
 const LABELS = {
-  t1: 't1', t2: 't2', jacred: 'Jacred', tracker3: 'tracker3', open2: 'open2', lostfilm: 'LostFilm',
+  t1: 't1', t2: 't2', jacred: 'Jacred', trackers: 'Открытые трекеры', 'open2': 'open2', open4: 'open4', tracker3: 'tracker3', open2: 'open2', lostfilm: 'LostFilm',
   open3: 'open3', bitru: 'Bitru', torrentby: 'open5.example', ultradox: 'Ultradox', leproduction: 'LE-Production',
   selezen: 'Селезень', rudub: 'RuDub', mazepa: 'Mazepa', toloka: 'Toloka', anilibria: 'AniLibria', anifilm: 'AniFilm',
   baibako: 'BaibaKo', animelayer: 'AnimeLayer',

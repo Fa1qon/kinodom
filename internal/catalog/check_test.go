@@ -77,7 +77,7 @@ func TestCheckReleaseRemoved(t *testing.T) {
 	if _, err := c.CheckRelease(ctx, id); !errors.Is(err, source.ErrRemoved) {
 		t.Fatalf("нужна source.ErrRemoved: %v", err)
 	}
-	if _, _, _, _, removed, err := c.st.release(ctx, id); err != nil || !removed {
+	if _, _, _, _, removed, _, err := c.st.release(ctx, id); err != nil || !removed {
 		t.Fatalf("раздача не помечена снятой: %v %v", removed, err)
 	}
 }
@@ -103,7 +103,7 @@ func TestUpsertNewHashResetsTorrent(t *testing.T) {
 		t1.top["12"] = []source.Release{rel("t1", "1", "Холод [01-08 из 08] (2026) WEB-DL 1080p", 60, 1<<30, "h2")}
 	})
 	refresh(t, c, true)
-	_, _, magnet, torrent, _, err := c.st.release(ctx, id)
+	_, _, magnet, torrent, _, _, err := c.st.release(ctx, id)
 	if err != nil {
 		t.Fatal(err)
 	}

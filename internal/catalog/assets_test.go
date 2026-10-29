@@ -347,7 +347,7 @@ func TestPosterAndTorrentRetried(t *testing.T) {
 	// Раздачу читаем из базы, а не «открываем»: открытие без картинки повторяет постер сразу.
 	torrentOf := func(id int64) []byte {
 		t.Helper()
-		_, _, _, b, _, err := c.st.release(ctx, id)
+		_, _, _, b, _, _, err := c.st.release(ctx, id)
 		if err != nil {
 			t.Fatal(err)
 		}
