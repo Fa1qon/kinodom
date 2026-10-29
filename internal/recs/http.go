@@ -72,6 +72,7 @@ func (s *Service) Register(rt Router, env Env) {
 	rt.Handle("GET /api/v1/recs/quiz", "", http.HandlerFunc(h.quiz))
 	rt.Handle("GET /api/v1/recs/films/{id}/poster", "", http.HandlerFunc(h.poster))
 	rt.Handle("GET /api/v1/recs/films", "", http.HandlerFunc(h.cardsOf))
+	rt.Handle("GET /api/v1/recs/wanted", "", http.HandlerFunc(h.wanted))
 	rt.HandleHome("POST /api/v1/recs/rate", "", http.HandlerFunc(h.rate))
 	rt.HandleHome("POST /api/v1/recs/mark", "", http.HandlerFunc(h.mark))
 	rt.HandleHome("POST /api/v1/recs/import-kp", "", http.HandlerFunc(h.importKP))
@@ -367,6 +368,61 @@ func (h *handlers) quiz(w http.ResponseWriter, r *http.Request) {
 	}
 	h.s.needCards(show)
 	httpx.WriteJSON(w, 200, map[string]any{"rated": len(sg.Ratings), "items": out})
+}
+
+// wanted — «Хочу посмотреть»: отметки «+» в подборке (новые первыми) и «Смотреть позже» Kinodom; оценённое
+// и отмеченное «видел» сюда не попадает. Фильм без карточки — заготовкой, карточку дозапросит очередь.
+func (h *handlers) wanted(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+	m := h.s.Model()
+	if m == nil {
+		h.fail(w, ErrNoModel)
+		return
+	}
+	owner := h.env.Owner(r)
+	var ids []int
+	rows, err := h.s.DB.R.QueryContext(ctx, `SELECT m.kp_id FROM rec_marks m
+		WHERE m.owner = ? AND m.mark = 'want' AND NOT EXISTS (SELECT 1 FROM rec_ratings r WHERE r.owner = m.owner AND r.kp_id = m.kp_id)
+		ORDER BY m.at DESC`, owner)
+	if err != nil {
+		h.fail(w, err)
+		return
+	}
+	for rows.Next() {
+		var kp int
+		rows.Scan(&kp)
+		ids = append(ids, kp)
+	}
+	rows.Close()
+	sg, err := h.s.signals(ctx, owner)
+	if err != nil {
+		h.fail(w, err)
+		return
+	}
+	if h.s.Wanted != nil {
+		for _, kp := range h.s.Wanted(ctx, owner) {
+			if !slices.Contains(ids, kp) && !sg.Seen(kp) {
+				ids = append(ids, kp)
+			}
+		}
+	}
+	fs, err := h.s.films(ctx, m, ids)
+	if err != nil {
+		h.fail(w, err)
+		return
+	}
+	out := []FilmOut{}
+	var need []Film
+	for _, kp := range ids {
+		f, ok := fs[kp]
+		if !ok {
+			f = Film{KP: kp, Kind: "film", Title: "Загружается…"}
+		}
+		need = append(need, f)
+		out = append(out, filmOut(f))
+	}
+	h.s.needCards(need)
+	httpx.WriteJSON(w, 200, map[string]any{"items": out})
 }
 
 // cardsOf — карточки фильмов ?ids=1,2,3: экран подставляет постеры, дозапрошенные после показа подборки

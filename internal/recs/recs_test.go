@@ -384,7 +384,7 @@ func TestSeriesMixFairly(t *testing.T) {
 // пакета попадает в подборку с причиной — «Похоже на „Папины дочки“».
 func TestSimilarsForUnlinked(t *testing.T) {
 	fx := newFixture(t, testPack(t, films, [][3]float64{{1, 2, 0.016}}, nil)) // вес — как у EASE в пакете
-	const daughters, kitchen = 900001, 900002 // «Папины дочки» и «Кухня»: ни того, ни другого в пакете нет
+	const daughters, kitchen = 900001, 900002                                 // «Папины дочки» и «Кухня»: ни того, ни другого в пакете нет
 	db := fx.s.DB
 	db.W.Exec(`INSERT INTO rec_cards (kp_id, kind, title, poster, full, fetched_at) VALUES (?, 'series', 'Папины дочки', 'https://x/d.jpg', 1, 1)`, daughters)
 	var mu sync.Mutex

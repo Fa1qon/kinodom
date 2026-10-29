@@ -44,6 +44,8 @@ export function render(root, r, ctx) {
   let quiz = null;
   const quizSkip = []; // «Не смотрел» в быстрой оценке — не показывать снова за этот заход
   let taste = null;
+  let wanted = null; // «Хочу посмотреть»: null — не загружено
+  let wantRate = 0; // карточка списка, где открыт выбор оценки
   let tab = 'recs';
   // Импорт с Кинопоиска — в состоянии экрана: экран перерисовывается сам (постеры подборки), и поле со
   // ссылкой и итог не должны пропадать посреди десятисекундного импорта.
@@ -106,6 +108,7 @@ export function render(root, r, ctx) {
       if (what === 'rate') await post('/recs/rate', { kpId: f.id, score });
       else await post('/recs/mark', { kpId: f.id, mark: what });
       done.set(f.id, what === 'rate' ? `Оценка ${score}` : what === 'want' ? 'В «Хочу посмотреть»' : what === 'seen' ? 'Видел' : 'Не моё — учту');
+      wanted = null; // список «Хочу посмотреть» перечитается
       rateFor = 0;
     } catch (e) {
       error = e.message;
@@ -127,15 +130,16 @@ export function render(root, r, ctx) {
     }
     keepFocus(root, () => fill(body,
       tabs(),
-      tab === 'recs' ? recsTab() : tab === 'taste' ? tasteTab() : setupTab()));
+      tab === 'recs' ? recsTab() : tab === 'want' ? wantTab() : tab === 'taste' ? tasteTab() : setupTab()));
   }
 
   function tabs() {
     const t = (id, title) => h('a', { class: tab === id ? 'on' : '', href: 'javascript:void 0', 'data-key': `recs-tab-${id}`,
-      onclick: () => { tab = id; if (id === 'taste') loadTaste(); if (id === 'setup') { loadQuiz(); reloadStatus(); } draw(); } }, title);
+      onclick: () => { tab = id; if (id === 'taste') loadTaste(); if (id === 'want') loadWanted(); if (id === 'setup') { loadQuiz(); reloadStatus(); } draw(); } }, title);
     const me = (status.people || []).find((p) => p.owner === status.owner);
     return h('div', { class: 'row recs-head' },
-      h('div', { class: 'tabs' }, t('recs', 'Подборка'), t('taste', 'Мой вкус'), t('setup', 'Оценки')),
+      h('div', { class: 'tabs' }, t('recs', 'Подборка'), t('want', wanted && wanted.length ? `Хочу посмотреть · ${wanted.length}` : 'Хочу посмотреть'),
+        t('taste', 'Мой вкус'), t('setup', 'Оценки')),
       h('div', { class: 'grow' }),
       h('span', { class: 'muted small' }, me ? `Профиль: ${me.name}` : 'Профиль не выбран — вкус этого устройства'));
   }
@@ -216,6 +220,37 @@ export function render(root, r, ctx) {
     if (alive) draw();
   }
 
+  // «Хочу посмотреть»: отмеченное «+» в подборке и «Смотреть позже» Kinodom.
+  async function loadWanted() {
+    try { wanted = (await get('/recs/wanted')).items; } catch (e) { error = e.message; }
+    if (alive) draw();
+  }
+
+  async function wantAct(f, what, score) {
+    try {
+      if (what === 'rate') await post('/recs/rate', { kpId: f.id, score });
+      else await post('/recs/mark', { kpId: f.id, mark: what });
+    } catch (e) { error = e.message; }
+    wantRate = 0;
+    loadWanted();
+  }
+
+  function wantTab() {
+    if (!wanted) return h('p', { class: 'muted' }, 'Загружается…');
+    if (!wanted.length) return h('p', { class: 'empty' }, 'Список пуст. Нажимайте «+» на карточках подборки — фильмы появятся здесь. «Смотреть позже» Kinodom тоже здесь.');
+    return h('div', { class: 'grid recs-grid' }, wanted.map((f) => h('div', { class: 'entry rec-card', 'data-key': `want-card-${f.id}` },
+      filmPoster(f),
+      h('div', { class: 'etitle' }, f.title),
+      h('div', { class: 'muted small' }, recLine(f)),
+      wantRate === f.id
+        ? h('div', { class: 'recs-actions' }, RATE.map(([title, v]) => h('button', { class: 'btn', type: 'button', 'data-key': `wrate-${f.id}-${v}`, onclick: () => wantAct(f, 'rate', v) }, title)),
+          h('button', { class: 'btn', type: 'button', 'data-key': `wseen-${f.id}`, onclick: () => wantAct(f, 'seen') }, 'Без оценки'))
+        : h('div', { class: 'recs-actions' },
+          h('a', { class: 'btn inv', href: filmSearchHref(f), 'data-key': `wfind-${f.id}` }, icon('search'), 'Найти'),
+          h('button', { class: 'btn sq', type: 'button', title: 'Посмотрел', 'aria-label': 'Посмотрел', 'data-key': `wwatched-${f.id}`, onclick: () => { wantRate = f.id; draw(); } }, icon('visibility')),
+          h('button', { class: 'btn sq', type: 'button', title: 'Убрать из списка', 'aria-label': 'Убрать из списка', 'data-key': `wdrop-${f.id}`, onclick: () => wantAct(f, '') }, icon('close'))))));
+  }
+
   async function loadTaste() {
     try { taste = await get('/recs/taste'); } catch (e) { error = e.message; }
     if (alive) draw();
@@ -269,5 +304,7 @@ export function render(root, r, ctx) {
   }
 
   loadStatus();
+  loadWanted(); // счёт на вкладке виден сразу
+  if (r.query.get('tab') === 'want') tab = 'want';
   return () => { alive = false; cardTimers.forEach(clearTimeout); };
 }

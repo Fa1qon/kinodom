@@ -60,7 +60,6 @@ CREATE TABLE rec_cards (
     rating_kp   REAL NOT NULL DEFAULT 0,
     rating_imdb REAL NOT NULL DEFAULT 0,
     missing     INTEGER NOT NULL DEFAULT 0,
-    full        INTEGER NOT NULL DEFAULT 1, -- 0 — только название и постер из «Похожих»: вид и рейтинг дозапросить
     fetched_at  INTEGER NOT NULL
 );
 
@@ -73,17 +72,3 @@ SELECT COALESCE('p:' || d.profile_id, 'd:' || w.device), w.hash, w.file_index, 0
 FROM watch_progress w LEFT JOIN family_devices d ON d.device = w.device
 WHERE w.device != ''
 ON CONFLICT(owner, hash, file_index) DO NOTHING;
-
--- «Похожие» Кинопоиска для фильмов профиля, у которых нет связей в пакете (сериалы, русское кино):
--- запрашиваются по ключу Кинопоиска понемногу (общий суточный лимит с рейтингами). rank — место в списке.
-CREATE TABLE rec_similars (
-    kp_id    INTEGER NOT NULL,
-    other_kp INTEGER NOT NULL,
-    rank     INTEGER NOT NULL,
-    PRIMARY KEY (kp_id, other_kp)
-);
--- Чьи «Похожие» уже спрашивали (и когда): не спрашивать снова месяц.
-CREATE TABLE rec_similars_state (
-    kp_id      INTEGER PRIMARY KEY,
-    fetched_at INTEGER NOT NULL
-);

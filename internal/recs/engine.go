@@ -374,7 +374,8 @@ func (s *Service) Recommend(ctx context.Context, owner string, q Query) ([]Rec, 
 	if err != nil {
 		return nil, err
 	}
-	list, err := s.rank(ctx, m, sc, q, func(int) bool { return false })
+	// уже в «Хочу посмотреть» — в своём списке; в подборке не повторять (во «вместе» — оставлять)
+	list, err := s.rank(ctx, m, sc, q, func(kp int) bool { return sc.sg.Marks[kp] == "want" })
 	if err != nil {
 		return nil, err
 	}

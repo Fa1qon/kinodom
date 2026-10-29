@@ -22,7 +22,7 @@ func TestBackfillFromWatchProgress(t *testing.T) {
 	d.Close()
 	raw, _ := sql.Open("sqlite", path)
 	for _, q := range []string{
-		`DROP TABLE view_log`, `DROP TABLE rec_ratings`, `DROP TABLE rec_marks`, `DROP TABLE rec_shown`, `DROP TABLE rec_cards`,
+		`DROP TABLE view_log`, `DROP TABLE rec_ratings`, `DROP TABLE rec_marks`, `DROP TABLE rec_shown`, `DROP TABLE rec_cards`, `DROP TABLE rec_similars`, `DROP TABLE rec_similars_state`,
 		`PRAGMA user_version = 20`,
 		`INSERT INTO watch_progress VALUES ('tv', 'aaaa', 0, 1, 7000, 7200, 1, 1000), ('tv', 'bbbb', 0, 0.05, 300, 7200, 0, 2000)`,
 	} {

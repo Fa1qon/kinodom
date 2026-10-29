@@ -17,6 +17,7 @@ export function render(root, r, ctx) {
   let downloads = null;
   let newReleases = {};
   let forYou = null; // «Для вас»: null — рекомендации не установлены или не ответили
+  let wanted = null; // «Хочу посмотреть»
   let newTab = 'our-series';
   let error = '';
   let busy = null;
@@ -29,6 +30,7 @@ export function render(root, r, ctx) {
       get('/catalog/new?group=our-series&limit=10'), get('/catalog/new?group=our-film&limit=10'),
       get('/catalog/new?group=foreign-series&limit=10'), get('/catalog/new?group=foreign-film&limit=10'),
       get('/recs?limit=10&shown=0'), // shown=0: главная обновляется раз в 15 с — это не «показали»
+      get('/recs/wanted'),
     ]);
     const failed = results.slice(0, 3).find((x) => x.status === 'rejected');
     if (failed) error = failed.reason && failed.reason.message ? failed.reason.message : 'Не удалось загрузить главный экран';
@@ -40,6 +42,7 @@ export function render(root, r, ctx) {
       if (results[i + 3].status === 'fulfilled') newReleases[key] = results[i + 3].value;
     }
     forYou = results[7].status === 'fulfilled' ? results[7].value.items : null;
+    wanted = results[8].status === 'fulfilled' ? results[8].value.items : null;
     if (alive) draw();
   }, 15000);
 
@@ -52,6 +55,7 @@ export function render(root, r, ctx) {
       error ? h('p', { class: 'error' }, error) : null,
       dashboardStats(),
       continueSection(),
+      wantedSection(),
       forYouSection(),
       newReleasesSection(),
       quickLinks(),
@@ -117,6 +121,17 @@ export function render(root, r, ctx) {
       h('a', { class: 'home-quick-link', href: '#/catalog', 'data-key': 'quick-catalog' }, icon('video_library'), h('span', null, 'Каталог'), h('span', { class: 'muted small' }, 'Найти фильм или сериал')),
       h('a', { class: 'home-quick-link', href: '#/library', 'data-key': 'quick-library' }, icon('video_library'), h('span', null, 'Медиатека'), h('span', { class: 'muted small' }, 'Скачанное и папки')),
       h('a', { class: 'home-quick-link', href: '#/downloads', 'data-key': 'quick-downloads' }, icon('download'), h('span', null, 'Загрузки'), h('span', { class: 'muted small' }, 'Очередь и место')));
+  }
+
+  // wantedSection — «Хочу посмотреть»: что отметили «+» в подборке и «Смотреть позже»; «Все» — вкладка списка.
+  function wantedSection() {
+    if (!wanted || !wanted.length) return null;
+    return h('section', { class: 'home-section home-recs', 'aria-label': 'Хочу посмотреть', 'data-key': 'wanted' },
+      h('div', { class: 'home-section-head' }, h('div', null, h('span', { class: 'eyebrow' }, 'ВАШ СПИСОК'), h('h2', null, 'Хочу посмотреть')),
+        h('a', { class: 'btn', href: '#/recs?tab=want', 'data-key': 'wanted-all' }, `Все · ${wanted.length}`)),
+      h('div', { class: 'home-rail' }, wanted.slice(0, 12).map((f) => h('a', { class: 'home-new-card', href: filmSearchHref(f),
+        'data-key': `wanted-${f.id}`, 'aria-label': f.title }, filmPoster(f), h('span', { class: 'etitle' }, f.title),
+      h('span', { class: 'muted small ellipsis' }, recLine(f))))));
   }
 
   // forYouSection — «Для вас»: подборка по журналу просмотров и оценкам; «Ещё» — экран «Что посмотреть».
