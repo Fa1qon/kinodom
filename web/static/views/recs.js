@@ -31,6 +31,10 @@ export const GENRES = [['фантастика', 'Фантастика'], ['фэ�
   ['приключения', 'Приключения'], ['ужасы', 'Ужасы'], ['мультфильм', 'Мультфильмы'], ['семейный', 'Семейное'],
   ['военный', 'Военные'], ['история', 'Исторические'], ['биография', 'Биографии'], ['документальный', 'Документальное'], ['аниме', 'Аниме']];
 
+// PAGE — карточек в подборке за раз; PAGE_MAX — предел сервера.
+const PAGE = 18;
+const PAGE_MAX = 90;
+
 // RATE — быстрые оценки: на ТВ десять кнопок долго листать, четырёх хватает, чтобы понять вкус.
 export const RATE = [['Шедевр', 10], ['Хорошо', 8], ['Так себе', 6], ['Плохо', 3]];
 
@@ -48,6 +52,7 @@ export function render(root, r, ctx) {
   let note = '';
   let error = '';
   let busy = false;
+  let limit = PAGE; // сколько карточек в подборке: «Ещё» добавляет страницу
   let rateFor = 0; // карточка, где открыт выбор оценки
   let done = new Map(); // kp → что отметили («Хочу», «Оценка 8», «Не моё»)
   let quiz = null;
@@ -77,11 +82,13 @@ export function render(root, r, ctx) {
     else draw();
   }
 
-  async function pick() {
+  // pick — подборка заново (с первой страницы) или, при more, на страницу длиннее.
+  async function pick(more = false) {
+    limit = more ? limit + PAGE : PAGE;
     busy = true;
     draw();
     try {
-      const v = await get(recsQuery({ text, moods: [...moods], genre, kind, with: [...together], surprise }));
+      const v = await get(recsQuery({ text, moods: [...moods], genre, kind, with: [...together], surprise, limit }));
       items = v.items;
       note = v.note || '';
       moods = new Set(v.query.moods || []); // настроения, понятые из просьбы, — тоже подсвечены
@@ -183,7 +190,10 @@ export function render(root, r, ctx) {
       error ? h('p', { class: 'error' }, error) : null,
       busy && !items ? h('p', { class: 'muted' }, 'Подбираю…') : null,
       items && !items.length ? h('p', { class: 'empty' }, 'Под такую просьбу ничего не нашлось — попробуйте мягче') : null,
-      items ? h('div', { class: 'grid recs-grid' + (busy ? ' busy' : '') }, items.map(card)) : null);
+      items ? h('div', { class: 'grid recs-grid' + (busy ? ' busy' : '') }, items.map(card)) : null,
+      items && items.length >= limit && limit < PAGE_MAX
+        ? h('button', { class: 'btn res-more', type: 'button', 'data-key': 'recs-more', disabled: busy, onclick: () => pick(true) }, 'Ещё')
+        : null);
   }
 
   function card(it) {

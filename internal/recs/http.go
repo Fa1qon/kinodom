@@ -161,7 +161,7 @@ func (h *handlers) recs(w http.ResponseWriter, r *http.Request) {
 	q.Genres = append(q.Genres, qs["genre"]...)
 	q.Surprise = q.Surprise || qs.Get("surprise") == "1"
 	q.Limit, _ = strconv.Atoi(qs.Get("limit"))
-	q.Limit = min(max(q.Limit, 1), 40)
+	q.Limit = min(max(q.Limit, 1), 90)
 	if qs.Get("limit") == "" {
 		q.Limit = 12
 	}
@@ -227,6 +227,8 @@ func (h *handlers) recs(w http.ResponseWriter, r *http.Request) {
 			o.Reason = "Похоже на " + strings.Join(bc, " и ")
 		case len(o.Moods) > 0:
 			o.Reason = strings.Join(o.Moods, ", ")
+		case x.Fill:
+			o.Reason = "Из лучшего в жанре"
 		default:
 			o.Reason = "Любят зрители с похожим вкусом"
 		}

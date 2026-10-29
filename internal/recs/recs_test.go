@@ -3,6 +3,7 @@ package recs
 import (
 	"context"
 	"database/sql"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -465,5 +466,40 @@ func TestGenreTasteLift(t *testing.T) {
 	}
 	if len(gs) < 2 || gs[0].Genre != "фантастика" || gs[0].Title != "Фантастика" {
 		t.Fatalf("любимый жанр — фантастика, а не драма: %+v", gs)
+	}
+}
+
+// Выбран жанр, а соседей любимого в нём нет: подборка — из лучшего в жанре, а не пусто или три фильма.
+func TestGenreFillsBeyondNeighbors(t *testing.T) {
+	fs := map[int]string{1: "Любимый"}
+	var links [][3]float64
+	for id := 2; id < 70; id++ { // 68 соседей-драм: кандидатов хватает, популярное не добирается
+		fs[id] = fmt.Sprintf("Драма %d", id)
+		links = append(links, [3]float64{1, float64(id), 0.1})
+	}
+	for id := 100; id < 130; id++ {
+		fs[id] = fmt.Sprintf("Аниме %d", id)
+	}
+	pack := testPack(t, fs, links, nil)
+	db, err := sql.Open("sqlite", pack)
+	if err != nil {
+		t.Fatal(err)
+	}
+	db.Exec(`UPDATE films SET genres = 'аниме, мультфильм' WHERE kp_id >= 100`)
+	db.Exec(`UPDATE films SET genres = 'аниме, драма' WHERE kp_id = 69`) // и одно аниме среди соседей
+	db.Close()
+	fx := newFixture(t, pack)
+	fx.s.Rate(fx.ctx, "p:1", 1, 10, "kinodom")
+	fx.s.Rate(fx.ctx, "p:1", 2, 8, "kinodom")
+	fx.s.Rate(fx.ctx, "p:1", 3, 8, "kinodom")
+	rs, err := fx.s.Recommend(fx.ctx, "p:1", Query{Genres: []string{"аниме"}, Limit: 18})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rs) != 18 || rs[0].Film.KP != 69 || rs[0].Fill {
+		t.Fatalf("сосед-аниме первым, дальше лучшее в жанре: %v", titles(rs))
+	}
+	if !rs[1].Fill || rs[1].Film.KP != 100 { // лучшее по качеству и популярности
+		t.Fatalf("добор жанра: %+v", rs[1])
 	}
 }

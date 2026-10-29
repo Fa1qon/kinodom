@@ -238,6 +238,34 @@ func (m *Model) Popular(ctx context.Context, limit int) ([]int, error) {
 	return out, rows.Err()
 }
 
+// GenreFilms — лучшие фильмы жанра (любого из genres) того же порядка, что Popular; kind "" — любой вид.
+func (m *Model) GenreFilms(ctx context.Context, genres []string, kind string, limit int) ([]int, error) {
+	var conds []string
+	var args []any
+	for _, g := range genres {
+		conds = append(conds, "LOWER(genres) LIKE ?")
+		args = append(args, "%"+strings.ToLower(g)+"%")
+	}
+	where := "(" + strings.Join(conds, " OR ") + ")"
+	if kind != "" {
+		where += " AND kind = ?"
+		args = append(args, kind)
+	}
+	rows, err := m.db.QueryContext(ctx, `SELECT kp_id FROM films WHERE `+where+`
+		ORDER BY LOG(1 + popularity) * MAX(rating_kp, rating_imdb, 6) DESC LIMIT ?`, append(args, limit)...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []int
+	for rows.Next() {
+		var id int
+		rows.Scan(&id)
+		out = append(out, id)
+	}
+	return out, rows.Err()
+}
+
 // Search — фильмы пакета по названию («что-то как „Тьма“»): точное совпадение, начало, вхождение.
 func (m *Model) Search(ctx context.Context, q string, limit int) ([]Film, error) {
 	q = strings.TrimSpace(q)

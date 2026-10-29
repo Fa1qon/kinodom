@@ -68,6 +68,7 @@ type Rec struct {
 	Because []int              `json:"because,omitempty"` // «потому что понравились …» — номера
 	Moods   []string           `json:"moods,omitempty"`
 	Members map[string]float64 `json:"members,omitempty"` // вместе: место у каждого (перцентиль)
+	Fill    bool               `json:"-"`                 // из лучшего в выбранном жанре, без похожести
 }
 
 // Параметры смешивания (kinosovet/DESIGN.md, проверены на живой модели).
@@ -81,11 +82,14 @@ const (
 	dislikeLift    = 0.3
 	shownPenalty   = 0.6
 	shownWindow    = 10 * 24 * time.Hour
+	shownFresh     = 30 * time.Minute // показанное только что не штрафуется: «Ещё» и смена фильтра не перемешивают подборку
 	candidatePool  = 1500
 	nicheShare     = 0.3
 	coldMinimum    = 3
 	coldQuality    = 0.5 // вес качества при холодном старте
-	kindSupport    = 5   // уверенность вида: n/(n+5) кандидатов с вкладом от любимого
+	genreFill      = 400 // при выбранном жанре — столько лучших фильмов жанра в кандидаты
+	genreQuality   = 0.25
+	kindSupport    = 5 // уверенность вида: n/(n+5) кандидатов с вкладом от любимого
 	groupMisery    = 0.30
 )
 
@@ -97,6 +101,7 @@ type cand struct {
 	}
 	mood  float64
 	moods []string
+	fill  bool // добавлен как лучший в выбранном жанре, а не по похожести
 }
 
 func (c *cand) add(from int, v float64, liked bool) {
@@ -193,6 +198,17 @@ func (s *Service) score(ctx context.Context, m *Model, owner string, q Query) (*
 			slices.Sort(c.moods)
 		}
 	}
+	// Выбран жанр: кандидаты — не только соседи любимого (у любителя фантастики соседей-аниме единицы), но и
+	// лучшее в жанре; без связей они встают после похожих, по качеству.
+	if len(q.Genres) > 0 {
+		fs, err := m.GenreFilms(ctx, q.Genres, q.Kind, genreFill)
+		if err != nil {
+			return nil, err
+		}
+		for _, kp := range fs {
+			get(kp).fill = true
+		}
+	}
 	if sc.cold || len(sc.cands) < 50 {
 		pop, err := m.Popular(ctx, 500)
 		if err != nil {
@@ -241,7 +257,7 @@ func (s *Service) rank(ctx context.Context, m *Model, sc *scored, q Query, exclu
 	slices.SortFunc(ids, func(a, b int) int { return cmpDesc(sc.cands[a].cf, sc.cands[b].cf) })
 	keep := ids[:0]
 	for i, kp := range ids {
-		if i < candidatePool || sc.cands[kp].mood > 0 || sc.cold {
+		if i < candidatePool || sc.cands[kp].mood > 0 || sc.cands[kp].fill || sc.cold {
 			keep = append(keep, kp)
 		}
 	}
@@ -292,10 +308,14 @@ func (s *Service) rank(ctx context.Context, m *Model, sc *scored, q Query, exclu
 			zcf[i] *= conf[k] / best
 		}
 	}
-	if sc.cold { // мало сигналов: к похожести — качество фильма (не вместо: одна оценка «10» не теряется)
+	if sc.cold || len(q.Genres) > 0 { // мало сигналов или добор жанра: к похожести — качество фильма
+		w := genreQuality
+		if sc.cold {
+			w = coldQuality // не вместо похожести: одна оценка «10» не теряется
+		}
 		zq := zscore(quality)
 		for i := range zcf {
-			zcf[i] += coldQuality * zq[i]
+			zcf[i] += w * zq[i]
 		}
 	}
 	if len(q.Moods) > 0 {
@@ -312,7 +332,7 @@ func (s *Service) rank(ctx context.Context, m *Model, sc *scored, q Query, exclu
 			base = (1-moodShare)*zcf[i] + moodShare*zmood[i]
 		}
 		v := base - pp*zpop[i]
-		if at, ok := sc.sg.Shown[out[i].film.KP]; ok && now.Sub(at) < shownWindow && sc.sg.Marks[out[i].film.KP] != "want" {
+		if at, ok := sc.sg.Shown[out[i].film.KP]; ok && now.Sub(at) >= shownFresh && now.Sub(at) < shownWindow && sc.sg.Marks[out[i].film.KP] != "want" {
 			v -= shownPenalty
 		}
 		out[i].score = v
@@ -358,6 +378,7 @@ func toRec(r ranked) Rec {
 			rec.Because = append(rec.Because, ct.kp)
 		}
 	}
+	rec.Fill = r.c.fill && len(rec.Because) == 0
 	return rec
 }
 
