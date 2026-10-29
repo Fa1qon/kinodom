@@ -45,6 +45,12 @@ export function render(root, r, ctx) {
   const quizSkip = []; // «Не смотрел» в быстрой оценке — не показывать снова за этот заход
   let taste = null;
   let tab = 'recs';
+  // Импорт с Кинопоиска — в состоянии экрана: экран перерисовывается сам (постеры подборки), и поле со
+  // ссылкой и итог не должны пропадать посреди десятисекундного импорта.
+  let kpProfile = '';
+  let kpBusy = false;
+  let kpMsg = '';
+  let kpError = false;
 
   const body = h('div', { class: 'recs-body' });
   root.append(h('div', { class: 'screen recs' }, h('h1', null, 'Что посмотреть'), body));
@@ -126,7 +132,7 @@ export function render(root, r, ctx) {
 
   function tabs() {
     const t = (id, title) => h('a', { class: tab === id ? 'on' : '', href: 'javascript:void 0', 'data-key': `recs-tab-${id}`,
-      onclick: () => { tab = id; if (id === 'taste') loadTaste(); if (id === 'setup') loadQuiz(); draw(); } }, title);
+      onclick: () => { tab = id; if (id === 'taste') loadTaste(); if (id === 'setup') { loadQuiz(); reloadStatus(); } draw(); } }, title);
     const me = (status.people || []).find((p) => p.owner === status.owner);
     return h('div', { class: 'row recs-head' },
       h('div', { class: 'tabs' }, t('recs', 'Подборка'), t('taste', 'Мой вкус'), t('setup', 'Оценки')),
@@ -183,6 +189,33 @@ export function render(root, r, ctx) {
       actions);
   }
 
+  // reloadStatus — ключ Кинопоиска могли задать в настройках после открытия страницы.
+  async function reloadStatus() {
+    try { status = await get('/recs/status'); } catch { return; }
+    if (alive) draw();
+  }
+
+  async function importKP() {
+    if (kpBusy) return;
+    kpBusy = true;
+    kpMsg = 'Забираю оценки с Кинопоиска — это до полуминуты…';
+    kpError = false;
+    draw();
+    try {
+      const v = await post('/recs/import-kp', { profile: kpProfile });
+      kpMsg = v.imported ? `Готово: ${v.imported} оценок. Подборка обновлена.` : 'Оценок не нашлось — проверьте, что они открыты в профиле.';
+      items = null; // подборка пересчитается с новыми оценками
+      taste = null;
+      loadQuiz();
+      if (v.imported) pick();
+    } catch (e) {
+      kpMsg = e.message;
+      kpError = true;
+    }
+    kpBusy = false;
+    if (alive) draw();
+  }
+
   async function loadTaste() {
     try { taste = await get('/recs/taste'); } catch (e) { error = e.message; }
     if (alive) draw();
@@ -205,7 +238,8 @@ export function render(root, r, ctx) {
   }
 
   function setupTab() {
-    const kpInput = h('input', { type: 'text', placeholder: 'kinopoisk.ru/user/123456', 'data-key': 'kp-profile' });
+    const kpInput = h('input', { type: 'text', placeholder: 'kinopoisk.ru/user/123456', value: kpProfile, 'data-key': 'kp-profile',
+      oninput: (e) => { kpProfile = e.target.value; }, onkeydown: (e) => { if (e.key === 'Enter') importKP(); } });
     const llmKey = h('input', { type: 'password', placeholder: status.llm.configured ? 'ключ сохранён' : 'ключ polza.ai', 'data-key': 'llm-key' });
     const llmModel = h('input', { type: 'text', value: status.llm.model, 'data-key': 'llm-model' });
     const msg = h('p', { class: 'muted small' });
@@ -218,10 +252,9 @@ export function render(root, r, ctx) {
       h('h2', null, 'Оценки с Кинопоиска'),
       h('p', { class: 'muted small' }, status.kpKey ? 'Откройте свои оценки в настройках приватности Кинопоиска и вставьте ссылку на профиль. Забираются последние ~1500 оценок.'
         : 'Нужен ключ Кинопоиска: Настройки → Параметры → Кинопоиск.'),
-      h('div', { class: 'row' }, kpInput, h('button', { class: 'btn inv', type: 'button', 'data-key': 'kp-import', disabled: !status.kpKey, onclick: async () => {
-        msg.textContent = 'Забираю оценки…';
-        try { const v = await post('/recs/import-kp', { profile: kpInput.value }); msg.textContent = `Готово: ${v.imported} оценок.`; } catch (e) { msg.textContent = e.message; }
-      } }, 'Забрать')),
+      h('div', { class: 'row' }, kpInput, h('button', { class: 'btn inv', type: 'button', 'data-key': 'kp-import', disabled: !status.kpKey || kpBusy,
+        onclick: importKP }, kpBusy ? 'Забираю…' : 'Забрать')),
+      kpMsg ? h('p', { class: kpError ? 'error' : 'muted small' }, kpMsg) : null,
       msg,
       h('h2', null, 'Быстрая оценка'),
       h('p', { class: 'muted small' }, `Оценено: ${quiz ? quiz.rated : '…'}. Двадцати оценок хватает, чтобы подборка стала вашей.`),
