@@ -2086,7 +2086,7 @@ for (const [got, want] of checks) {
 func TestPultKPCatalog(t *testing.T) {
 	node := lookNode(t)
 	script := `
-const { filmSearchHref, filmLine, kpRestoreCount } = await import('./views/kpcat.js');
+const { filmSearchHref, filmLine, kpRestoreCount, filmMatch } = await import('./views/kpcat.js');
 const here = '#/catalog/kinopoisk/films-ru?order=kp';
 const checks = [
   // Ревью 14Г: сериал — без года (идущий сезон новее первого, а трекерам нужны все слова запроса).
@@ -2099,6 +2099,14 @@ const checks = [
   [filmSearchHref({ id: 5, title: 'Мастер и Маргарита: «Тест»', year: 2024 }), '#/search?q=' + encodeURIComponent('Мастер и Маргарита: «Тест» 2024') + '&kp=5'],
   [filmSearchHref({ id: 6, title: 'Без года', year: 0 }), '#/search?q=' + encodeURIComponent('Без года') + '&kp=6'],
   [filmLine({ year: 2024, kinopoisk: 8.1, imdb: 0 }), '2024 · КП 8,1'],
+  // 2026-10-29: «Начало» (сериал, Kai duan) — с оригиналом, иначе трекеры находят Нолана; name — запасной запрос.
+  [filmSearchHref({ id: 9, title: 'Начало', original: 'Kai duan', year: 2022, type: 'TV_SERIES' }),
+    '#/search?q=' + encodeURIComponent('Начало Kai duan') + '&kp=9&name=' + encodeURIComponent('Начало')],
+  [filmSearchHref({ id: 10, title: 'Брат', original: 'Брат', year: 1997 }), '#/search?q=' + encodeURIComponent('Брат 1997') + '&kp=10'],
+  [filmMatch({ name: 'Начало', original: 'Inception', year: 2010, title: 'Начало / Inception [2010]' }, { title: 'Начало', original: 'Kai duan', year: 2022, type: 'TV_SERIES' }), false],
+  [filmMatch({ name: 'Начало', original: 'Kai duan', year: 2022, title: 'Начало / Kai duan [2022]' }, { title: 'Начало', original: 'Kai duan', year: 2022, type: 'TV_SERIES' }), true],
+  [filmMatch({ name: 'Бэтмен: Начало', original: 'Batman Begins', year: 2005, title: '' }, { title: 'Начало', original: 'Inception', year: 2010 }), false],
+  [filmMatch({ name: 'Брат', original: '', year: 1997, title: 'Брат (1997)' }, { title: 'Брат', original: 'Брат', year: 1997 }), true],
   [filmLine({ year: 0, kinopoisk: 0, imdb: 7.25 }), 'IMDb 7,3'],
 ];
 for (const [got, want] of checks) {

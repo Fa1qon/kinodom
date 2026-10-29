@@ -3,7 +3,7 @@
 import { h, icon, size, poll, keepFocus, offWarn, store, formatTag, plural } from '../ui.js';
 import { get, del } from '../api.js';
 import { poster } from './catalog.js';
-import { filmHeader } from './kpcat.js';
+import { filmHeader, filmMatch } from './kpcat.js';
 import { portionEnd } from './channels.js';
 import { appBridge } from './tvkit.js';
 import { playSound } from '../nav.js';
@@ -155,14 +155,27 @@ export function render(root, r, ctx) {
   field.addEventListener('blur', () => {
     if (document.activeElement !== field) field.readOnly = true;
   });
-  // Пришли с карточки «Кинопоиска» (план 14Г) — над результатами шапка фильма.
+  // Пришли с карточки фильма (каталог «Кинопоиск», рекомендации) — над результатами шапка фильма, а раздачи
+  // именно этого фильма — первыми; остальные с похожим названием — по кнопке (2026-10-29: «Начало» — сериал,
+  // а находились Нолан и «Бэтмен: Начало»).
   const film = h('div');
+  const more = h('div', { class: 'res-more' });
+  let filmInfo = null;
+  let lastRes = null;
+  let showOther = false;
   if (kp > 0) {
-    get(`/kpcat/films/${kp}`).then((f) => {
-      if (alive) film.replaceChildren(filmHeader(f));
-    }, () => {});
+    const shown = (f) => {
+      if (!alive) return;
+      filmInfo = f;
+      film.replaceChildren(filmHeader(f));
+      if (lastRes) keepFocus(table, () => draw(lastRes));
+    };
+    get(`/kpcat/films/${kp}`).then(shown, () => get(`/recs/films?ids=${kp}`).then((v) => {
+      const f = v.items && v.items[0];
+      if (f) shown({ ...f, original: f.titleOrig, genres: f.genres ? f.genres.split(', ') : [] });
+    }, () => {}));
   }
-  root.append(h('div', { class: 'screen' }, form, h('h1', null, q ? (where === 'description' ? `Поиск по описаниям: «${q}»` : `Поиск: «${q}»`) : 'Поиск'), film, history, off, trackers, table, resTail));
+  root.append(h('div', { class: 'screen' }, form, h('h1', null, q ? (where === 'description' ? `Поиск по описаниям: «${q}»` : `Поиск: «${q}»`) : 'Поиск'), film, history, off, trackers, table, more, resTail));
   const onStatus = (status) => {
     const tr = (status && status.trackers) || {};
     keepFocus(off, () => off.replaceChildren(...OWN.filter((t) => tr[t] && tr[t].state === 'off').map((t) => offWarn(tr[t].text))));
@@ -248,14 +261,38 @@ export function render(root, r, ctx) {
   let drawn = null; // набор, по которому построена таблица: тот же — опрос меняет строки на месте
   const refs = new Map();
 
+  // pickRows — раздачи фильма из шапки первыми; остальные — когда попросили или своих нет.
+  function pickRows(results) {
+    more.replaceChildren();
+    if (!filmInfo || where === 'description') return results;
+    const hit = results.filter((e) => filmMatch(e, filmInfo));
+    const other = results.filter((e) => !filmMatch(e, filmInfo));
+    if (!hit.length) {
+      if (other.length) more.replaceChildren(h('p', { class: 'muted small' }, 'Раздач именно этого фильма не нашлось — выше раздачи с похожим названием.'));
+      return other;
+    }
+    if (showOther || !other.length) return hit.concat(other);
+    more.replaceChildren(h('button', { class: 'btn', type: 'button', 'data-key': 'res-other', onclick: () => { showOther = true; if (lastRes) draw(lastRes); } },
+      `Ещё ${other.length} ${plural(other.length, 'раздача', 'раздачи', 'раздач')} с похожим названием`));
+    return hit;
+  }
+
   function draw(res) {
+    lastRes = res;
     trackers.replaceChildren(...(where === 'description' ? [h('span', { class: 'tag' }, 'Поиск по описаниям')] : trackerTags(res.trackers, res.results)));
     if (!res.results.length) {
+      // Точный запрос (название и оригинал) ничего не дал — тот же поиск по одному названию.
+      const name = r.query.get('name');
+      if (res.complete && name && kp > 0) {
+        location.replace('#/search?q=' + encodeURIComponent(name) + `&kp=${kp}`);
+        return;
+      }
       table.replaceChildren(res.complete ? h('p', { class: 'muted' }, 'Ничего не нашлось') : '');
+      more.replaceChildren();
       resetRows();
       return;
     }
-    rows = res.results;
+    rows = pickRows(res.results);
     if (drawn && sameIds(rows, drawn)) {
       for (const e of rows.slice(0, built)) {
         const r = refs.get(e.id);

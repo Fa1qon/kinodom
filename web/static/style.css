@@ -295,6 +295,7 @@ a.var-row:hover { background: var(--hover); }
 .results { border: 1px solid var(--line-soft); }
 .results:empty, .results:has(> p) { border: 0; }
 .res-row { display: grid; grid-template-columns: 48px minmax(0, 1fr) 120px 160px 90px 110px 100px; gap: 16px; align-items: center; padding: 12px 18px; border-bottom: 1px solid #1E2226; font-size: 15px; }
+.res-more { margin: 14px 0; } /* «Ещё N раздач с похожим названием» под раздачами фильма из шапки */
 /* Постер найденного — миниатюрой в строке (замечание № 10 этапа 11b): без подписей и меток. */
 .poster.thumb { width: 48px; height: 72px; min-height: 0; aspect-ratio: auto; }
 .poster.thumb .ptitle, .poster.thumb .kp, .poster.thumb .vars { display: none; }

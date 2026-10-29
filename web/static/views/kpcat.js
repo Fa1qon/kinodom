@@ -13,11 +13,38 @@ const KP_SECTION = 'kpcat.section';
 const SERIES = ['TV_SERIES', 'MINI_SERIES', 'TV_SHOW'];
 
 
+// normTitle — название для сравнения: строчные буквы и цифры, ё→е, без знаков.
+export function normTitle(s) {
+  return String(s || '').toLowerCase().replace(/ё/g, 'е').replace(/[^\p{L}\p{N}]+/gu, ' ').trim();
+}
+
+// latinOriginal — оригинальное название латиницей, если оно не совпадает с русским; иначе ''.
+export function latinOriginal(f) {
+  const o = f.original || f.titleOrig || '';
+  return /[a-z]/i.test(o) && normTitle(o) !== normTitle(f.title) ? o : '';
+}
+
 // filmSearchHref — поиск раздач фильма: название и год; у сериала — без года: идущий сезон новее первого, а
-// трекерам нужны все слова запроса (ревью 14Г). kp — шапка фильма над результатами.
+// трекерам нужны все слова запроса (ревью 14Г). Есть оригинальное название латиницей — и оно: «Начало» само по
+// себе находит Нолана и «Бэтмен: Начало», а «Начало Kai duan» — только сериал (2026-10-29); не нашлось — экран
+// повторит по одному названию (name). kp — шапка фильма над результатами.
 export function filmSearchHref(f) {
-  const q = [f.title, SERIES.includes(f.type) ? null : f.year || null].filter(Boolean).join(' ');
-  return `#/search?q=${encodeURIComponent(q)}&kp=${f.id}`;
+  const series = SERIES.includes(f.type) || f.kind === 'series';
+  const orig = latinOriginal(f);
+  const q = [f.title, orig || null, series ? null : f.year || null].filter(Boolean).join(' ');
+  const name = orig ? '&name=' + encodeURIComponent([f.title, series ? null : f.year || null].filter(Boolean).join(' ')) : '';
+  return `#/search?q=${encodeURIComponent(q)}&kp=${f.id}${name}`;
+}
+
+// filmMatch — раздача того самого фильма из шапки: совпало оригинальное название, или русское название и год
+// (у сериала — не раньше первого сезона). Раздача без года — по названию.
+export function filmMatch(e, f) {
+  const orig = latinOriginal(f);
+  if (orig && normTitle(`${e.original} ${e.title}`).includes(normTitle(orig))) return true;
+  if (normTitle(e.name) !== normTitle(f.title)) return false;
+  if (!e.year || !f.year) return true;
+  const series = SERIES.includes(f.type) || f.kind === 'series';
+  return series ? e.year >= f.year - 1 : Math.abs(e.year - f.year) <= 1;
 }
 
 // kpRestoreCount — возврат на место (ревью 14Г, как у трекеров): запись этой страницы — сколько карточек
