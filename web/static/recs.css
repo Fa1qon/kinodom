@@ -12,6 +12,7 @@
 .recs-with { margin-left: 12px; white-space: nowrap; flex: none; }
 .recs-grid { grid-template-columns: repeat(6, minmax(0, 1fr)); }
 .recs-grid.busy { opacity: .5; }
+.recs-end { min-height: 1px; margin: 14px 0; }
 .rec-reason { color: var(--muted); line-height: 1.35; }
 .recs-actions { display: flex; flex-wrap: wrap; gap: 4px; }
 .recs-actions .btn { height: 36px; padding: 0 10px; }

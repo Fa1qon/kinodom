@@ -52,7 +52,8 @@ export function render(root, r, ctx) {
   let note = '';
   let error = '';
   let busy = false;
-  let limit = PAGE; // сколько карточек в подборке: «Ещё» добавляет страницу
+  let limit = PAGE; // сколько карточек в подборке: подгрузка внизу добавляет страницу
+  let moreBusy = false; // идёт подгрузка следующей страницы — подборку не затемнять
   let rateFor = 0; // карточка, где открыт выбор оценки
   let done = new Map(); // kp → что отметили («Хочу», «Оценка 8», «Не моё»)
   let quiz = null;
@@ -82,10 +83,13 @@ export function render(root, r, ctx) {
     else draw();
   }
 
-  // pick — подборка заново (с первой страницы) или, при more, на страницу длиннее.
+  // pick — подборка заново (с первой страницы) или, при more, на страницу длиннее: сервер отдаёт подборку
+  // целиком, начало списка при этом то же, а отметки на карточках сохраняются.
   async function pick(more = false) {
+    if (more && (busy || !canMore())) return;
     limit = more ? limit + PAGE : PAGE;
     busy = true;
+    moreBusy = more;
     draw();
     try {
       const v = await get(recsQuery({ text, moods: [...moods], genre, kind, with: [...together], surprise, limit }));
@@ -94,12 +98,34 @@ export function render(root, r, ctx) {
       moods = new Set(v.query.moods || []); // настроения, понятые из просьбы, — тоже подсвечены
       refreshCards();
       error = '';
-      done = new Map();
+      if (!more) done = new Map();
     } catch (e) {
       error = e.message;
+      if (more) limit -= PAGE;
     }
     busy = false;
+    moreBusy = false;
     if (alive) draw();
+  }
+
+  // Следующая страница — когда низ подборки близко к экрану (мышь, касание) или фокус пульта пришёл в последний ряд.
+  const canMore = () => tab === 'recs' && !!items && items.length >= limit && limit < PAGE_MAX;
+  const watcher = typeof IntersectionObserver === 'function'
+    ? new IntersectionObserver((es) => {
+      if (es.some((e) => e.isIntersecting)) pick(true);
+    }, { rootMargin: '600px 0px' })
+    : null;
+  function watchEnd() {
+    if (!watcher) return;
+    watcher.disconnect();
+    const end = body.querySelector('.recs-end');
+    if (end) watcher.observe(end);
+  }
+  function lastRowFocus(e) {
+    const grid = e.currentTarget;
+    const last = grid.lastElementChild;
+    if (last && e.target.closest && e.target.closest('.entry') &&
+      e.target.getBoundingClientRect().top >= last.getBoundingClientRect().top - 1) pick(true);
   }
 
   // refreshCards — фильмы без постера Kinodom дозапрашивает у Кинопоиска после показа (по одному в 2–3 с): через
@@ -147,6 +173,7 @@ export function render(root, r, ctx) {
     keepFocus(root, () => fill(body,
       tabs(),
       tab === 'recs' ? recsTab() : tab === 'genres' ? genresTab() : tab === 'want' ? wantTab() : tab === 'taste' ? tasteTab() : setupTab()));
+    watchEnd();
   }
 
   function tabs() {
@@ -190,9 +217,11 @@ export function render(root, r, ctx) {
       error ? h('p', { class: 'error' }, error) : null,
       busy && !items ? h('p', { class: 'muted' }, 'Подбираю…') : null,
       items && !items.length ? h('p', { class: 'empty' }, 'Под такую просьбу ничего не нашлось — попробуйте мягче') : null,
-      items ? h('div', { class: 'grid recs-grid' + (busy ? ' busy' : '') }, items.map(card)) : null,
-      items && items.length >= limit && limit < PAGE_MAX
-        ? h('button', { class: 'btn res-more', type: 'button', 'data-key': 'recs-more', disabled: busy, onclick: () => pick(true) }, 'Ещё')
+      items ? h('div', { class: 'grid recs-grid' + (busy && !moreBusy ? ' busy' : ''), onfocusin: lastRowFocus }, items.map(card)) : null,
+      moreBusy ? h('p', { class: 'muted recs-end' }, 'Подбираю ещё…') : null,
+      !moreBusy && canMore()
+        ? (watcher ? h('div', { class: 'recs-end', 'aria-hidden': 'true' })
+          : h('button', { class: 'btn res-more', type: 'button', 'data-key': 'recs-more', disabled: busy, onclick: () => pick(true) }, 'Ещё'))
         : null);
   }
 
@@ -350,5 +379,5 @@ export function render(root, r, ctx) {
   loadStatus();
   loadWanted(); // счёт на вкладке виден сразу
   if (r.query.get('tab') === 'want') tab = 'want';
-  return () => { alive = false; cardTimers.forEach(clearTimeout); };
+  return () => { alive = false; cardTimers.forEach(clearTimeout); if (watcher) watcher.disconnect(); };
 }
