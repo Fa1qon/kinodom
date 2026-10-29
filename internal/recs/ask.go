@@ -202,7 +202,10 @@ func sanitize(r *Request, people []string) {
 // ---- оценки с Кинопоиска (kinopoiskapiunofficial.tech, тот же ключ, что в настройках Kinodom) ----
 
 // KPVote — оценка из профиля.
-type KPVote struct{ KP, Score int }
+type KPVote struct {
+	KP, Score int
+	Card      Card // карточка из того же ответа: название, год, постер, жанры — без лишних запросов
+}
 
 // KPVotes — оценки профиля (сервис отдаёт около 1500 последних, по 20 на страницу).
 func KPVotes(ctx context.Context, base, key, user string) ([]KPVote, error) {
@@ -232,8 +235,19 @@ func KPVotes(ctx context.Context, base, key, user string) ([]KPVote, error) {
 		var v struct {
 			TotalPages int `json:"totalPages"`
 			Items      []struct {
-				KinopoiskID int `json:"kinopoiskId"`
-				UserRating  int `json:"userRating"`
+				KinopoiskID  int      `json:"kinopoiskId"`
+				UserRating   int      `json:"userRating"`
+				NameRu       *string  `json:"nameRu"`
+				NameEn       *string  `json:"nameEn"`
+				NameOriginal *string  `json:"nameOriginal"`
+				Year         *int     `json:"year"`
+				Type         string   `json:"type"`
+				PosterURL    *string  `json:"posterUrl"`
+				RatingKP     *float64 `json:"ratingKinopoisk"`
+				RatingIMDb   *float64 `json:"ratingImdb"`
+				Genres       []struct {
+					Genre string `json:"genre"`
+				} `json:"genres"`
 			} `json:"items"`
 		}
 		if err := json.Unmarshal(b, &v); err != nil {
@@ -242,9 +256,40 @@ func KPVotes(ctx context.Context, base, key, user string) ([]KPVote, error) {
 		pages = v.TotalPages
 		for _, it := range v.Items {
 			if it.UserRating >= 1 && it.UserRating <= 10 {
-				out = append(out, KPVote{it.KinopoiskID, it.UserRating})
+				c := Card{Kind: "film", Title: deref(it.NameRu), TitleOrig: deref(it.NameOriginal), Poster: deref(it.PosterURL)}
+				if c.TitleOrig == "" {
+					c.TitleOrig = deref(it.NameEn)
+				}
+				if c.Title == "" {
+					c.Title = c.TitleOrig
+				}
+				if it.Year != nil {
+					c.Year = *it.Year
+				}
+				if it.RatingKP != nil {
+					c.RatingKP = *it.RatingKP
+				}
+				if it.RatingIMDb != nil {
+					c.RatingIMDb = *it.RatingIMDb
+				}
+				if strings.Contains(it.Type, "SERIES") || it.Type == "TV_SHOW" {
+					c.Kind = "series"
+				}
+				var gs []string
+				for _, g := range it.Genres {
+					gs = append(gs, g.Genre)
+				}
+				c.Genres = strings.Join(gs, ", ")
+				out = append(out, KPVote{KP: it.KinopoiskID, Score: it.UserRating, Card: c})
 			}
 		}
 	}
 	return out, nil
+}
+
+func deref(p *string) string {
+	if p == nil {
+		return ""
+	}
+	return *p
 }

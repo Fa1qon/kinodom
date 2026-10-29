@@ -73,6 +73,7 @@ func (s *Service) Register(rt Router, env Env) {
 	rt.Handle("GET /api/v1/recs/films/{id}/poster", "", http.HandlerFunc(h.poster))
 	rt.Handle("GET /api/v1/recs/films", "", http.HandlerFunc(h.cardsOf))
 	rt.Handle("GET /api/v1/recs/wanted", "", http.HandlerFunc(h.wanted))
+	rt.Handle("GET /api/v1/recs/genres", "", http.HandlerFunc(h.genreRails))
 	rt.HandleHome("POST /api/v1/recs/rate", "", http.HandlerFunc(h.rate))
 	rt.HandleHome("POST /api/v1/recs/mark", "", http.HandlerFunc(h.mark))
 	rt.HandleHome("POST /api/v1/recs/import-kp", "", http.HandlerFunc(h.importKP))
@@ -157,6 +158,7 @@ func (h *handlers) recs(w http.ResponseWriter, r *http.Request) {
 	if k := qs.Get("kind"); k != "" {
 		q.Kind = k
 	}
+	q.Genres = append(q.Genres, qs["genre"]...)
 	q.Surprise = q.Surprise || qs.Get("surprise") == "1"
 	q.Limit, _ = strconv.Atoi(qs.Get("limit"))
 	q.Limit = min(max(q.Limit, 1), 40)
@@ -279,10 +281,13 @@ func (h *handlers) taste(w http.ResponseWriter, r *http.Request) {
 		fs, _ = h.s.films(ctx, m, ids)
 	}
 	var liked, disliked []item
+	var unknown []Film // фильмов нет ни в пакете, ни в карточках — дозапросить (оценки импорта до 2026-10-29)
+	defer func() { h.s.needCards(unknown) }()
 	for kp, x := range prof {
 		f, ok := fs[kp]
 		if !ok {
-			f = Film{KP: kp, Title: fmt.Sprintf("Фильм %d", kp)}
+			f = Film{KP: kp, Title: "Загружается…"}
+			unknown = append(unknown, f)
 		}
 		it := item{Film: filmOut(f), Weight: x, Why: why(sg, kp)}
 		if x > 0 {
@@ -293,7 +298,15 @@ func (h *handlers) taste(w http.ResponseWriter, r *http.Request) {
 	}
 	slices.SortFunc(liked, func(a, b item) int { return cmpDesc(a.Weight, b.Weight) })
 	slices.SortFunc(disliked, func(a, b item) int { return cmpDesc(b.Weight, a.Weight) })
-	httpx.WriteJSON(w, 200, map[string]any{"owner": owner, "ratings": len(sg.Ratings), "watched": len(sg.Watches),
+	fav := []GenreScore{}
+	if gs, err := h.s.GenreTaste(ctx, owner); err == nil {
+		for _, g := range gs {
+			if g.Lift >= 1 && len(fav) < 8 {
+				fav = append(fav, g)
+			}
+		}
+	}
+	httpx.WriteJSON(w, 200, map[string]any{"owner": owner, "ratings": len(sg.Ratings), "watched": len(sg.Watches), "genres": fav,
 		"liked": liked[:min(30, len(liked))], "disliked": disliked[:min(30, len(disliked))]})
 }
 
@@ -368,6 +381,58 @@ func (h *handlers) quiz(w http.ResponseWriter, r *http.Request) {
 	}
 	h.s.needCards(show)
 	httpx.WriteJSON(w, 200, map[string]any{"rated": len(sg.Ratings), "items": out})
+}
+
+// genreRails — подборка по жанрам: строки любимых жанров первыми; kind — только фильмы или сериалы.
+func (h *handlers) genreRails(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+	m := h.s.Model()
+	if m == nil {
+		h.fail(w, ErrNoModel)
+		return
+	}
+	owner := h.env.Owner(r)
+	rails, taste, err := h.s.GenreRails(ctx, owner, Query{Kind: r.URL.Query().Get("kind")})
+	if err != nil {
+		h.fail(w, err)
+		return
+	}
+	type railOut struct {
+		Genre string   `json:"genre"`
+		Title string   `json:"title"`
+		Lift  float64  `json:"lift"`
+		Items []recOut `json:"items"`
+	}
+	out := []railOut{}
+	var show []Film
+	for _, rl := range rails {
+		ro := railOut{Genre: rl.Genre, Title: rl.Title, Lift: rl.Lift}
+		var because []int
+		for _, x := range rl.Recs {
+			because = append(because, x.Because...)
+		}
+		titles, _ := h.s.films(ctx, m, because)
+		for _, x := range rl.Recs {
+			o := recOut{Film: filmOut(x.Film), Reason: "Любят зрители с похожим вкусом"}
+			var bc []string
+			for _, kp := range x.Because {
+				if f, ok := titles[kp]; ok {
+					bc = append(bc, "«"+f.Title+"»")
+				}
+			}
+			if len(bc) > 0 {
+				o.Reason = "Похоже на " + strings.Join(bc, " и ")
+			}
+			ro.Items = append(ro.Items, o)
+			show = append(show, x.Film)
+		}
+		out = append(out, ro)
+	}
+	h.s.needCards(show)
+	if taste == nil {
+		taste = []GenreScore{}
+	}
+	httpx.WriteJSON(w, 200, map[string]any{"rails": out, "taste": taste})
 }
 
 // wanted — «Хочу посмотреть»: отметки «+» в подборке (новые первыми) и «Смотреть позже» Kinodom; оценённое
@@ -545,6 +610,7 @@ func (h *handlers) importKP(w http.ResponseWriter, r *http.Request) {
 			h.fail(w, err)
 			return
 		}
+		h.s.saveCard(r.Context(), v.KP, v.Card) // название и постер — «Мой вкус» и «Похожие» показывают фильм, а не номер
 	}
 	httpx.WriteJSON(w, 200, map[string]any{"imported": len(votes)})
 }

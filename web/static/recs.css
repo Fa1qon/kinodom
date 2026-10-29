@@ -3,6 +3,9 @@
 .recs-askrow { gap: 12px; margin-bottom: 14px; }
 .recs-ask { flex: 1; min-width: 0; height: 48px; padding: 0 14px; font-size: 16px; background: transparent; color: var(--text); border: 1px solid var(--line-strong); }
 .recs-chips { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 10px; align-items: center; }
+/* настроения и жанры — одной прокручиваемой строкой: иначе пять рядов кнопок над подборкой */
+.recs-chips.line { flex-wrap: nowrap; overflow-x: auto; padding-bottom: 4px; scrollbar-width: thin; }
+.recs-chips.line .btn.chip { flex: none; }
 .btn.chip { height: 34px; padding: 0 12px; font-weight: 500; }
 .btn.chip.on { background: var(--inv-bg); border-color: var(--inv-bg); color: var(--inv-text); }
 .btn.sq { width: 40px; padding: 0; }

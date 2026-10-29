@@ -13,16 +13,23 @@ export function recLine(f) {
 }
 
 // recsQuery — адрес подборки: просьба словами, настроения, вид, с кем вместе, «удиви».
-export function recsQuery({ text = '', moods = [], kind = '', with: together = [], surprise = false, limit = 18 }) {
+export function recsQuery({ text = '', moods = [], genre = '', kind = '', with: together = [], surprise = false, limit = 18 }) {
   const q = new URLSearchParams();
   if (text.trim()) q.set('q', text.trim());
   for (const m of moods) q.append('mood', m);
+  if (genre) q.set('genre', genre);
   if (kind) q.set('kind', kind);
   if (together.length) q.set('with', together.join(','));
   if (surprise) q.set('surprise', '1');
   q.set('limit', String(limit));
   return '/recs?' + q;
 }
+
+// GENRES — жанры для кнопок подборки, самые частые первыми.
+export const GENRES = [['фантастика', 'Фантастика'], ['фэнтези', 'Фэнтези'], ['боевик', 'Боевики'], ['детектив', 'Детективы'],
+  ['триллер', 'Триллеры'], ['комедия', 'Комедии'], ['мелодрама', 'Мелодрамы'], ['драма', 'Драмы'], ['криминал', 'Криминал'],
+  ['приключения', 'Приключения'], ['ужасы', 'Ужасы'], ['мультфильм', 'Мультфильмы'], ['семейный', 'Семейное'],
+  ['военный', 'Военные'], ['история', 'Исторические'], ['биография', 'Биографии'], ['документальный', 'Документальное'], ['аниме', 'Аниме']];
 
 // RATE — быстрые оценки: на ТВ десять кнопок долго листать, четырёх хватает, чтобы понять вкус.
 export const RATE = [['Шедевр', 10], ['Хорошо', 8], ['Так себе', 6], ['Плохо', 3]];
@@ -33,6 +40,8 @@ export function render(root, r, ctx) {
   let text = r.query.get('q') || '';
   let moods = new Set(r.query.getAll('mood'));
   let kind = store.get(KIND) || '';
+  let genre = r.query.get('genre') || ''; // жанр подборки; '' — любой
+  let rails = null; // «По жанрам»: строки, null — не загружено
   let together = new Set();
   let surprise = false;
   let items = null;
@@ -72,7 +81,7 @@ export function render(root, r, ctx) {
     busy = true;
     draw();
     try {
-      const v = await get(recsQuery({ text, moods: [...moods], kind, with: [...together], surprise }));
+      const v = await get(recsQuery({ text, moods: [...moods], genre, kind, with: [...together], surprise }));
       items = v.items;
       note = v.note || '';
       moods = new Set(v.query.moods || []); // настроения, понятые из просьбы, — тоже подсвечены
@@ -130,15 +139,15 @@ export function render(root, r, ctx) {
     }
     keepFocus(root, () => fill(body,
       tabs(),
-      tab === 'recs' ? recsTab() : tab === 'want' ? wantTab() : tab === 'taste' ? tasteTab() : setupTab()));
+      tab === 'recs' ? recsTab() : tab === 'genres' ? genresTab() : tab === 'want' ? wantTab() : tab === 'taste' ? tasteTab() : setupTab()));
   }
 
   function tabs() {
     const t = (id, title) => h('a', { class: tab === id ? 'on' : '', href: 'javascript:void 0', 'data-key': `recs-tab-${id}`,
-      onclick: () => { tab = id; if (id === 'taste') loadTaste(); if (id === 'want') loadWanted(); if (id === 'setup') { loadQuiz(); reloadStatus(); } draw(); } }, title);
+      onclick: () => { tab = id; if (id === 'taste') loadTaste(); if (id === 'want') loadWanted(); if (id === 'genres') loadRails(); if (id === 'setup') { loadQuiz(); reloadStatus(); } draw(); } }, title);
     const me = (status.people || []).find((p) => p.owner === status.owner);
     return h('div', { class: 'row recs-head' },
-      h('div', { class: 'tabs' }, t('recs', 'Подборка'), t('want', wanted && wanted.length ? `Хочу посмотреть · ${wanted.length}` : 'Хочу посмотреть'),
+      h('div', { class: 'tabs' }, t('recs', 'Подборка'), t('genres', 'По жанрам'), t('want', wanted && wanted.length ? `Хочу посмотреть · ${wanted.length}` : 'Хочу посмотреть'),
         t('taste', 'Мой вкус'), t('setup', 'Оценки')),
       h('div', { class: 'grow' }),
       h('span', { class: 'muted small' }, me ? `Профиль: ${me.name}` : 'Профиль не выбран — вкус этого устройства'));
@@ -152,8 +161,12 @@ export function render(root, r, ctx) {
     return h('div', null,
       h('div', { class: 'row recs-askrow' }, input,
         h('button', { class: 'btn inv', type: 'button', 'data-key': 'recs-go', disabled: busy, onclick: pick }, icon('star'), 'Подобрать')),
-      h('div', { class: 'recs-chips', 'aria-label': 'Настроение' }, status.moods.map((m) => chip(moods.has(m.Key), m.Name, `mood-${m.Key}`, () => {
+      h('div', { class: 'recs-chips line', 'aria-label': 'Настроение' }, status.moods.map((m) => chip(moods.has(m.Key), m.Name, `mood-${m.Key}`, () => {
         moods.has(m.Key) ? moods.delete(m.Key) : moods.add(m.Key);
+        pick();
+      }))),
+      h('div', { class: 'recs-chips line', 'aria-label': 'Жанр' }, GENRES.map(([g, title]) => chip(genre === g, title, `genre-${g}`, () => {
+        genre = genre === g ? '' : g;
         pick();
       }))),
       h('div', { class: 'row recs-chips' },
@@ -220,6 +233,25 @@ export function render(root, r, ctx) {
     if (alive) draw();
   }
 
+  // «По жанрам»: подборка, разложенная по жанрам, любимые первыми; «Все» — подборка с этим жанром.
+  async function loadRails() {
+    try { rails = (await get('/recs/genres' + (kind ? '?kind=' + kind : ''))).rails; } catch (e) { error = e.message; }
+    if (alive) draw();
+  }
+
+  function genresTab() {
+    if (!rails) return h('p', { class: 'muted' }, 'Подбираю по жанрам…');
+    if (!rails.length) return h('p', { class: 'empty' }, 'Пока мало оценок, чтобы разложить по жанрам — оцените несколько фильмов во вкладке «Оценки».');
+    return h('div', null, rails.map((rl) => h('section', { class: 'home-section home-recs', 'aria-label': rl.title, 'data-key': `rail-${rl.genre}` },
+      h('div', { class: 'home-section-head' },
+        h('div', null, rl.lift >= 1.3 ? h('span', { class: 'eyebrow' }, 'ВАШ ЖАНР') : null, h('h2', null, rl.title)),
+        h('button', { class: 'btn', type: 'button', 'data-key': `rail-all-${rl.genre}`, onclick: () => { genre = rl.genre; tab = 'recs'; pick(); } }, 'Все')),
+      h('div', { class: 'home-rail' }, rl.items.map((it) => h('a', { class: 'home-new-card', href: filmSearchHref(it.film),
+        'data-key': `rail-${rl.genre}-${it.film.id}`, 'aria-label': `${it.film.title}. ${it.reason}` },
+      filmPoster(it.film), h('span', { class: 'etitle' }, it.film.title), h('span', { class: 'muted small ellipsis' }, recLine(it.film)),
+      h('span', { class: 'muted small' }, it.reason)))))));
+  }
+
   // «Хочу посмотреть»: отмеченное «+» в подборке и «Смотреть позже» Kinodom.
   async function loadWanted() {
     try { wanted = (await get('/recs/wanted')).items; } catch (e) { error = e.message; }
@@ -259,7 +291,9 @@ export function render(root, r, ctx) {
   function tasteTab() {
     if (!taste) return h('p', { class: 'muted' }, 'Загружается…');
     const row = (it) => h('div', { class: 'recs-taste-item' }, h('span', { class: 'strong' }, it.film.title), h('span', { class: 'muted small' }, it.why));
+    const fav = (taste.genres || []).map((g) => h('span', { class: 'btn chip on' }, g.title));
     return h('div', { class: 'recs-taste' },
+      fav.length ? h('div', null, h('h2', null, 'Любимые жанры'), h('div', { class: 'recs-chips' }, fav)) : null,
       h('p', { class: 'muted' }, `Оценок: ${taste.ratings}. Фильмов в журнале просмотров: ${taste.watched}. ` +
         'Досмотренное и пересмотренное — плюс; брошенное через три дня и удалённое, не досмотрев, — минус. Только что начатое и пробу озвучки Kinodom не считает.'),
       h('div', { class: 'recs-taste-cols' },

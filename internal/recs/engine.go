@@ -386,6 +386,27 @@ func (s *Service) Recommend(ctx context.Context, owner string, q Query) ([]Rec, 
 	return out, nil
 }
 
+// ranked — подборка человеку целиком по порядку (без отбора нишевого), до q.Limit: её раскладывают по жанрам.
+func (s *Service) ranked(ctx context.Context, owner string, q Query) ([]Rec, error) {
+	m := s.Model()
+	if m == nil {
+		return nil, ErrNoModel
+	}
+	sc, err := s.score(ctx, m, owner, q)
+	if err != nil {
+		return nil, err
+	}
+	list, err := s.rank(ctx, m, sc, q, func(kp int) bool { return sc.sg.Marks[kp] == "want" })
+	if err != nil {
+		return nil, err
+	}
+	out := make([]Rec, 0, min(q.Limit, len(list)))
+	for _, r := range list[:min(q.Limit, len(list))] {
+		out = append(out, toRec(r))
+	}
+	return out, nil
+}
+
 // Group — что посмотреть вместе: перцентиль места у каждого; у кого-то ниже порога или модель прямо ждёт,
 // что не понравится, — отпадает; остальные — 0.5·среднее + 0.5·геометрическое.
 func (s *Service) Group(ctx context.Context, owners []string, q Query) ([]Rec, error) {

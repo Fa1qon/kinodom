@@ -96,6 +96,20 @@ func (s *Service) fetchCard(ctx context.Context, src CardSource, j cardJob) {
 	}
 }
 
+// saveCard — карточка, пришедшая вместе с другими данными (импорт оценок): не затирает полную.
+func (s *Service) saveCard(ctx context.Context, kp int, c Card) error {
+	if c.Title == "" {
+		return nil
+	}
+	_, err := s.DB.W.ExecContext(ctx, `INSERT INTO rec_cards (kp_id, kind, title, title_orig, year, genres, poster, rating_kp, rating_imdb, missing, full, fetched_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 1, ?)
+		ON CONFLICT(kp_id) DO UPDATE SET kind = excluded.kind, title = excluded.title, title_orig = excluded.title_orig, year = excluded.year,
+			genres = excluded.genres, poster = excluded.poster, rating_kp = excluded.rating_kp, rating_imdb = excluded.rating_imdb,
+			missing = 0, full = 1, fetched_at = excluded.fetched_at`,
+		kp, c.Kind, c.Title, c.TitleOrig, c.Year, c.Genres, c.Poster, c.RatingKP, c.RatingIMDb, s.now().UnixMilli())
+	return err
+}
+
 // needCards ставит в очередь фильмы без карточки (без постера в пакете и без rec_cards).
 func (s *Service) needCards(fs []Film) {
 	f := s.cards

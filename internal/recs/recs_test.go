@@ -432,3 +432,38 @@ func TestSimilarsForUnlinked(t *testing.T) {
 		t.Fatalf("запросов «Похожих»: %d, ждали 1", asked)
 	}
 }
+
+// Любимый жанр — не самый частый (драма есть почти у всего), а тот, что чаще, чем в кино вообще.
+func TestGenreTasteLift(t *testing.T) {
+	fs := map[int]string{}
+	var links [][3]float64
+	for i := 1; i <= 60; i++ {
+		fs[i] = "Ф"
+	}
+	pack := testPack(t, fs, links, nil)
+	db, _ := sql.Open("sqlite", pack)
+	// каталог: драм много (40 из 60), фантастики мало (8), остальное — комедии
+	for i := 1; i <= 60; i++ {
+		g := "комедия"
+		switch {
+		case i <= 8:
+			g = "фантастика, драма"
+		case i <= 40:
+			g = "драма"
+		}
+		db.Exec(`UPDATE films SET genres = ? WHERE kp_id = ?`, g, i)
+	}
+	db.Close()
+	fx := newFixture(t, pack)
+	// любит 5 фантастических (они же драмы) и 5 обычных драм
+	for _, kp := range []int{1, 2, 3, 4, 5, 20, 21, 22, 23, 24} {
+		fx.s.Rate(fx.ctx, "p:1", kp, 10, "kinodom")
+	}
+	gs, err := fx.s.GenreTaste(fx.ctx, "p:1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(gs) < 2 || gs[0].Genre != "фантастика" || gs[0].Title != "Фантастика" {
+		t.Fatalf("любимый жанр — фантастика, а не драма: %+v", gs)
+	}
+}
