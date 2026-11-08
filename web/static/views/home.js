@@ -1,7 +1,7 @@
 // Главный экран: быстрый вход в продолжение просмотра, новые серии и активные загрузки.
 // Данные уже существуют в API медиатеки, подписок и торрентов — экран только собирает их
 // в один TV-first маршрут.
-import { h, fill, keepFocus, poll, day } from '../ui.js';
+import { h, fill, icon, keepFocus, poll, day } from '../ui.js';
 import { get } from '../api.js';
 import { libPoster, continueLabel } from './library-parts.js';
 import { playFile } from './library-card.js';
@@ -69,13 +69,14 @@ export function render(root, r, ctx) {
       lines.length ? null : h('p', { class: 'empty' }, 'Здесь появятся фильмы, серии и загрузки')));
   }
 
-  // line — ряд: заголовок, справа «Все» (more — адрес), под ним лента карточек.
+  // line — ряд: заголовок и лента карточек; «Все» (more — адрес) — последней плиткой ленты, как у Lampa: вверх-вниз
+  // между рядами фокус идёт по карточкам, не заходя в заголовок.
   function line(key, title, cards, more) {
     if (!cards.length) return null;
     return h('section', { class: 'line', 'aria-label': title, 'data-key': `line-${key}` },
-      h('div', { class: 'line-head' }, h('h2', null, title),
-        more ? h('a', { class: 'line-more', href: more, 'data-key': `line-more-${key}` }, 'Все') : null),
-      h('div', { class: 'line-body', 'data-row': '' }, cards));
+      h('div', { class: 'line-head' }, h('h2', null, title)),
+      h('div', { class: 'line-body', 'data-row': '' }, cards,
+        more ? h('a', { class: 'line-card line-more', href: more, 'data-key': `line-more-${key}` }, h('span', { class: 'line-more-box' }, icon('chevron_right', 36), 'Все')) : null));
   }
 
   // card — карточка ряда: постер, название, строка под ним; href — ссылка, иначе onclick.
