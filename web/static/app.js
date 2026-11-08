@@ -199,9 +199,14 @@ initClientUI();
 initNav();
 // Любой фокус (стрелкой, экраном напрямую) подводит экран к элементу — здесь одном месте (nav.reveal). Меню
 // неподвижно. В приложении для ТВ — без плавности: на слабом телевизоре плавная прокрутка тормозит.
+// keyNav — фокус двигают стрелки (пульт, клавиатура). Только тогда страница едет за фокусом: после касания тега
+// фокус оставался на нём, и каждая подгрузка подборки, возвращая фокус, отбрасывала страницу к тегам (2026-11-08).
+let keyNav = false;
+window.addEventListener('keydown', () => { keyNav = true; }, { capture: true, passive: true });
+for (const t of ['pointerdown', 'touchstart', 'wheel']) window.addEventListener(t, () => { keyNav = false; }, { capture: true, passive: true });
 window.addEventListener('focusin', (e) => {
   const el = e.target;
-  if (!el || !el.getBoundingClientRect || el.closest('#top')) return;
+  if (!keyNav || !el || !el.getBoundingClientRect || el.closest('#top')) return;
   requestAnimationFrame(() => reveal(el, !isClient()));
 }, { passive: true });
 window.addEventListener('hashchange', (e) => {

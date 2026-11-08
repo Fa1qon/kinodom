@@ -218,3 +218,13 @@ body.playing #top { display: none; }
 .dlg.confirm { max-width: 30rem; display: flex; flex-direction: column; gap: 1rem; padding: 1.6rem; border-radius: var(--r); }
 .dlg.confirm .h { font-size: 1.25rem; line-height: 1.35; overflow-wrap: anywhere; }
 .dlg.confirm .row { justify-content: flex-end; margin-top: .4rem; }
+
+/* Телефон: ряды тегов и вкладки листаются от края до края экрана, а не в рамке отступов с обрезанным тегом
+   у края; вкладки — в одну строку (2026-11-08). */
+@media (max-width: 699px) {
+  .recs-chips, .recs-chips.line, .recs-head .tabs { margin-inline: calc(-1 * var(--pad)); padding-inline: var(--pad); scroll-padding-inline: var(--pad); scrollbar-width: none; }
+  .recs-chips::-webkit-scrollbar, .recs-head .tabs::-webkit-scrollbar { display: none; }
+  .recs-head .tabs { flex: 0 0 calc(100% + 2 * var(--pad)); display: flex; flex-wrap: nowrap; overflow-x: auto; background: none; border-radius: 0; }
+  .recs-head .tabs a { flex: none; white-space: nowrap; padding: 0 1rem; border-radius: 1.2rem; background: rgba(0, 0, 0, .3); }
+  .recs-head .tabs a.on { background: rgba(255, 255, 255, .85); }
+}
