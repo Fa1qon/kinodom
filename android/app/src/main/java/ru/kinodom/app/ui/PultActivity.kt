@@ -431,7 +431,7 @@ class PultActivity : Activity() {
         scope.launch {
             if (overlay != null || postponed) return@launch
             val app = updater.check()
-            if (overlay == null && UpdateDecision.offer(BuildConfig.VERSION_CODE, app, postponed)) offerUpdate(app!!)
+            if (overlay == null && UpdateDecision.offer(BuildConfig.VERSION_CODE, app, postponed, Prefs(this@PultActivity).skippedUpdate)) offerUpdate(app!!)
         }
     }
 
@@ -451,6 +451,7 @@ class PultActivity : Activity() {
         c.addView(now)
         c.addView(Screens.button(this, getString(R.string.update_later)) {
             postponed = true
+            Prefs(this).skippedUpdate = app.versionCode
             closeOverlay()
         })
         showOverlay(c, closable = true, focus = now)
@@ -478,6 +479,7 @@ class PultActivity : Activity() {
                 e.addView(Screens.title(this@PultActivity, getString(R.string.update_failed)))
                 val close = Screens.button(this@PultActivity, getString(R.string.close)) {
                     postponed = true
+                    Prefs(this@PultActivity).skippedUpdate = app.versionCode
                     closeOverlay()
                 }
                 e.addView(close)

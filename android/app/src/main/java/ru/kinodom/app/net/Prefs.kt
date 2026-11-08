@@ -13,6 +13,11 @@ class Prefs(context: Context) {
         get() = p.getString("base", null)
         set(v) = p.edit().putString("base", v).apply()
 
+    // skippedUpdate — номер сборки, которую отложили «Позже»: её больше не предлагать.
+    var skippedUpdate: Int
+        get() = p.getInt("skippedUpdate", 0)
+        set(v) = p.edit().putInt("skippedUpdate", v).apply()
+
     // localServer — сервер на этом устройстве (полный порт, план 2026-10-06). Пока человек не
     // выбирал («auto»): с сервером в сети не знакомы (адрес не сохранён) — стартуют свой, знакомы —
     // как раньше, по сети. Явное on/off перекрывает.

@@ -29,6 +29,12 @@ class UpdateDecisionTest {
     fun noInfoNotOffered() = assertFalse(UpdateDecision.offer(own = 5, server = null, postponed = false))
 
     @Test
+    fun skippedBuildNotOfferedAgain() = assertFalse(UpdateDecision.offer(own = 5, server = app(6), postponed = false, skipped = 6))
+
+    @Test
+    fun newerThanSkippedOffered() = assertTrue(UpdateDecision.offer(own = 5, server = app(7), postponed = false, skipped = 6))
+
+    @Test
     fun postponedNotOffered() = assertFalse(UpdateDecision.offer(own = 5, server = app(6), postponed = true))
 
     @Test

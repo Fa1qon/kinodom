@@ -16,9 +16,12 @@ data class ServerApp(val version: String, val versionCode: Int, val url: String,
     }
 }
 
-// UpdateDecision — предлагать ли обновление (спека этапа 13, раздел 6): на сервере новее, а «Позже» не нажимали.
+// UpdateDecision — предлагать ли обновление (спека этапа 13, раздел 6): на сервере новее, «Позже» не нажимали
+// и эту же сборку не откладывали раньше — отложенную больше не предлагать, только следующую (жалоба 2026-11-08:
+// «постоянно просит обновить»).
 object UpdateDecision {
-    fun offer(own: Int, server: ServerApp?, postponed: Boolean): Boolean = !postponed && server != null && server.versionCode > own
+    fun offer(own: Int, server: ServerApp?, postponed: Boolean, skipped: Int = 0): Boolean =
+        !postponed && server != null && server.versionCode > own && server.versionCode != skipped
 
     // Сервер раздаёт kinodom.apk — это клиентский flavor. Полное приложение со встроенным
     // сервером обновляется отдельным каналом релизов и не должно ставить клиентский APK.

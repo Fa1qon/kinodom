@@ -91,10 +91,10 @@ $sdk = if ($env:ANDROID_HOME) { $env:ANDROID_HOME } else { [Environment]::GetEnv
 if ($jdk -and $sdk -and (Test-Path "$jdk\bin\java.exe") -and (Test-Path "$sdk\platforms")) {
     $env:JAVA_HOME, $env:ANDROID_HOME = $jdk, $sdk
     & .\android\make-key.ps1
-    # Номер сборки — Unix-время в секундах. Число коммитов не подходит для повторных сборок
-    # одного рабочего дерева: Android тогда считает новый APK той же версией и не предлагает его.
-    # Текущее значение (~1.8 млрд) безопасно помещается в signed int Android versionCode.
-    $code = [int][DateTimeOffset]::UtcNow.ToUnixTimeSeconds()
+    # Номер сборки — время последнего коммита (Unix, секунды): растёт с каждым коммитом, а пересборка того же
+    # коммита даёт тот же номер — телевизор не просит обновиться после каждой проверочной сборки (жалоба
+    # 2026-11-08). Значение (~1.8 млрд) помещается в signed int Android versionCode.
+    $code = [int](git log -1 --format=%ct)
     Push-Location android
     # Свойства — в кавычках: PowerShell режет «-PversionName=0.11.0-…» на два аргумента. Gradle пишет
     # предупреждения в поток ошибок — судим по коду выхода.
