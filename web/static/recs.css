@@ -1,36 +1,35 @@
 /* «Что посмотреть» и строка «Для вас» на главной. */
-.recs-head { margin-bottom: 20px; gap: 16px; flex-wrap: wrap; }
-.recs-askrow { gap: 12px; margin-bottom: 14px; }
-.recs-ask { flex: 1; min-width: 0; height: 48px; padding: 0 14px; font-size: 16px; background: transparent; color: var(--text); border: 1px solid var(--line-strong); }
-.recs-chips { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 10px; align-items: center; }
+.recs-head { margin-bottom: 1.3333rem; gap: 1.0667rem; flex-wrap: wrap; }
+.recs-askrow { gap: 0.8rem; margin-bottom: 0.9333rem; }
+.recs-ask { flex: 1; min-width: 0; height: 3.2rem; padding: 0 0.9333rem; font-size: 1.0667rem; background: transparent; color: var(--text); border: 1px solid var(--line-strong); }
+.recs-chips { display: flex; flex-wrap: wrap; gap: 0.5333rem; margin-bottom: 0.6667rem; align-items: center; }
 /* настроения и жанры — одной прокручиваемой строкой: иначе пять рядов кнопок над подборкой */
-.recs-chips.line { flex-wrap: nowrap; overflow-x: auto; padding-bottom: 4px; scrollbar-width: thin; }
+.recs-chips.line { flex-wrap: nowrap; overflow-x: auto; padding-bottom: 0.2667rem; scrollbar-width: thin; }
 .recs-chips.line .btn.chip { flex: none; }
-.btn.chip { height: 34px; padding: 0 12px; font-weight: 500; }
+.btn.chip { height: 2.2667rem; padding: 0 0.8rem; font-weight: 500; }
 .btn.chip.on { background: var(--inv-bg); border-color: var(--inv-bg); color: var(--inv-text); }
-.btn.sq { width: 40px; padding: 0; }
-.recs-with { margin-left: 12px; white-space: nowrap; flex: none; }
-.recs-grid { grid-template-columns: repeat(6, minmax(0, 1fr)); }
+.btn.sq { width: 2.6667rem; padding: 0; }
+.recs-with { margin-left: 0.8rem; white-space: nowrap; flex: none; }
+.recs-grid { grid-template-columns: repeat(auto-fill, minmax(10rem, 1fr)); }
 .recs-grid.busy { opacity: .5; }
-.recs-end { min-height: 1px; margin: 14px 0; }
+.recs-end { min-height: 1px; margin: 0.9333rem 0; }
 .rec-reason { color: var(--muted); line-height: 1.35; }
-.recs-actions { display: flex; flex-wrap: wrap; gap: 4px; }
-.recs-actions .btn { height: 36px; padding: 0 10px; }
-.recs-actions .btn.sq { width: 36px; padding: 0; flex: none; }
+.recs-actions { display: flex; flex-wrap: wrap; gap: 0.2667rem; }
+.recs-actions .btn { height: 2.4rem; padding: 0 0.6667rem; }
+.recs-actions .btn.sq { width: 2.4rem; padding: 0; flex: none; }
 .recs-actions .btn.inv { flex: 1 1 auto; min-width: 0; }
-.recs-empty { max-width: 720px; }
-.recs-taste-cols { display: grid; grid-template-columns: 1fr 1fr; gap: 32px; }
-.recs-taste-item { display: flex; justify-content: space-between; gap: 12px; padding: 8px 0; border-bottom: 1px solid var(--line-soft); }
-.recs-setup input { height: 40px; padding: 0 12px; background: transparent; color: var(--text); border: 1px solid var(--line-strong); min-width: 260px; }
-.recs-setup .row { gap: 10px; flex-wrap: wrap; margin-bottom: 8px; }
-.recs-setup h2 { margin-top: 28px; }
-.home-recs .home-rail { display: grid; grid-auto-flow: column; grid-auto-columns: 154px; justify-content: start; gap: 16px; overflow-x: auto; }
-@media (max-width: 1100px) { .recs-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); } }
-@media (max-width: 640px) {
+.recs-empty { max-width: 48rem; }
+.recs-taste-cols { display: grid; grid-template-columns: 1fr 1fr; gap: 2.1333rem; }
+.recs-taste-item { display: flex; justify-content: space-between; gap: 0.8rem; padding: 0.5333rem 0; border-bottom: 1px solid var(--line-soft); }
+.recs-setup input { height: 2.6667rem; padding: 0 0.8rem; background: transparent; color: var(--text); border: 1px solid var(--line-strong); min-width: 17.3333rem; }
+.recs-setup .row { gap: 0.6667rem; flex-wrap: wrap; margin-bottom: 0.5333rem; }
+.recs-setup h2 { margin-top: 1.8667rem; }
+.home-recs .home-rail { display: grid; grid-auto-flow: column; grid-auto-columns: 10.2667rem; justify-content: start; gap: 1.0667rem; overflow-x: auto; }
+@media (max-width: 699px) {
   .recs-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .recs-taste-cols { grid-template-columns: 1fr; }
   .recs-askrow { flex-wrap: wrap; }
   .recs-ask { flex-basis: 100%; }
-  .recs-chips { flex-wrap: nowrap; overflow-x: auto; padding-bottom: 4px; }
+  .recs-chips { flex-wrap: nowrap; overflow-x: auto; padding-bottom: 0.2667rem; }
   .recs-chips .btn.chip { flex: none; }
 }

@@ -7,7 +7,7 @@ import { libPoster, continueLabel } from './library-parts.js';
 import { playFile } from './library-card.js';
 import { poster } from './catalog.js';
 import { updateLabel } from './updates.js';
-import { filmPoster, filmSearchHref } from './kpcat.js';
+import { filmPoster } from './kpcat.js';
 import { recLine } from './recs.js';
 
 export function render(root, r, ctx) {
@@ -129,7 +129,7 @@ export function render(root, r, ctx) {
     return h('section', { class: 'home-section home-recs', 'aria-label': 'Хочу посмотреть', 'data-key': 'wanted' },
       h('div', { class: 'home-section-head' }, h('div', null, h('span', { class: 'eyebrow' }, 'ВАШ СПИСОК'), h('h2', null, 'Хочу посмотреть')),
         h('a', { class: 'btn', href: '#/recs?tab=want', 'data-key': 'wanted-all' }, `Все · ${wanted.length}`)),
-      h('div', { class: 'home-rail' }, wanted.slice(0, 12).map((f) => h('a', { class: 'home-new-card', href: filmSearchHref(f),
+      h('div', { class: 'home-rail' }, wanted.slice(0, 12).map((f) => h('a', { class: 'home-new-card', href: `#/film/${f.id}`,
         'data-key': `wanted-${f.id}`, 'aria-label': f.title }, filmPoster(f), h('span', { class: 'etitle' }, f.title),
       h('span', { class: 'muted small ellipsis' }, recLine(f))))));
   }
@@ -140,7 +140,7 @@ export function render(root, r, ctx) {
     return h('section', { class: 'home-section home-recs', 'aria-label': 'Для вас', 'data-key': 'for-you' },
       h('div', { class: 'home-section-head' }, h('div', null, h('span', { class: 'eyebrow' }, 'ПО ВАШЕМУ ВКУСУ'), h('h2', null, 'Для вас')),
         h('a', { class: 'btn', href: '#/recs', 'data-key': 'for-you-more' }, icon('tune'), 'Подобрать под настроение')),
-      h('div', { class: 'home-rail' }, forYou.map((it) => h('a', { class: 'home-new-card', href: filmSearchHref(it.film),
+      h('div', { class: 'home-rail' }, forYou.map((it) => h('a', { class: 'home-new-card', href: `#/film/${it.film.id}`,
         'data-key': `for-you-${it.film.id}`, 'aria-label': `${it.film.title}. ${it.reason}` },
       filmPoster(it.film), h('span', { class: 'etitle' }, it.film.title), h('span', { class: 'muted small ellipsis' }, recLine(it.film)),
       h('span', { class: 'muted small' }, it.reason)))));

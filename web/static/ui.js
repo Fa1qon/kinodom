@@ -116,6 +116,8 @@ export function icon(name, size = 20, label = '') {
   svg.setAttribute('class', 'ic');
   svg.setAttribute('width', size);
   svg.setAttribute('height', size);
+  // Размер — в rem (база 15 px): значки растут и сжимаются вместе с экраном, как весь пульт.
+  svg.style.width = svg.style.height = `${+(size / 15).toFixed(4)}rem`;
   svg.setAttribute('viewBox', '0 0 24 24');
   svg.setAttribute('fill', 'currentColor');
   if (label) {

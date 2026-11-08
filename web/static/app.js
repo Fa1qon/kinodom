@@ -2,13 +2,15 @@
 import { h, icon, clear, poll, store, carryFocus } from './ui.js';
 import { NAV } from './app-nav.js';
 import { get } from './api.js';
-import { initNav } from './nav.js';
+import { initNav, reveal } from './nav.js';
+import { markOwned } from './owned.js';
 import { isClient, initClientUI } from './client-ui.js';
 import * as catalog from './views/catalog.js';
 import * as home from './views/home.js';
 import * as recs from './views/recs.js';
 import { catalogHome } from './views/catalog.js';
 import * as release from './views/release.js';
+import * as film from './views/film.js';
 import * as search from './views/search.js';
 import * as downloads from './views/downloads.js';
 import * as settingsStatus from './views/settings-status.js';
@@ -30,7 +32,7 @@ import * as channelPlayer from './views/channel-player.js';
 import { settingsRoute } from './views/settings-layout.js';
 
 // views — экраны по первой части адреса; у «Настроек» — по второй.
-const views = { home, recs, catalog, release, search, downloads, channels, channel, history, library, setup, updates, play: player, 'channel-play': channelPlayer };
+const views = { home, recs, catalog, release, film, search, downloads, channels, channel, history, library, setup, updates, play: player, 'channel-play': channelPlayer };
 const settingsViews = { status: settingsStatus, params: settingsParams, sections: settingsSections, iptv: settingsIPTV, unrecognized: settingsUnrecognized,
   library: settingsLibrary, app: settingsApp };
 
@@ -76,33 +78,37 @@ let searchBtn; // «Поиск» в шапке (план 16Б)
 let bell; // колокольчик «Новые серии» (спека 11b, 6.1)
 let bellCount;
 
-// buildHeader — шапка: логотип, меню, кнопка «Поиск» (на узком экране — значок) и значок меню. Поля поиска в шапке
-// нет (план 16Б): на ТВ стрелки попадали в него и вызывали клавиатуру; поле — на странице поиска. Строится один раз.
+// buildHeader — боковое меню (как у Lampa): логотип, «Поиск», разделы, «Новые серии», «Справка»; свёрнуто — одни
+// значки, с фокусом пульта или под мышью раскрывается поверх экрана. На телефоне меню выезжает по кнопке из верхней
+// полосы. Поля поиска в меню нет (план 16Б): на ТВ стрелки попадали в него и вызывали клавиатуру. Строится один раз.
 function buildHeader() {
+  const item = (href, ic, title, key, extra) => h('a', { class: 'mi', href, 'data-key': key, 'aria-label': title, title },
+    icon(ic, 24), h('span', { class: 'label' }, title), extra || null);
+  searchBtn = item('#/search', 'search', 'Поиск', 'search');
   const nav = h('nav', { class: 'nav', id: 'nav', 'aria-label': 'Разделы' },
-    NAV.map(([id, title, soon]) => {
-      if (soon) return h('span', { class: 'soon', 'aria-disabled': 'true' }, title);
-      navLinks[id] = h('a', { href: id === 'settings' ? '#/settings/status' : '#/' + id }, title);
+    NAV.map(([id, title, ic]) => {
+      navLinks[id] = item(id === 'settings' ? '#/settings/status' : '#/' + id, ic, title, 'menu-' + id);
       return navLinks[id];
     }));
-  searchBtn = h('a', { class: 'btn search-btn', href: '#/search', 'aria-label': 'Поиск', 'data-key': 'search' },
-    icon('search'), h('span', { class: 'wide-only' }, 'Поиск'));
-  menuButton = h('button', { class: 'sq narrow-only', type: 'button', 'aria-label': 'Меню', 'aria-controls': 'nav', 'aria-expanded': 'false',
-    onclick: () => setMenu(!top.classList.contains('open')) }, icon('menu'));
   bellCount = h('span', { class: 'bell-n' });
-  bell = h('a', { class: 'sq bell', href: '#/updates', 'aria-label': 'Новые серии', 'data-key': 'bell' }, icon('notifications'), bellCount);
-  const helpBtn = h('button', { class: 'sq', type: 'button', 'aria-label': 'Справка', title: 'Справка', 'data-key': 'help', onclick: openHelp }, icon('help_outline'));
+  bell = item('#/updates', 'notifications', 'Новые серии', 'bell', bellCount);
+  bell.classList.add('bell');
+  const helpBtn = h('button', { class: 'mi', type: 'button', 'aria-label': 'Справка', title: 'Справка', 'data-key': 'help', onclick: openHelp },
+    icon('help_outline', 24), h('span', { class: 'label' }, 'Справка'));
   top.append(
     // Логотип заказчика: иконка, затем надпись (нарезка — assets/logo/cut.py).
-    h('a', { class: 'logo', href: '#/home', 'aria-label': 'Kinodom' },
+    h('a', { class: 'logo', href: '#/home', 'aria-label': 'Kinodom', tabindex: '-1' },
       h('img', { class: 'logo-icon', src: 'logo-icon.png', alt: '' }), h('img', { class: 'logo-text', src: 'logo-text.png', alt: '' })),
-    nav,
-    h('div', { class: 'grow' }),
-    helpBtn,
-    bell,
     searchBtn,
-    menuButton,
+    nav,
+    bell,
+    h('div', { class: 'sep' }),
+    helpBtn,
   );
+  menuButton = h('button', { class: 'sq', type: 'button', 'aria-label': 'Меню', 'aria-controls': 'top', 'aria-expanded': 'false',
+    onclick: () => setMenu(!top.classList.contains('open')) }, icon('menu'));
+  top.before(h('div', { class: 'mbar' }, menuButton,
+    h('a', { class: 'logo', href: '#/home', 'aria-label': 'Kinodom' }, h('img', { class: 'logo-icon', src: 'logo-icon.png', alt: '' }))));
 }
 
 function setMenu(open) {
@@ -122,8 +128,12 @@ function updateHeader(r) {
     else a.removeAttribute('aria-current');
   }
   const settings = navLinks.settings;
-  settings.querySelector('.ic')?.remove();
-  if (ctx.status && ctx.status.problems.length > 0) settings.append(icon('warning', 18, 'Есть проблемы'));
+  settings.querySelector('.warn-dot')?.remove();
+  if (ctx.status && ctx.status.problems.length > 0) {
+    const w = icon('warning', 18, 'Есть проблемы');
+    w.classList.add('warn-dot');
+    settings.querySelector('.ic').after(w);
+  }
   const n = updates.bellText(ctx.status && ctx.status.updates);
   bellCount.textContent = n;
   bell.classList.toggle('on', r.parts[0] === 'updates');
@@ -177,19 +187,22 @@ function render() {
 
 buildHeader();
 initClientUI();
+// Метки «Есть» (фильм в медиатеке) на постерах любого экрана: экраны дорисовывают карточки порциями — после
+// каждой перерисовки, не чаще раза в 0,4 с.
+{
+  let t = 0;
+  new MutationObserver(() => {
+    clearTimeout(t);
+    t = setTimeout(() => markOwned(document.getElementById('view')), 400);
+  }).observe(document.getElementById('view'), { childList: true, subtree: true });
+}
 initNav();
-// Фокус, поставленный экраном напрямую (а не через стрелочную навигацию), тоже
-// прокручивается плавно и с небольшим запасом у нижнего края.
+// Любой фокус (стрелкой, экраном напрямую) подводит экран к элементу — здесь одном месте (nav.reveal). Меню
+// неподвижно. В приложении для ТВ — без плавности: на слабом телевизоре плавная прокрутка тормозит.
 window.addEventListener('focusin', (e) => {
   const el = e.target;
-  if (!el || !el.getBoundingClientRect) return;
-  requestAnimationFrame(() => {
-    if (!el.isConnected) return;
-    const r = el.getBoundingClientRect();
-    const edge = Math.max(24, window.innerHeight * 0.025);
-    const delta = r.top < edge ? r.top - edge : r.bottom > window.innerHeight - edge ? r.bottom - (window.innerHeight - edge) : 0;
-    if (delta) window.scrollBy({ top: delta, behavior: 'smooth' });
-  });
+  if (!el || !el.getBoundingClientRect || el.closest('#top')) return;
+  requestAnimationFrame(() => reveal(el, !isClient()));
 }, { passive: true });
 window.addEventListener('hashchange', (e) => {
   const at = e.oldURL.indexOf('#');

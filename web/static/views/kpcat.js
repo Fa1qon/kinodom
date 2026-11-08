@@ -29,11 +29,23 @@ export function latinOriginal(f) {
 // себе находит Нолана и «Бэтмен: Начало», а «Начало Kai duan» — только сериал (2026-10-29); не нашлось — экран
 // повторит по одному названию (name). kp — шапка фильма над результатами.
 export function filmSearchHref(f) {
-  const series = SERIES.includes(f.type) || f.kind === 'series';
+  const { q, name } = filmQuery(f);
+  return `#/search?q=${encodeURIComponent(q)}&kp=${f.id}` + (name ? '&name=' + encodeURIComponent(name) : '');
+}
+
+// filmQuery — запрос раздач фильма (как в filmSearchHref): q — название, оригинал латиницей и год; name — запасной
+// запрос без оригинала ('' — его нет).
+export function filmQuery(f) {
+  const series = isSeries(f);
   const orig = latinOriginal(f);
   const q = [f.title, orig || null, series ? null : f.year || null].filter(Boolean).join(' ');
-  const name = orig ? '&name=' + encodeURIComponent([f.title, series ? null : f.year || null].filter(Boolean).join(' ')) : '';
-  return `#/search?q=${encodeURIComponent(q)}&kp=${f.id}${name}`;
+  const name = orig ? [f.title, series ? null : f.year || null].filter(Boolean).join(' ') : '';
+  return { q, name };
+}
+
+// isSeries — сериал (каталог Кинопоиска — type, подборки — kind).
+export function isSeries(f) {
+  return SERIES.includes(f.type) || f.kind === 'series';
 }
 
 // filmMatch — раздача того самого фильма из шапки: совпало оригинальное название, или русское название и год
@@ -84,7 +96,7 @@ export function filmLine(f) {
 
 // filmPoster — постер фильма (сервер скачивает его в кэш по первому показу); нет — тёмный прямоугольник с названием.
 export function filmPoster(f, cls = 'poster') {
-  const box = h('div', { class: cls },
+  const box = h('div', { class: cls, 'data-kp': f.id || null },
     f.kinopoisk > 0 ? h('span', { class: 'kp' }, 'КП ' + rating(f.kinopoisk)) : null,
     h('div', { class: 'ptitle' }, f.title || ''));
   if (f.poster) {
@@ -97,7 +109,7 @@ export function filmPoster(f, cls = 'poster') {
 }
 
 function card(f) {
-  return h('a', { class: 'entry', href: filmSearchHref(f), 'data-key': `kp-${f.id}` },
+  return h('a', { class: 'entry', href: `#/film/${f.id}`, 'data-key': `kp-${f.id}` },
     filmPoster(f),
     h('div', { class: 'etitle' }, f.title),
     h('div', { class: 'muted small' }, filmLine(f)));

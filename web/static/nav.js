@@ -106,16 +106,28 @@ const rectOf = (el) => {
   return { left: r.left, top: r.top, right: r.right, bottom: r.bottom };
 };
 
+// focusOn — фокус без прокрутки браузера: экран к элементу подводит reveal (через focusin в app.js) — одна
+// прокрутка на нажатие, а не две наперегонки.
 function focusOn(el) {
   el.focus({ preventScroll: true });
-  const apply = () => {
-    if (!el.isConnected || typeof window === 'undefined') return;
+}
+
+// reveal — показать элемент с фокусом: ряд карточек [data-row] сдвигается вбок так, чтобы карточка была видна с
+// запасом в карточку, страница — по вертикали с запасом 2,5 % экрана. smooth — плавно (мышь, ПК); на ТВ мгновенно:
+// плавная прокрутка большой страницы на слабом телевизоре и даёт «медленную навигацию».
+export function reveal(el, smooth) {
+  if (!el || !el.isConnected || typeof window === 'undefined') return;
+  const behavior = smooth ? 'smooth' : 'auto';
+  const row = el.closest && el.closest('[data-row]');
+  if (row) {
+    const rr = row.getBoundingClientRect();
     const r = el.getBoundingClientRect();
-    const edge = Math.max(24, window.innerHeight * 0.025);
-    const delta = r.top < edge ? r.top - edge : r.bottom > window.innerHeight - edge ? r.bottom - (window.innerHeight - edge) : 0;
-    if (delta) window.scrollBy({ top: delta, behavior: 'smooth' });
-  };
-  if (typeof requestAnimationFrame === 'function') requestAnimationFrame(apply); else apply();
+    const pad = r.width;
+    const dx = r.left < rr.left + pad ? r.left - rr.left - pad : r.right > rr.right - pad ? r.right - rr.right + pad : 0;
+    if (dx) row.scrollBy({ left: dx, behavior });
+  }
+  const delta = focusScrollDelta(el.getBoundingClientRect(), window.innerHeight);
+  if (delta) window.scrollBy({ top: delta, behavior });
 }
 
 // Объём прокрутки для фокуса: держим 2,5% экрана между активным элементом и краем,
@@ -134,16 +146,56 @@ export function firstFocus(all) {
   return all.find((el) => el.closest('main') && !typing(el) && !el.closest('.search-here')) || all[0];
 }
 
+// near — элементы не дальше полутора экранов по вертикали от from: на длинной странице (сотни карточек) стрелка не
+// меряет каждую — на телевизоре это и было «медленной навигацией».
+function nearby(all, from) {
+  const h = typeof window !== 'undefined' ? window.innerHeight : 1000;
+  return all.filter((el) => {
+    const r = el.getBoundingClientRect();
+    return r.bottom > from.top - 1.5 * h && r.top < from.bottom + 1.5 * h;
+  });
+}
+
+// lastMain — последний элемент экрана (не меню) с фокусом: из меню вправо — обратно на него.
+let lastMain = null;
+
+// sideJump — меню ↔ экран: из меню вправо — на последний элемент экрана (или первый); с края экрана влево — на
+// выбранный пункт меню. null — не этот случай.
+function sideJump(active, dir) {
+  const side = document.getElementById('top');
+  if (!side || !side.classList.contains('side')) return null;
+  if (dir === 'right' && side.contains(active)) {
+    if (lastMain && lastMain.isConnected && lastMain.getClientRects().length) return lastMain;
+    return firstFocus(focusables(document.querySelector('main') || document));
+  }
+  if (dir === 'left' && !side.contains(active)) {
+    const items = focusables(side);
+    return items.find((el) => el.classList.contains('on')) || items[0] || null;
+  }
+  return null;
+}
+
 // move — фокус в сторону dir; фокуса ещё нет — на первый элемент экрана. false — идти некуда.
 export function move(dir) {
-  const all = focusables();
   const active = document.activeElement;
+  const fromSide = !!(active && active.closest && active.closest('#top.side'));
+  if (active && !fromSide && active.closest && active.closest('main')) lastMain = active;
+  if (fromSide && dir === 'right') {
+    const to = sideJump(active, dir);
+    if (to) {
+      focusOn(to);
+      return true;
+    }
+  }
+  const all = focusables();
   if (!active || !all.includes(active)) {
     const first = firstFocus(all);
     if (first) focusOn(first);
     return !!first;
   }
-  const others = all.filter((el) => el !== active);
+  // В меню — только пункты меню; на экране — элементы рядом по вертикали (и меню — через sideJump).
+  const pool = fromSide ? all.filter((el) => el.closest('#top.side')) : nearby(all.filter((el) => !el.closest('#top.side')), rectOf(active));
+  const others = pool.filter((el) => el !== active);
   // Вбок из колонки — сначала в своей колонке, потом в соседнюю колонку: иначе липкая панель раздачи
   // перехватывает стрелку у строк основной колонки на её высоте, и «обратно» теряется (ревью 11b-А).
   const side = dir === 'left' || dir === 'right';
@@ -154,7 +206,7 @@ export function move(dir) {
     focusOn(near[i]);
     return true;
   }
-  const jump = dir === 'left' || dir === 'right' ? columnJump(active, dir, others) : null;
+  const jump = (dir === 'left' || dir === 'right' ? columnJump(active, dir, others) : null) || (dir === 'left' && !fromSide ? sideJump(active, dir) : null);
   if (!jump) return false;
   focusOn(jump);
   return true;

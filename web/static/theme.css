@@ -1,0 +1,178 @@
+/* Оформление в духе Lampa (просьба 2026-11-08): тёмно-графитовый фон, скругления 1em, без цветных акцентов —
+   выбранное пультом залито белым с чёрным текстом, у постеров — белая рамка с зазором. Размеры в rem, а rem
+   растёт с шириной экрана: на телевизоре (WebView ~960 px) пульт мельче, на большом мониторе — крупнее.
+   Подключается после style.css и перекрывает его. */
+
+:root {
+  --bg: #1d1f20;
+  --bg-raised: #262829;
+  --bg-input: rgba(0, 0, 0, .3);
+  --hover: rgba(255, 255, 255, .1);
+  --line: rgba(255, 255, 255, .1);
+  --line-strong: rgba(255, 255, 255, .16);
+  --line-soft: rgba(255, 255, 255, .06);
+  --text: #fff;
+  --muted: rgba(255, 255, 255, .6);
+  --dim: rgba(255, 255, 255, .5);
+  --faint: rgba(255, 255, 255, .3);
+  --soft: rgba(255, 255, 255, .85);
+  --prose: rgba(255, 255, 255, .8);
+  --inv-bg: #fff;
+  --inv-text: #000;
+  --focus: #fff;
+  --focus-fill: #fff;
+  --yellow: #ffe216;
+  --green: #57F570;
+  --red: #EA4E4E;
+  --skel: #3e3e3e;
+  --display: "Golos Text", system-ui, sans-serif;
+  --pad: 1.5rem;
+  --side: 4.6rem; /* свёрнутое меню — только значки */
+  --side-open: 15rem;
+  --r: 1rem;
+}
+
+/* База 15 px — телефон; шире — как у Lampa, от ширины экрана (1600 px → ~15 px, 1920 → ~18, ТВ 960 → 10,6). */
+html { font-size: 15px; }
+@media (min-width: 700px) {
+  html { font-size: max(10.6px, .95vw); }
+}
+
+body { line-height: 1.3; }
+h1 { font-weight: 600; }
+
+/* Фокус пульта: белая заливка и чёрный текст у кнопок и ссылок, белая рамка с зазором у постеров. */
+:focus-visible { outline: none; box-shadow: none; }
+:is(a, button, select, .btn, .sq, .fil, .chip):focus-visible { background-color: #fff !important; color: #000 !important; border-color: #fff !important; }
+:is(a, button, .btn, .sq, .fil):focus-visible .ic { color: #000 !important; }
+.field:focus-within { box-shadow: 0 0 0 .2rem #fff; }
+.ch:has(:focus-visible), .ep:has(:focus-visible), .var-row:has(:focus-visible) { background: #fff; color: #000; }
+.ch:has(:focus-visible) .muted, .ep:has(:focus-visible) .muted, .var-row:has(:focus-visible) .muted { color: rgba(0, 0, 0, .6); }
+
+/* Кнопки и поля — скруглённые, «стекло» вместо рамок. */
+.btn, .sq, .fil, .page, .tag, .input, .field, .tabs, .warn, .card { border-radius: var(--r); }
+.btn, .sq, .fil, .page { border-color: transparent; background: rgba(0, 0, 0, .3); }
+.btn:hover, .sq:hover, .fil:hover { background: var(--hover); }
+.btn.inv, .fil.on, .page.on, .sq.following, .btn.following { background: rgba(255, 255, 255, .85); color: #000; }
+.tag { border-color: transparent; background: rgba(255, 255, 255, .1); border-radius: .4rem; }
+.tabs { border: 0; background: rgba(0, 0, 0, .3); padding: .2rem; gap: .2rem; }
+.tabs a, .tabs button { border-radius: .8rem; }
+.tabs a + a { border-left: 0; }
+.tabs a.on { background: rgba(255, 255, 255, .85); color: #000; }
+.card { border-color: transparent; background: rgba(0, 0, 0, .2); }
+.input, .field { border-color: transparent; }
+
+/* Меню слева (как у Lampa): свёрнуто — значки, с фокусом или под мышью — раскрыто поверх экрана. */
+#top.side {
+  position: fixed; inset: 0 auto 0 0; z-index: 30; width: var(--side); height: auto;
+  display: flex; flex-direction: column; align-items: stretch; gap: .1rem; padding: 1.2rem .5rem;
+  border: 0; background: var(--bg); overflow: hidden; transition: width .15s;
+}
+#top.side:is(:hover, :focus-within, .open) { width: var(--side-open); box-shadow: 1rem 0 2rem rgba(0, 0, 0, .5); }
+#top.side .logo { height: 2.6rem; padding: 0 .55rem; margin-bottom: 1.4rem; gap: .7rem; }
+#top.side .logo-icon { height: 2.4rem; }
+#top.side .logo-text { height: 1rem; }
+.side .mi {
+  display: flex; align-items: center; gap: 1.2rem; height: 2.9rem; padding: 0 .95rem; flex-shrink: 0;
+  border-radius: var(--r); color: var(--muted); font-size: 1.1rem; white-space: nowrap;
+}
+.side .mi .ic { width: 1.6rem !important; height: 1.6rem !important; color: inherit; }
+.side .mi.on { color: #fff; background: rgba(255, 255, 255, .08); }
+.side .mi .label { opacity: 0; transition: opacity .1s; }
+.side:is(:hover, :focus-within, .open) .mi .label, .side:is(:hover, :focus-within, .open) .logo-text { opacity: 1; }
+.side .logo-text { opacity: 0; }
+.side .mi .warn-dot { width: 1.1rem !important; height: 1.1rem !important; color: var(--yellow); margin-left: -2rem; margin-top: -1.2rem; }
+.side .mi.bell { position: relative; }
+.side .mi .bell-n { position: static; margin-left: auto; border-radius: .6rem; }
+.side .sep { flex-grow: 1; }
+
+body:not(.playing) #view { margin-left: var(--side); }
+body.playing #top { display: none; }
+
+/* Узкий экран (телефон): меню выезжает по кнопке из верхней полосы. */
+.mbar { display: none; }
+@media (max-width: 699px) {
+  .mbar { position: sticky; top: 0; z-index: 25; display: flex; align-items: center; gap: .8rem; height: 3.4rem; padding: 0 .8rem; background: var(--bg); }
+  .mbar .logo-icon { height: 2rem; }
+  #top.side { width: var(--side-open); transform: translateX(-100%); transition: transform .2s; }
+  #top.side.open { transform: none; }
+  #top.side .mi .label, #top.side .logo-text { opacity: 1; }
+  body:not(.playing) #view { margin-left: 0; }
+  body.playing .mbar { display: none; }
+}
+
+/* Меню: пункты столбиком, без рамок и фона кнопок. */
+.side .nav { display: flex !important; flex-direction: column; gap: .1rem; position: static !important; padding: 0 !important; background: none !important; border: 0 !important; box-shadow: none !important; }
+.side .mi { border: 0; background: transparent; cursor: pointer; font: inherit; font-size: 1.1rem; text-align: left; }
+.side .mi:hover { background: var(--hover); color: #fff; }
+
+/* Карточка (как у Lampa): постер 2:3 со скруглением, значки поверх постера, подпись — под ним. Выбранная пультом
+   карточка не заливается: вокруг постера белая рамка с зазором — видно издалека и не прыгает вёрстка. */
+.entry { gap: .6rem; border-radius: 0; }
+.entry:focus-visible, a.entry:focus-visible { background: none !important; color: inherit !important; }
+.poster { border-radius: var(--r); overflow: visible; background: var(--skel); padding: .8rem; }
+.poster img { border-radius: var(--r); }
+.entry:is(:focus-visible, :focus-within) .poster::after,
+.entry:hover .poster::after { content: ""; position: absolute; inset: -.45rem; border: .25rem solid #fff; border-radius: 1.35rem; pointer-events: none; z-index: 2; }
+.entry:hover:not(:focus-visible):not(:focus-within) .poster::after { border-color: rgba(255, 255, 255, .45); }
+.kp { top: auto; bottom: .4rem; right: .4rem; padding: .2rem .5rem; border-radius: .7rem; background: rgba(0, 0, 0, .6); color: #fff; font-size: .9rem; }
+.vars { top: .5rem; left: .5rem; padding: .15rem .45rem; border-radius: .4rem; background: #fff; color: #000; font-size: .75rem; }
+.etitle { font-size: 1.1rem; font-weight: 500; line-height: 1.2; }
+/* «Уже есть» — фильм в медиатеке (любой раздачей): метка на постере. */
+.have { position: absolute; left: .4rem; bottom: .4rem; z-index: 1; display: inline-flex; align-items: center; gap: .25rem; padding: .2rem .5rem;
+  border-radius: .7rem; background: #fff; color: #000; font-size: .8rem; font-weight: 700; }
+.have .ic { width: 1rem !important; height: 1rem !important; }
+
+/* Страница фильма (как «полная карточка» Lampa): размытый постер на фоне, постер слева, справа — название,
+   оценки, кнопки и описание; ниже — раздачи. */
+.full { position: relative; gap: 1.2rem; }
+.full > :not(.full-head), .full-body { position: relative; z-index: 1; }
+.full-head { position: relative; min-height: 20rem; }
+.full-bg { position: fixed; inset: 0; width: 100vw; height: 100vh; z-index: 0; opacity: 0; transition: opacity .5s; pointer-events: none; }
+.full-bg.on { opacity: .35; }
+.full-body { display: flex; align-items: flex-end; gap: 2.4rem; padding-top: 1rem; }
+.full-poster { flex: none; width: 15rem; aspect-ratio: 2 / 3; border-radius: var(--r); overflow: hidden; background: var(--skel); }
+.full-poster img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.full-right { display: flex; flex-direction: column; gap: .7rem; min-width: 0; }
+.full-meta { color: var(--muted); font-size: 1.1rem; }
+.full-title { font-size: 3.2rem; font-weight: 600; line-height: 1.15; margin: 0; }
+.full-orig { color: var(--muted); font-size: 1.3rem; margin-top: -.3rem; }
+.full-rates { display: flex; flex-wrap: wrap; align-items: center; gap: .6rem; }
+.full-rates .rate { display: inline-flex; align-items: center; gap: .4rem; padding: .25rem .6rem; border-radius: .4rem; background: rgba(0, 0, 0, .3); font-size: 1.15rem; }
+.full-rates .rate b { font-weight: 700; }
+.full-rates .rate span { font-size: .75rem; color: var(--muted); font-weight: 600; }
+.full-genres { color: var(--muted); font-size: 1rem; }
+.full-have { display: inline-flex; align-items: center; gap: .4rem; align-self: flex-start; padding: .3rem .7rem; border-radius: .7rem; background: rgba(87, 245, 112, .15); color: var(--green); font-weight: 600; }
+.full-buttons { display: flex; flex-wrap: wrap; gap: .75rem; margin-top: .3rem; }
+.full-buttons .btn.big { height: 3.2rem; padding: 0 1.2rem; font-size: 1.15rem; }
+.full-desc { margin: .3rem 0 0; max-width: 60rem; font-size: 1.1rem; font-weight: 300; line-height: 1.5; color: var(--prose);
+  display: -webkit-box; -webkit-line-clamp: 4; -webkit-box-orient: vertical; overflow: hidden; }
+.full-h2 { margin-top: 1rem; font-size: 1.6rem; font-weight: 500; }
+.full-filters { display: flex; gap: .5rem; overflow-x: auto; scrollbar-width: none; padding: .4rem .2rem; }
+.full-filters::-webkit-scrollbar { display: none; }
+.full-filters .fil { flex: none; }
+.full-sep { flex: none; width: 1px; margin: 0 .4rem; background: var(--line-strong); }
+.torrents { display: flex; flex-direction: column; gap: .8rem; }
+.torrent-item { position: relative; display: block; padding: 1rem 1.2rem; border-radius: var(--r); background: rgba(0, 0, 0, .3); line-height: 1.25; }
+.torrent-item:hover { background: rgba(0, 0, 0, .45); }
+.torrent-item:focus-visible { background: rgba(0, 0, 0, .3) !important; color: #fff !important; }
+.torrent-item:focus-visible::after { content: ""; position: absolute; inset: -.4rem; border: .25rem solid #fff; border-radius: 1.3rem; pointer-events: none; }
+.ti-title { font-size: 1.15rem; overflow-wrap: anywhere; }
+.ti-details { display: flex; flex-wrap: wrap; align-items: center; gap: .5rem .9rem; margin-top: .6rem; color: var(--dim); font-weight: 600; font-size: .95rem; }
+.ti-tracker { color: var(--soft); }
+.ti-chip { padding: .1rem .45rem; border-radius: .35rem; background: rgba(255, 255, 255, .12); color: var(--soft); }
+.ti-num { display: inline-flex; align-items: center; gap: .15rem; color: var(--soft); }
+.ti-num.dim { color: var(--dim); }
+.ti-size { padding: .15rem .55rem; border-radius: .35rem; background: #fff; color: #000; }
+.torrent-item:focus-visible .ic { color: inherit !important; }
+.full-trackers .tag { font-size: .85rem; }
+@media (max-width: 699px) {
+  .full-body { flex-direction: column; align-items: flex-start; gap: 1.2rem; }
+  .full-poster { width: 10rem; }
+  .full-title { font-size: 2rem; }
+}
+
+/* Строки чипов (настроения, жанры) — прокрутка вбок за фокусом, без полосы прокрутки и без обрезки рамки. */
+.recs-chips.line { scrollbar-width: none; padding: .3rem .2rem; }
+.recs-chips.line::-webkit-scrollbar { display: none; }
+.btn.chip { border-radius: 1.2rem; }

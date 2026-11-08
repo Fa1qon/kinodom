@@ -449,7 +449,8 @@ export function render(root, r, ctx) {
 export function entry(e, order) {
   const title = e.name || e.title;
   const os = orderStat(e, order);
-  return h('a', { class: 'entry', href: `#/release/${e.id}`, 'data-key': `e-${e.id}` },
+  // Фильм найден на Кинопоиске — карточка ведёт на страницу фильма (все раздачи сразу), иначе — на раздачу.
+  return h('a', { class: 'entry', href: e.kp > 0 ? `#/film/${e.kp}` : `#/release/${e.id}`, 'data-key': `e-${e.id}` },
     poster(e, title),
     e.title
       ? [h('div', { class: 'etitle' }, title), h('div', { class: 'muted small' }, dotted([e.year || null, e.quality || null, formatTag(e.format, e.preferred), altFormatTag(e.preferredAlt)]))]
@@ -463,7 +464,7 @@ export function entry(e, order) {
 // poster — картинка раздачи; нет картинки или она не загрузилась — тёмный прямоугольник с названием. У
 // карточки фильма с несколькими раздачами — «N раздач» (спека этапа 7, раздел 10.7).
 export function poster(e, title, cls = 'poster') {
-  const box = h('div', { class: cls },
+  const box = h('div', { class: cls, 'data-kp': e.kp || null },
     e.kinopoisk > 0 ? h('span', { class: 'kp' }, 'КП ' + rating(e.kinopoisk)) : null,
     e.variants > 1 ? h('span', { class: 'vars' }, plural(e.variants, 'раздача', 'раздачи', 'раздач')) : null,
     h('div', { class: 'ptitle' }, title || ''));

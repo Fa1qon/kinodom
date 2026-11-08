@@ -90,8 +90,10 @@ func TestClientReleaseLayoutKeepsDescriptionAndRemovesTabs(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(string(css), ".client-ui .grid { grid-template-columns: repeat(6") {
-		t.Fatal("TV client catalog density rule is missing")
+	// Плотность каталога на ТВ — столько колонок, сколько влезает по ширине карточки в rem (rem растёт с экраном;
+	// оформление 2026-11-08), а не жёсткие 6.
+	if !strings.Contains(string(css), ".grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(10rem") {
+		t.Fatal("catalog density rule is missing")
 	}
 }
 

@@ -2,7 +2,7 @@
 // настроению; «смотрим вместе» — на нескольких профилях семьи. Карточка ведёт в поиск раздач фильма.
 import { h, fill, icon, rating, keepFocus, store } from '../ui.js';
 import { get, post, put } from '../api.js';
-import { filmPoster, filmSearchHref } from './kpcat.js';
+import { filmPoster } from './kpcat.js';
 
 const KIND = 'recs.kind';
 
@@ -195,11 +195,11 @@ export function render(root, r, ctx) {
     return h('div', null,
       h('div', { class: 'row recs-askrow' }, input,
         h('button', { class: 'btn inv', type: 'button', 'data-key': 'recs-go', disabled: busy, onclick: pick }, icon('star'), 'Подобрать')),
-      h('div', { class: 'recs-chips line', 'aria-label': 'Настроение' }, status.moods.map((m) => chip(moods.has(m.Key), m.Name, `mood-${m.Key}`, () => {
+      h('div', { class: 'recs-chips line', 'data-row': '', 'aria-label': 'Настроение' }, status.moods.map((m) => chip(moods.has(m.Key), m.Name, `mood-${m.Key}`, () => {
         moods.has(m.Key) ? moods.delete(m.Key) : moods.add(m.Key);
         pick();
       }))),
-      h('div', { class: 'recs-chips line', 'aria-label': 'Жанр' }, GENRES.map(([g, title]) => chip(genre === g, title, `genre-${g}`, () => {
+      h('div', { class: 'recs-chips line', 'data-row': '', 'aria-label': 'Жанр' }, GENRES.map(([g, title]) => chip(genre === g, title, `genre-${g}`, () => {
         genre = genre === g ? '' : g;
         pick();
       }))),
@@ -233,7 +233,7 @@ export function render(root, r, ctx) {
         h('button', { class: 'btn', type: 'button', 'data-key': `seen-${f.id}`, onclick: () => act(f, 'seen') }, 'Без оценки'))
       : mark ? h('div', { class: 'recs-actions muted small' }, mark)
         : h('div', { class: 'recs-actions' },
-          h('a', { class: 'btn inv', href: filmSearchHref(f), 'data-key': `find-${f.id}` }, icon('search'), 'Найти'),
+          h('a', { class: 'btn inv', href: `#/film/${f.id}`, 'data-key': `find-${f.id}` }, icon('download'), 'Раздачи'),
           h('button', { class: 'btn sq', type: 'button', title: 'Хочу посмотреть', 'aria-label': 'Хочу посмотреть', 'data-key': `want-${f.id}`, onclick: () => act(f, 'want') }, icon('add')),
           h('button', { class: 'btn sq', type: 'button', title: 'Уже видел', 'aria-label': 'Уже видел', 'data-key': `seen-${f.id}`, onclick: () => { rateFor = f.id; draw(); } }, icon('visibility')),
           h('button', { class: 'btn sq', type: 'button', title: 'Не моё', 'aria-label': 'Не моё', 'data-key': `no-${f.id}`, onclick: () => act(f, 'notmine') }, icon('close')));
@@ -285,7 +285,7 @@ export function render(root, r, ctx) {
       h('div', { class: 'home-section-head' },
         h('div', null, rl.lift >= 1.3 ? h('span', { class: 'eyebrow' }, 'ВАШ ЖАНР') : null, h('h2', null, rl.title)),
         h('button', { class: 'btn', type: 'button', 'data-key': `rail-all-${rl.genre}`, onclick: () => { genre = rl.genre; tab = 'recs'; pick(); } }, 'Все')),
-      h('div', { class: 'home-rail' }, rl.items.map((it) => h('a', { class: 'home-new-card', href: filmSearchHref(it.film),
+      h('div', { class: 'home-rail' }, rl.items.map((it) => h('a', { class: 'home-new-card', href: `#/film/${it.film.id}`,
         'data-key': `rail-${rl.genre}-${it.film.id}`, 'aria-label': `${it.film.title}. ${it.reason}` },
       filmPoster(it.film), h('span', { class: 'etitle' }, it.film.title), h('span', { class: 'muted small ellipsis' }, recLine(it.film)),
       h('span', { class: 'muted small' }, it.reason)))))));
@@ -317,7 +317,7 @@ export function render(root, r, ctx) {
         ? h('div', { class: 'recs-actions' }, RATE.map(([title, v]) => h('button', { class: 'btn', type: 'button', 'data-key': `wrate-${f.id}-${v}`, onclick: () => wantAct(f, 'rate', v) }, title)),
           h('button', { class: 'btn', type: 'button', 'data-key': `wseen-${f.id}`, onclick: () => wantAct(f, 'seen') }, 'Без оценки'))
         : h('div', { class: 'recs-actions' },
-          h('a', { class: 'btn inv', href: filmSearchHref(f), 'data-key': `wfind-${f.id}` }, icon('search'), 'Найти'),
+          h('a', { class: 'btn inv', href: `#/film/${f.id}`, 'data-key': `wfind-${f.id}` }, icon('download'), 'Раздачи'),
           h('button', { class: 'btn sq', type: 'button', title: 'Посмотрел', 'aria-label': 'Посмотрел', 'data-key': `wwatched-${f.id}`, onclick: () => { wantRate = f.id; draw(); } }, icon('visibility')),
           h('button', { class: 'btn sq', type: 'button', title: 'Убрать из списка', 'aria-label': 'Убрать из списка', 'data-key': `wdrop-${f.id}`, onclick: () => wantAct(f, '') }, icon('close'))))));
   }
