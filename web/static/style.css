@@ -314,7 +314,7 @@ a.res-row:hover { background: var(--hover); }
 .dl-section-title { margin: 1.0667rem 0 0; padding: 0 0.2667rem; font-size: 1rem; color: var(--muted); }
 .dl-section-title:first-child { margin-top: 0; }
 .dl-list:has(> p) { border: 0; }
-.dl { display: grid; grid-template-columns: 3.4667rem minmax(17.3333rem, 1fr) 14.6667rem 6rem 10rem max-content; align-items: center; gap: 0.9333rem 1.0667rem; padding: 0.8rem 1.0667rem; border-bottom: 1px solid #1E2226; }
+.dl { display: grid; grid-template-columns: 3.4667rem minmax(17.3333rem, 1fr) 14.6667rem 6rem 10rem 10rem; /* кнопки — постоянной ширины (до трёх): иначе у строк с одной кнопкой колонки съезжали (2026-11-08) */ align-items: center; gap: 0.9333rem 1.0667rem; padding: 0.8rem 1.0667rem; border-bottom: 1px solid #1E2226; }
 .dl:last-child { border-bottom: 0; }
 /* История и «Новые серии»: строка из ссылки (постер и название) и кнопок — без колонок «Загрузок». */
 .dl.simple { display: flex; gap: 1.2rem; }
@@ -331,7 +331,7 @@ a.res-row:hover { background: var(--hover); }
 .dl-when { width: 100%; min-width: 0; line-height: 1.4; }
 .btn.danger { border-color: var(--yellow); color: var(--yellow); width: 6.4rem; }
 .dl-actions { display: flex; align-items: center; justify-content: flex-end; gap: 0.5333rem; min-width: 0; }
-.dl.child { grid-template-columns: minmax(17.3333rem, 1fr) 14.6667rem 6rem 10rem max-content; padding-left: 4.8rem; background: #121417; }
+.dl.child { grid-template-columns: minmax(17.3333rem, 1fr) 14.6667rem 6rem 10rem 10rem; padding-left: 5.6rem; background: #121417; }
 
 /* Настройки */
 .set-grid { display: flex; gap: 2.6667rem; align-items: flex-start; }
@@ -616,8 +616,8 @@ a.res-row:hover { background: var(--hover); }
   .pair { flex-wrap: wrap; }
   .res-row { grid-template-columns: 3.2rem minmax(0, 1fr) 6rem 8.6667rem 4.6667rem 6rem 5.3333rem; gap: 0.8rem; }
   .dl { gap: 0.9333rem; }
-  .dl { grid-template-columns: 3.4667rem minmax(14.6667rem, 1fr) 12rem 5.3333rem 8rem max-content; }
-  .dl.child { grid-template-columns: minmax(14.6667rem, 1fr) 12rem 5.3333rem 8rem max-content; }
+  .dl { grid-template-columns: 3.4667rem minmax(14.6667rem, 1fr) 12rem 5.3333rem 8rem 10rem; }
+  .dl.child { grid-template-columns: minmax(14.6667rem, 1fr) 12rem 5.3333rem 8rem 10rem; }
   .dl-state { width: 12rem; }
   .dl-state .track { width: 10.6667rem; }
   .dl-when { width: 8rem; }

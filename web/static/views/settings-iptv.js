@@ -1,7 +1,7 @@
 // «Настройки → Каналы» (спека этапа 8, раздел 6.2): плейлисты (ссылкой и файлом, «ограничено»,
 // «Обновить», «Проверить», корзина), телепрограмма, ход проверок, часовой пояс каналов, скрытие
 // категорий, стран и языков, скрытые поштучно каналы, избранное этого устройства.
-import { h, fill, icon, poll, keepFocus, ago, plural, fileBase64 } from '../ui.js';
+import { h, fill, icon, poll, keepFocus, ago, plural, fileBase64, confirmDialog } from '../ui.js';
 import { get, put, post, del } from '../api.js';
 import { layout, remoteNote, channelTabs } from './settings-layout.js';
 import { fileFieldShown } from './settings-unrecognized.js';
@@ -50,7 +50,6 @@ export function render(root, r, ctx) {
   let mine = null; // /channels — избранное устройства
   let error = '';
   let adding = false;
-  let confirm = 0; // плейлист, у которого корзина просит подтверждения
   let hidden = null; // черновик скрытия: {categories, countries, languages}
   let favKeys = null; // /iptv/favorites — избранное этого устройства как сохранено
   // Поля ввода создаются один раз: опрос перерисовывает экран, а набранное не должно пропадать.
@@ -103,7 +102,6 @@ export function render(root, r, ctx) {
 
   function playlistsCard() {
     const rows = pls.items.map((p) => {
-      const conf = confirm === p.id;
       return h('div', { class: 'pl' },
         h('div', { class: 'pl-name' }, h('span', { class: 'strong ellipsis' }, p.name),
           h('span', { class: 'muted small ellipsis', title: p.url }, p.url || 'файл'),
@@ -116,25 +114,14 @@ export function render(root, r, ctx) {
           onclick: () => act(() => post(`/iptv/playlists/${p.id}/refresh`)) }, icon('refresh')) : null,
         h('button', { class: 'sq', type: 'button', 'aria-label': 'Проверить', title: 'Проверить', 'data-key': `probe-${p.id}`,
           onclick: () => act(() => post('/iptv/probe', { playlist: p.id })) }, icon('network_check')),
-        canEdit() ? h('button', { class: conf ? 'btn danger' : 'sq', type: 'button', 'aria-label': conf ? 'Удалить?' : 'Удалить плейлист', 'data-key': `del-${p.id}`,
-          onclick: () => {
-            if (!conf) {
-              confirm = p.id;
-              draw();
-              setTimeout(() => {
-                if (confirm === p.id) {
-                  confirm = 0;
-                  if (alive) draw();
-                }
-              }, 3000);
-              return;
-            }
-            confirm = 0;
+        canEdit() ? h('button', { class: 'sq', type: 'button', 'aria-label': 'Удалить плейлист', title: 'Удалить плейлист', 'data-key': `del-${p.id}`,
+          onclick: async () => {
+            if (!(await confirmDialog({ title: `Удалить плейлист «${p.name}»?`, yes: 'Удалить', safe: true, danger: true })) || !alive) return;
             act(async () => {
               await del(`/iptv/playlists/${p.id}`);
               all = null;
             });
-          } }, icon('delete'), conf ? 'Удалить?' : null) : null);
+          } }, icon('delete')) : null);
     });
     url.disabled = !canEdit() || adding;
     limited.disabled = !canEdit();

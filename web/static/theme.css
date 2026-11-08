@@ -209,3 +209,12 @@ body.playing #top { display: none; }
 .season-summary, .seasons { border-radius: var(--r); }
 .ti-have { display: inline-flex; align-items: center; gap: .25rem; padding: .1rem .5rem; border-radius: .35rem; background: rgba(87, 245, 112, .18); color: var(--green); }
 .torrent-item.have-it { box-shadow: inset .25rem 0 0 var(--green); }
+
+/* Окно подтверждения — одно на все удаления (2026-11-08) */
+/* Окна — непрозрачные: прозрачная .card сливалась с затемнением */
+.dlg, .dlg.card { background: var(--bg-raised); box-shadow: 0 1rem 3rem rgba(0, 0, 0, .6); }
+.btn.danger { width: auto; border-color: transparent; background: #c2393b; color: #fff; }
+.btn.danger:hover { background: #d84446; }
+.dlg.confirm { max-width: 30rem; display: flex; flex-direction: column; gap: 1rem; padding: 1.6rem; border-radius: var(--r); }
+.dlg.confirm .h { font-size: 1.25rem; line-height: 1.35; overflow-wrap: anywhere; }
+.dlg.confirm .row { justify-content: flex-end; margin-top: .4rem; }

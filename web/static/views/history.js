@@ -1,7 +1,7 @@
 // «История» (спека этапа 8, раздел 7.5): раздачи, которые смотрели на этом устройстве, по времени
 // последнего просмотра; последняя серия и где остановились; строка ведёт на экран раздачи; крестик
 // убирает раздачу из истории (из домашней сети).
-import { h, fill, icon, poll, keepFocus, day, baseName, thumb as thumbOf } from '../ui.js';
+import { h, fill, icon, poll, keepFocus, day, baseName, thumb as thumbOf, confirmDialog } from '../ui.js';
 import { get, del } from '../api.js';
 
 // duration — «52 мин», «1 ч 58 мин».
@@ -43,7 +43,6 @@ export function render(root, r, ctx) {
   let alive = true;
   let data = null;
   let error = '';
-  let confirm = '';
   const list = h('div', { class: 'dl-list' });
   root.append(h('div', { class: 'screen' }, h('h1', null, 'История'), list));
 
@@ -63,7 +62,6 @@ export function render(root, r, ctx) {
     } catch (e) {
       error = e.message;
     }
-    confirm = '';
     listPoll.now();
   }
 
@@ -90,25 +88,13 @@ export function render(root, r, ctx) {
     ];
     const main = h('span', { class: 'dl-name' }, h('span', { class: 'strong ellipsis', title }, title),
       h('span', { class: 'muted small ellipsis' }, lines[0]), h('span', { class: 'muted small' }, lines[1]));
-    const conf = confirm === it.hash;
     return h('div', { class: 'dl simple' },
       lib || rel ? h('a', { class: 'hist-link', href: lib ? `#/library/${encodeURIComponent(lib.key)}` : `#/release/${rel.id}`, 'data-key': `open-${it.hash}` }, thumb, main)
         : h('div', { class: 'hist-link' }, thumb, main),
-      ctx.canEdit ? h('button', { class: conf ? 'btn danger' : 'sq', type: 'button', 'data-key': `forget-${it.hash}`,
-        'aria-label': conf ? 'Убрать?' : 'Убрать из истории', onclick: () => {
-          if (!conf) {
-            confirm = it.hash;
-            draw();
-            setTimeout(() => {
-              if (confirm === it.hash) {
-                confirm = '';
-                if (alive) draw();
-              }
-            }, 3000);
-            return;
-          }
-          remove(it.hash);
-        } }, icon('close'), conf ? 'Убрать?' : null) : null);
+      ctx.canEdit ? h('button', { class: 'sq', type: 'button', 'data-key': `forget-${it.hash}`, 'aria-label': 'Убрать из истории', title: 'Убрать из истории',
+        onclick: async () => {
+          if (await confirmDialog({ title: `Убрать «${title}» из истории?`, text: 'Файлы останутся, забудется только место просмотра', yes: 'Убрать', safe: true, danger: true }) && alive) remove(it.hash);
+        } }, icon('close')) : null);
   }
 
   const onStatus = () => {

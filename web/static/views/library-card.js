@@ -431,7 +431,7 @@ export function render(root, r, ctx) {
     }
     out.push(h('button', { class: 'btn', type: 'button', 'data-key': 'delete', onclick: async () => {
       const req = deleteRequest(v);
-      if (!(await confirmDialog({ title: req.text, yes: 'Удалить', safe: !!req.safe }))) return;
+      if (!(await confirmDialog({ title: req.text, yes: 'Удалить', safe: true, danger: true }))) return;
       act(async () => {
         const step = afterDelete(c, v.unit, await del(req.path));
         if (step.go) ctx.go(step.go);

@@ -1,7 +1,7 @@
 // «Настройки → Медиатека» (спека этапа 9, раздел 6.3): категории по порядку — название, устройство,
 // Кинопоиск, скрытая; папки с отметкой «не найдена / не читается»; добавить и убрать папку, добавить и
 // удалить свою категорию; у скрытой — «Показывать на этом устройстве». Правки — из домашней сети.
-import { h, fill, icon, keepFocus } from '../ui.js';
+import { h, fill, icon, keepFocus, confirmDialog } from '../ui.js';
 import { get, put, post, del } from '../api.js';
 import { layout, remoteNote } from './settings-layout.js';
 import { pickFolder, grantControl } from './folders.js';
@@ -24,7 +24,6 @@ export function render(root, r, ctx) {
   let cats = null;
   let error = ''; // список не загрузился
   let failed = ''; // последнее действие не удалось — видно до следующего действия
-  let confirm = 0;
   const inputs = new Map(); // поле «папка» по категории: создаётся один раз
   const newName = h('input', { class: 'input', name: 'name', placeholder: 'Название', 'aria-label': 'Название новой категории', 'data-key': 'new-name' });
   const newLayout = h('select', { class: 'input', name: 'layout', 'aria-label': 'Устройство новой категории', 'data-key': 'new-layout' },
@@ -91,26 +90,14 @@ export function render(root, r, ctx) {
 
   function category(c) {
     const own = !c.builtin;
-    const conf = confirm === c.id;
     const fin = folderInput(c);
     return h('section', { class: 'card', 'aria-label': c.name },
       h('div', { class: 'row' }, h('div', { class: 'h grow' }, c.name),
-        own && canEdit() ? h('button', { class: conf ? 'btn danger' : 'sq', type: 'button', 'data-key': `del-${c.id}`, 'aria-label': conf ? 'Удалить?' : 'Удалить категорию',
-          onclick: () => {
-            if (!conf) {
-              confirm = c.id;
-              draw();
-              setTimeout(() => {
-                if (confirm === c.id) {
-                  confirm = 0;
-                  if (alive) draw();
-                }
-              }, 3000);
-              return;
-            }
-            confirm = 0;
+        own && canEdit() ? h('button', { class: 'sq', type: 'button', 'data-key': `del-${c.id}`, 'aria-label': 'Удалить категорию', title: 'Удалить категорию',
+          onclick: async () => {
+            if (!(await confirmDialog({ title: `Удалить категорию «${c.name}»?`, yes: 'Удалить', safe: true, danger: true })) || !alive) return;
             act(() => del(`/library/categories/${c.id}`));
-          } }, icon('delete'), conf ? 'Удалить?' : null) : null),
+          } }, icon('delete')) : null),
       own ? h('div', { class: 'row wrap gap10' },
         h('select', { class: 'input sel', name: 'layout', 'aria-label': 'Устройство', disabled: !canEdit(), 'data-key': `layout-${c.id}`,
           onchange: (e) => save(c, { layout: e.target.value }) }, LAYOUTS.map(([v, t]) => h('option', { value: v, selected: v === c.layout }, t))),

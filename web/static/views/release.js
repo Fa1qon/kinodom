@@ -627,7 +627,7 @@ export function render(root, r, ctx) {
   // серию с открытым потоком сервер оставляет.
   async function remove() {
     const fromHere = root.contains(document.activeElement);
-    if (!(await confirmDialog({ title: removeTitle(rel.name || rel.title, st) })) || !alive) return;
+    if (!(await confirmDialog({ title: removeTitle(rel.name || rel.title, st), yes: 'Удалить', safe: true, danger: true })) || !alive) return;
     busy = true;
     actionError = '';
     drawLive();

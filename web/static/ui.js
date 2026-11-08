@@ -350,18 +350,19 @@ export function openModal(box, onCancel) {
 }
 
 // confirmDialog — «Да» / «Нет» (спека 11b, 4.1): Promise<boolean>; фокус сразу на «Да», у безвозвратного (safe) —
-// на «Нет»: второе OK на пульте ТВ не должно удалить своё с диска (ревью 14В).
-export function confirmDialog({ title, yes = 'Да', no = 'Нет', safe = false }) {
+// на «Нет»: второе OK на пульте ТВ не должно удалить своё с диска (ревью 14В). Одно окно на все удаления (2026-11-08):
+// text — строка пояснения под вопросом, danger — «Да» красная.
+export function confirmDialog({ title, text = '', yes = 'Да', no = 'Нет', safe = false, danger = false }) {
   return new Promise((resolve) => {
     let modal = null;
     const done = (v) => {
       modal.close();
       resolve(v);
     };
-    const yesBtn = h('button', { class: 'btn inv', type: 'button', 'data-key': 'dlg-yes', onclick: () => done(true) }, yes);
+    const yesBtn = h('button', { class: danger ? 'btn danger' : 'btn inv', type: 'button', 'data-key': 'dlg-yes', onclick: () => done(true) }, yes);
     const noBtn = h('button', { class: 'btn', type: 'button', 'data-key': 'dlg-no', onclick: () => done(false) }, no);
-    const box = h('div', { class: 'dlg card', role: 'dialog', 'aria-modal': 'true', 'aria-label': title },
-      h('div', { class: 'h' }, title), h('div', { class: 'row gap10' }, yesBtn, noBtn));
+    const box = h('div', { class: 'dlg card confirm', role: 'dialog', 'aria-modal': 'true', 'aria-label': title },
+      h('div', { class: 'h' }, title), text ? h('div', { class: 'muted' }, text) : null, h('div', { class: 'row gap10' }, yesBtn, noBtn));
     modal = openModal(box, () => done(false));
     (safe ? noBtn : yesBtn).focus({ preventScroll: true });
   });

@@ -150,7 +150,7 @@ export function render(root, r, ctx) {
 
   // removeCustom — «Удалить канал» у своего канала (ревью 14Д, п. 5): его потоки вернутся в «Не распознано».
   async function removeCustom() {
-    if (!(await confirmDialog({ title: `Удалить канал «${card.name}»?`, yes: 'Удалить', safe: true })) || !alive) return;
+    if (!(await confirmDialog({ title: `Удалить канал «${card.name}»?`, yes: 'Удалить', safe: true, danger: true })) || !alive) return;
     try {
       await del(`/iptv/custom/${enc}`);
       ctx.go('#/settings/iptv/unrecognized');

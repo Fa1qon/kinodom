@@ -1,6 +1,6 @@
 // Загрузки — по раздачам: скачанное и то, что качается, серии внутри раздачи, место в папке; удаление —
 // из домашней сети (спека этапа 7, разделы 5.5, 6.3 и 10.7).
-import { h, icon, size, speed, day, ready, poll, keepFocus, plural, shortNames, formatTag, fileFormat } from '../ui.js';
+import { h, icon, size, speed, day, ready, poll, keepFocus, plural, shortNames, formatTag, fileFormat, confirmDialog } from '../ui.js';
 import { get, post, put, del } from '../api.js';
 import { followButton } from './release.js';
 
@@ -14,7 +14,6 @@ const STATE = {
 };
 // ORDER — состояние раздачи, если у серий разные: первое, что есть.
 const ORDER = ['watching', 'downloading', 'paused', 'queued', 'done'];
-const CONFIRM_FOR = 3000; // «Удалить?» ждёт второго нажатия 3 с
 const NOTE_FOR = 10000; // «Сейчас смотрят — …» после удаления раздачи видно 10 с (хвост Х27)
 
 // skippedText — после удаления раздачи: серии, которые сейчас смотрят, остались.
@@ -39,11 +38,11 @@ export function stateLabel(d) {
   return (STATE[d.state] || STATE.queued)[0];
 }
 
-// confirmText — второе нажатие корзины: смотрели недавно — когда (замечание № 19).
+// confirmText — пояснение в окне «Удалить?»: смотрели недавно — когда (замечание № 19).
 export function confirmText(d) {
-  if (!d || !d.watchedAt) return 'Удалить?';
+  if (!d || !d.watchedAt) return '';
   const t = new Date(d.watchedAt);
-  return `Смотрели в ${String(t.getHours()).padStart(2, '0')}:${String(t.getMinutes()).padStart(2, '0')} — удалить?`;
+  return `Смотрели в ${String(t.getHours()).padStart(2, '0')}:${String(t.getMinutes()).padStart(2, '0')}`;
 }
 
 // noteText — надпись под корзиной: {text, until} — until 0 — до следующего действия (ошибка), иначе
@@ -56,8 +55,6 @@ export function noteText(entry, now) {
 export function render(root, r, ctx) {
   let alive = true;
   let view = null;
-  let confirming = ''; // корзина, которая превратилась в «Удалить?»: «hash» — раздача, «hash-i» — серия
-  let confirmTimer = 0;
   const open = new Set(); // раскрытые раздачи — остаются раскрытыми при опросе
   const errors = new Map(); // корзина → {text, until}: ошибка или «сейчас смотрят» (noteText)
   const warn = h('div');
@@ -125,8 +122,8 @@ export function render(root, r, ctx) {
         followToggle(g, key), // у сериала — и когда скачана одна серия
         single ? queueButton(d0, key) : null,
         !ctx.canEdit ? null
-          : single ? trash(key, d0.canDelete, 'Удалить файл', () => removeFile(d0), confirmText(d0))
-            : trash(key, g.canDelete, 'Удалить раздачу', () => removeRelease(g), confirmText({ watchedAt }))))];
+          : single ? trash(key, d0.canDelete, 'Удалить файл', () => removeFile(d0), `Удалить «${title}»?`, confirmText(d0))
+            : trash(key, g.canDelete, 'Удалить раздачу', () => removeRelease(g), `Удалить «${title}» — ${plural(g.items.length, 'серию', 'серии', 'серий')}?`, confirmText({ watchedAt }))))];
     if (!single && isOpen) {
       const names = shortNames(g.items.map((d) => d.file));
       g.items.forEach((d, k) => rows.push(episode(d, names[k])));
@@ -142,7 +139,7 @@ export function render(root, r, ctx) {
       stateCell(d.state, d.readiness, d.percent, stateLabel(d)),
       h('div', { class: 'dl-size' }, size(d.size), d.speed ? h('div', { class: 'muted small' }, speed(d.speed)) : null),
       h('div', { class: 'muted small dl-when' }, when([d]), errorOf(key)),
-      h('div', { class: 'dl-actions' }, queueButton(d, key), ctx.canEdit ? trash(key, d.canDelete, 'Удалить файл', () => removeFile(d), confirmText(d)) : null));
+      h('div', { class: 'dl-actions' }, queueButton(d, key), ctx.canEdit ? trash(key, d.canDelete, 'Удалить файл', () => removeFile(d), `Удалить «${name}»?`, confirmText(d)) : null));
   }
 
   function queueButton(d, key) {
@@ -180,29 +177,18 @@ export function render(root, r, ctx) {
     return text ? h('div', { class: 'error' }, text) : null;
   }
 
-  // trash — корзина: первое нажатие — «Удалить?» (ask) на 3 с, второе — удалить. Файл с открытым потоком
+  // trash — корзина: окно «Удалить?» (ask, пояснение note) — то же, что везде. Файл с открытым потоком
   // удалить нельзя: у раздачи — если поток открыт у всех её серий (№ 19: смотрели недавно — можно).
-  function trash(key, canDelete, label, remove, ask = 'Удалить?') {
+  function trash(key, canDelete, label, remove, ask, note) {
     if (!canDelete) {
       return h('button', { class: 'sq', type: 'button', disabled: true, 'aria-label': 'Сейчас смотрят — удалить нельзя' }, icon('delete'));
     }
-    if (confirming === key) {
-      return h('button', { class: 'btn danger', type: 'button', 'data-key': `del-${key}`, onclick: () => run(key, remove) }, ask);
-    }
-    return h('button', { class: 'sq', type: 'button', 'data-key': `del-${key}`, 'aria-label': label, onclick: () => {
-      confirming = key;
-      clearTimeout(confirmTimer);
-      confirmTimer = setTimeout(() => {
-        confirming = '';
-        if (alive && view) draw();
-      }, CONFIRM_FOR);
-      draw();
+    return h('button', { class: 'sq', type: 'button', 'data-key': `del-${key}`, 'aria-label': label, title: label, onclick: async () => {
+      if (await confirmDialog({ title: ask, text: note, yes: 'Удалить', safe: true, danger: true }) && alive) run(key, remove);
     } }, icon('delete'));
   }
 
   async function run(key, remove) {
-    confirming = '';
-    clearTimeout(confirmTimer);
     try {
       const note = await remove();
       if (note) {
@@ -243,7 +229,6 @@ export function render(root, r, ctx) {
   return () => {
     alive = false;
     refresh.stop();
-    clearTimeout(confirmTimer);
     ctx.listeners.delete(onStatus);
   };
 }
