@@ -504,3 +504,35 @@ func TestGenreFillsBeyondNeighbors(t *testing.T) {
 		t.Fatalf("добор жанра: %+v", rs[1])
 	}
 }
+
+// «Оцените просмотренное» (2026-11-08): досмотренное без оценки — в списке; оценка и «Без оценки» убирают.
+func TestUnratedAsksForFinished(t *testing.T) {
+	fx := newFixture(t, testPack(t, films, nil, nil))
+	fx.watch(t, "tv", "aaaa000000000000000000000000000000000001", 1, 0, 1)
+	fx.watch(t, "tv", "aaaa000000000000000000000000000000000002", 2, 0, 1)
+	fx.watch(t, "tv", "aaaa000000000000000000000000000000000003", 3, 0, 0.05) // только начал
+	sg, _ := fx.s.signals(fx.ctx, "d:tv")
+	if got := sg.Unrated(*fx.now); len(got) != 2 || got[0] != 2 {
+		t.Fatalf("досмотренные, свежий первым: %v", got)
+	}
+	fx.s.Rate(fx.ctx, "d:tv", 2, 8, "kinodom")
+	fx.s.Mark(fx.ctx, "d:tv", 1, "seen")
+	sg, _ = fx.s.signals(fx.ctx, "d:tv")
+	if got := sg.Unrated(*fx.now); len(got) != 0 {
+		t.Fatalf("оценённое и «Без оценки» не спрашиваются: %v", got)
+	}
+}
+
+func TestGenrePrefAndMatch(t *testing.T) {
+	f := Film{Genres: "ужасы, триллер"}
+	prefs := map[string]int{"триллер": 1, "ужасы": -1}
+	if v := genrePref(prefs, f, nil); v != genreLove-genreHate {
+		t.Fatalf("любимый и нелюбимый жанр: %v", v)
+	}
+	if v := genrePref(prefs, f, []string{"Ужасы"}); v != genreLove {
+		t.Fatalf("жанр выбран кнопкой — «не смотрю» не опускает: %v", v)
+	}
+	if matchOf(0) != 50 || matchOf(4) != 87 || matchOf(-30) != 1 || matchOf(30) != 99 {
+		t.Fatalf("совпадение: %d %d %d %d", matchOf(0), matchOf(4), matchOf(-30), matchOf(30))
+	}
+}

@@ -228,3 +228,31 @@ body.playing #top { display: none; }
   .recs-head .tabs a { flex: none; white-space: nowrap; padding: 0 1rem; border-radius: 1.2rem; background: rgba(0, 0, 0, .3); }
   .recs-head .tabs a.on { background: rgba(255, 255, 255, .85); }
 }
+
+/* «Что посмотреть» (2026-11-08). Карточка — колонка одной высоты в ряду сетки: значки прижаты к низу и стоят
+   ровно у всех карточек, сколько бы строк ни заняло «Похоже на…». */
+.rec-card { height: 100%; }
+.rec-open { display: block; color: inherit; }
+.rec-card .rec-reason { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+.rec-card .recs-actions { margin-top: auto; display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: .4rem; }
+.rec-card .recs-actions .btn.sq { width: auto; height: 2.5rem; }
+.rec-card .recs-actions.muted { display: block; }
+.recs-rate { display: flex; flex-wrap: wrap; gap: .4rem; margin-top: auto; }
+.recs-rate .btn { height: 2.4rem; padding: 0 .8rem; }
+.recs-rate.wide { align-items: center; margin: .8rem 0 0; }
+.recs-rate.wide .strong { margin-right: .4rem; }
+.poster .match { position: absolute; left: .5rem; top: .5rem; z-index: 1; padding: .15rem .5rem; border-radius: .5rem; background: #2e7d32; color: #fff; font-size: .85rem; font-weight: 600; }
+.btn.chip.off { color: var(--muted); text-decoration: line-through; }
+.btn.chip .ic { margin-right: -.1rem; }
+.recs-unrated { margin-bottom: 1.4rem; }
+.recs-unrated .line-card { width: 8rem; display: flex; flex-direction: column; gap: .4rem; }
+.recs-unrated .line-card.on .poster::after { content: ""; position: absolute; inset: -.35rem; border: .2rem solid rgba(255, 255, 255, .7); border-radius: 1.3rem; }
+.recs-unrated .line-card:focus-visible { background: none !important; color: inherit !important; }
+.recs-unrated .line-card:focus-visible .poster::after { content: ""; position: absolute; inset: -.35rem; border: .25rem solid #fff; border-radius: 1.3rem; }
+/* Ряды тегов на ПК и ТВ — в несколько строк: прокрутку вбок мышью не найти, часть тегов пряталась за краем. */
+@media (min-width: 700px) {
+  .recs-chips.line { flex-wrap: wrap; overflow: visible; }
+}
+.rec-card .recs-rate { display: grid; grid-template-columns: 1fr 1fr; gap: .3rem; }
+.rec-card .recs-rate .btn { height: 2.2rem; padding: 0 .4rem; justify-content: center; font-size: .9rem; }
+.rec-card .recs-rate .btn:first-child, .rec-card .recs-rate .btn:last-child { grid-column: span 2; }

@@ -3,6 +3,7 @@ package recs
 import (
 	"context"
 	"math"
+	"slices"
 	"time"
 
 	"kinodom/internal/history"
@@ -52,10 +53,11 @@ type Signals struct {
 	Marks   map[int]string // notmine | seen | want
 	Watches map[int]*watchState
 	Shown   map[int]time.Time
+	Genres  map[string]int // жанры из «Моего вкуса»: 1 — люблю, -1 — не смотрю
 }
 
 func newSignals() Signals {
-	return Signals{Ratings: map[int]int{}, Marks: map[int]string{}, Watches: map[int]*watchState{}, Shown: map[int]time.Time{}}
+	return Signals{Ratings: map[int]int{}, Marks: map[int]string{}, Watches: map[int]*watchState{}, Shown: map[int]time.Time{}, Genres: map[string]int{}}
 }
 
 // addViews — журнал просмотров (history.Views) по фильмам.
@@ -98,6 +100,25 @@ func (sg Signals) Seen(kp int) bool {
 	}
 	w := sg.Watches[kp]
 	return w != nil && (w.finished > 0 || w.deleted || w.seen >= sampleSeen)
+}
+
+// unratedFor — сколько дней после просмотра фильм ждёт оценки в «Оцените просмотренное».
+const unratedFor = 60 * 24 * time.Hour
+
+// Unrated — досмотренное без оценки за последние два месяца, свежее первым: оценка точнее, чем «досмотрел».
+// «Без оценки» (отметка seen) и «не моё» убирают фильм из списка.
+func (sg Signals) Unrated(now time.Time) []int {
+	var out []int
+	for kp, w := range sg.Watches {
+		if _, ok := sg.Ratings[kp]; ok || sg.Marks[kp] == "seen" || sg.Marks[kp] == "notmine" || now.Sub(w.lastAt) > unratedFor {
+			continue
+		}
+		if x, ok := watchWeight(w, now); ok && x > 0 && !w.manual {
+			out = append(out, kp)
+		}
+	}
+	slices.SortFunc(out, func(a, b int) int { return sg.Watches[b].lastAt.Compare(sg.Watches[a].lastAt) })
+	return out
 }
 
 // Profile — вход модели: фильм → вклад (положительный — нравится).
@@ -228,6 +249,17 @@ func (s *Service) signals(ctx context.Context, owner string) (Signals, error) {
 		var m string
 		rows.Scan(&kp, &m)
 		sg.Marks[kp] = m
+	}
+	rows.Close()
+	rows, err = s.DB.R.QueryContext(ctx, `SELECT genre, pref FROM rec_genres WHERE owner = ?`, owner)
+	if err != nil {
+		return sg, err
+	}
+	for rows.Next() {
+		var g string
+		var p int
+		rows.Scan(&g, &p)
+		sg.Genres[g] = p
 	}
 	rows.Close()
 	rows, err = s.DB.R.QueryContext(ctx, `SELECT kp_id, at FROM rec_shown WHERE owner = ?`, owner)

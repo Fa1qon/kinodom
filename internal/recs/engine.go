@@ -69,6 +69,7 @@ type Rec struct {
 	Moods   []string           `json:"moods,omitempty"`
 	Members map[string]float64 `json:"members,omitempty"` // вместе: место у каждого (перцентиль)
 	Fill    bool               `json:"-"`                 // из лучшего в выбранном жанре, без похожести
+	Match   int                `json:"match,omitempty"`   // совпадение со вкусом, 1–99 %; 0 — вкус ещё не известен
 }
 
 // Параметры смешивания (kinosovet/DESIGN.md, проверены на живой модели).
@@ -91,6 +92,8 @@ const (
 	genreQuality   = 0.25
 	kindSupport    = 5 // уверенность вида: n/(n+5) кандидатов с вкладом от любимого
 	groupMisery    = 0.30
+	genreLove      = 0.35 // жанр, отмеченный «люблю», — плюс к очкам
+	genreHate      = 1.2  // «не смотрю» — почти вниз списка, если жанр не выбран кнопкой явно
 )
 
 type cand struct {
@@ -198,10 +201,11 @@ func (s *Service) score(ctx context.Context, m *Model, owner string, q Query) (*
 			slices.Sort(c.moods)
 		}
 	}
-	// Выбран жанр: кандидаты — не только соседи любимого (у любителя фантастики соседей-аниме единицы), но и
-	// лучшее в жанре; без связей они встают после похожих, по качеству.
-	if len(q.Genres) > 0 {
-		fs, err := m.GenreFilms(ctx, q.Genres, q.Kind, genreFill)
+	// Выбран жанр или годы: кандидаты — не только соседи любимого (у любителя фантастики соседей-аниме единицы,
+	// у новинок связей в пакете почти нет), но и лучшее в жанре и годах; без связей они встают после похожих,
+	// по качеству.
+	if len(q.Genres) > 0 || q.yearSet() {
+		fs, err := m.FillFilms(ctx, q.Genres, q.Kind, q.YearFrom, q.YearTo, genreFill)
 		if err != nil {
 			return nil, err
 		}
@@ -219,6 +223,36 @@ func (s *Service) score(ctx context.Context, m *Model, owner string, q Query) (*
 		}
 	}
 	return sc, nil
+}
+
+func (q Query) yearSet() bool { return q.YearFrom > 0 || q.YearTo > 0 }
+
+// genrePref — поправка за жанры из «Моего вкуса»: любимый — плюс (один раз, сколько бы любимых ни было),
+// «не смотрю» — минус, если этот жанр не выбран в подборке кнопкой.
+func genrePref(prefs map[string]int, f Film, chosen []string) float64 {
+	love, hate := false, false
+	for _, g := range genres(f) {
+		switch prefs[g] {
+		case 1:
+			love = true
+		case -1:
+			hate = hate || !slices.ContainsFunc(chosen, func(x string) bool { return strings.EqualFold(x, g) })
+		}
+	}
+	v := 0.0
+	if love {
+		v += genreLove
+	}
+	if hate {
+		v -= genreHate
+	}
+	return v
+}
+
+// matchOf — совпадение со вкусом в процентах из очков подборки: 0 очков — 50 %, 2 — 73 %, 4 — 87 %. Шкала
+// пологая: у лучших в подборке очки 3,5–6, и при более крутой все они выходили «99 %» — без разницы.
+func matchOf(score float64) int {
+	return min(99, max(1, int(math.Round(50+49*math.Tanh(score/4)))))
 }
 
 func pass(f Film, q Query) bool {
@@ -308,7 +342,7 @@ func (s *Service) rank(ctx context.Context, m *Model, sc *scored, q Query, exclu
 			zcf[i] *= conf[k] / best
 		}
 	}
-	if sc.cold || len(q.Genres) > 0 { // мало сигналов или добор жанра: к похожести — качество фильма
+	if sc.cold || len(q.Genres) > 0 || q.yearSet() { // мало сигналов или добор жанра и годов: к похожести — качество фильма
 		w := genreQuality
 		if sc.cold {
 			w = coldQuality // не вместо похожести: одна оценка «10» не теряется
@@ -335,7 +369,7 @@ func (s *Service) rank(ctx context.Context, m *Model, sc *scored, q Query, exclu
 		if at, ok := sc.sg.Shown[out[i].film.KP]; ok && now.Sub(at) >= shownFresh && now.Sub(at) < shownWindow && sc.sg.Marks[out[i].film.KP] != "want" {
 			v -= shownPenalty
 		}
-		out[i].score = v
+		out[i].score = v + genrePref(sc.sg.Genres, out[i].film, q.Genres)
 	}
 	slices.SortStableFunc(out, func(a, b ranked) int { return cmpDesc(a.score, b.score) })
 	return out, nil
@@ -402,7 +436,11 @@ func (s *Service) Recommend(ctx context.Context, owner string, q Query) ([]Rec, 
 	}
 	var out []Rec
 	for _, r := range diversify(list, q.Limit, m.niche) {
-		out = append(out, toRec(r))
+		rec := toRec(r)
+		if !sc.cold {
+			rec.Match = matchOf(r.score)
+		}
+		out = append(out, rec)
 	}
 	return out, nil
 }
@@ -618,6 +656,18 @@ func cmpDesc(a, b float64) int {
 func (s *Service) Rate(ctx context.Context, owner string, kp, score int, source string) error {
 	_, err := s.DB.W.ExecContext(ctx, `INSERT INTO rec_ratings (owner, kp_id, score, source, at) VALUES (?, ?, ?, ?, ?)
 		ON CONFLICT(owner, kp_id) DO UPDATE SET score = excluded.score, source = excluded.source, at = excluded.at`, owner, kp, score, source, s.now().UnixMilli())
+	return err
+}
+
+// SetGenre — жанр в «Моём вкусе»: 1 — люблю, -1 — не смотрю, 0 — снять.
+func (s *Service) SetGenre(ctx context.Context, owner, genre string, pref int) error {
+	genre = strings.ToLower(strings.TrimSpace(genre))
+	if pref == 0 {
+		_, err := s.DB.W.ExecContext(ctx, `DELETE FROM rec_genres WHERE owner = ? AND genre = ?`, owner, genre)
+		return err
+	}
+	_, err := s.DB.W.ExecContext(ctx, `INSERT INTO rec_genres (owner, genre, pref, at) VALUES (?, ?, ?, ?)
+		ON CONFLICT(owner, genre) DO UPDATE SET pref = excluded.pref, at = excluded.at`, owner, genre, pref, s.now().UnixMilli())
 	return err
 }
 

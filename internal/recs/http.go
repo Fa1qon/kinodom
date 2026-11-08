@@ -74,6 +74,8 @@ func (s *Service) Register(rt Router, env Env) {
 	rt.Handle("GET /api/v1/recs/films", "", http.HandlerFunc(h.cardsOf))
 	rt.Handle("GET /api/v1/recs/wanted", "", http.HandlerFunc(h.wanted))
 	rt.Handle("GET /api/v1/recs/genres", "", http.HandlerFunc(h.genreRails))
+	rt.Handle("GET /api/v1/recs/unrated", "", http.HandlerFunc(h.unrated))
+	rt.HandleHome("PUT /api/v1/recs/genre", "", http.HandlerFunc(h.setGenre))
 	rt.HandleHome("POST /api/v1/recs/rate", "", http.HandlerFunc(h.rate))
 	rt.HandleHome("POST /api/v1/recs/mark", "", http.HandlerFunc(h.mark))
 	rt.HandleHome("POST /api/v1/recs/import-kp", "", http.HandlerFunc(h.importKP))
@@ -109,6 +111,7 @@ type recOut struct {
 	Reason  string             `json:"reason"`
 	Moods   []string           `json:"moods,omitempty"`
 	Members map[string]float64 `json:"members,omitempty"`
+	Match   int                `json:"match,omitempty"`
 }
 
 func moodName(k string) string {
@@ -157,6 +160,12 @@ func (h *handlers) recs(w http.ResponseWriter, r *http.Request) {
 	q.Moods = slices.Compact(q.Moods)
 	if k := qs.Get("kind"); k != "" {
 		q.Kind = k
+	}
+	if y, err := strconv.Atoi(qs.Get("yearFrom")); err == nil && y > 0 {
+		q.YearFrom = y
+	}
+	if y, err := strconv.Atoi(qs.Get("yearTo")); err == nil && y > 0 {
+		q.YearTo = y
 	}
 	q.Genres = append(q.Genres, qs["genre"]...)
 	q.Surprise = q.Surprise || qs.Get("surprise") == "1"
@@ -210,7 +219,7 @@ func (h *handlers) recs(w http.ResponseWriter, r *http.Request) {
 	out := []recOut{}
 	var shown []int
 	for _, x := range list {
-		o := recOut{Film: filmOut(x.Film), Members: x.Members}
+		o := recOut{Film: filmOut(x.Film), Members: x.Members, Match: x.Match}
 		for _, k := range x.Moods {
 			o.Moods = append(o.Moods, moodName(k))
 		}
@@ -308,7 +317,7 @@ func (h *handlers) taste(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 	}
-	httpx.WriteJSON(w, 200, map[string]any{"owner": owner, "ratings": len(sg.Ratings), "watched": len(sg.Watches), "genres": fav,
+	httpx.WriteJSON(w, 200, map[string]any{"owner": owner, "ratings": len(sg.Ratings), "watched": len(sg.Watches), "genres": fav, "prefs": sg.Genres,
 		"liked": liked[:min(30, len(liked))], "disliked": disliked[:min(30, len(disliked))]})
 }
 
@@ -511,6 +520,42 @@ func (h *handlers) cardsOf(w http.ResponseWriter, r *http.Request) {
 		h.fail(w, err)
 		return
 	}
+	// Своя оценка и отметка — для страницы фильма: «Ваша оценка 8».
+	sg, _ := h.s.signals(r.Context(), h.env.Owner(r))
+	type card struct {
+		FilmOut
+		MyScore int    `json:"myScore,omitempty"`
+		Mark    string `json:"mark,omitempty"`
+	}
+	out := []card{}
+	for _, id := range ids {
+		if f, ok := fs[id]; ok {
+			out = append(out, card{FilmOut: filmOut(f), MyScore: sg.Ratings[id], Mark: sg.Marks[id]})
+		}
+	}
+	httpx.WriteJSON(w, 200, map[string]any{"items": out})
+}
+
+// unrated — «Оцените просмотренное»: досмотренное без оценки, до 12 фильмов.
+func (h *handlers) unrated(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+	m := h.s.Model()
+	if m == nil {
+		h.fail(w, ErrNoModel)
+		return
+	}
+	sg, err := h.s.signals(ctx, h.env.Owner(r))
+	if err != nil {
+		h.fail(w, err)
+		return
+	}
+	ids := sg.Unrated(h.s.now())
+	ids = ids[:min(12, len(ids))]
+	fs, err := h.s.films(ctx, m, ids)
+	if err != nil {
+		h.fail(w, err)
+		return
+	}
 	out := []FilmOut{}
 	for _, id := range ids {
 		if f, ok := fs[id]; ok {
@@ -518,6 +563,26 @@ func (h *handlers) cardsOf(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	httpx.WriteJSON(w, 200, map[string]any{"items": out})
+}
+
+// setGenre — жанр в «Моём вкусе»: pref 1 — люблю, -1 — не смотрю, 0 — снять.
+func (h *handlers) setGenre(w http.ResponseWriter, r *http.Request) {
+	var in struct {
+		Genre string `json:"genre"`
+		Pref  int    `json:"pref"`
+	}
+	if !httpx.ReadJSON(w, r, &in) {
+		return
+	}
+	if _, ok := GenreTitles[strings.ToLower(in.Genre)]; !ok || in.Pref < -1 || in.Pref > 1 {
+		httpx.WriteError(w, 400, "нужен жанр из списка и pref -1, 0 или 1")
+		return
+	}
+	if err := h.s.SetGenre(r.Context(), h.env.Owner(r), in.Genre, in.Pref); err != nil {
+		h.fail(w, err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
 }
 
 func (h *handlers) poster(w http.ResponseWriter, r *http.Request) {

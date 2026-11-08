@@ -238,15 +238,27 @@ func (m *Model) Popular(ctx context.Context, limit int) ([]int, error) {
 	return out, rows.Err()
 }
 
-// GenreFilms — лучшие фильмы жанра (любого из genres) того же порядка, что Popular; kind "" — любой вид.
-func (m *Model) GenreFilms(ctx context.Context, genres []string, kind string, limit int) ([]int, error) {
+// FillFilms — лучшие фильмы жанра (любого из genres; пусто — любого) и годов yearFrom–yearTo (0 — без границы)
+// того же порядка, что Popular; kind "" — любой вид.
+func (m *Model) FillFilms(ctx context.Context, genres []string, kind string, yearFrom, yearTo, limit int) ([]int, error) {
 	var conds []string
 	var args []any
 	for _, g := range genres {
 		conds = append(conds, "LOWER(genres) LIKE ?")
 		args = append(args, "%"+strings.ToLower(g)+"%")
 	}
-	where := "(" + strings.Join(conds, " OR ") + ")"
+	where := "1"
+	if len(conds) > 0 {
+		where = "(" + strings.Join(conds, " OR ") + ")"
+	}
+	if yearFrom > 0 {
+		where += " AND year >= ?"
+		args = append(args, yearFrom)
+	}
+	if yearTo > 0 {
+		where += " AND year > 0 AND year <= ?"
+		args = append(args, yearTo)
+	}
 	if kind != "" {
 		where += " AND kind = ?"
 		args = append(args, kind)

@@ -5,6 +5,14 @@ import { get, post, put } from '../api.js';
 import { filmPoster } from './kpcat.js';
 
 const KIND = 'recs.kind';
+const ERA = 'recs.era';
+
+// eras — годы подборки: модель учена на старом кино, и без выбора годов в подборке много классики (2026-11-08).
+// [ключ, подпись, с какого года, по какой]; 0 — без границы; «Новинки» — прошлый год и этот.
+export function eras(year = new Date().getFullYear()) {
+  return [['new', 'Новинки', year - 1, 0], ['2020', '2020-е', 2020, 2029], ['2010', '2010-е', 2010, 2019],
+    ['2000', '2000-е', 2000, 2009], ['1990', '90-е', 1990, 1999], ['old', 'Старше', 0, 1989]];
+}
 
 // recLine — год, длительность, оценки.
 export function recLine(f) {
@@ -13,12 +21,15 @@ export function recLine(f) {
 }
 
 // recsQuery — адрес подборки: просьба словами, настроения, вид, с кем вместе, «удиви».
-export function recsQuery({ text = '', moods = [], genre = '', kind = '', with: together = [], surprise = false, limit = 18 }) {
+export function recsQuery({ text = '', moods = [], genre = '', kind = '', era = '', with: together = [], surprise = false, limit = 18 }) {
   const q = new URLSearchParams();
   if (text.trim()) q.set('q', text.trim());
   for (const m of moods) q.append('mood', m);
   if (genre) q.set('genre', genre);
   if (kind) q.set('kind', kind);
+  const e = eras().find((x) => x[0] === era);
+  if (e && e[2]) q.set('yearFrom', String(e[2]));
+  if (e && e[3]) q.set('yearTo', String(e[3]));
   if (together.length) q.set('with', together.join(','));
   if (surprise) q.set('surprise', '1');
   q.set('limit', String(limit));
@@ -35,8 +46,16 @@ export const GENRES = [['фантастика', 'Фантастика'], ['фэ�
 const PAGE = 18;
 const PAGE_MAX = 90;
 
-// RATE — быстрые оценки: на ТВ десять кнопок долго листать, четырёх хватает, чтобы понять вкус.
-export const RATE = [['Шедевр', 10], ['Хорошо', 8], ['Так себе', 6], ['Плохо', 3]];
+// RATE — быстрые оценки: на ТВ десять кнопок долго листать, пяти слов хватает, чтобы понять вкус, и каждое
+// понятно без шкалы (2026-11-08: было четыре, «Так себе» путали с «Плохо»).
+export const RATE = [['Шедевр', 10], ['Отлично', 8], ['Нормально', 6], ['Скучно', 4], ['Плохо', 2]];
+
+// rateName — оценка 1–10 словом из RATE (ближайшее).
+export function rateName(v) {
+  let best = RATE[0];
+  for (const r of RATE) if (Math.abs(r[1] - v) < Math.abs(best[1] - v)) best = r;
+  return best[0];
+}
 
 export function render(root, r, ctx) {
   let alive = true;
@@ -44,6 +63,9 @@ export function render(root, r, ctx) {
   let text = r.query.get('q') || '';
   let moods = new Set(r.query.getAll('mood'));
   let kind = store.get(KIND) || '';
+  let era = store.get(ERA) || '';
+  let unrated = []; // «Оцените просмотренное»
+  let unratedPick = 0; // фильм, для которого открыт выбор оценки
   let genre = r.query.get('genre') || ''; // жанр подборки; '' — любой
   let rails = null; // «По жанрам»: строки, null — не загружено
   let together = new Set();
@@ -92,7 +114,7 @@ export function render(root, r, ctx) {
     moreBusy = more;
     draw();
     try {
-      const v = await get(recsQuery({ text, moods: [...moods], genre, kind, with: [...together], surprise, limit }));
+      const v = await get(recsQuery({ text, moods: [...moods], genre, kind, era, with: [...together], surprise, limit }));
       items = v.items;
       note = v.note || '';
       moods = new Set(v.query.moods || []); // настроения, понятые из просьбы, — тоже подсвечены
@@ -193,6 +215,7 @@ export function render(root, r, ctx) {
       'data-key': 'recs-ask', oninput: (e) => { text = e.target.value; }, onkeydown: (e) => { if (e.key === 'Enter') pick(); } });
     const chip = (on, title, key, fn) => h('button', { class: on ? 'btn chip on' : 'btn chip', type: 'button', 'aria-pressed': String(on), 'data-key': key, onclick: fn }, title);
     return h('div', null,
+      unratedLine(),
       h('div', { class: 'row recs-askrow' }, input,
         h('button', { class: 'btn inv', type: 'button', 'data-key': 'recs-go', disabled: busy, onclick: pick }, icon('star'), 'Подобрать')),
       h('div', { class: 'recs-chips line', 'data-row': '', 'aria-label': 'Настроение' }, status.moods.map((m) => chip(moods.has(m.Key), m.Name, `mood-${m.Key}`, () => {
@@ -201,6 +224,11 @@ export function render(root, r, ctx) {
       }))),
       h('div', { class: 'recs-chips line', 'data-row': '', 'aria-label': 'Жанр' }, GENRES.map(([g, title]) => chip(genre === g, title, `genre-${g}`, () => {
         genre = genre === g ? '' : g;
+        pick();
+      }))),
+      h('div', { class: 'recs-chips line', 'data-row': '', 'aria-label': 'Годы' }, eras().map(([key, title]) => chip(era === key, title, `era-${key}`, () => {
+        era = era === key ? '' : key;
+        store.set(ERA, era);
         pick();
       }))),
       h('div', { class: 'row recs-chips' },
@@ -225,24 +253,61 @@ export function render(root, r, ctx) {
         : null);
   }
 
+  // card — постер с совпадением и оценкой Кинопоиска ведёт на страницу фильма; под ним — название, год, почему
+  // советуем и ровный ряд значков внизу карточки: раздачи, хочу, видел (оценить), не моё.
   function card(it) {
     const f = it.film;
     const mark = done.get(f.id);
+    const sq = (key, ic, title, fn) => h('button', { class: 'btn sq', type: 'button', title, 'aria-label': title, 'data-key': `${key}-${f.id}`, onclick: fn }, icon(ic));
     const actions = rateFor === f.id
-      ? h('div', { class: 'recs-actions' }, RATE.map(([title, v]) => h('button', { class: 'btn', type: 'button', 'data-key': `rate-${f.id}-${v}`, onclick: () => act(f, 'rate', v) }, title)),
+      ? h('div', { class: 'recs-rate' }, RATE.map(([title, v]) => h('button', { class: 'btn', type: 'button', 'data-key': `rate-${f.id}-${v}`, onclick: () => act(f, 'rate', v) }, title)),
         h('button', { class: 'btn', type: 'button', 'data-key': `seen-${f.id}`, onclick: () => act(f, 'seen') }, 'Без оценки'))
       : mark ? h('div', { class: 'recs-actions muted small' }, mark)
         : h('div', { class: 'recs-actions' },
-          h('a', { class: 'btn inv', href: `#/film/${f.id}`, 'data-key': `find-${f.id}` }, icon('download'), 'Раздачи'),
-          h('button', { class: 'btn sq', type: 'button', title: 'Хочу посмотреть', 'aria-label': 'Хочу посмотреть', 'data-key': `want-${f.id}`, onclick: () => act(f, 'want') }, icon('add')),
-          h('button', { class: 'btn sq', type: 'button', title: 'Уже видел', 'aria-label': 'Уже видел', 'data-key': `seen-${f.id}`, onclick: () => { rateFor = f.id; draw(); } }, icon('visibility')),
-          h('button', { class: 'btn sq', type: 'button', title: 'Не моё', 'aria-label': 'Не моё', 'data-key': `no-${f.id}`, onclick: () => act(f, 'notmine') }, icon('close')));
+          h('a', { class: 'btn sq inv', href: `#/film/${f.id}`, title: 'Раздачи', 'aria-label': 'Раздачи', 'data-key': `find-${f.id}` }, icon('download')),
+          sq('want', 'add', 'Хочу посмотреть', () => act(f, 'want')),
+          sq('seen', 'visibility', 'Уже видел — оценить', () => { rateFor = f.id; draw(); }),
+          sq('no', 'close', 'Не моё', () => act(f, 'notmine')));
+    const poster = filmPoster(f);
+    if (it.match) poster.append(h('span', { class: 'match', title: 'Совпадение с вашим вкусом' }, `${it.match} %`));
     return h('div', { class: 'entry rec-card', 'data-key': `rec-${f.id}` },
-      filmPoster(f),
+      h('a', { class: 'rec-open', href: `#/film/${f.id}`, tabindex: '-1', 'aria-hidden': 'true' }, poster),
       h('div', { class: 'etitle' }, f.title),
       h('div', { class: 'muted small' }, recLine(f)),
       h('div', { class: 'small rec-reason' }, it.reason),
       actions);
+  }
+
+  // «Оцените просмотренное»: досмотренное без оценки — оценка точнее, чем «досмотрел», и сразу меняет подборку.
+  async function loadUnrated() {
+    try { unrated = (await get('/recs/unrated')).items; } catch { unrated = []; }
+    if (alive) draw();
+  }
+
+  async function rateWatched(f, v) {
+    try {
+      if (v) await post('/recs/rate', { kpId: f.id, score: v });
+      else await post('/recs/mark', { kpId: f.id, mark: 'seen' });
+    } catch (e) {
+      error = e.message;
+    }
+    unrated = unrated.filter((x) => x.id !== f.id);
+    unratedPick = 0;
+    taste = null;
+    pick();
+  }
+
+  function unratedLine() {
+    if (!unrated.length) return null;
+    const cur = unrated.find((f) => f.id === unratedPick);
+    return h('section', { class: 'line recs-unrated', 'aria-label': 'Оцените просмотренное' },
+      h('div', { class: 'line-head' }, h('h2', null, 'Оцените просмотренное')),
+      h('div', { class: 'line-body', 'data-row': '' }, unrated.map((f) => h('button', { class: 'line-card' + (f.id === unratedPick ? ' on' : ''), type: 'button',
+        'data-key': `unrated-${f.id}`, onclick: () => { unratedPick = unratedPick === f.id ? 0 : f.id; draw(); } },
+      filmPoster(f), h('span', { class: 'etitle' }, f.title)))),
+      cur ? h('div', { class: 'recs-rate wide' }, h('span', { class: 'strong' }, `«${cur.title}» — как вам?`),
+        RATE.map(([title, v]) => h('button', { class: 'btn', type: 'button', 'data-key': `urate-${cur.id}-${v}`, onclick: () => rateWatched(cur, v) }, title)),
+        h('button', { class: 'btn', type: 'button', 'data-key': `urate-${cur.id}-skip`, onclick: () => rateWatched(cur, 0) }, 'Без оценки')) : null);
   }
 
   // reloadStatus — ключ Кинопоиска могли задать в настройках после открытия страницы.
@@ -330,9 +395,25 @@ export function render(root, r, ctx) {
   function tasteTab() {
     if (!taste) return h('p', { class: 'muted' }, 'Загружается…');
     const row = (it) => h('div', { class: 'recs-taste-item' }, h('span', { class: 'strong' }, it.film.title), h('span', { class: 'muted small' }, it.why));
-    const fav = (taste.genres || []).map((g) => h('span', { class: 'btn chip on' }, g.title));
+    const prefs = taste.prefs || {};
+    const found = new Set((taste.genres || []).map((g) => g.genre));
+    // Жанр по нажатию: — → люблю → не смотрю → —. «Люблю» поднимает жанр в подборке, «не смотрю» опускает вниз.
+    const genreChip = ([g, title]) => {
+      const p = prefs[g] || 0;
+      return h('button', { class: 'btn chip' + (p > 0 ? ' on' : p < 0 ? ' off' : ''), type: 'button', 'data-key': `pref-${g}`, 'aria-pressed': String(p !== 0),
+        title: p > 0 ? 'Люблю' : p < 0 ? 'Не смотрю' : found.has(g) ? 'Ваш жанр по оценкам' : '',
+        onclick: async () => {
+          const next = p === 0 ? 1 : p > 0 ? -1 : 0;
+          try { await put('/recs/genre', { genre: g, pref: next }); } catch (e) { error = e.message; }
+          prefs[g] = next;
+          taste.prefs = prefs;
+          items = null;
+          draw();
+          pick();
+        } }, p > 0 ? icon('favorite', 16) : p < 0 ? icon('block', 16) : found.has(g) ? icon('star', 16) : null, title);
+    };
     return h('div', { class: 'recs-taste' },
-      fav.length ? h('div', null, h('h2', null, 'Любимые жанры'), h('div', { class: 'recs-chips' }, fav)) : null,
+      h('div', null, h('h2', null, 'Жанры'), h('div', { class: 'recs-chips' }, GENRES.map(genreChip))),
       h('p', { class: 'muted' }, `Оценок: ${taste.ratings}. Фильмов в журнале просмотров: ${taste.watched}. ` +
         'Досмотренное и пересмотренное — плюс; брошенное через три дня и удалённое, не досмотрев, — минус. Только что начатое и пробу озвучки Kinodom не считает.'),
       h('div', { class: 'recs-taste-cols' },
@@ -378,6 +459,7 @@ export function render(root, r, ctx) {
 
   loadStatus();
   loadWanted(); // счёт на вкладке виден сразу
+  loadUnrated();
   if (r.query.get('tab') === 'want') tab = 'want';
   return () => { alive = false; cardTimers.forEach(clearTimeout); if (watcher) watcher.disconnect(); };
 }

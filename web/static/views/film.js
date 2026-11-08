@@ -7,6 +7,7 @@ import { get, post } from '../api.js';
 import { filmMatch, filmQuery, isSeries, latinOriginal } from './kpcat.js';
 import { trackerLabel, keepPolling, trackerTags } from './search.js';
 import { ownedMap, forgetOwned } from '../owned.js';
+import { RATE, rateName } from './recs.js';
 
 const SORTS = [['seeders', 'Раздающие'], ['size', 'Размер'], ['added', 'Новые']];
 
@@ -64,6 +65,8 @@ export function render(root, r) {
   let season = 0;
   let showOther = false;
   let wantDone = false;
+  let myScore = 0; // своя оценка 1–10; 0 — не оценён
+  let rateOpen = false; // открыт ряд оценок
   let have = new Map(); // номер раздачи → «done» (скачана) или «loading» (качается): отметка в списке
   let searchStop = () => {};
 
@@ -87,6 +90,8 @@ export function render(root, r) {
       if (x) {
         film = film || { id: kp, title: x.title, original: x.titleOrig, year: x.year, poster: x.poster, genres: x.genres ? x.genres.split(', ') : [] };
         film.description = x.description || '';
+        myScore = x.myScore || 0;
+        wantDone = x.mark === 'want';
         film.kind = film.kind || x.kind;
         if (!film.kinopoisk && x.kpRating) film.kinopoisk = x.kpRating;
       }
@@ -138,7 +143,23 @@ export function render(root, r) {
           // рекомендации не установлены — кнопка просто не сработает
         }
       } }, icon('bookmark', 22), wantDone ? 'В «Хочу посмотреть»' : 'Хочу посмотреть'),
+      h('button', { class: 'btn big', type: 'button', 'data-key': 'film-rate', 'aria-expanded': String(rateOpen),
+        onclick: () => { rateOpen = !rateOpen; keepFocus(head, drawHead); } },
+      icon(myScore ? 'star' : 'star_border', 22), myScore ? `Моя оценка: ${rateName(myScore)}` : 'Оценить'),
     ];
+    // Оценка сразу уходит в подборку «Что посмотреть»: точнее, чем «досмотрел».
+    const rateRow = rateOpen ? h('div', { class: 'full-buttons full-rate', 'data-row': '' }, RATE.map(([title, v]) =>
+      h('button', { class: 'btn' + (rateName(myScore) === title && myScore ? ' inv' : ''), type: 'button', 'data-key': `film-rate-${v}`, onclick: async () => {
+        try {
+          await post('/recs/rate', { kpId: kp, score: v });
+          myScore = v;
+          rateOpen = false;
+          head.querySelector('[data-key="film-rate"]')?.focus({ preventScroll: true });
+        } catch {
+          // рекомендации не установлены — оценка не сохранится
+        }
+        keepFocus(head, drawHead);
+      } }, title))) : null;
     const poster = h('div', { class: 'full-poster' }, f.poster ? h('img', { src: f.poster, alt: '' }) : null);
     keepFocus(head, () => head.replaceChildren(
       backdrop(f.poster),
@@ -151,6 +172,7 @@ export function render(root, r) {
           h('div', { class: 'full-rates' }, ...rates, (f.genres || []).length ? h('div', { class: 'full-genres' }, f.genres.slice(0, 4).join(', ')) : null),
           owned ? h('div', { class: 'full-have' }, icon('download_done', 18), owned.downloading ? 'Качается — уже можно смотреть' : 'Уже есть в медиатеке') : null,
           h('div', { class: 'full-buttons' }, ...buttons),
+          rateRow,
           f.description ? h('p', { class: 'full-desc' }, f.description) : null))));
   }
 
@@ -197,13 +219,13 @@ export function render(root, r) {
     const rows = sortRows(base.filter((e) => (!quality || qualityOf(e) === quality) && (!season || seasonOf(e) === season)), sort)
       .sort((a, b) => (have.has(b.id) ? 1 : 0) - (have.has(a.id) ? 1 : 0));
     const chip = (on, text, key, fn) => h('button', { class: on ? 'fil on' : 'fil', type: 'button', 'data-key': key, onclick: () => { fn(); keepFocus(root, draw); } }, text);
-    keepFocus(filters, () => filters.replaceChildren(
+    keepFocus(filters, () => filters.replaceChildren(...[ // replaceChildren пишет null текстом «null» — пустые прочь
       ...SORTS.map(([id, text]) => chip(sort === id, text, `sort-${id}`, () => { sort = id; })),
       qualities.length > 1 ? h('span', { class: 'full-sep' }) : null,
       ...(qualities.length > 1 ? [chip(!quality, 'Любое', 'q-all', () => { quality = ''; }), ...qualities.map((x) => chip(quality === x, x, `q-${x}`, () => { quality = x; }))] : []),
       seasons.length > 1 ? h('span', { class: 'full-sep' }) : null,
       ...(seasons.length > 1 ? [chip(!season, 'Все сезоны', 's-all', () => { season = 0; }), ...seasons.map((x) => chip(season === x, `Сезон ${x}`, `s-${x}`, () => { season = x; }))] : []),
-    ));
+    ].filter(Boolean)));
     const tail = [];
     if (!hit.length && other.length) tail.push(h('p', { class: 'muted' }, 'Раздач именно этого фильма не нашлось — ниже раздачи с похожим названием.'));
     if (hit.length && other.length && !showOther) {

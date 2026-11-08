@@ -3102,3 +3102,30 @@ func TestPultChannelPlayerUnified(t *testing.T) {
 		t.Error("app.js: маршрут channel-play не зарегистрирован")
 	}
 }
+
+// «Что посмотреть» (2026-11-08): годы — в адресе подборки, оценка словами из пяти.
+func TestPultRecsErasAndRate(t *testing.T) {
+	node := lookNode(t)
+	script := `
+import { recsQuery, eras, rateName } from './views/recs.js';
+const checks = [
+  [recsQuery({ era: '1990' }), '/recs?yearFrom=1990&yearTo=1999&limit=18'],
+  [recsQuery({ era: 'old' }), '/recs?yearTo=1989&limit=18'],
+  [recsQuery({ era: 'new' }).startsWith('/recs?yearFrom=' + (new Date().getFullYear() - 1) + '&limit'), true],
+  [recsQuery({}), '/recs?limit=18'],
+  [eras(2026)[0][2], 2025],
+  [rateName(10), 'Шедевр'], [rateName(8), 'Отлично'], [rateName(6), 'Нормально'], [rateName(1), 'Плохо'],
+];
+for (const [got, want] of checks) {
+  if (got !== want) {
+    console.error(JSON.stringify(got), '≠', JSON.stringify(want));
+    process.exitCode = 1;
+  }
+}
+`
+	cmd := exec.Command(node, "--input-type=module", "--no-warnings", "-e", script)
+	cmd.Dir = "static"
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Errorf("%v\n%s", err, out)
+	}
+}
