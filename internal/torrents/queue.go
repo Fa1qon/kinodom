@@ -257,18 +257,69 @@ func (s *Service) applyLocked(ss *session) {
 	if ss.t.Info() == nil {
 		return
 	}
-	verifying := len(ss.verifyQ) > 0
-	for i, f := range ss.t.Files() {
-		switch {
-		case !ss.storedFiles[i] || verifying || ss.paused[i]:
-			f.SetPriority(torrent.PiecePriorityNone)
-		case i == ss.focus || ss.readers[i] > 0 || fileDone(f):
-			f.SetPriority(torrent.PiecePriorityNormal)
-		default:
-			f.SetPriority(torrent.PiecePriorityNone)
-		}
+	for i := range ss.t.Files() {
+		s.applyFileLocked(ss, i)
 	}
 	s.refreshPlayPrioritiesLocked(ss)
+}
+
+// streamWindow — явные приоритеты кусков впереди позиции pos файла f: первый недокачанный — Now, второй — Next,
+// до streamReadaheadBytes — Readahead, дальше до ahead — High. Докачанные пропускаются.
+func streamWindow(t *torrent.Torrent, f *torrent.File, pos, ahead int64) map[int]torrent.PiecePriority {
+	out := map[int]torrent.PiecePriority{}
+	pl := t.Info().PieceLength
+	pos = max(0, min(pos, f.Length()))
+	begin := int((f.Offset() + pos) / pl)
+	end := f.EndPieceIndex()
+	ra := streamReadaheadBytes(pl)
+	n := 0
+	for i := begin; i < end; i++ {
+		dist := int64(i-begin) * pl
+		if dist > ahead {
+			break
+		}
+		if t.PieceState(i).Complete {
+			continue
+		}
+		switch {
+		case n == 0:
+			out[i] = torrent.PiecePriorityNow
+		case n == 1:
+			out[i] = torrent.PiecePriorityNext
+		case dist <= ra:
+			out[i] = torrent.PiecePriorityReadahead
+		default:
+			out[i] = torrent.PiecePriorityHigh
+		}
+		n++
+	}
+	return out
+}
+
+// bufferedAhead — сколько байт подряд от позиции pos файла f уже скачано.
+func bufferedAhead(t *torrent.Torrent, f *torrent.File, pos int64) int64 {
+	pl := t.Info().PieceLength
+	pos = max(0, min(pos, f.Length()))
+	i := int((f.Offset() + pos) / pl)
+	for i < f.EndPieceIndex() && t.PieceState(i).Complete {
+		i++
+	}
+	return max(0, min(int64(i)*pl-f.Offset(), f.Length())-pos)
+}
+
+// applyFileLocked — приоритет тела одного файла по тем же правилам, что applyLocked. Вызывать под s.mu.
+func (s *Service) applyFileLocked(ss *session, i int) {
+	f := ss.t.Files()[i]
+	switch {
+	case !ss.storedFiles[i] || len(ss.verifyQ) > 0 || ss.paused[i]:
+		f.SetPriority(torrent.PiecePriorityNone)
+	case ss.readers[i] > 0 && ss.held[i]:
+		f.SetPriority(torrent.PiecePriorityNone)
+	case i == ss.focus || ss.readers[i] > 0 || fileDone(f):
+		f.SetPriority(torrent.PiecePriorityNormal)
+	default:
+		f.SetPriority(torrent.PiecePriorityNone)
+	}
 }
 
 // До открытия HTTP-потока качаем непрерывный участок, а не случайные куски тела файла.
@@ -296,22 +347,28 @@ func (s *Service) refreshPlayPrioritiesLocked(ss *session) {
 			}
 			raise(p.head, windowPriority)
 			raise(p.tail, windowPriority)
-			// Если поток приблизился к непрерывно скачанному краю, его ближайшие
-			// куски должны обойти фоновые очереди. Позиции потоков обновляются
-			// обёрткой Reader, а сам расчёт выполняется раз в секунду под общей
-			// блокировкой сервиса.
+			// Окно просмотра как у TorrServer: от позиции каждого потока ступени Now, Next, Readahead, High —
+			// ближние куски всегда раньше дальних. Внутри одной ступени движок берёт куски по редкости, а не
+			// по порядку: с одним большим окном дальние куски обгоняли нужные плееру, и поток вставал, пока
+			// фильм не докачан целиком (2026-11-08).
 			if ss.readers[index] > 0 {
 				f := ss.t.Files()[index]
-				head := contiguousPrefix(ss.t, f)
-				urgent := playbackBoundaryBytes(p.bitrate)
+				ahead := streamAheadBytes(p.bitrate)
+				starving := false
 				for _, rp := range ss.readerPos {
-					if rp.index != index || head-rp.pos > urgent {
+					if rp.index != index {
 						continue
 					}
-					start := max(int64(0), min(rp.pos, f.Length()))
-					// Срочное окно короткое: большое окно остаётся Readahead и
-					// не превращает весь фильм в равноприоритетный пул кусков.
-					raise(spanFor(ss.t.Info().PieceLength, f.Offset()+start, min(playbackBoundaryBytes(p.bitrate), f.Length()-start)), playbackPriority(true, true))
+					for piece, pr := range streamWindow(ss.t, f, rp.pos, ahead) {
+						want[piece] = max(want[piece], pr)
+					}
+					if bufferedAhead(ss.t, f, rp.pos) < min(ahead, f.Length()-rp.pos) {
+						starving = true
+					}
+				}
+				if starving != ss.held[index] {
+					ss.held[index] = starving
+					s.applyFileLocked(ss, index)
 				}
 			}
 			if index != ss.focus || ss.readers[index] > 0 {

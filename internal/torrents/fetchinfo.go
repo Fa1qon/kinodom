@@ -54,6 +54,9 @@ func (s *Service) FetchInfo(ctx context.Context, magnet string) ([]byte, error) 
 	if len(m.Trackers) > 0 {
 		t.AddTrackers([][]string{m.Trackers})
 	}
+	if !s.eng.cfg.Offline {
+		t.AddTrackers(retrackers)
+	}
 	select {
 	case <-t.GotInfo():
 		return bencode.Marshal(t.Metainfo())

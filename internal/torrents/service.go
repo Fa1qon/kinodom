@@ -67,6 +67,7 @@ type session struct {
 	storedFiles    map[int]bool                  // файлы, которые хранятся и докачиваются (в том числе до перезапуска)
 	readers        map[int]int                   // открытые потоки по файлам: такой файл «сейчас смотрят»
 	readerPos      map[uint64]readerPosition     // позиции открытых потоков для арбитража границы буфера
+	held           map[int]bool                  // смотрят, а запаса впереди мало: тело файла не качается, только окно
 	nextReaderID   uint64
 	touched        map[int]time.Time // когда просмотр файла последний раз записан в базу
 	paused         map[int]bool      // докачка на паузе: мало места (этап 6)
@@ -443,8 +444,11 @@ func (s *Service) sessionFor(t *torrent.Torrent) *session {
 	if ss, ok := s.sessions[ih]; ok && ss.t == t {
 		return ss
 	}
-	ss := &session{t: t, prepared: map[int]*prepared{}, storedFiles: map[int]bool{}, readers: map[int]int{}, readerPos: map[uint64]readerPosition{},
+	ss := &session{t: t, prepared: map[int]*prepared{}, storedFiles: map[int]bool{}, readers: map[int]int{}, readerPos: map[uint64]readerPosition{}, held: map[int]bool{},
 		touched: map[int]time.Time{}, paused: map[int]bool{}, verifyQ: map[int]bool{}, lastSeen: s.now(), focus: -1}
+	if !s.eng.cfg.Offline {
+		t.AddTrackers(retrackers)
+	}
 	if s.uploadOff {
 		t.DisallowDataUpload()
 	}

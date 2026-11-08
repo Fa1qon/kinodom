@@ -50,10 +50,12 @@ func TestBuildConfigDefaults(t *testing.T) {
 	switch {
 	case !cfg.Seed:
 		t.Error("раздача должна быть включена")
-	case cfg.EstablishedConnsPerTorrent != 20:
-		t.Errorf("соединений на раздачу %d, ожидалось 20", cfg.EstablishedConnsPerTorrent)
-	case cfg.TotalHalfOpenConns != 100:
-		t.Errorf("полуоткрытых %d, ожидалось 100", cfg.TotalHalfOpenConns)
+	case cfg.EstablishedConnsPerTorrent != 30:
+		t.Errorf("соединений на раздачу %d, ожидалось 30", cfg.EstablishedConnsPerTorrent)
+	case cfg.TotalHalfOpenConns != 300:
+		t.Errorf("полуоткрытых %d, ожидалось 300", cfg.TotalHalfOpenConns)
+	case cfg.MaxUnverifiedBytes != 256<<20:
+		t.Errorf("непроверенных байт %d, ожидалось 256 МБ", cfg.MaxUnverifiedBytes)
 	case cfg.ListenPort != 42000:
 		t.Errorf("порт %d", cfg.ListenPort)
 	case cfg.HTTPProxy != nil:

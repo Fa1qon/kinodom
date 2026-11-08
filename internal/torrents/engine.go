@@ -140,6 +140,19 @@ func NewEngine(c Config) (*Engine, error) {
 	return e, nil
 }
 
+// retrackers — публичные трекеры, которые добавляются к каждой раздаче (как у TorrServer): у magnet-ссылок
+// трекеров бывает мало или нет, а пиров тогда находит только DHT — медленно. Отдельными уровнями: движок
+// опрашивает все.
+var retrackers = [][]string{
+	{"http://retracker.local/announce"},
+	{"http://bt4.t-ru.org/ann?magnet"},
+	{"udp://tracker.opentrackr.org:1337/announce"},
+	{"udp://open.stealth.si:80/announce"},
+	{"udp://exodus.desync.com:6969/announce"},
+	{"udp://explodie.org:6969/announce"},
+	{"udp://tracker.torrent.eu.org:451/announce"},
+}
+
 // buildClientConfig отдельно от NewEngine, чтобы проверять настройки без запуска клиента.
 func buildClientConfig(c Config, st storage.ClientImpl, up *rate.Limiter) (*torrent.ClientConfig, error) {
 	cfg := torrent.NewDefaultClientConfig()
@@ -152,8 +165,11 @@ func buildClientConfig(c Config, st storage.ClientImpl, up *rate.Limiter) (*torr
 	cfg.Seed = true // раздаём, пока файл хранится (спека, раздел 9)
 	cfg.UploadRateLimiter = up
 	// Общего лимита соединений в движке нет — только на раздачу (проверено).
-	cfg.EstablishedConnsPerTorrent = cmp.Or(c.ConnsPerTorrent, 20)
-	cfg.TotalHalfOpenConns = 100
+	cfg.EstablishedConnsPerTorrent = cmp.Or(c.ConnsPerTorrent, 30)
+	cfg.TotalHalfOpenConns = 300
+	// Бюджет кусков «в работе»: с крупными кусками (16 МБ) 64 МБ по умолчанию — четыре куска, и окно
+	// просмотра упиралось бы в него (TorrServer, 2026-11-08).
+	cfg.MaxUnverifiedBytes = 256 << 20
 	// В anacrolix v1.61 пробуждение горутины записи теряется (гонка Broadcast и Signaled):
 	// соединение перестаёт запрашивать куски и оживает только по таймеру keepalive — по умолчанию
 	// через минуту. С 5 с простой пира не дольше; цена — 4 байта keepalive на простаивающее

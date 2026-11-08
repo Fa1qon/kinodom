@@ -61,8 +61,16 @@ func TestPreparedDownloadWindowMovesAndYieldsToReader(t *testing.T) {
 	}
 	s.mu.Unlock()
 	closeReader := s.openReader(ih, 0)
-	if tt.PieceState(first).Priority != torrent.PiecePriorityNormal {
-		t.Fatal("при просмотре окно загрузки должно уступать приоритеты читателю плеера")
+	// При просмотре окно задаёт позиция потока: ближайший недокачанный кусок — первым (Now), тело файла
+	// ждёт, пока впереди нет запаса.
+	if p := tt.PieceState(first).Priority; p != torrent.PiecePriorityNow {
+		t.Fatalf("ближайший недокачанный кусок при просмотре — %v, ожидался Now", p)
+	}
+	s.mu.Lock()
+	held := ss.held[0]
+	s.mu.Unlock()
+	if !held {
+		t.Fatal("запаса впереди нет — тело файла должно ждать окна просмотра")
 	}
 	closeReader()
 	s.mu.Lock()

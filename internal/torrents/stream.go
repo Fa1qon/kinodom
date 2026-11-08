@@ -39,6 +39,12 @@ func streamAheadBytes(bitrate float64) int64 {
 	return n
 }
 
+// streamReadaheadBytes — окно Reader потока (ступень Readahead): 16 МБ, как AdjustRA у TorrServer, но не
+// меньше четырёх кусков. Дальше окна куски получают High из streamWindow.
+func streamReadaheadBytes(pieceLen int64) int64 {
+	return max(16<<20, 4*pieceLen)
+}
+
 func (s *Service) StreamHandler() http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		ih, ok := parseHash(w, r)
@@ -78,7 +84,7 @@ func (s *Service) StreamHandler() http.Handler {
 		rd := f.NewReader()
 		rd.SetContext(r.Context()) // зритель ушёл — чтение прерывается и не держит приоритеты кусков
 		rd.SetResponsive()         // отдавать данные, не дожидаясь проверки целого куска — быстрая перемотка
-		rd.SetReadahead(streamAheadBytes(s.bitrateOf(ih, index, f.Length())))
+		rd.SetReadahead(streamReadaheadBytes(t.Info().PieceLength))
 		var bodyClose io.Closer = rd
 		var body io.ReadSeeker = rd
 		// Уже проверенное непрерывное начало лежит на диске быстрее, чем его повторное
@@ -244,6 +250,7 @@ func (s *Service) openPlaybackReader(ih metainfo.Hash, index int) (func(), func(
 		defer s.mu.Unlock()
 		delete(ss.readerPos, id)
 		if ss.readers[index]--; ss.readers[index] == 0 {
+			ss.held[index] = false
 			s.applyLocked(ss)
 		}
 	}

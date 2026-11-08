@@ -83,6 +83,7 @@ type EntryView struct {
 	Size      int64   `json:"size"`
 	ImageKey  string  `json:"imageKey"`           // картинка — /img/{imageKey}; "" — нет
 	Kinopoisk float64 `json:"kinopoisk"`          // рейтинг Кинопоиска; 0 — нет
+	KP        int     `json:"kp,omitempty"`       // номер фильма на Кинопоиске: пульт отмечает уже скачанное; 0 — не найден
 	Format    string  `json:"format"`             // «MKV», «AVI, MKV»; "" — неизвестен
 	Season    string  `json:"season"`             // сезон и серии из заголовка: «S01»; "" — нет
 	Variants  int     `json:"variants,omitempty"` // раздач фильма на обоих трекерах — у карточки каталога
@@ -101,7 +102,7 @@ func (e Entry) View() EntryView {
 	t := meta.ParseTitle(e.Title)
 	v := EntryView{ID: e.ID, Tracker: e.Tracker, Title: e.Title, Name: t.Ru, Original: t.Orig, Year: t.Year,
 		Quality: e.Quality, Category: e.Category, Seeders: e.Seeders, Leechers: e.Leechers, Size: e.Size,
-		ImageKey: e.ImageKey, Kinopoisk: e.Rating.Kinopoisk, Format: e.Format, Season: t.Season, Variants: e.Variants,
+		ImageKey: e.ImageKey, Kinopoisk: e.Rating.Kinopoisk, KP: e.Rating.KinopoiskID, Format: e.Format, Season: t.Season, Variants: e.Variants,
 		DetailsPending: e.DetailsPending, Preferred: e.Preferred, PreferredAlt: e.PreferredAlt, Downloads: e.Downloads}
 	if !e.Added.IsZero() {
 		at := e.Added
