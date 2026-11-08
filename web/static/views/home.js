@@ -1,7 +1,7 @@
 // Главный экран: быстрый вход в продолжение просмотра, новые серии и активные загрузки.
 // Данные уже существуют в API медиатеки, подписок и торрентов — экран только собирает их
 // в один TV-first маршрут.
-import { h, fill, icon, keepFocus, poll, day } from '../ui.js';
+import { h, fill, keepFocus, poll, day } from '../ui.js';
 import { get } from '../api.js';
 import { libPoster, continueLabel } from './library-parts.js';
 import { playFile } from './library-card.js';
@@ -9,6 +9,9 @@ import { poster } from './catalog.js';
 import { updateLabel } from './updates.js';
 import { filmPoster } from './kpcat.js';
 import { recLine } from './recs.js';
+
+// NEW — ряды новинок трекеров по разделам.
+const NEW = [['our-series', 'Новые наши сериалы'], ['our-film', 'Новое наше кино'], ['foreign-series', 'Новые зарубежные сериалы'], ['foreign-film', 'Новое зарубежное кино']];
 
 export function render(root, r, ctx) {
   let alive = true;
@@ -18,18 +21,17 @@ export function render(root, r, ctx) {
   let newReleases = {};
   let forYou = null; // «Для вас»: null — рекомендации не установлены или не ответили
   let wanted = null; // «Хочу посмотреть»
-  let newTab = 'our-series';
   let error = '';
   let busy = null;
   const body = h('div', { class: 'home-body' });
-  root.append(h('div', { class: 'screen home' }, h('h1', null, 'Главная'), body));
+  root.append(h('div', { class: 'screen home' }, body));
 
   const refresh = poll(async () => {
     const results = await Promise.allSettled([
       get('/library'), get('/updates'), get('/downloads'),
-      get('/catalog/new?group=our-series&limit=10'), get('/catalog/new?group=our-film&limit=10'),
-      get('/catalog/new?group=foreign-series&limit=10'), get('/catalog/new?group=foreign-film&limit=10'),
-      get('/recs?limit=10&shown=0'), // shown=0: главная обновляется раз в 15 с — это не «показали»
+      get('/catalog/new?group=our-series&limit=20'), get('/catalog/new?group=our-film&limit=20'),
+      get('/catalog/new?group=foreign-series&limit=20'), get('/catalog/new?group=foreign-film&limit=20'),
+      get('/recs?limit=20&shown=0'), // shown=0: главная обновляется раз в 15 с — это не «показали»
       get('/recs/wanted'),
     ]);
     const failed = results.slice(0, 3).find((x) => x.status === 'rejected');
@@ -46,140 +48,92 @@ export function render(root, r, ctx) {
     if (alive) draw();
   }, 15000);
 
+  // draw — главная рядами, как у Lampa: у каждого ряда заголовок и лента карточек вбок (пульт: влево-вправо — по
+  // ряду, вверх-вниз — между рядами).
   function draw() {
     if (!library && !updates && !downloads && !Object.keys(newReleases).length) {
       fill(body, error ? h('p', { class: 'error' }, error) : h('p', { class: 'muted' }, 'Загружается…'));
       return;
     }
+    const lines = [
+      continueLine(),
+      updatesLine(),
+      forYouLine(),
+      wantedLine(),
+      libraryLine(),
+      ...NEW.map(([key, title]) => newLine(key, title)),
+    ].filter(Boolean);
     keepFocus(root, () => fill(body,
       error ? h('p', { class: 'error' }, error) : null,
-      dashboardStats(),
-      continueSection(),
-      wantedSection(),
-      forYouSection(),
-      newReleasesSection(),
-      quickLinks(),
-      updatesSection(),
-      !((library && library.continue && library.continue.length) || (updates && updates.length) || (downloads && downloads.items && downloads.items.length) ||
-        Object.values(newReleases).some((x) => x && x.entries && x.entries.length))
-        ? h('p', { class: 'empty' }, 'Здесь появятся фильмы, серии и загрузки') : null));
+      ...lines,
+      lines.length ? null : h('p', { class: 'empty' }, 'Здесь появятся фильмы, серии и загрузки')));
   }
 
-  function section(title, content, key) {
-    if (!content) return null;
-    return h('section', { class: 'home-section', 'aria-label': title, 'data-key': key }, h('div', { class: 'row' }, h('h2', { class: 'grow' }, title)), content);
+  // line — ряд: заголовок, справа «Все» (more — адрес), под ним лента карточек.
+  function line(key, title, cards, more) {
+    if (!cards.length) return null;
+    return h('section', { class: 'line', 'aria-label': title, 'data-key': `line-${key}` },
+      h('div', { class: 'line-head' }, h('h2', null, title),
+        more ? h('a', { class: 'line-more', href: more, 'data-key': `line-more-${key}` }, 'Все') : null),
+      h('div', { class: 'line-body', 'data-row': '' }, cards));
   }
 
-  function continueSection() {
+  // card — карточка ряда: постер, название, строка под ним; href — ссылка, иначе onclick.
+  function card(key, art, title, sub, href, onclick, label) {
+    const kids = [art, h('span', { class: 'etitle' }, title), sub ? h('span', { class: 'muted small ellipsis' }, sub) : null];
+    return href
+      ? h('a', { class: 'entry line-card', href, 'data-key': key, 'aria-label': label || title }, kids)
+      : h('button', { class: 'entry line-card', type: 'button', 'data-key': key, 'aria-label': label || title, onclick }, kids);
+  }
+
+  function continueLine() {
     const items = library && Array.isArray(library.continue) ? library.continue : [];
-    if (!items.length) return null;
-    const featured = items[0];
-    const resume = (c) => h('button', {
-      class: 'cont', type: 'button', 'data-key': `continue-${c.card.key}`, disabled: busy === c.file,
-      'aria-label': `Продолжить: ${c.card.title}, ${continueLabel(c)}`,
-      onclick: () => playContinue(c),
-    }, libPoster(c.card, 'poster small'), h('span', { class: 'etitle' }, c.card.title), h('span', { class: 'muted small' }, continueLabel(c)));
-    return h('section', { class: 'home-section home-continue', 'aria-label': 'Продолжить просмотр', 'data-key': 'continue' },
-      h('div', { class: 'home-section-head' }, h('div', null, h('span', { class: 'eyebrow' }, 'ВЕРНУТЬСЯ К ПРОСМОТРУ'), h('h2', null, 'Продолжить просмотр')),
-        h('span', { class: 'home-count' }, `${items.length} ${items.length === 1 ? 'фильм' : 'фильмов'}`)),
-      h('div', { class: 'home-hero' },
-        h('div', { class: 'home-hero-art' }, libPoster(featured.card, 'poster hero-poster')),
-        h('div', { class: 'home-hero-copy' },
-          h('span', { class: 'eyebrow' }, featured.card.type === 'SERIES' ? 'СЕРИАЛ' : 'ФИЛЬМ'),
-          h('h3', null, featured.card.title),
-          h('p', { class: 'home-hero-meta' }, continueLabel(featured)),
-          h('p', { class: 'muted' }, featured.episode > 0 ? `Серия ${featured.episode}${featured.season > 0 ? ` · сезон ${featured.season}` : ''}` : 'Продолжить с последнего места'),
-          h('button', { class: 'btn inv big', type: 'button', 'data-key': `hero-${featured.card.key}`, 'data-nav-main': true, disabled: busy === featured.file, onclick: () => playContinue(featured) }, icon('play_arrow'), 'Продолжить'))),
-      items.length > 1 ? h('div', { class: 'cont-list' }, items.slice(1, 9).map(resume)) : null);
+    return line('continue', 'Продолжить просмотр', items.slice(0, 20).map((c) => card(`continue-${c.card.key}`, libPoster(c.card, 'poster'),
+      c.card.title, continueLabel(c), null, () => playContinue(c), `Продолжить: ${c.card.title}, ${continueLabel(c)}`)));
   }
 
   async function playContinue(c) {
+    if (busy) return;
     busy = c.file;
-    draw();
     try { await playFile(c.file, ctx, false, c.episode > 0); }
-    catch (e) { error = e.message; }
+    catch (e) { error = e.message; if (alive) draw(); }
     busy = null;
-    if (alive) draw();
   }
 
-  function dashboardStats() {
-    const cont = library && Array.isArray(library.continue) ? library.continue.length : 0;
-    const fresh = Array.isArray(updates) ? updates.length : 0;
-    const all = downloads && Array.isArray(downloads.items) ? downloads.items : [];
-    const active = all.filter((d) => d.state === 'watching' || d.state === 'downloading').length;
-    return h('div', { class: 'home-stats', 'aria-label': 'Сводка' },
-      stat('Продолжить', cont, '#/library', 'play_arrow'), stat('Новые серии', fresh, '#/updates', 'notifications'), stat('Активные загрузки', active, '#/downloads', 'download'));
-  }
-
-  function stat(title, value, href, glyph) {
-    return h('a', { class: 'home-stat', href, 'data-key': `stat-${title}` }, h('span', { class: 'home-stat-icon' }, icon(glyph)), h('span', { class: 'home-stat-value' }, String(value)), h('span', { class: 'home-stat-title' }, title));
-  }
-
-  function quickLinks() {
-    return h('div', { class: 'home-quick', 'aria-label': 'Быстрые действия' },
-      h('a', { class: 'home-quick-link', href: '#/recs', 'data-key': 'quick-recs' }, icon('star'), h('span', null, 'Что посмотреть'), h('span', { class: 'muted small' }, 'По вкусу и настроению')),
-      h('a', { class: 'home-quick-link', href: '#/catalog', 'data-key': 'quick-catalog' }, icon('video_library'), h('span', null, 'Каталог'), h('span', { class: 'muted small' }, 'Найти фильм или сериал')),
-      h('a', { class: 'home-quick-link', href: '#/library', 'data-key': 'quick-library' }, icon('video_library'), h('span', null, 'Медиатека'), h('span', { class: 'muted small' }, 'Скачанное и папки')),
-      h('a', { class: 'home-quick-link', href: '#/downloads', 'data-key': 'quick-downloads' }, icon('download'), h('span', null, 'Загрузки'), h('span', { class: 'muted small' }, 'Очередь и место')));
-  }
-
-  // wantedSection — «Хочу посмотреть»: что отметили «+» в подборке и «Смотреть позже»; «Все» — вкладка списка.
-  function wantedSection() {
-    if (!wanted || !wanted.length) return null;
-    return h('section', { class: 'home-section home-recs', 'aria-label': 'Хочу посмотреть', 'data-key': 'wanted' },
-      h('div', { class: 'home-section-head' }, h('div', null, h('span', { class: 'eyebrow' }, 'ВАШ СПИСОК'), h('h2', null, 'Хочу посмотреть')),
-        h('a', { class: 'btn', href: '#/recs?tab=want', 'data-key': 'wanted-all' }, `Все · ${wanted.length}`)),
-      h('div', { class: 'home-rail' }, wanted.slice(0, 12).map((f) => h('a', { class: 'home-new-card', href: `#/film/${f.id}`,
-        'data-key': `wanted-${f.id}`, 'aria-label': f.title }, filmPoster(f), h('span', { class: 'etitle' }, f.title),
-      h('span', { class: 'muted small ellipsis' }, recLine(f))))));
-  }
-
-  // forYouSection — «Для вас»: подборка по журналу просмотров и оценкам; «Ещё» — экран «Что посмотреть».
-  function forYouSection() {
-    if (!forYou || !forYou.length) return null;
-    return h('section', { class: 'home-section home-recs', 'aria-label': 'Для вас', 'data-key': 'for-you' },
-      h('div', { class: 'home-section-head' }, h('div', null, h('span', { class: 'eyebrow' }, 'ПО ВАШЕМУ ВКУСУ'), h('h2', null, 'Для вас')),
-        h('a', { class: 'btn', href: '#/recs', 'data-key': 'for-you-more' }, icon('tune'), 'Подобрать под настроение')),
-      h('div', { class: 'home-rail' }, forYou.map((it) => h('a', { class: 'home-new-card', href: `#/film/${it.film.id}`,
-        'data-key': `for-you-${it.film.id}`, 'aria-label': `${it.film.title}. ${it.reason}` },
-      filmPoster(it.film), h('span', { class: 'etitle' }, it.film.title), h('span', { class: 'muted small ellipsis' }, recLine(it.film)),
-      h('span', { class: 'muted small' }, it.reason)))));
-  }
-
-  function newReleasesSection() {
-    const tabs = [
-      ['our-series', 'Наши сериалы'], ['our-film', 'Наше кино'],
-      ['foreign-series', 'Зарубежные сериалы'], ['foreign-film', 'Зарубежное кино'],
-    ];
-    const active = newReleases[newTab];
-    const entries = active && Array.isArray(active.entries) ? active.entries : [];
-    return h('section', { class: 'home-section home-new', 'aria-label': 'Новинки', 'data-key': 'new-releases' },
-      h('div', { class: 'home-section-head' }, h('h2', null, 'Новинки')),
-      h('div', { class: 'home-tabs', role: 'tablist', 'aria-label': 'Категории новинок' }, tabs.map(([key, title]) => h('button', {
-        class: newTab === key ? 'home-tab on' : 'home-tab', type: 'button', role: 'tab', 'aria-selected': newTab === key,
-        'data-key': `new-tab-${key}`, onclick: () => { newTab = key; draw(); },
-      }, title))),
-      entries.length ? newRail(entries) : h('p', { class: 'muted' }, 'В этой категории пока нет новых раздач'));
-  }
-
-  function newRail(entries) {
-    const items = Array.isArray(entries) ? entries : [];
-    return h('div', { class: 'home-rail' }, items.slice(0, 10).map((e) => {
-      const name = e.name || e.title || 'Без названия';
-      const meta = [e.year || null, e.quality || null, e.format || null, e.season || null].filter(Boolean).join(' · ');
-      const added = e.added ? day(e.added) : null;
-      return h('a', { class: 'home-new-card', href: `#/release/${e.id}`, 'data-key': `new-${e.id}`, 'aria-label': `${name}${meta ? `, ${meta}` : ''}` },
-        poster(e, name), h('span', { class: 'etitle' }, name), meta ? h('span', { class: 'muted small ellipsis' }, meta) : null,
-        added ? h('span', { class: 'muted small' }, `Добавлено: ${added}`) : null);
-    }));
-  }
-
-  function updatesSection() {
+  // updatesLine — новые серии сериалов, на которые подписаны: карточка ведёт на раздачу.
+  function updatesLine() {
     const items = Array.isArray(updates) ? updates : [];
-    if (!items.length) return null;
-    return section('Новые серии', h('div', { class: 'home-list' }, items.slice(0, 6).map((u) => h('div', { class: 'home-item' },
-      h('div', { class: 'home-item-main' }, h('span', { class: 'strong ellipsis' }, updateLabel(u)), h('span', { class: 'muted small' }, day(u.at))),
-      h('a', { class: 'btn', href: `#/release/${u.releaseId}`, 'data-key': `update-${u.id}` }, icon('play_arrow'), 'Открыть')))), 'updates');
+    return line('updates', 'Новые серии', items.slice(0, 20).map((u) => card(`update-${u.id}`,
+      h('div', { class: 'poster' }, h('div', { class: 'ptitle' }, updateLabel(u))), updateLabel(u), day(u.at), `#/release/${u.releaseId}`)), '#/updates');
+  }
+
+  function forYouLine() {
+    if (!forYou) return null;
+    return line('for-you', 'Для вас', forYou.map((it) => card(`for-you-${it.film.id}`, filmPoster(it.film), it.film.title, it.reason,
+      `#/film/${it.film.id}`, null, `${it.film.title}. ${it.reason}`)), '#/recs');
+  }
+
+  function wantedLine() {
+    if (!wanted) return null;
+    return line('wanted', 'Хочу посмотреть', wanted.slice(0, 20).map((f) => card(`wanted-${f.id}`, filmPoster(f), f.title, recLine(f), `#/film/${f.id}`)),
+      '#/recs?tab=want');
+  }
+
+  // libraryLine — медиатека: карточки фильмов и сериалов, скачанное — первым.
+  function libraryLine() {
+    const cards = library && Array.isArray(library.cards) ? library.cards : [];
+    return line('library', 'Медиатека', cards.slice(0, 20).map((c) => card(`lib-${c.key}`, libPoster(c, 'poster'), c.title,
+      c.downloading ? 'качается' : c.year ? String(c.year) : '', `#/library/${encodeURIComponent(c.key)}`)), '#/library');
+  }
+
+  // newLine — новые раздачи раздела: найденный на Кинопоиске фильм ведёт на свою страницу, иначе — раздача.
+  function newLine(key, title) {
+    const entries = newReleases[key] && Array.isArray(newReleases[key].entries) ? newReleases[key].entries : [];
+    return line(`new-${key}`, title, entries.slice(0, 20).map((e) => {
+      const name = e.name || e.title || 'Без названия';
+      const meta = [e.year || null, e.quality || null, e.season || null].filter(Boolean).join(' · ');
+      return card(`new-${e.id}`, poster(e, name), name, meta, e.kp > 0 ? `#/film/${e.kp}` : `#/release/${e.id}`);
+    }));
   }
 
   return () => { alive = false; refresh.stop(); };
