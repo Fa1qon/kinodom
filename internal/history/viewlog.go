@@ -38,6 +38,9 @@ func (s *Service) SetOwner(f func(ctx context.Context, device string) string) { 
 // SetFilmOf — номер Кинопоиска фильма раздачи или единицы медиатеки; nil — журнал без фильмов.
 func (s *Service) SetFilmOf(f func(ctx context.Context, hash string) int) { s.filmOf = f }
 
+// SetClock — свои часы вместо time.Now (тесты: журнал и подборка должны жить в одном времени).
+func (s *Service) SetClock(now func() time.Time) { s.now = now }
+
 // Owner — хозяин журнала для устройства: «p:<профиль>» или «d:<устройство>».
 func (s *Service) Owner(ctx context.Context, device string) string {
 	if s.owner != nil {

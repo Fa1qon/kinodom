@@ -80,6 +80,7 @@ func newFixture(t *testing.T, pack string) *fixture {
 	fx := &fixture{ctx: ctx, now: &now, film: map[string]int{}}
 	fx.h = history.New(db)
 	fx.h.SetFilmOf(func(_ context.Context, hash string) int { return fx.film[hash] })
+	fx.h.SetClock(func() time.Time { return *fx.now })
 	fx.s = &Service{DB: db, Journal: fx.h, Now: func() time.Time { return *fx.now }}
 	m, err := OpenModel(pack)
 	if err != nil {

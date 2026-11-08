@@ -149,7 +149,7 @@ func TestHomeShowsNewFilmsAndSeries(t *testing.T) {
 		t.Fatal(err)
 	}
 	text := string(src)
-	for _, want := range []string{"/catalog/new?group=our-series", "/catalog/new?group=our-film", "/catalog/new?group=foreign-series", "/catalog/new?group=foreign-film", "Наши сериалы", "Наше кино", "Зарубежные сериалы", "Зарубежное кино", "home-new-card"} {
+	for _, want := range []string{"/catalog/new?group=our-series", "/catalog/new?group=our-film", "/catalog/new?group=foreign-series", "/catalog/new?group=foreign-film", "Новые наши сериалы", "Новое наше кино", "Новые зарубежные сериалы", "Новое зарубежное кино", "line-card"} {
 		if !strings.Contains(text, want) {
 			t.Fatalf("home page misses %q", want)
 		}
@@ -157,13 +157,13 @@ func TestHomeShowsNewFilmsAndSeries(t *testing.T) {
 	if strings.Contains(text, "h('div', { class: 'home-columns' }, updatesSection(), downloadsSection())") {
 		t.Fatal("downloads block must not be rendered on the home page")
 	}
-	css, err := fs.ReadFile(Static, "style.css")
+	css, err := fs.ReadFile(Static, "theme.css")
 	if err != nil {
 		t.Fatal(err)
 	}
 	cssText := string(css)
-	if !strings.Contains(cssText, ".home-new-card") || !strings.Contains(cssText, ".home-tabs") || !strings.Contains(cssText, ".home-tab") || !strings.Contains(cssText, ".cont .poster.small") {
-		t.Fatal("new releases rails style is missing")
+	if !strings.Contains(cssText, ".line-body") || !strings.Contains(cssText, ".line-card") {
+		t.Fatal("home rows style is missing")
 	}
 }
 
@@ -452,7 +452,7 @@ for (const [got, want] of checks) {
 func TestPultHomeView(t *testing.T) {
 	src := scripts(t)
 	s := src["views/home.js"]
-	for _, want := range []string{"get('/library')", "get('/updates')", "get('/downloads')", "dashboardStats()", "quickLinks()", "home-hero", "Продолжить просмотр", "Новые серии", "Загрузки", "playFile(c.file"} {
+	for _, want := range []string{"get('/library')", "get('/updates')", "get('/downloads')", "Продолжить просмотр", "Новые серии", "Для вас", "Хочу посмотреть", "data-row", "playFile(c.file"} {
 		if !strings.Contains(s, want) {
 			t.Errorf("home.js: нет %q", want)
 		}
