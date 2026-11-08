@@ -187,3 +187,20 @@ body.playing #top { display: none; }
 .line-card { flex: none; width: 10.5rem; padding: 0; border: 0; background: none; color: inherit; font: inherit; text-align: left; cursor: pointer; }
 .line-card .etitle { -webkit-line-clamp: 2; }
 .line-card .poster .ptitle { font-size: 1rem; }
+
+/* Старые блоки экранов (раздача, медиатека, загрузки) — в общем стиле: «стекло» со скруглением вместо рамок. */
+.panel { border: 0; border-radius: var(--r); background: rgba(0, 0, 0, .3); }
+.panel:focus-within { border: 0; background: rgba(0, 0, 0, .45); }
+.ep { border: 0; border-radius: var(--r); background: rgba(0, 0, 0, .25); }
+.ep.on { background: rgba(255, 255, 255, .08); }
+.var-list { border: 0; display: flex; flex-direction: column; gap: .5rem; }
+.var-row { border: 0; border-radius: var(--r); background: rgba(0, 0, 0, .25); }
+.var-row.on { box-shadow: inset .25rem 0 0 #fff; }
+.dl-list { border: 0; display: flex; flex-direction: column; gap: .5rem; }
+.dl { border: 0; border-radius: var(--r); background: rgba(0, 0, 0, .25); }
+.dl.child { background: rgba(0, 0, 0, .15); }
+.dl:has(:focus-visible) { background: rgba(255, 255, 255, .08); }
+.state { border: 0; border-radius: .6rem; background: rgba(255, 255, 255, .1); }
+.poster.thumb { border-radius: .5rem; padding: 0; }
+.poster.thumb img { border-radius: .5rem; }
+.season-summary, .seasons { border-radius: var(--r); }
