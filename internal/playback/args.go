@@ -70,7 +70,9 @@ func pace(burst int, complete bool) []string {
 		}
 		burst = Burst
 	}
-	return []string{"-readrate", "1", "-readrate_initial_burst", strconv.Itoa(burst)}
+	// Догон: раздача на миг отстала — ffmpeg потом читает вдвое быстрее, пока не вернёт запас, а не
+	// живёт впритык до конца фильма (2026-11-08).
+	return []string{"-readrate", "1", "-readrate_initial_burst", strconv.Itoa(burst), "-readrate_catchup", "2"}
 }
 
 // streamArgs — ffmpeg: с ключевого кадра, видео как есть, звук — AAC стерео (AAC стерео — как есть).
