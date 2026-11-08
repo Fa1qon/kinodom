@@ -204,3 +204,5 @@ body.playing #top { display: none; }
 .poster.thumb { border-radius: .5rem; padding: 0; }
 .poster.thumb img { border-radius: .5rem; }
 .season-summary, .seasons { border-radius: var(--r); }
+.ti-have { display: inline-flex; align-items: center; gap: .25rem; padding: .1rem .5rem; border-radius: .35rem; background: rgba(87, 245, 112, .18); color: var(--green); }
+.torrent-item.have-it { box-shadow: inset .25rem 0 0 var(--green); }

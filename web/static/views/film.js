@@ -64,6 +64,7 @@ export function render(root, r) {
   let season = 0;
   let showOther = false;
   let wantDone = false;
+  let have = new Map(); // номер раздачи → «done» (скачана) или «loading» (качается): отметка в списке
   let searchStop = () => {};
 
   const head = h('div', { class: 'full-head' });
@@ -98,6 +99,17 @@ export function render(root, r) {
       return;
     }
     owned = (await ownedMap()).get(kp) || null;
+    // Какие раздачи уже скачаны (у сериала их бывает несколько — по сезонам и разным трекерам).
+    try {
+      const d = await get('/downloads');
+      for (const x of d.items || []) {
+        if (!x.release || !x.release.id) continue;
+        const st = x.percent >= 100 ? 'done' : 'loading';
+        if (have.get(x.release.id) !== 'done') have.set(x.release.id, st);
+      }
+    } catch {
+      // без отметок
+    }
     if (!alive) return;
     drawHead();
     startSearch();
@@ -181,7 +193,9 @@ export function render(root, r) {
     const seasons = series ? [...new Set(base.map(seasonOf).filter(Boolean))].sort((a, b) => a - b) : [];
     if (quality && !qualities.includes(quality)) quality = '';
     if (season && !seasons.includes(season)) season = 0;
-    const rows = sortRows(base.filter((e) => (!quality || qualityOf(e) === quality) && (!season || seasonOf(e) === season)), sort);
+    // Скачанные раздачи — первыми: фильм уже есть, с них и смотреть.
+    const rows = sortRows(base.filter((e) => (!quality || qualityOf(e) === quality) && (!season || seasonOf(e) === season)), sort)
+      .sort((a, b) => (have.has(b.id) ? 1 : 0) - (have.has(a.id) ? 1 : 0));
     const chip = (on, text, key, fn) => h('button', { class: on ? 'fil on' : 'fil', type: 'button', 'data-key': key, onclick: () => { fn(); keepFocus(root, draw); } }, text);
     keepFocus(filters, () => filters.replaceChildren(
       ...SORTS.map(([id, text]) => chip(sort === id, text, `sort-${id}`, () => { sort = id; })),
@@ -203,9 +217,11 @@ export function render(root, r) {
   // item — раздача (как torrent-item у Lampa): заголовок целиком, ниже трекер, дата, качество и формат, справа —
   // раздающие, качающие и размер.
   function item(e) {
-    return h('a', { class: 'torrent-item', href: `#/release/${e.id}`, 'data-key': `t-${e.id}` },
+    const st = have.get(e.id);
+    return h('a', { class: st ? 'torrent-item have-it' : 'torrent-item', href: `#/release/${e.id}`, 'data-key': `t-${e.id}` },
       h('div', { class: 'ti-title' }, e.title || e.name),
       h('div', { class: 'ti-details' },
+        st ? h('span', { class: 'ti-have' }, icon(st === 'done' ? 'download_done' : 'download', 15), st === 'done' ? 'Скачано' : 'Качается') : null,
         h('span', { class: 'ti-tracker' }, trackerLabel(e.tracker)),
         e.added ? h('span', null, new Date(e.added).toLocaleDateString('ru-RU')) : null,
         e.quality ? h('span', { class: 'ti-chip' }, e.quality) : null,
