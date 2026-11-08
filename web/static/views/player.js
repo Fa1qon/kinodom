@@ -168,7 +168,8 @@ export function render(root, r, ctx) {
     // Позади держим 10–30 с (по умолчанию 2–3 мин — лишнее место в MSE, ревью 18Б). Stash-буфер
     // включён: без него сетевые микрозадержки сразу бьют в декодер — просмотр дёргался (2026-10-08).
     // Разбор потока — в рабочем потоке: в основном он отнимал кадры у страницы на тяжёлых файлах (2026-11-08).
-    mp = mpegts.createPlayer({ type: 'mpegts', isLive: false, url: P.streamURL(src, k, audio, sid) },
+    // Адрес — полный: рабочий поток живёт по blob:-адресу и «/play/…» не разбирает — плеер не запускался вовсе.
+    mp = mpegts.createPlayer({ type: 'mpegts', isLive: false, url: new URL(P.streamURL(src, k, audio, sid), location.href).href },
       { enableWorker: true, enableStashBuffer: true, stashInitialSize: 384,
         lazyLoad: false, autoCleanupSourceBuffer: true,
         autoCleanupMaxBackwardDuration: 30, autoCleanupMinBackwardDuration: 10 });

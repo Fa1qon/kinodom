@@ -2969,6 +2969,9 @@ func TestPultWatchGoesToPlayer(t *testing.T) {
 	if s := src["views/player.js"]; strings.Contains(s, "Во внешнем плеере") || strings.Contains(s, "pl-external") {
 		t.Error("player.js: кнопка внешнего плеера должна быть только на странице раздачи")
 	}
+	if s := src["views/player.js"]; strings.Contains(s, "enableWorker: true") && !strings.Contains(s, "url: new URL(P.streamURL(") {
+		t.Error("player.js: рабочему потоку mpegts нужен полный адрес потока — относительный он не разбирает")
+	}
 	if s := src["views/library-card.js"]; !strings.Contains(s, "playExternalFile") || !strings.Contains(s, "external-watch") {
 		t.Error("library-card.js: нет отдельного внешнего запуска")
 	}
