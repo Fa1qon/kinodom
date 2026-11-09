@@ -72,14 +72,17 @@ export function appCard(m, bridge) {
 }
 
 // upgradeCard — «Обновления»: версия программы и выпуск баз из релизов GitHub (docs/data-packs-and-updates.md).
-// Базы ставятся сами, если не выключено; новая программа — ссылкой на релиз.
+// Базы ставятся сами, если не выключено; новая программа — «Обновить» (подписанный установщик ставится тихо,
+// сервер перезапускается) или ссылкой на релиз, если ставить сам сервер не умеет.
 export function upgradeCard(u, act) {
   if (!u) return null;
   const busy = u.installing || u.checking;
   return h('div', { class: 'card tight upgrade-card' }, h('div', { class: 'h' }, 'Обновления'),
     h('div', { class: 'muted' }, `Kinodom ${u.version}`),
-    u.appNew ? h('div', { class: 'row wrap' }, h('span', { style: { color: 'var(--yellow)' } }, `Вышла версия ${u.appNew}`),
-      h('a', { class: 'btn inv', href: u.appUrl, target: '_blank', rel: 'noopener', 'data-key': 'upgrade-app' }, icon('download'), 'Скачать')) : null,
+    u.appNew ? h('div', { class: 'row wrap' }, h('span', { style: { color: 'var(--yellow)' } }, u.appInstalling ? `Ставится версия ${u.appNew}…` : `Вышла версия ${u.appNew}`),
+      u.appInstalling ? null : u.appSigned
+        ? h('button', { class: 'btn inv', type: 'button', 'data-key': 'upgrade-app', onclick: () => act('app') }, icon('download'), 'Обновить')
+        : h('a', { class: 'btn inv', href: u.appUrl, target: '_blank', rel: 'noopener', 'data-key': 'upgrade-app' }, icon('download'), 'Скачать')) : null,
     h('div', { class: 'muted' }, u.installing ? `Базы: ставится выпуск ${u.dataNew || ''}` : `Базы: ${u.data ? 'выпуск ' + u.data : 'из установщика'}`),
     u.dataNew && !u.installing ? h('div', { style: { color: 'var(--yellow)' } }, `Есть выпуск ${u.dataNew}`) : null,
     u.error ? h('div', { class: 'small', style: { color: 'var(--yellow)' } }, u.error) : null,
@@ -109,9 +112,14 @@ export function render(root, r, ctx) {
         upgrade = { ...upgrade, checking: true };
         if (last) draw(last);
         upgrade = await post('/upgrade/check', {});
+      } else if (what === 'app') {
+        upgrade = { ...upgrade, appInstalling: true };
+        if (last) draw(last);
+        await post('/upgrade/app', {});
+        return; // дальше сервер перезапустится; экран переподключится сам
       } else upgrade = await put('/upgrade', { auto: on });
     } catch (e) {
-      upgrade = { ...upgrade, checking: false, error: e.message };
+      upgrade = { ...upgrade, checking: false, appInstalling: false, error: e.message };
     }
     if (alive && last) draw(last);
   }

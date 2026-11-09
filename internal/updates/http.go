@@ -2,6 +2,7 @@ package updates
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"time"
 
@@ -18,6 +19,22 @@ func (s *Service) Register(r Router) {
 	r.Handle("GET /api/v1/upgrade", "", http.HandlerFunc(s.handleGet))
 	r.HandleHome("POST /api/v1/upgrade/check", "", http.HandlerFunc(s.handleCheck))
 	r.HandleHome("PUT /api/v1/upgrade", "", http.HandlerFunc(s.handlePut))
+	r.HandleHome("POST /api/v1/upgrade/app", "", http.HandlerFunc(s.handleApp))
+}
+
+// handleApp — «Обновить»: установщик качается и запускается; сервер вскоре перезапустится новой версией.
+func (s *Service) handleApp(w http.ResponseWriter, r *http.Request) {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Minute)
+	defer cancel()
+	if err := s.InstallApp(ctx); err != nil {
+		code := 500
+		if errors.Is(err, ErrNoApp) {
+			code = 409
+		}
+		httpx.WriteError(w, code, err.Error())
+		return
+	}
+	w.WriteHeader(http.StatusAccepted)
 }
 
 func (s *Service) handleGet(w http.ResponseWriter, r *http.Request) {

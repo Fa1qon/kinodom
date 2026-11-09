@@ -13,9 +13,11 @@ import (
 	"kinodom/internal/updates"
 )
 
-// cmdDataRelease — файлы релиза баз data-ГГГГ.ММ.ДД с подписью (docs/data-packs-and-updates.md):
+// cmdDataRelease — файлы релиза с подписью (docs/data-packs-and-updates.md): баз data-ГГГГ.ММ.ДД или
+// программы v<версия> (это делает build.ps1 -Installer):
 //
 //	kinodom data-release -out dist\data recs=..\kinosovet\data\recs-model.db:1
+//	kinodom data-release -out dist -version 0.17.0 app=dist\Kinodom-0.17.0-setup.exe:0
 //
 // Ключ — файл из KINODOM_SIGN_KEY (по умолчанию %USERPROFILE%\.kinodom-sign\data.key). Выкладывает
 // владелец: gh release create data-<версия> --latest=false <файлы>.
@@ -52,7 +54,12 @@ func cmdDataRelease(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintln(stderr, err)
 		return 1
 	}
-	dir := filepath.Join(*out, updates.DataPrefix+*version)
+	// Релиз программы — v<версия> (установщик как есть), баз — data-<выпуск>.
+	prefix := updates.DataPrefix
+	if len(in) == 1 && in[0].Pack == "app" {
+		prefix = "v"
+	}
+	dir := filepath.Join(*out, prefix+*version)
 	m, err := updates.BuildRelease(dir, *version, key, in)
 	if err != nil {
 		fmt.Fprintln(stderr, err)

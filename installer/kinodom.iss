@@ -249,7 +249,9 @@ begin
       InstallOK := True;
       { Значок в трее — от имени пользователя, запустившего установку (сам установщик — от администратора);
         и при тихом обновлении: stop его закрывал. }
-      ExecAsOriginalUser(ExpandConstant('{app}\kinodomw.exe'), 'tray', '', SW_SHOWNORMAL, ewNoWait, Code);
+      { Самообновление (/AUTOUPDATE=1) идёт от имени службы: значок оказался бы в чужом сеансе — вернётся при входе. }
+      if ExpandConstant('{param:AUTOUPDATE|0}') <> '1' then
+        ExecAsOriginalUser(ExpandConstant('{app}\kinodomw.exe'), 'tray', '', SW_SHOWNORMAL, ewNoWait, Code);
     end
     else
     begin

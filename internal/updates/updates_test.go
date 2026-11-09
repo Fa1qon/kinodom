@@ -5,6 +5,7 @@ import (
 	"crypto/ed25519"
 	"crypto/rand"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -45,7 +46,7 @@ func fakeHub(t *testing.T, dir, dataTag, app string) *httptest.Server {
 				assets = append(assets, map[string]any{"name": e.Name(), "browser_download_url": srv.URL + "/dl/" + e.Name()})
 			}
 			json.NewEncoder(w).Encode([]map[string]any{
-				{"tag_name": "v" + app, "html_url": "https://example/v" + app},
+				{"tag_name": "v" + app, "html_url": "https://example/v" + app, "assets": assets},
 				{"tag_name": dataTag, "assets": assets},
 				{"tag_name": "v9.9.9", "draft": true},
 			})
@@ -155,5 +156,38 @@ func TestNewer(t *testing.T) {
 		if newer(c.a, c.b) != c.want {
 			t.Errorf("newer(%s, %s) != %v", c.a, c.b, c.want)
 		}
+	}
+}
+
+func TestAppInstallerSignedAndLaunched(t *testing.T) {
+	if !canInstall {
+		t.Skip("самообновление только на Windows")
+	}
+	pub, priv, _ := ed25519.GenerateKey(rand.Reader)
+	setupExe := filepath.Join(t.TempDir(), "Kinodom-0.17.0-setup.exe")
+	os.WriteFile(setupExe, []byte("установщик"), 0o644)
+	dir := t.TempDir()
+	if _, err := BuildRelease(dir, "0.17.0", priv, []Input{{Path: setupExe, Pack: "app"}}); err != nil {
+		t.Fatal(err)
+	}
+	// релиз программы — в той же папке, что и релиз баз (для fakeHub — один набор файлов)
+	srv := fakeHub(t, dir, "data-2026.01.01", "0.17.0")
+	var got []string
+	s, _ := service(t, srv.URL, pub, &got)
+	if err := s.InstallApp(context.Background()); !errors.Is(err, ErrNoApp) {
+		t.Fatalf("до проверки: %v", err)
+	}
+	s.Check(context.Background(), false)
+	if st := s.Status(context.Background()); st.AppNew != "0.17.0" || !st.AppSigned {
+		t.Fatalf("состояние %+v", st)
+	}
+	var launched string
+	start = func(p string) error { b, _ := os.ReadFile(p); launched = string(b); return nil }
+	defer func() { start = launch }()
+	if err := s.InstallApp(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if launched != "установщик" {
+		t.Fatalf("запущен %q", launched)
 	}
 }

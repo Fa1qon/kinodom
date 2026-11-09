@@ -36,7 +36,9 @@ func bindChildren() error {
 		return err
 	}
 	var info windows.JOBOBJECT_EXTENDED_LIMIT_INFORMATION
-	info.BasicLimitInformation.LimitFlags = windows.JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE
+	// BREAKAWAY_OK — выйти из задания может только тот, кого запускают с CREATE_BREAKAWAY_FROM_JOB: установщик
+	// обновления (internal/updates) переживает остановку службы. Edge такого флага не ставит и умирает с нами.
+	info.BasicLimitInformation.LimitFlags = windows.JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE | windows.JOB_OBJECT_LIMIT_BREAKAWAY_OK
 	if _, err := windows.SetInformationJobObject(job, windows.JobObjectExtendedLimitInformation,
 		uintptr(unsafe.Pointer(&info)), uint32(unsafe.Sizeof(info))); err != nil {
 		windows.CloseHandle(job)

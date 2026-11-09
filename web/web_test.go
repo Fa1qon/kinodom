@@ -3136,7 +3136,7 @@ func TestStatusUpgradeCard(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, want := range []string{"get('/upgrade')", "post('/upgrade/check'", "put('/upgrade', { auto", "upgradeCard(upgrade, act)", "'Ставить базы сами'"} {
+	for _, want := range []string{"get('/upgrade')", "post('/upgrade/check'", "put('/upgrade', { auto", "upgradeCard(upgrade, act)", "'Ставить базы сами'", "post('/upgrade/app'"} {
 		if !strings.Contains(string(b), want) {
 			t.Errorf("settings-status.js: нет %q", want)
 		}

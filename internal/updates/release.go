@@ -35,21 +35,25 @@ func LoadKey(path string) (ed25519.PrivateKey, error) {
 	return ed25519.NewKeyFromSeed(seed), nil
 }
 
-// BuildRelease готовит в out файлы релиза баз: сжатые базы, manifest.json и manifest.json.sig.
+// BuildRelease готовит в out файлы релиза: базы (сжатые) или установщик, manifest.json и manifest.json.sig.
 func BuildRelease(out, version string, key ed25519.PrivateKey, in []Input) (Manifest, error) {
 	m := Manifest{Version: version}
 	if err := os.MkdirAll(out, 0o755); err != nil {
 		return m, err
 	}
 	for _, x := range in {
-		name := filepath.Base(x.Path) + ".gz"
+		// Установщик уже сжат — кладётся как есть; базы — gzip (вдвое меньше).
+		name, pack := filepath.Base(x.Path), copyFile
+		if x.Pack != "app" {
+			name, pack = name+".gz", gzipFile
+		}
 		for _, f := range m.Files {
 			if f.Name == name {
 				return m, fmt.Errorf("два файла с именем %s: у баз разных схем — разные имена", name)
 			}
 		}
 		dst := filepath.Join(out, name)
-		if err := gzipFile(x.Path, dst); err != nil {
+		if err := pack(x.Path, dst); err != nil {
 			return m, fmt.Errorf("%s: %w", x.Path, err)
 		}
 		sum, size, err := hashFile(dst)
@@ -67,6 +71,23 @@ func BuildRelease(out, version string, key ed25519.PrivateKey, in []Input) (Mani
 	}
 	sig := base64.StdEncoding.EncodeToString(ed25519.Sign(key, body))
 	return m, os.WriteFile(filepath.Join(out, "manifest.json.sig"), []byte(sig), 0o644)
+}
+
+func copyFile(src, dst string) error {
+	in, err := os.Open(src)
+	if err != nil {
+		return err
+	}
+	defer in.Close()
+	out, err := os.Create(dst)
+	if err != nil {
+		return err
+	}
+	if _, err := io.Copy(out, in); err != nil {
+		out.Close()
+		return err
+	}
+	return out.Close()
 }
 
 func gzipFile(src, dst string) error {

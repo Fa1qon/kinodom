@@ -91,6 +91,7 @@ type Status struct {
 	Version    string    `json:"version"`              // программа
 	AppNew     string    `json:"appNew,omitempty"`     // вышла новее
 	AppURL     string    `json:"appUrl,omitempty"`     // страница релиза
+	AppSigned  bool      `json:"appSigned,omitempty"`  // в релизе подписанный установщик: «Обновить» ставит сам
 	Installing bool      `json:"installing,omitempty"` // идёт загрузка баз
 }
 
@@ -98,6 +99,7 @@ type Service struct {
 	o   Options
 	mu  sync.Mutex
 	st  Status
+	app *release   // новая версия программы из последней проверки
 	run sync.Mutex // одна проверка за раз
 }
 
@@ -230,9 +232,10 @@ func (s *Service) check(ctx context.Context, install bool) error {
 		}
 	}
 	s.mu.Lock()
-	s.st.AppNew, s.st.AppURL = "", ""
+	s.st.AppNew, s.st.AppURL, s.st.AppSigned, s.app = "", "", false, nil
 	if app != nil && s.o.Version != "dev" && newer(app.Tag, s.o.Version) { // сборка разработчика не обновляется
-		s.st.AppNew, s.st.AppURL = strings.TrimPrefix(app.Tag, "v"), app.URL
+		_, signed := app.asset("manifest.json.sig")
+		s.st.AppNew, s.st.AppURL, s.st.AppSigned, s.app = strings.TrimPrefix(app.Tag, "v"), app.URL, signed && canInstall, app
 	}
 	s.mu.Unlock()
 	if data == nil {
@@ -461,3 +464,46 @@ func nums(v string) [3]int {
 	}
 	return out
 }
+
+// ErrNoApp — новой подписанной версии программы нет (или проверки ещё не было).
+var ErrNoApp = errors.New("новой версии нет")
+
+// InstallApp качает установщик новой версии, сверяет подпись и хэш и запускает его тихо: установщик
+// остановит службу, поставит версию и запустит её снова; приложения на ТВ подтянут новый APK как обычно.
+func (s *Service) InstallApp(ctx context.Context) error {
+	s.run.Lock()
+	defer s.run.Unlock()
+	s.mu.Lock()
+	r := s.app
+	s.mu.Unlock()
+	if r == nil || !canInstall {
+		return ErrNoApp
+	}
+	m, err := s.manifest(ctx, *r)
+	if err != nil {
+		return err
+	}
+	for _, f := range m.Files {
+		if f.Pack != "app" {
+			continue
+		}
+		a, ok := r.asset(f.Name)
+		if !ok {
+			return errors.New("установщика нет в релизе")
+		}
+		if err := os.MkdirAll(s.o.Dir, 0o755); err != nil {
+			return err
+		}
+		path := filepath.Join(s.o.Dir, filepath.Base(f.Name))
+		if err := s.download(ctx, a.URL, path, f); err != nil {
+			os.Remove(path)
+			return err
+		}
+		s.o.Log.Info("обновления: запускаю установщик", "version", m.Version)
+		return start(path)
+	}
+	return ErrNoApp
+}
+
+// start — запуск установщика (тесты подменяют).
+var start = launch

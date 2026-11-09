@@ -135,4 +135,13 @@ if ($Installer) {
     & $iscc /Q "/DAppVersion=$version" "/DNumVersion=$numeric" installer\kinodom.iss
     if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
     Write-Host "dist\Kinodom-$version-setup.exe"
+    # Files for GitHub release v<VERSION>: installer + manifest.json + signature (self-update, internal/updates).
+    # Signed only with the owner's key (KINODOM_SIGN_KEY or %USERPROFILE%\.kinodom-sign\data.key).
+    $key = if ($env:KINODOM_SIGN_KEY) { $env:KINODOM_SIGN_KEY } else { Join-Path $env:USERPROFILE '.kinodom-sign\data.key' }
+    if (Test-Path $key) {
+        & bin\kinodom.exe data-release -out dist -version $version "app=dist\Kinodom-$version-setup.exe:0"
+        if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+    } else {
+        Write-Host 'No signing key - release without manifest (no self-update for it)'
+    }
 }
