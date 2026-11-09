@@ -26,6 +26,7 @@ func commands() []command {
 		{"meta", "проверить метаданные вживую: kinodom meta kp film 301", cmdMeta},
 		{"torrent", "проверить движок вживую: kinodom torrent info <magnet> — метаинфо от пиров", cmdTorrent},
 		{"catalog", "каталог вживую на отдельной папке: kinodom catalog refresh --home …", cmdCatalog},
+		{"data-release", "файлы релиза баз с подписью: kinodom data-release recs=путь:схема", cmdDataRelease},
 		{"version", "показать версию", cmdVersion},
 	}
 	return append(base, osCommands()...)

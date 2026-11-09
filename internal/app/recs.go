@@ -9,11 +9,14 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"time"
 
 	"kinodom/internal/history"
 	"kinodom/internal/httpx"
 	"kinodom/internal/meta"
+	"kinodom/internal/netx"
 	"kinodom/internal/recs"
+	"kinodom/internal/updates"
 )
 
 // initRecs — «Что посмотреть»: журнал вкуса в истории (кто смотрел, сколько, чем кончилось), отметки
@@ -177,4 +180,44 @@ func (j resolvingJournal) Views(ctx context.Context, owner string) ([]history.Vi
 		return nil, err
 	}
 	return j.h.Views(ctx, owner)
+}
+
+// initUpdates — базы из релизов data-* (ставятся сами, если не выключено) и новость о новой версии программы.
+// Пакет рекомендаций ставится тем же путём, что ручной (POST /recs/model), и только если он свежее открытого.
+func (a *App) initUpdates(o Options) {
+	a.Updates = updates.New(updates.Options{
+		Client:  &http.Client{Transport: netx.NewTransport(a.proxy), Timeout: 30 * time.Minute},
+		Dir:     filepath.Join(a.Paths.Data, "updates"),
+		Store:   a.DB,
+		Version: a.version,
+		Log:     a.Log,
+		Packs: []updates.Pack{{Name: "recs", Schema: 1, Install: func(ctx context.Context, path string) error {
+			m, err := recs.OpenModel(path)
+			if err != nil {
+				return err
+			}
+			built := m.Info["built"]
+			m.Close()
+			if cur := a.Recs.Model(); cur != nil && built <= cur.Info["built"] {
+				return nil
+			}
+			dst := filepath.Join(a.Paths.Data, "recs-model.db")
+			if err := recs.InstallModel(path, dst); err != nil {
+				return err
+			}
+			nm, err := recs.OpenModel(dst)
+			if err != nil {
+				return err
+			}
+			a.Recs.SetModel(nm)
+			return nil
+		}}},
+	})
+	a.Updates.Register(a.API)
+	if o.Offline {
+		return
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	a.closers = append(a.closers, closerFunc(func() error { cancel(); return nil }))
+	go a.Updates.Run(ctx)
 }

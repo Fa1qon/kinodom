@@ -3129,3 +3129,16 @@ for (const [got, want] of checks) {
 		t.Errorf("%v\n%s", err, out)
 	}
 }
+
+// «Обновления» на экране «Состояние»: версия и выпуск баз из релизов GitHub (docs/data-packs-and-updates.md).
+func TestStatusUpgradeCard(t *testing.T) {
+	b, err := fs.ReadFile(Static, "views/settings-status.js")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"get('/upgrade')", "post('/upgrade/check'", "put('/upgrade', { auto", "upgradeCard(upgrade, act)", "'Ставить базы сами'"} {
+		if !strings.Contains(string(b), want) {
+			t.Errorf("settings-status.js: нет %q", want)
+		}
+	}
+}

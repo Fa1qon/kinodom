@@ -47,6 +47,7 @@ import (
 	"kinodom/internal/store"
 	"kinodom/internal/supervisor"
 	"kinodom/internal/torrents"
+	"kinodom/internal/updates"
 	"kinodom/web"
 )
 
@@ -105,6 +106,7 @@ type App struct {
 	Follow   *follow.Module    // подписка на новые серии (модуль follow, этап 11b-В)
 	KPCat    *kpcat.Module     // каталог «Кинопоиск» (модуль kpcat, план 14Г)
 	Recs     *recs.Service     // «Что посмотреть»: рекомендации по журналу вкуса
+	Updates  *updates.Service  // базы и программа из релизов GitHub (docs/data-packs-and-updates.md)
 	Playback *playback.Module  // свой плеер фильмов (цикл 18)
 	pairing  *pairingState
 	p1       *p1State
@@ -203,6 +205,7 @@ func New(ctx context.Context, o Options) (*App, error) {
 	a.initP1()
 	a.initKPCat(ctx)
 	a.initRecs()
+	a.initUpdates(o)
 	a.initSetup()
 	a.initDiscovery(ctx, o)
 	a.API.SetStatus(a.statusFields)

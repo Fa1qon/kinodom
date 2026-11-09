@@ -1,7 +1,7 @@
 // «Настройки → Состояние»: потоки и скорости, модули, трекеры, место, проблемы (спека этапа 7,
 // разделы 5.7 и 6.3).
 import { h, fill, size, speed, ago, poll, icon } from '../ui.js';
-import { get } from '../api.js';
+import { get, post, put } from '../api.js';
 import { layout } from './settings-layout.js';
 import { appBridge } from './tvkit.js';
 
@@ -71,6 +71,24 @@ export function appCard(m, bridge) {
     h('div', { class: 'row wrap' }, action));
 }
 
+// upgradeCard — «Обновления»: версия программы и выпуск баз из релизов GitHub (docs/data-packs-and-updates.md).
+// Базы ставятся сами, если не выключено; новая программа — ссылкой на релиз.
+export function upgradeCard(u, act) {
+  if (!u) return null;
+  const busy = u.installing || u.checking;
+  return h('div', { class: 'card tight upgrade-card' }, h('div', { class: 'h' }, 'Обновления'),
+    h('div', { class: 'muted' }, `Kinodom ${u.version}`),
+    u.appNew ? h('div', { class: 'row wrap' }, h('span', { style: { color: 'var(--yellow)' } }, `Вышла версия ${u.appNew}`),
+      h('a', { class: 'btn inv', href: u.appUrl, target: '_blank', rel: 'noopener', 'data-key': 'upgrade-app' }, icon('download'), 'Скачать')) : null,
+    h('div', { class: 'muted' }, u.installing ? `Базы: ставится выпуск ${u.dataNew || ''}` : `Базы: ${u.data ? 'выпуск ' + u.data : 'из установщика'}`),
+    u.dataNew && !u.installing ? h('div', { style: { color: 'var(--yellow)' } }, `Есть выпуск ${u.dataNew}`) : null,
+    u.error ? h('div', { class: 'small', style: { color: 'var(--yellow)' } }, u.error) : null,
+    u.checkedAt ? h('div', { class: 'muted small' }, `Проверено ${ago(u.checkedAt)}`) : null,
+    h('div', { class: 'row wrap' },
+      h('button', { class: 'btn', type: 'button', 'data-key': 'upgrade-check', disabled: busy, onclick: () => act('check') }, icon('refresh'), busy ? 'Проверяю…' : 'Проверить'),
+      h('label', { class: 'check' }, h('input', { type: 'checkbox', checked: u.auto, 'data-key': 'upgrade-auto', onchange: (e) => act('auto', e.target.checked) }), 'Ставить базы сами')));
+}
+
 const LOGIN = {
   none: 'логин не задан',
   unknown: 'вход ещё не проверялся',
@@ -81,6 +99,22 @@ export function render(root, r, ctx) {
   const content = layout(root, 'status', 'Состояние');
   let alive = true;
   let appInfo = null; // «Приложение для ТВ и телефона»: сведения об APK и адреса — один раз
+  let upgrade = null; // «Обновления»
+  let last = null;
+  const loadUpgrade = () => get('/upgrade').then((u) => { upgrade = u; if (alive && last) draw(last); }, () => {});
+  loadUpgrade();
+  async function act(what, on) {
+    try {
+      if (what === 'check') {
+        upgrade = { ...upgrade, checking: true };
+        if (last) draw(last);
+        upgrade = await post('/upgrade/check', {});
+      } else upgrade = await put('/upgrade', { auto: on });
+    } catch (e) {
+      upgrade = { ...upgrade, checking: false, error: e.message };
+    }
+    if (alive && last) draw(last);
+  }
   Promise.all([get('/app').catch(() => null), get('/setup/addresses').catch(() => [])]).then(([app, addrs]) => {
     appInfo = appModel(app, addrs, appBridge());
   });
@@ -94,9 +128,11 @@ export function render(root, r, ctx) {
       return;
     }
     if (alive) draw(st);
+    if (upgrade && upgrade.installing) loadUpgrade();
   }, 2000);
 
   function draw(st) {
+    last = st;
     // fill, а не replaceChildren: карточки приложения ещё нет (сведения грузятся) — пусто, а не «null».
     fill(content,
       h('div', { class: 'tiles' },
@@ -114,6 +150,7 @@ export function render(root, r, ctx) {
           ? st.problems.map((p) => h('div', { class: 'mod' }, h('span', { class: 'mark', style: { background: 'var(--yellow)' } }), h('span', { class: 'grow' }, p.text), h('span', { class: 'muted small mod-when' }, ago(p.since))))
           : h('div', { class: 'muted' }, 'Проблем нет')),
       appCard(appInfo, appBridge()),
+      upgradeCard(upgrade, act),
     );
   }
 
