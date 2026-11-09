@@ -9,10 +9,12 @@ package recs
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
 )
@@ -45,7 +47,13 @@ type Model struct {
 	Info  map[string]string
 	mu    sync.Mutex
 	niche float64
+	// Weights — веса видов связей у пакета схемы 2 (связи по видам в edges, meta "weights"): связь фильмов —
+	// сумма весов её видов. У схемы 1 — nil: в neighbors уже смешанный вес.
+	Weights map[string]float64
 }
+
+// defaultWeights — если в пакете схемы 2 нет своих весов.
+var defaultWeights = map[string]float64{"cf": 1, "kp": 1, "trakt": 0.6, "lb": 0.8, "people": 0.3, "franchise": 0.5}
 
 // OpenModel открывает пакет; файла нет — ErrNoModel.
 func OpenModel(path string) (*Model, error) {
@@ -69,6 +77,11 @@ func OpenModel(path string) (*Model, error) {
 		m.Info[k] = v
 	}
 	rows.Close()
+	if v, _ := strconv.Atoi(m.Info["version"]); v >= 2 {
+		if json.Unmarshal([]byte(m.Info["weights"]), &m.Weights) != nil || len(m.Weights) == 0 {
+			m.Weights = defaultWeights
+		}
+	}
 	db.QueryRow(`SELECT popularity FROM films ORDER BY popularity DESC LIMIT 1 OFFSET 999`).Scan(&m.niche)
 	return m, nil
 }
@@ -156,6 +169,9 @@ func (m *Model) Film(ctx context.Context, id int) (Film, bool) {
 
 // Neighbors — связи из фильмов ids: fn(откуда, куда, вес).
 func (m *Model) Neighbors(ctx context.Context, ids []int, fn func(from, to int, w float64)) error {
+	if m.Weights != nil {
+		return m.edges(ctx, ids, fn)
+	}
 	for chunk := range slices.Chunk(ids, 500) {
 		rows, err := m.db.QueryContext(ctx, `SELECT kp_id, other_kp, weight FROM neighbors WHERE kp_id IN (`+ph(len(chunk))+`)`, ints(chunk)...)
 		if err != nil {
@@ -166,6 +182,39 @@ func (m *Model) Neighbors(ctx context.Context, ids []int, fn func(from, to int, 
 			var w float64
 			rows.Scan(&a, &b, &w)
 			fn(a, b, w)
+		}
+		rows.Close()
+	}
+	return nil
+}
+
+// edges — связи пакета схемы 2: виды одной пары складываются с весами вида.
+func (m *Model) edges(ctx context.Context, ids []int, fn func(from, to int, w float64)) error {
+	for chunk := range slices.Chunk(ids, 500) {
+		rows, err := m.db.QueryContext(ctx, `SELECT kp_id, other_kp, kind, weight FROM edges WHERE kp_id IN (`+ph(len(chunk))+`) ORDER BY kp_id, other_kp`, ints(chunk)...)
+		if err != nil {
+			return err
+		}
+		a0, b0, sum := 0, 0, 0.0
+		for rows.Next() {
+			var a, b int
+			var kind string
+			var w float64
+			rows.Scan(&a, &b, &kind, &w)
+			if a != a0 || b != b0 {
+				if a0 != 0 && sum != 0 {
+					fn(a0, b0, sum)
+				}
+				a0, b0, sum = a, b, 0
+			}
+			sum += m.Weights[kind] * w
+		}
+		if a0 != 0 && sum != 0 {
+			fn(a0, b0, sum)
+		}
+		if err := rows.Err(); err != nil {
+			rows.Close()
+			return err
 		}
 		rows.Close()
 	}

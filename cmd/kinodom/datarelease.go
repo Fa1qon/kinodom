@@ -16,7 +16,7 @@ import (
 // cmdDataRelease — файлы релиза с подписью (docs/data-packs-and-updates.md): баз data-ГГГГ.ММ.ДД или
 // программы v<версия> (это делает build.ps1 -Installer):
 //
-//	kinodom data-release -out dist\data recs=..\kinosovet\data\recs-model.db:1
+//	kinodom data-release -out dist\data recs=..\kinosovet\data\recs-model.db:2
 //	kinodom data-release -out dist -version 0.17.0 app=dist\Kinodom-0.17.0-setup.exe:0
 //
 // Ключ — файл из KINODOM_SIGN_KEY (по умолчанию %USERPROFILE%\.kinodom-sign\data.key). Выкладывает

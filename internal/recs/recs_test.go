@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"math"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -534,5 +535,44 @@ func TestGenrePrefAndMatch(t *testing.T) {
 	}
 	if matchOf(0) != 50 || matchOf(4) != 87 || matchOf(-30) != 1 || matchOf(30) != 99 {
 		t.Fatalf("совпадение: %d %d %d %d", matchOf(0), matchOf(4), matchOf(-30), matchOf(30))
+	}
+}
+
+// Пакет схемы 2: связи по видам складываются с весами из meta, вид без веса не учитывается.
+func TestEdgesMixedByKind(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "recs-model.db")
+	db, err := sql.Open("sqlite", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, q := range []string{
+		`CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT NOT NULL)`,
+		`CREATE TABLE films (kp_id INTEGER PRIMARY KEY, popularity REAL)`,
+		`CREATE TABLE edges (kp_id INTEGER, other_kp INTEGER, kind TEXT, weight REAL, PRIMARY KEY (kp_id, other_kp, kind))`,
+		`INSERT INTO meta VALUES ('version', '2'), ('weights', '{"cf":1,"kp":0.5}')`,
+		`INSERT INTO edges VALUES (1, 2, 'cf', 0.02), (1, 2, 'kp', 0.01), (1, 3, 'kp', 0.01), (1, 4, 'people', 0.5), (5, 2, 'cf', 0.03)`,
+	} {
+		if _, err := db.Exec(q); err != nil {
+			t.Fatal(err)
+		}
+	}
+	db.Close()
+	m, err := OpenModel(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer m.Close()
+	got := map[[2]int]float64{}
+	if err := m.Neighbors(context.Background(), []int{1, 5}, func(a, b int, w float64) { got[[2]int{a, b}] = w }); err != nil {
+		t.Fatal(err)
+	}
+	want := map[[2]int]float64{{1, 2}: 0.025, {1, 3}: 0.005, {5, 2}: 0.03}
+	if len(got) != len(want) {
+		t.Fatalf("связи %v, ждали %v", got, want)
+	}
+	for k, w := range want {
+		if math.Abs(got[k]-w) > 1e-9 {
+			t.Errorf("%v: %v, ждали %v", k, got[k], w)
+		}
 	}
 }
