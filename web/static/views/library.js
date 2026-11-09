@@ -133,6 +133,12 @@ export function render(root, r, ctx) {
         h('div', { class: 'strong' }, u.name),
         h('div', { class: 'muted small' }, [u.category, u.title + (u.year ? ` (${u.year})` : ''), u.path].filter(Boolean).join(' · ')),
         ctx.canEdit ? [
+          (u.suggestions || []).length ? h('div', { class: 'un-sugg' }, u.suggestions.map((s) =>
+            h('button', { class: 'un-pick', type: 'button', title: s.titleOrig || s.title, 'data-key': `pick-${u.unit}-${s.kp}`,
+              onclick: () => act(() => put(`/library/units/${u.unit}`, { kinopoisk: String(s.kp) })) },
+            h('img', { src: `/api/v1/recs/films/${s.kp}/poster`, alt: '', loading: 'lazy', decoding: 'async' }),
+            h('span', { class: 'un-pick-t' }, s.title || s.titleOrig),
+            h('span', { class: 'muted small' }, [s.year, s.series ? 'сериал' : ''].filter(Boolean).join(' · '))))) : null,
           h('form', { class: 'row gap10', onsubmit: (e) => {
             e.preventDefault();
             act(() => put(`/library/units/${u.unit}`, { kinopoisk: f.link.value }));

@@ -126,6 +126,9 @@ type UnrecognizedView struct {
 	Path     string `json:"path"` // путь папки или файла; у скачанного — папка раздачи
 	Category string `json:"category"`
 	Card     string `json:"card"` // ключ карточки
+	// Suggestions — похожие фильмы каталога пакета: привязать одним нажатием; пусто — каталога нет или
+	// похожих нет.
+	Suggestions []Suggestion `json:"suggestions"`
 }
 
 // Unrecognized — нераспознанные единицы, видимые на устройстве.
@@ -135,6 +138,7 @@ func (l *Library) Unrecognized(ctx context.Context, device string) ([]Unrecogniz
 		return nil, err
 	}
 	out := []UnrecognizedView{}
+	cat := l.catalog(ctx)
 	for key, us := range v.units {
 		if !v.shown(key) {
 			continue
@@ -147,6 +151,10 @@ func (l *Library) Unrecognized(ctx context.Context, device string) ([]Unrecogniz
 				Category: v.byID[v.category(key)].Name, Card: key}
 			if u.tu != nil {
 				x.Path = u.tu.Dir
+			}
+			x.Suggestions = []Suggestion{}
+			if cat != nil {
+				x.Suggestions = append(x.Suggestions, cat.suggest(u.Title, u.Year, v.byID[v.category(key)].Layout)...)
 			}
 			out = append(out, x)
 		}

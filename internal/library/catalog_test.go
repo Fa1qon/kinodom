@@ -91,3 +91,25 @@ func TestCatalogBeforeKP(t *testing.T) {
 		t.Errorf("фильм не из каталога не искали: %q", e.kp.calls)
 	}
 }
+
+// «Не распознано» — с подсказками из каталога: точные названия любого года, фильмы раньше сериала,
+// затем названия со всеми словами; одна подсказка — номер для «Привязать».
+func TestUnrecognizedSuggestions(t *testing.T) {
+	e := newEnv(t)
+	cat := dune()
+	cat.films = append(cat.films, film(4540126, "Дюна: Часть вторая", "Dune: Part Two", 2024, "FILM"))
+	e.l.o.Catalog = func() Catalog { return cat }
+	e.folder(t, catFilms, "Movies", "Дюна.mkv")
+	e.scan(t)
+	us, err := e.l.Unrecognized(ctx, "pc")
+	if err != nil || len(us) != 1 {
+		t.Fatalf("нераспознанные: %+v (%v)", us, err)
+	}
+	var got []int
+	for _, s := range us[0].Suggestions {
+		got = append(got, s.KP)
+	}
+	if !slices.Equal(got, []int{409424, 2882, 229087, 4540126}) {
+		t.Errorf("подсказки: %+v", us[0].Suggestions)
+	}
+}

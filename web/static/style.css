@@ -546,6 +546,13 @@ a.res-row:hover { background: var(--hover); }
 .un-top { flex-wrap: wrap; }
 .un-top .un-name { flex: 1 1 17.3333rem; }
 .un-acts { flex: 0 1 auto; }
+.un-sugg { display: flex; flex-wrap: wrap; gap: 0.6667rem; }
+.un-pick { display: flex; flex-direction: column; gap: 0.2rem; width: 7.3333rem; padding: 0.4rem; text-align: left; color: inherit;
+  background: var(--bg-raised); border: 1px solid var(--line); border-radius: 0.5333rem; cursor: pointer; font: inherit; }
+.un-pick:hover { background: var(--hover); }
+.un-pick:focus-visible { border-color: var(--focus); }
+.un-pick img { width: 100%; aspect-ratio: 2 / 3; object-fit: cover; border-radius: 0.3333rem; background: var(--line-soft); }
+.un-pick-t { font-size: 0.9333rem; line-height: 1.2; overflow: hidden; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
 
 /* Медиатека (спека этапа 9, раздел 6) */
 .library .cont-row:empty { display: none; }
