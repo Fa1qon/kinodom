@@ -53,7 +53,7 @@ type Model struct {
 }
 
 // defaultWeights — если в пакете схемы 2 нет своих весов.
-var defaultWeights = map[string]float64{"cf": 1, "kp": 1, "trakt": 0.6, "lb": 0.8, "people": 0.3, "franchise": 0.5}
+var defaultWeights = map[string]float64{"cf": 1, "kp": 1, "trakt": 0.6, "lb": 0.8, "people": 0.4, "franchise": 0.5}
 
 // OpenModel открывает пакет; файла нет — ErrNoModel.
 func OpenModel(path string) (*Model, error) {
