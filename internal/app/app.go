@@ -118,7 +118,8 @@ type App struct {
 	t1     *t1.t1
 	t2 *t2.t2
 	search    *jacred.Client  // источник поиска Jacred / Jackett по адресу из настроек (11b-Д); в поиске — не участвует
-	trackers  *cardigann.Pool // открытые трекеры по описаниям Jackett (open2, open3…): источник поиска каталога
+	trackers  *cardigann.Pool // трекеры по описаниям Prowlarr из списка «Трекеры»: источник поиска каталога
+	profiles  trackerProfiles // профили трекеров по адресу (trackers.pack)
 	proxy     *netx.Proxy     // прокси для трекеров: один на всех, меняется в пульте на ходу
 	closers   []io.Closer     // закрываются в обратном порядке
 }
@@ -164,7 +165,10 @@ func New(ctx context.Context, o Options) (*App, error) {
 	if err != nil {
 		return fail(fmt.Errorf("настройки: %w", err))
 	}
+	a.migrateOpenTrackers(ctx, &vals)
 	a.Settings = settings.New(db, vals, a)
+	a.loadTrackerPack()
+	a.Settings.SetProfiles(&a.profiles)
 	a.proxy = a.initProxy(ctx, vals.Proxy)
 
 	a.Sup = supervisor.New(log, supervisor.WithErrorSink(func(module, text string) {
@@ -342,10 +346,11 @@ func (a *App) initCatalog(ctx context.Context, o Options, v settings.Values) err
 	}
 	a.t1 = t1Src
 	a.search = jacred.New(jacred.Options{Address: v.SearchAddress, Key: v.SearchKey, Proxy: a.proxy, Log: log})
-	// Вместо Jacred (публичные серверы закрылись или просят ключ): открытые трекеры по описаниям Jackett —
-	// сам Kinodom, без второй программы; описания скачиваются в папку данных и обновляются раз в неделю.
+	// Вместо Jacred (публичные серверы закрылись или просят ключ): трекеры по описаниям Prowlarr — сам Kinodom,
+	// без второй программы; описания скачиваются в папку данных и обновляются раз в неделю.
 	a.trackers = cardigann.NewPool(cardigann.PoolOptions{Dir: filepath.Join(a.Paths.Data, "trackers"),
-		Client: &http.Client{Transport: netx.NewTransport(a.proxy), Timeout: 40 * time.Second}, Log: log})
+		Client: &http.Client{Transport: netx.NewTransport(a.proxy), Timeout: 40 * time.Second}, Log: log,
+		Trackers: poolTrackers(v.OpenTrackers)})
 	if !o.Offline {
 		trCtx, trCancel := context.WithCancel(context.Background())
 		a.closers = append(a.closers, closerFunc(func() error { trCancel(); return nil }))
@@ -856,6 +861,10 @@ func (a *App) Apply(ctx context.Context, old, n settings.Values) {
 			a.Log.Error("адрес t2 не применился", "err", err)
 		}
 		trackersChanged = true
+	}
+	if !reflect.DeepEqual(n.OpenTrackers, old.OpenTrackers) {
+		a.trackers.SetTrackers(poolTrackers(n.OpenTrackers))
+		a.Catalog.ForgetSearches() // тот же запрос — уже по новому списку
 	}
 	if trackersChanged {
 		a.Catalog.Refresh()

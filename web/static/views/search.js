@@ -7,23 +7,14 @@ import { filmHeader, filmMatch } from './kpcat.js';
 import { portionEnd } from './channels.js';
 import { appBridge } from './tvkit.js';
 import { playSound } from '../nav.js';
+import { trackerName } from './tracker-names.js';
 
-// OWN — свои трекеры: страница раздачи, вкладка каталога; остальные — источник поиска Jacred / Jackett и
-// трекеры его раздач (11b-Д).
+// OWN — трекеры со своим разбором: страница раздачи, вкладка каталога; остальные — трекеры по описаниям.
 const OWN = ['t1', 't2'];
-const LABELS = {
-  t1: 't1', t2: 't2', jacred: 'Jacred', trackers: 'Открытые трекеры', 'open2': 'open2', open4: 'open4', tracker3: 'tracker3', open2: 'open2', lostfilm: 'LostFilm',
-  open3: 'open3', bitru: 'Bitru', torrentby: 'open5.example', ultradox: 'Ultradox', leproduction: 'LE-Production',
-  selezen: 'Селезень', rudub: 'RuDub', mazepa: 'Mazepa', toloka: 'Toloka', anilibria: 'AniLibria', anifilm: 'AniFilm',
-  baibako: 'BaibaKo', animelayer: 'AnimeLayer',
-};
 const SEARCH_FOR = 30000; // поиск сервер держит не дольше 30 с
 
-// trackerLabel — название трекера для человека; незнакомый — как пришёл, с заглавной.
-export function trackerLabel(name) {
-  if (!name) return '';
-  return LABELS[name] || name[0].toUpperCase() + name.slice(1);
-}
+// trackerLabel — название трекера для человека (с сервера; незнакомый — как пришёл, с заглавной).
+export const trackerLabel = trackerName;
 
 // backTo — «назад» с экрана раздачи: своя — в запомненный раздел каталога её трекера, чужая (из источника
 // поиска, каталога у неё нет) — в последний поиск.

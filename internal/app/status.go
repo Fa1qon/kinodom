@@ -79,7 +79,12 @@ func (a *App) statusFields(ctx context.Context) (map[string]any, error) {
 		return nil, err
 	}
 	trackers := map[string]trackerStatus{}
+	v := a.Settings.Current()
 	for _, tr := range []string{"t1", "t2"} {
+		if (tr == "t1" && v.t1Address == "") || (tr == "t2" && v.t2Address == "") {
+			trackers[tr] = trackerStatus{State: "off"} // нет в списке «Трекеры»
+			continue
+		}
 		st := trackerOf(ps, tr)
 		at, err := a.Catalog.UpdatedAt(ctx, tr)
 		if err != nil {
@@ -110,10 +115,11 @@ func (a *App) statusFields(ctx context.Context) (map[string]any, error) {
 		return nil, err
 	}
 	return map[string]any{
-		"updates":   updates,
-		"version":   a.version,
-		"setupDone": a.Settings.Current().SetupDone, // пульт открывает мастер начальных настроек
-		"trackers":  trackers,
+		"updates":      updates,
+		"version":      a.version,
+		"setupDone":    a.Settings.Current().SetupDone, // пульт открывает мастер начальных настроек
+		"trackers":     trackers,
+		"trackerNames": a.trackerNames(),
 		"kinopoisk": kinopoiskStatus{KeySet: rs.HasKey, BadKey: rs.BadKey, DailyUsed: rs.Quota.DailyUsed,
 			DailyLimit: rs.Quota.DailyLimit, TotalLimit: rs.Quota.TotalLimit, QuotaUntil: timeOrNil(rs.PausedUntil),
 			Keyless: kinopoiskKeyless{PausedUntil: timeOrNil(rs.Keyless.PausedUntil), Reason: rs.Keyless.Reason, Today: rs.Keyless.Today}},

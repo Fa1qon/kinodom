@@ -2,8 +2,8 @@
 // импорта работал, но хрупко (ревью 14Г).
 import { h, icon, openModal } from '../ui.js';
 import { playSound } from '../nav.js';
+import { ownTrackers } from './tracker-names.js';
 
-export const TRACKERS = [['t2', 't2'], ['t1', 't1']];
 
 // oneAtATime — пока вызов fn идёт, повторный возвращает тот же промис: вторая просьба порции ждёт идущую
 // загрузку, а не возвращается сразу (иначе экран считал список пустым — найдено вживую, 11b-А).
@@ -26,9 +26,10 @@ export function orderLinks(orders, current, base) {
   return (orders || []).map((o) => ({ id: o.id, name: o.name, on: o.id === current, href: `${base}?order=${o.id}` }));
 }
 
-// trackerItems — трекеры для панели каталога (план 17А): t2, t1, «Кинопоиск»; у трекера с проблемами — значок.
+// trackerItems — трекеры для панели каталога (план 17А): подключённые со своим каталогом и «Кинопоиск»; у трекера
+// с проблемами — значок.
 export function trackerItems(current, trackers = {}) {
-  return [...TRACKERS, ['kinopoisk', 'Кинопоиск']].map(([id, name]) => ({
+  return [...ownTrackers(), ['kinopoisk', 'Кинопоиск']].map(([id, name]) => ({
     id, name, href: `#/catalog/${id}`, on: id === current, bad: !!(trackers[id] && trackers[id].state !== 'ok'),
   }));
 }

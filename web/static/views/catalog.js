@@ -4,10 +4,11 @@ import { h, icon, ago, size, rating, store, plural, keepFocus, offWarn, poll, fo
 import { get } from '../api.js';
 import { playSound } from '../nav.js';
 import { render as renderKP } from './kpcat.js';
-import { TRACKERS, oneAtATime, retryDue, orderLinks, trackerItems, filterSummary, drawerSections, firstColumn, filterButton, openFilters,
+import { oneAtATime, retryDue, orderLinks, trackerItems, filterSummary, drawerSections, firstColumn, filterButton, openFilters,
   takePending, focusFirstCard } from './catalog-parts.js';
+import { OWN_IDS, ownTrackers, trackerName } from './tracker-names.js';
 
-export { TRACKERS, oneAtATime, retryDue, orderLinks } from './catalog-parts.js';
+export { oneAtATime, retryDue, orderLinks } from './catalog-parts.js';
 
 // portions — подгрузка каталога порциями (замечание № 9 этапа 11b): {loaded, page, next, more, loading,
 // error}; page — сколько порций пришло, next — курсор (место последней карточки раздела, -1 — с начала;
@@ -196,7 +197,11 @@ export function orderStat(e, order) {
 
 export function render(root, r, ctx) {
   if (r.parts[1] === 'kinopoisk') return renderKP(root, r, ctx);
-  const tracker = TRACKERS.some(([id]) => id === r.parts[1]) ? r.parts[1] : 't1';
+  // Трекер из ссылки, если он подключён; иначе — первый подключённый. Названия ещё не пришли (первый показ) —
+  // как в ссылке.
+  const own = ownTrackers();
+  const asked = OWN_IDS.includes(r.parts[1]) ? r.parts[1] : 't1';
+  const tracker = !own.length || own.some(([id]) => id === asked) ? asked : own[0][0];
   const section = r.parts[2] || '';
   // Порядок: из адреса, иначе выбранный раньше, иначе — умолчание сервера (план 14Б).
   const urlOrder = r.query.get('order') || '';
@@ -216,7 +221,7 @@ export function render(root, r, ctx) {
 
   // Над сеткой — одна строка: сводка «трекер · раздел · порядок» (OK — панель выбора слева) и «обновлён» (план 17А).
   const updated = h('div', { class: 'muted small' });
-  const fbtn = filterButton((TRACKERS.find(([id]) => id === tracker) || [, ''])[1], () => openPanel());
+  const fbtn = filterButton(trackerName(tracker), () => openPanel());
   const warn = h('div', { class: 'fnote' }); // пустые — без места: сетка выше (план 17А)
   const owarn = h('div', { class: 'fnote' });
   // Что сделать после перехода из панели — забрать сразу (ревью 17А), сделать, когда экран загрузится.
@@ -232,7 +237,7 @@ export function render(root, r, ctx) {
   function drawSummary() {
     const sec = sectionList.find((s) => s.id === shownSection);
     const ord = orderList.length > 1 ? orderList.find((o) => o.id === shownOrder) : null;
-    const text = filterSummary([(TRACKERS.find(([id]) => id === tracker) || [, ''])[1], sec ? sec.name : '', ord ? ord.name : '']);
+    const text = filterSummary([trackerName(tracker), sec ? sec.name : '', ord ? ord.name : '']);
     fbtn.title = text;
     fbtn.querySelector('.btn-label').textContent = text;
   }

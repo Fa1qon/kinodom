@@ -2,6 +2,7 @@
 // разделы 5.7 и 6.3).
 import { h, fill, size, speed, ago, poll, icon } from '../ui.js';
 import { get, post, put } from '../api.js';
+import { ownTrackers } from './tracker-names.js';
 import { layout } from './settings-layout.js';
 import { appBridge } from './tvkit.js';
 
@@ -151,7 +152,7 @@ export function render(root, r, ctx) {
         h('div', { class: 'card tight' }, h('div', { class: 'h' }, 'Модули'), MODULES.map(([id, name]) => moduleRow(st, id, name))),
         h('div', { class: 'col' },
           h('div', { class: 'card tight' }, h('div', { class: 'h' }, 'Трекеры'),
-            trackerRow('t2', st.trackers.t2), trackerRow('t1', st.trackers.t1)),
+            ownTrackers().length ? ownTrackers().map(([id, name]) => trackerRow(name, st.trackers[id])) : h('div', { class: 'muted' }, 'Нет')),
           disk(st))),
       h('div', { class: 'card tight' }, h('div', { class: 'h' }, 'Проблемы'),
         st.problems.length

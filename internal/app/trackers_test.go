@@ -37,7 +37,7 @@ func TestTrackersOffUntilAddressIsSet(t *testing.T) {
 		getJSON(t, base+"/api/v1/status", &st)
 		return st.Trackers["t1"].State == "off" && st.Trackers["t2"].State == "off"
 	})
-	if st.Trackers["t1"].Text != "Укажите адрес t1 в настройках" || st.Trackers["t2"].Text != "Укажите адрес t2 в настройках" {
+	if st.Trackers["t1"].Text != "" || st.Trackers["t2"].Text != "" { // программа трекеров не называет
 		t.Fatalf("тексты: %+v", st.Trackers)
 	}
 	var found struct {

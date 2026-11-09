@@ -2,6 +2,7 @@
 import { h, icon, clear, poll, store, carryFocus } from './ui.js';
 import { NAV } from './app-nav.js';
 import { get } from './api.js';
+import { setTrackerNames } from './views/tracker-names.js';
 import { initNav, reveal } from './nav.js';
 import { markOwned } from './owned.js';
 import { isClient, initClientUI } from './client-ui.js';
@@ -224,6 +225,7 @@ let setupChecked = false;
 statusPoll = poll(async () => {
   try {
     ctx.status = await get('/status');
+    setTrackerNames(ctx.status.trackerNames);
   } catch {
     ctx.status = null;
   }

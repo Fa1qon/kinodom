@@ -7,7 +7,8 @@ import (
 )
 
 // Адрес трекера не введён (этап 11a): трекер выключен — ни разделов, ни топов, ни страниц
-// раздач, ни поиска; вместо «не отвечает» — «укажите адрес», и каталог не считает это неудачей.
+// раздач, ни поиска; это не сбой и не проблема (трекера просто нет в списке «Трекеры»), каталог не считает
+// это неудачей.
 func TestTrackerWithoutAddressIsOff(t *testing.T) {
 	t1, rt := newFake("t1"), newFake("t2")
 	t1.off = true
@@ -21,8 +22,8 @@ func TestTrackerWithoutAddressIsOff(t *testing.T) {
 	if t1.Calls("top") != 0 || t1.Calls("categories") != 0 {
 		t.Fatalf("к выключенному трекеру ходили: топ %d, разделы %d", t1.Calls("top"), t1.Calls("categories"))
 	}
-	if got := problemText(t, db, "catalog.t1.address"); got != "Укажите адрес t1 в настройках" {
-		t.Fatalf("проблема адреса: %q", got)
+	if got := problemText(t, db, "catalog.t1.address"); got != "" {
+		t.Fatalf("трекер без адреса — проблема: %q", got)
 	}
 	if got := problemText(t, db, "catalog.t1"); got != "" {
 		t.Fatalf("выключенный трекер «не отвечает»: %q", got)

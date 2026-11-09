@@ -1063,7 +1063,8 @@ func TestStatusThroughAPI(t *testing.T) {
 		} `json:"streams"`
 	}
 	getJSON(t, "http://"+a.API.Addr()+"/api/v1/status", &st)
-	if rt, ok := st.Trackers["t2"]; !st.Local || !ok || rt.Login == nil || rt.Login.State != t2.LoginNone || st.Trackers["t1"].State == "" {
+	// трекеры без адреса — выключены, без входа и без текста: их нет в списке «Трекеры»
+	if rt, ok := st.Trackers["t2"]; !st.Local || !ok || rt.State != "off" || rt.Login != nil || st.Trackers["t1"].State != "off" {
 		t.Fatalf("трекеры: %+v", st.Trackers)
 	}
 	if st.Kinopoisk.Keyless == nil || st.Kinopoisk.Keyless.PausedUntil != nil {

@@ -87,20 +87,48 @@ export function render(root, r, ctx) {
   } }, icon('network_check'), 'Проверить');
 
   const steps = {
-    // Раздачи: адреса и вход t2, адрес t1, поиск Jacred, разделы каталога (все отмечены —
-    // просьба 2026-10-06), прокси. «Проверить» и «Далее» сначала сохраняют поля.
+    // Раздачи: адреса трекеров (разбор сервер подбирает по профилю адреса), вход на трекер, где он нужен,
+    // разделы каталога (все отмечены — просьба 2026-10-06), прокси. «Проверить» и «Далее» сначала сохраняют поля.
     async trackers() {
       const v = await get('/settings');
       const f = {
-        rtAddress: input('rtAddress', v.t2.address, { inputmode: 'url' }), rtLogin: input('rtLogin', v.t2.login),
-        rtPassword: secret('rtPassword', v.t2.passwordSet), t1Address: input('t1Address', v.t1.address, { inputmode: 'url' }),
+        rtLogin: input('rtLogin', v.t2.login), rtPassword: secret('rtPassword', v.t2.passwordSet),
         proxyAddress: input('proxyAddress', v.proxy.address), proxyLogin: input('proxyLogin', v.proxy.login), proxyPassword: secret('proxyPassword', v.proxy.passwordSet),
       };
+      // Список адресов: строка на трекер, название — из профиля, который сервер нашёл по адресу.
+      const rows = h('div', { class: 'col' });
+      let addrs = [];
+      const addRow = (t) => {
+        const i = addrs.length;
+        const inp = input(`tracker-${i}`, t ? t.address : '', { inputmode: 'url', placeholder: 'https://', 'aria-label': 'Адрес трекера', class: 'input grow' });
+        addrs.push(inp);
+        const row = h('div', { class: 'row gap10' }, inp,
+          t ? h('span', { class: 'small', style: { color: t.name ? 'var(--muted)' : 'var(--yellow)', whiteSpace: 'nowrap' } }, t.name || 'не поддерживается') : null,
+          h('button', { class: 'sq', type: 'button', 'aria-label': 'Убрать', title: 'Убрать', disabled: !canEdit(), 'data-key': `tracker-del-${i}`,
+            onclick: () => { inp.value = ''; row.remove(); } }, icon('close')));
+        rows.append(row);
+        return inp;
+      };
+      const drawRows = () => {
+        rows.replaceChildren();
+        addrs = [];
+        for (const t of v.trackers) addRow(t);
+        if (!v.trackers.length) addRow(null);
+      };
+      drawRows();
+      const loginTracker = () => v.trackers.find((t) => t.engine === 't2');
+      const loginHead = h('div', { class: 'h' });
+      const loginBox = h('div', { class: 'col' }, loginHead, h('div', { class: 'two' }, field('Логин', f.rtLogin), field('Пароль', f.rtPassword)));
+      const drawLogin = () => {
+        const t = loginTracker();
+        loginBox.hidden = !t;
+        if (t) loginHead.textContent = `Вход: ${t.name || t.address}`;
+      };
+      drawLogin();
       const types = [['none', 'Нет'], ['http', 'HTTP'], ['socks5', 'SOCKS5']];
       const ptype = h('div', { class: 'checks', role: 'radiogroup', 'aria-label': 'Прокси' }, types.map(([id, t]) => h('label', { class: 'check' },
         h('input', { type: 'radio', name: 'ptype', value: id, checked: v.proxy.type === id, disabled: !canEdit(), 'data-key': `ptype-${id}` }), t)));
-      const rtResult = result();
-      const t1Result = result();
+      const trResult = result();
 
       // Разделы каталога: выбор не трогаем, пока деревья не загрузились (без сети разделы уйдут бы).
       let groups = null; // группы t2 и их подразделы первого уровня
@@ -114,7 +142,8 @@ export function render(root, r, ctx) {
           get('/sources/t2/categories?level=1'), get('/sources/t2/categories'), get('/sources/t1/categories'),
         ]);
         const saved = (v.catalog && v.catalog.sections) || {};
-        if (level.status === 'fulfilled' && full.status === 'fulfilled') {
+        const has = (engine) => v.trackers.some((t) => t.engine === engine); // разделы — только трекеров из списка
+        if (has('t2') && level.status === 'fulfilled' && full.status === 'fulfilled') {
           fullTree = buildTree(full.value);
           groups = buildTree(level.value);
           if (groups.roots.some((g) => g.children.length > 0)) {
@@ -127,7 +156,7 @@ export function render(root, r, ctx) {
             groups = null;
           }
         }
-        if (t1.status === 'fulfilled') {
+        if (has('t1') && t1.status === 'fulfilled') {
           t1Cats = t1.value || [];
           if ((saved.t1 || []).length) {
             for (const id of saved.t1) t1Sel.add(id);
@@ -180,8 +209,11 @@ export function render(root, r, ctx) {
 
       const save = async () => {
         const val = (k) => f[k].value.trim();
-        const p = { t2: { address: val('rtAddress'), login: val('rtLogin') }, t1: { address: val('t1Address') } };
-        if (f.rtPassword.value) p.t2.password = f.rtPassword.value;
+        const p = { trackers: addrs.map((i) => i.value.trim()).filter(Boolean) };
+        if (loginTracker()) {
+          p.t2 = { login: val('rtLogin') };
+          if (f.rtPassword.value) p.t2.password = f.rtPassword.value;
+        }
         const sp = sectionsPatch();
         if (sp) p.catalog = { sections: sp };
         const type = ptype.querySelector('input:checked').value;
@@ -190,17 +222,36 @@ export function render(root, r, ctx) {
           if (type !== 'none' && f.proxyPassword.value) p.proxy.password = f.proxyPassword.value;
         }
         Object.assign(v, await put('/settings', p));
-        f.rtAddress.value = v.t2.address; // адрес — как его сохранил сервер: «схема://хост»
-        f.t1Address.value = v.t1.address;
+        drawRows(); // адреса — как их сохранил сервер («схема://хост»), с названиями
+        drawLogin();
+        if (ctx.refreshStatus) ctx.refreshStatus(); // названия трекеров — во всём пульте сразу
         f.rtPassword.value = f.proxyPassword.value = '';
         f.rtPassword.placeholder = v.t2.passwordSet ? 'задан' : '';
         f.proxyPassword.placeholder = v.proxy.passwordSet ? 'задан' : '';
       };
-      const check = (tracker, el) => async () => {
+      // check — каждый трекер списка: свой разбор у трекеров со своим движком, остальные — по описаниям.
+      const check = async () => {
         await save();
-        el.textContent = 'Проверяю…';
-        el.classList.remove('good', 'bad');
-        showResult(el, await post('/setup/check', { tracker }));
+        trResult.textContent = 'Проверяю…';
+        trResult.classList.remove('good', 'bad');
+        if (!v.trackers.length) {
+          showResult(trResult, { ok: false, text: 'Добавьте адрес трекера' });
+          return;
+        }
+        const out = [];
+        let ok = true;
+        const open = v.trackers.filter((t) => t.engine === 'cardigann');
+        for (const t of v.trackers.filter((x) => x.engine !== 'cardigann')) {
+          const res = await post('/setup/check', { tracker: t.engine });
+          ok = ok && res.ok;
+          out.push(`${t.name || t.address}: ${res.text}`);
+        }
+        if (open.length) {
+          const res = await post('/setup/check', { source: 'search' });
+          ok = ok && res.ok;
+          out.push(res.text);
+        }
+        showResult(trResult, { ok, text: out.join(' · ') });
       };
       next = async () => {
         await save();
@@ -209,17 +260,14 @@ export function render(root, r, ctx) {
       if (groups) drawGroups();
       if (t1Cats.length) drawt1();
       return [
-        h('div', { class: 'card' }, h('div', { class: 'h' }, 't2'), field('Адрес сайта', f.rtAddress),
-          h('div', { class: 'two' }, field('Логин', f.rtLogin), field('Пароль', f.rtPassword)),
-          h('div', { class: 'row gap10' }, checkBtn('check-t2', check('t2', rtResult)), rtResult)),
-        h('div', { class: 'card' }, h('div', { class: 'h' }, 't1'), field('Адрес сайта или зеркала', f.t1Address),
-          h('div', { class: 'row gap10' }, checkBtn('check-t1', check('t1', t1Result)), t1Result)),
-        h('div', { class: 'card' }, h('div', { class: 'h' }, 'Открытые трекеры'),
-          h('p', { class: 'muted small' }, 'Поиск идёт и по открытым трекерам: open2, open3, open5.example и open4. Они подключаются сами, без регистрации и настроек.')),
-        h('div', { class: 'card' }, h('div', { class: 'h' }, 'Разделы каталога'),
-          h('p', { class: 'muted small' }, 'Какие разделы показывать в «Каталоге». По умолчанию отмечены все.'),
-          groups ? groupBox : h('p', { class: 'muted small' }, 'Разделы t2 не загрузились — сохранённый выбор не изменится.'),
-          t1Cats.length ? t1Box : null),
+        h('div', { class: 'card', 'data-key': 'trackers' }, h('div', { class: 'h' }, 'Трекеры'), rows,
+          h('div', { class: 'row gap10' },
+            h('button', { class: 'btn', type: 'button', disabled: !canEdit(), 'data-key': 'tracker-add', onclick: () => addRow(null).focus() }, icon('add'), 'Добавить'),
+            checkBtn('check-trackers', check), trResult),
+          loginBox),
+        groups || t1Cats.length ? h('div', { class: 'card' }, h('div', { class: 'h' }, 'Разделы каталога'),
+          groups ? groupBox : null,
+          t1Cats.length ? t1Box : null) : null,
         h('div', { class: 'card' }, h('div', { class: 'h' }, 'Прокси для трекеров'), ptype, field('Адрес', f.proxyAddress),
           h('div', { class: 'two' }, field('Логин', f.proxyLogin), field('Пароль', f.proxyPassword))),
       ];

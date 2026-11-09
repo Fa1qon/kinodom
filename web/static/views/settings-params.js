@@ -1,5 +1,5 @@
-﻿// «Настройки → Параметры»: t2, t1 (адреса вводит пользователь — этап 11a), прокси, источник поиска
-// Jacred / Jackett (адрес и ключ — 11b-Д), хранение,
+﻿// «Настройки → Параметры»: трекеры (адреса вводит человек, разбор подбирает сервер по профилю адреса —
+// docs/data-packs-and-updates.md, раздел 3), прокси, хранение,
 // плеер и формат в приоритете; в «Дополнительно» — служебные адреса трекеров и запасной ключ Кинопоиска
 // (он работает без ключа — спека 11b, 5.7).
 // «Сохранить» отправляет только изменённые поля; ошибка поля — под полем; не из домашней сети — только
@@ -13,11 +13,10 @@ import { pickFolder } from './folders.js';
 
 // FIELD — поле формы по названию поля в тексте ошибки сервера («Прокси: …»).
 const FIELD = {
-  'Адрес t2': 'rtAddress',
-  'Адрес API t2': 'rtApi',
-  'Адрес ленты t2': 'rtFeed',
-  'Адрес t1': 't1Address',
-  'Адрес .torrent t1': 't1Download',
+  'Трекеры': 'trackers',
+  'Адрес API трекера': 'rtApi',
+  'Адрес ленты трекера': 'rtFeed',
+  'Адрес .torrent трекера': 't1Download',
   'Прокси': 'proxyAddress',
   'Адрес источника поиска': 'searchAddress',
   'Хранить, дней': 'keepDays',
@@ -56,8 +55,8 @@ export function render(root, r, ctx) {
   let alive = true;
   let view = null; // /settings — что сейчас сохранено
   let status = null; // /status — вход t2, квота Кинопоиска, canEdit
-  let loginEl = null; // строка состояния входа t2: «Войти» меняет только её
-  let searchResult = null; // итог «Проверить» источника поиска
+  let loginEl = null; // строка состояния входа на трекер: «Войти» меняет только её
+  let trackerInputs = []; // поля адресов трекеров; убранный — пустой
   const inputs = {};
   const errs = {};
 
@@ -85,6 +84,8 @@ export function render(root, r, ctx) {
   function draw() {
     const v = view;
     const canEdit = status.canEdit;
+    delete inputs.rtLogin; // поля входа — только пока в списке есть трекер со входом
+    delete inputs.rtPassword;
     const login = status.trackers.t2 && status.trackers.t2.login;
     const kp = status.kinopoisk;
     const proxyType = h('div', { class: 'seg', role: 'radiogroup', 'aria-label': 'Тип прокси' },
@@ -144,15 +145,35 @@ export function render(root, r, ctx) {
     errs.catalogOrder = h('div', { class: 'error field-error' });
     errs.general = h('div', { class: 'error' });
     const loginBtn = h('button', { class: 'btn', type: 'button', disabled: !canEdit, 'data-key': 'login', onclick: relogin }, icon('login'), 'Войти');
+    // Трекеры: название — из профиля по адресу; трекер со входом — логин и пароль под списком.
+    const withLogin = v.trackers.find((t) => t.engine === 't2');
+    const trackerRows = h('div', { class: 'col' });
+    trackerInputs = [];
+    const addRow = (t) => {
+      const i = trackerInputs.length;
+      const inp = h('input', { class: 'input grow', value: t ? t.address : '', placeholder: 'https://', autocomplete: 'off', inputmode: 'url',
+        'aria-label': 'Адрес трекера', disabled: !canEdit, 'data-key': `tracker-${i}` });
+      trackerInputs.push(inp);
+      const row = h('div', { class: 'row gap10' }, inp,
+        t ? h('span', { class: 'small', style: { color: t.name ? 'var(--muted)' : 'var(--yellow)', whiteSpace: 'nowrap' } }, t.name || 'не поддерживается') : null,
+        h('button', { class: 'sq', type: 'button', 'aria-label': 'Убрать', title: 'Убрать', disabled: !canEdit, 'data-key': `tracker-del-${i}`,
+          onclick: () => { inp.value = ''; row.remove(); } }, icon('close')));
+      trackerRows.append(row);
+      return inp;
+    };
+    for (const t of v.trackers) addRow(t);
+    if (!v.trackers.length) addRow(null);
+    const addBtn = h('button', { class: 'btn', type: 'button', disabled: !canEdit, 'data-key': 'tracker-add', onclick: () => addRow(null).focus() },
+      icon('add'), 'Добавить');
+    errs.trackers = h('div', { class: 'error field-error' });
     // «Дополнительно» — служебные адреса трекеров (пусто — по адресу сайта) и запасной ключ Кинопоиска.
     // Открыто, если что-то задано.
     const erase = v.kinopoisk.keySet && canEdit
       ? h('button', { class: 'btn', type: 'button', 'data-key': 'kp-erase', onclick: () => eraseKey('kinopoisk') }, icon('delete'), 'Стереть') : null;
-    searchResult = h('div', { class: 'small check-result', role: 'status' });
     const extra = h('div', { class: 'col', hidden: !(v.t1.downloadAddress || v.t2.apiAddress || v.t2.feedAddress || v.kinopoisk.keySet) },
-      field('Адрес .torrent t1', 't1Download', input('t1Download', v.t1.downloadAddress)),
-      field('Адрес API t2', 'rtApi', input('rtApi', v.t2.apiAddress)),
-      field('Адрес ленты t2', 'rtFeed', input('rtFeed', v.t2.feedAddress)),
+      field('Адрес .torrent трекера', 't1Download', input('t1Download', v.t1.downloadAddress)),
+      field('Адрес API трекера', 'rtApi', input('rtApi', v.t2.apiAddress)),
+      field('Адрес ленты трекера', 'rtFeed', input('rtFeed', v.t2.feedAddress)),
       field('Ключ API Кинопоиска', 'kpKey', h('div', { class: 'row gap10' }, secret('kpKey', v.kinopoisk.keySet), erase)),
       kp.badKey ? h('div', { class: 'small', style: { color: 'var(--yellow)' } }, 'Ключ не подошёл')
         : kp.keySet ? h('div', { class: 'muted small' }, `${kp.dailyUsed} из ${kp.dailyLimit} запросов за сутки`) : '');
@@ -171,20 +192,14 @@ export function render(root, r, ctx) {
       errs.general,
       h('div', { class: 'two-cols' },
         h('div', { class: 'col' },
-          h('div', { class: 'card' }, h('div', { class: 'h' }, 't2'),
-            field('Адрес сайта', 'rtAddress', input('rtAddress', v.t2.address, { autocomplete: 'off', inputmode: 'url' })),
-            h('div', { class: 'two' }, field('Логин', 'rtLogin', input('rtLogin', v.t2.login, { autocomplete: 'off' })), field('Пароль', 'rtPassword', secret('rtPassword', v.t2.passwordSet))),
-            h('div', { class: 'row gap10' }, (loginEl = loginLine(login)), loginBtn)),
-          h('div', { class: 'card' }, h('div', { class: 'h' }, 't1'),
-            field('Адрес сайта или зеркала', 't1Address', input('t1Address', v.t1.address, { autocomplete: 'off', inputmode: 'url' }))),
+          h('div', { class: 'card', 'data-key': 'trackers' }, h('div', { class: 'h' }, 'Трекеры'), trackerRows, errs.trackers,
+            h('div', { class: 'row gap10' }, addBtn),
+            withLogin ? h('div', { class: 'col' }, h('div', { class: 'h' }, `Вход: ${withLogin.name || withLogin.address}`),
+              h('div', { class: 'two' }, field('Логин', 'rtLogin', input('rtLogin', v.t2.login, { autocomplete: 'off' })), field('Пароль', 'rtPassword', secret('rtPassword', v.t2.passwordSet))),
+              h('div', { class: 'row gap10' }, (loginEl = loginLine(login)), loginBtn)) : null),
           h('div', { class: 'card' }, h('div', { class: 'h' }, 'Прокси для трекеров'), proxyType,
             field('Адрес', 'proxyAddress', input('proxyAddress', v.proxy.address, { placeholder: '192.168.1.20:3128' })),
             h('div', { class: 'two' }, field('Логин', 'proxyLogin', input('proxyLogin', v.proxy.login, { autocomplete: 'off' })), field('Пароль', 'proxyPassword', secret('proxyPassword', v.proxy.passwordSet)))),
-          h('div', { class: 'card' }, h('div', { class: 'h' }, 'Открытые трекеры'),
-            h('p', { class: 'muted small' }, 'Кроме t1 и t2, поиск идёт по открытым трекерам: open2, open3, open5.example и open4. Регистрация и настройки не нужны: Kinodom сам скачивает их описания и раз в неделю обновляет.'),
-            h('div', { class: 'row gap10' },
-              h('button', { class: 'btn', type: 'button', disabled: !canEdit, 'data-key': 'search-check', onclick: checkSearch }, icon('network_check'), 'Проверить'),
-              searchResult)),
           h('div', { class: 'card' }, extraBtn, extra)),
         h('div', { class: 'col' },
           h('div', { class: 'card' }, h('div', { class: 'h' }, 'Хранение'),
@@ -244,29 +259,6 @@ export function render(root, r, ctx) {
     if (alive) draw();
   }
 
-  // checkSearch — «Проверить» открытые трекеры: скачаны ли их описания (0.17: вместо источника Jacred).
-  async function checkSearch(e) {
-    const btn = e.currentTarget;
-    const el = searchResult;
-    btn.disabled = true;
-    errs.general.textContent = '';
-    try {
-      el.textContent = 'Проверяю…';
-      el.classList.remove('good', 'bad');
-      const res = await post('/setup/check', { source: 'search' });
-      if (!alive) return;
-      el.textContent = res.text;
-      el.classList.toggle('good', res.ok);
-      el.classList.toggle('bad', !res.ok);
-    } catch (x) {
-      const at = x.message.indexOf(':');
-      const k = at > 0 ? FIELD[x.message.slice(0, at)] : null;
-      (k && errs[k] ? errs[k] : errs.general).textContent = x.message;
-      el.textContent = '';
-    }
-    btn.disabled = !status.canEdit;
-  }
-
   // markSeg — выбранный тип прокси подсвечен.
   function markSeg(seg) {
     for (const l of seg.querySelectorAll('label')) l.classList.toggle('on', l.querySelector('input').checked);
@@ -289,13 +281,17 @@ export function render(root, r, ctx) {
       p[group] = p[group] || {};
       p[group][key] = value;
     };
-    for (const [k, group, key, was] of [['rtAddress', 't2', 'address', v.t2.address], ['rtApi', 't2', 'apiAddress', v.t2.apiAddress],
-      ['rtFeed', 't2', 'feedAddress', v.t2.feedAddress], ['t1Address', 't1', 'address', v.t1.address],
-      ['t1Download', 't1', 'downloadAddress', v.t1.downloadAddress]]) {
+    // Трекеры — весь список, если он изменился: движок каждого адреса сервер найдёт по профилю.
+    const trackers = trackerInputs.map((i) => i.value.trim()).filter(Boolean);
+    if (trackers.join('\n') !== v.trackers.map((t) => t.address).join('\n')) p.trackers = trackers;
+    for (const [k, group, key, was] of [['rtApi', 't2', 'apiAddress', v.t2.apiAddress],
+      ['rtFeed', 't2', 'feedAddress', v.t2.feedAddress], ['t1Download', 't1', 'downloadAddress', v.t1.downloadAddress]]) {
       if (val(k) !== was) set(group, key, val(k));
     }
-    if (val('rtLogin') !== v.t2.login) set('t2', 'login', val('rtLogin'));
-    if (val('rtPassword')) set('t2', 'password', inputs.rtPassword.value);
+    if (inputs.rtLogin) {
+      if (val('rtLogin') !== v.t2.login) set('t2', 'login', val('rtLogin'));
+      if (val('rtPassword')) set('t2', 'password', inputs.rtPassword.value);
+    }
     const ptype = inputs.proxyType.querySelector('input:checked').value;
     if (ptype !== v.proxy.type || val('proxyAddress') !== v.proxy.address || val('proxyLogin') !== v.proxy.login || val('proxyPassword')) {
       p.proxy = { type: ptype, address: val('proxyAddress'), login: val('proxyLogin') };
@@ -351,7 +347,8 @@ export function render(root, r, ctx) {
       ctx.refreshStatus();
     } catch (e) {
       const at = e.message.indexOf(':');
-      const key = at > 0 ? FIELD[e.message.slice(0, at)] : null;
+      const head = at > 0 ? e.message.slice(0, at) : '';
+      const key = head.startsWith('Трекер') ? 'trackers' : FIELD[head];
       (key && errs[key] ? errs[key] : errs.general).textContent = e.message;
       saveBtn.disabled = false;
     }

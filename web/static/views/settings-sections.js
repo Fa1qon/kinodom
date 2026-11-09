@@ -1,8 +1,10 @@
-// «Настройки → Разделы каталога»: t2 — три группы («Кино · Сериалы · Документалистика») и их
-// подразделы первого уровня флажками (спека 11b, 7.1), t1 — списком (спека этапа 7, раздел 6.3).
+// «Настройки → Разделы каталога»: трекер с деревом форумов — три группы («Кино · Сериалы · Документалистика») и
+// их подразделы первого уровня флажками (спека 11b, 7.1), трекер с категориями — списком (спека этапа 7, 6.3).
+// Карточка — только у подключённого трекера, название — с сервера.
 import { h, icon } from '../ui.js';
 import { get, put } from '../api.js';
 import { layout, remoteNote } from './settings-layout.js';
+import { ownTrackers } from './tracker-names.js';
 
 export function render(root, r, ctx) {
   const saveBtn = h('button', { class: 'btn inv', type: 'button', 'data-key': 'save' }, icon('save'), 'Сохранить');
@@ -44,16 +46,17 @@ export function render(root, r, ctx) {
   })();
 
   function draw() {
+    const names = Object.fromEntries(ownTrackers());
     content.replaceChildren(
       canEdit ? '' : remoteNote(),
       general,
       h('div', { class: 'sections-grid' },
-        h('div', { class: 'card' }, h('div', { class: 'h' }, 't2'),
-          groups ? groupBox : h('div', { class: 'error' }, 'Разделы t2 не загрузились — выбор не изменится')),
-        h('div', { class: 'card' }, h('div', { class: 'h' }, 't1'),
+        names.t2 ? h('div', { class: 'card' }, h('div', { class: 'h' }, names.t2),
+          groups ? groupBox : h('div', { class: 'error' }, 'Разделы не загрузились — выбор не изменится')) : null,
+        names.t1 ? h('div', { class: 'card' }, h('div', { class: 'h' }, names.t1),
           h('div', { class: 'list' }, t1Cats.map((c) => h('label', { class: 'check' },
             h('input', { type: 'checkbox', name: `t1-${c.id}`, checked: t1Sel.has(c.id), disabled: !canEdit, 'data-key': `t1-${c.id}`,
-              onchange: (e) => (e.target.checked ? t1Sel.add(c.id) : t1Sel.delete(c.id)) }), c.name))))),
+              onchange: (e) => (e.target.checked ? t1Sel.add(c.id) : t1Sel.delete(c.id)) }), c.name)))) : null),
     );
     if (groups) drawGroups();
     saveBtn.disabled = !canEdit;

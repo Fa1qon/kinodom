@@ -191,7 +191,7 @@ func (a *App) initUpdates(o Options) {
 		Store:   a.DB,
 		Version: a.version,
 		Log:     a.Log,
-		Packs: []updates.Pack{{Name: "recs", Schema: 1, Install: func(ctx context.Context, path string) error {
+		Packs: []updates.Pack{{Name: "recs", Schema: 2, Install: func(ctx context.Context, path string) error {
 			m, err := recs.OpenModel(path)
 			if err != nil {
 				return err
@@ -211,7 +211,7 @@ func (a *App) initUpdates(o Options) {
 			}
 			a.Recs.SetModel(nm)
 			return nil
-		}}},
+		}}, {Name: "trackers", Schema: 1, Install: a.installTrackerPack}},
 	})
 	a.Updates.Register(a.API)
 	if o.Offline {

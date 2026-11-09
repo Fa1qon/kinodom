@@ -81,6 +81,16 @@ if (Test-Path $RecsModel) {
     Remove-Item bin\recs-model.db -ErrorAction SilentlyContinue
     Write-Warning "No recommendations pack ($RecsModel): build without recommendations"
 }
+# Профили трекеров (docs/data-packs-and-updates.md, раздел 3): зашифрованный trackers.pack из списка владельца
+# (%USERPROFILE%\.kinodom-sign\trackers.json — вне репозиториев: в нём адреса трекеров).
+$profiles = Join-Path $env:USERPROFILE '.kinodom-sign\trackers.json'
+if (Test-Path $profiles) {
+    & bin\kinodom.exe trackers-pack $profiles bin\trackers.pack
+    if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+} else {
+    Remove-Item bin\trackers.pack -ErrorAction SilentlyContinue
+    Write-Warning "No tracker profiles ($profiles): trackers only by data update"
+}
 
 # Приложение для Android: версия — как у сервера, номер сборки — число коммитов; подпись — ключ из
 # %USERPROFILE%\.kinodom (make-key.ps1 создаёт его при первой сборке). Нет JDK или SDK — без APK.

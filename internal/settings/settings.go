@@ -36,6 +36,7 @@ const (
 	KeySetupDone        = "setup.done" // мастер начальных настроек пройден
 	KeyAutorun          = "autorun"    // запуск Kinodom при старте ОС
 	KeyProxy            = "proxy.trackers"
+	KeyOpenTrackers     = "trackers.open" // JSON [{def, address}]: трекеры по описаниям Prowlarr (адреса ввёл человек)
 	KeyKinopoisk        = "kinopoisk.key"
 	KeySearchAddress    = "search.address" // источник поиска Jacred / Jackett (спека 11b, раздел 8)
 	KeySearchKey        = "search.key"
@@ -79,11 +80,12 @@ var Orders = []string{"seeders", "leechers", "new", "downloads"}
 type Values struct {
 	t2Login    string
 	t2Password string
-	t2Address  string // «схема://хост»; "" — t2 выключен
-	t2API      string // "" — по правилу из адреса сайта
-	t2Feed     string // "" — по правилу из адреса сайта
-	t1Address      string // «схема://хост»; "" — t1 выключен
-	t1Download     string // адрес .torrent; "" — по правилу из адреса сайта
+	t2Address  string        // «схема://хост»; "" — t2 выключен
+	t2API      string        // "" — по правилу из адреса сайта
+	t2Feed     string        // "" — по правилу из адреса сайта
+	t1Address      string        // «схема://хост»; "" — t1 выключен
+	t1Download     string        // адрес .torrent; "" — по правилу из адреса сайта
+	OpenTrackers      []OpenTracker // nil — настройки ещё нет (старая установка: берётся из скачанных описаний)
 	SetupDone         bool
 	Autorun           bool   // запуск при старте ОС; правда по умолчанию
 	Proxy             string // адрес целиком: http:// или socks5://, с логином и паролем; "" — нет
@@ -104,6 +106,12 @@ type Values struct {
 	HiddenCountries   []string
 	HiddenLanguages   []string
 	UTCOffset         int // часовой пояс каналов, часы от UTC
+}
+
+// OpenTracker — трекер по описанию Prowlarr: номер описания из профиля и адрес, который ввёл человек.
+type OpenTracker struct {
+	Def     string `json:"def"`
+	Address string `json:"address"`
 }
 
 // Defaults — то, чего пакет не знает сам: папка загрузок по умолчанию и разделы каталога по умолчанию.
@@ -152,6 +160,11 @@ func Load(ctx context.Context, db *store.DB, def Defaults, overrides map[string]
 		Keyt2Feed: &v.t2Feed, Keyt1Address: &v.t1Address, Keyt1Download: &v.t1Download} {
 		*dst, err = str(key, "")
 		collect(err)
+	}
+	if s, ok, err := get(KeyOpenTrackers); err != nil {
+		collect(err)
+	} else if ok && json.Unmarshal([]byte(s), &v.OpenTrackers) == nil && v.OpenTrackers == nil {
+		v.OpenTrackers = []OpenTracker{} // «[]» и «null» — список есть, пустой
 	}
 	done, err := str(KeySetupDone, "false")
 	collect(err)
@@ -231,6 +244,15 @@ func Load(ctx context.Context, db *store.DB, def Defaults, overrides map[string]
 
 func ptr[T any](v T) *T { return &v }
 
+// openList — строка базы; nil — "" (настройки нет, в базу не пишется, пока список не задан).
+func openList(l []OpenTracker) string {
+	if l == nil {
+		return ""
+	}
+	b, _ := json.Marshal(l)
+	return string(b)
+}
+
 func jsonList(l []string) string {
 	if l == nil {
 		l = []string{}
@@ -253,6 +275,7 @@ func (v Values) entries() map[string]string {
 		Keyt2Feed:     v.t2Feed,
 		Keyt1Address:      v.t1Address,
 		Keyt1Download:     v.t1Download,
+		KeyOpenTrackers:      openList(v.OpenTrackers),
 		KeySetupDone:         strconv.FormatBool(v.SetupDone),
 		KeyAutorun:           strconv.FormatBool(v.Autorun),
 		KeyProxy:             v.Proxy,
@@ -323,20 +346,23 @@ func (v Values) With(p Patch) (Values, error) {
 			in    *string
 			dst   *string
 			field string
-		}{{r.Address, &n.t2Address, "Адрес t2"}, {r.APIAddress, &n.t2API, "Адрес API t2"},
-			{r.FeedAddress, &n.t2Feed, "Адрес ленты t2"}} {
+		}{{r.Address, &n.t2Address, "Трекеры"}, {r.APIAddress, &n.t2API, "Адрес API трекера"},
+			{r.FeedAddress, &n.t2Feed, "Адрес ленты трекера"}} {
 			if err := setAddress(f.in, f.dst, f.field); err != nil {
 				return v, err
 			}
 		}
 	}
 	if r := p.t1; r != nil {
-		if err := setAddress(r.Address, &n.t1Address, "Адрес t1"); err != nil {
+		if err := setAddress(r.Address, &n.t1Address, "Трекеры"); err != nil {
 			return v, err
 		}
-		if err := setAddress(r.DownloadAddress, &n.t1Download, "Адрес .torrent t1"); err != nil {
+		if err := setAddress(r.DownloadAddress, &n.t1Download, "Адрес .torrent трекера"); err != nil {
 			return v, err
 		}
+	}
+	if p.open != nil {
+		n.OpenTrackers = *p.open
 	}
 	if st := p.Setup; st != nil && st.Done != nil {
 		n.SetupDone = *st.Done

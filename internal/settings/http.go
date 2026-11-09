@@ -5,14 +5,18 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"strings"
 	"sync"
 
 	"kinodom/internal/httpx"
+	"kinodom/internal/source"
 	"kinodom/internal/store"
+	"kinodom/internal/trackerpack"
 )
 
 // View — настройки для пульта. Секретов в ответе нет: только признак «задан».
 type View struct {
+	Trackers  []TrackerView `json:"trackers"` // адреса, которые ввёл человек, с движком из профиля
 	t2 t2View `json:"t2"`
 	t1     t1View     `json:"t1"`
 	Setup     SetupView     `json:"setup"`
@@ -24,6 +28,14 @@ type View struct {
 	Autorun   bool          `json:"autorun"` // запуск Kinodom при старте ОС
 	Catalog   CatalogView   `json:"catalog"`
 	IPTV      IPTVView      `json:"iptv"`
+}
+
+// TrackerView — трекер из списка «Трекеры». Название — из профиля, найденного по адресу: программа сама
+// трекеров не знает (docs/data-packs-and-updates.md, раздел 3).
+type TrackerView struct {
+	Address string `json:"address"`
+	Name    string `json:"name"`   // "" — профиль по адресу больше не находится
+	Engine  string `json:"engine"` // t1 | t2 | cardigann
 }
 
 type t2View struct {
@@ -86,7 +98,18 @@ type IPTVView struct {
 // View — настройки для пульта.
 func (v Values) View() View {
 	p := splitProxy(v.Proxy)
+	trackers := []TrackerView{}
+	if v.t2Address != "" {
+		trackers = append(trackers, TrackerView{Address: v.t2Address, Engine: "t2"})
+	}
+	if v.t1Address != "" {
+		trackers = append(trackers, TrackerView{Address: v.t1Address, Engine: "t1"})
+	}
+	for _, t := range v.OpenTrackers {
+		trackers = append(trackers, TrackerView{Address: t.Address, Engine: "cardigann"})
+	}
 	return View{
+		Trackers: trackers,
 		t2: t2View{Login: v.t2Login, PasswordSet: v.t2Password != "",
 			Address: v.t2Address, APIAddress: v.t2API, FeedAddress: v.t2Feed},
 		t1:     t1View{Address: v.t1Address, DownloadAddress: v.t1Download},
@@ -105,6 +128,10 @@ func (v Values) View() View {
 
 // Patch — изменения из пульта: только присланные поля. Секрет: поля нет — не меняется, "" — стереть.
 type Patch struct {
+	// Trackers — весь список адресов трекеров: движок каждого — из профиля по адресу; адреса t2 и
+	// t1 (если есть) записываются в их поля, остальные — в OpenTrackers. Прочие поля — после него.
+	Trackers  *[]string       `json:"trackers"`
+	open      *[]OpenTracker  // разобранные Trackers
 	t2 *t2Patch `json:"t2"`
 	t1     *t1Patch     `json:"t1"`
 	Setup     *SetupPatch     `json:"setup"`
@@ -213,10 +240,16 @@ type Applier interface {
 	Apply(ctx context.Context, old, new Values)
 }
 
+// Profiles — профили трекеров по адресу (trackers.pack).
+type Profiles interface {
+	Lookup(addr string) (trackerpack.Profile, error)
+}
+
 // Service — настройки работающего сервера.
 type Service struct {
-	db    *store.DB
-	apply Applier
+	db       *store.DB
+	apply    Applier
+	profiles Profiles // nil — список трекеров не меняется
 
 	mu  sync.Mutex
 	cur Values
@@ -224,6 +257,79 @@ type Service struct {
 
 func New(db *store.DB, cur Values, a Applier) *Service {
 	return &Service{db: db, cur: cur, apply: a}
+}
+
+// SetProfiles — профили трекеров (приложение загружает их после настроек и подменяет при обновлении базы).
+func (s *Service) SetProfiles(p Profiles) {
+	s.mu.Lock()
+	s.profiles = p
+	s.mu.Unlock()
+}
+
+// View — настройки для пульта с названиями трекеров из профилей.
+func (s *Service) View() View {
+	s.mu.Lock()
+	v, pr := s.cur.View(), s.profiles
+	s.mu.Unlock()
+	for i, t := range v.Trackers {
+		if pr != nil {
+			if p, err := pr.Lookup(t.Address); err == nil {
+				v.Trackers[i].Name = p.Name
+			}
+		}
+	}
+	return v
+}
+
+// resolveTrackers — список адресов в поля настроек по профилям: каждый адрес должен найтись в профилях,
+// один трекер — один адрес.
+func resolveTrackers(p *Patch, pr Profiles) error {
+	if p.Trackers == nil {
+		return nil
+	}
+	if pr == nil {
+		return fieldErr("Трекеры", "профили трекеров ещё не загружены — попробуйте через минуту")
+	}
+	t1, t2 := "", ""
+	open := []OpenTracker{}
+	seen := map[string]bool{}
+	for _, raw := range *p.Trackers {
+		raw = strings.TrimSpace(raw)
+		if raw == "" {
+			continue
+		}
+		field := "Трекер " + raw
+		addr, err := source.SiteAddress(raw)
+		if err != nil {
+			return fieldErr(field, "%v", err)
+		}
+		prof, err := pr.Lookup(addr)
+		if err != nil {
+			return fieldErr(field, "%v", err)
+		}
+		if seen[prof.Name] {
+			return fieldErr(field, "%s уже в списке — оставьте один адрес", prof.Name)
+		}
+		seen[prof.Name] = true
+		switch prof.Engine {
+		case "t1":
+			t1 = addr
+		case "t2":
+			t2 = addr
+		case "cardigann":
+			open = append(open, OpenTracker{Def: prof.Def, Address: addr})
+		default:
+			return fieldErr(field, "нужна новая версия Kinodom")
+		}
+	}
+	if p.t1 == nil {
+		p.t1 = &t1Patch{}
+	}
+	if p.t2 == nil {
+		p.t2 = &t2Patch{}
+	}
+	p.t1.Address, p.t2.Address, p.open = &t1, &t2, &open
+	return nil
 }
 
 // Current — действующие настройки.
@@ -239,6 +345,9 @@ func (s *Service) Update(ctx context.Context, p Patch) (Values, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	old := s.cur
+	if err := resolveTrackers(&p, s.profiles); err != nil {
+		return old, err
+	}
 	n, err := old.With(p)
 	if err != nil {
 		return old, err
@@ -272,7 +381,7 @@ func (s *Service) Register(r Router) {
 }
 
 func (s *Service) handleGet(w http.ResponseWriter, r *http.Request) {
-	httpx.WriteJSON(w, http.StatusOK, s.Current().View())
+	httpx.WriteJSON(w, http.StatusOK, s.View())
 }
 
 func (s *Service) handlePut(w http.ResponseWriter, r *http.Request) {
@@ -280,11 +389,11 @@ func (s *Service) handlePut(w http.ResponseWriter, r *http.Request) {
 	if !httpx.ReadJSON(w, r, &p) {
 		return
 	}
-	v, err := s.Update(r.Context(), p)
+	_, err := s.Update(r.Context(), p)
 	var fe *FieldError
 	switch {
 	case err == nil:
-		httpx.WriteJSON(w, http.StatusOK, v.View())
+		httpx.WriteJSON(w, http.StatusOK, s.View())
 	case errors.As(err, &fe):
 		httpx.WriteError(w, http.StatusBadRequest, fe.Error())
 	default:

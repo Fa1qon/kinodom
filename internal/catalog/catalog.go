@@ -262,13 +262,13 @@ func (c *Catalog) refreshPass(ctx context.Context, force bool) (time.Duration, e
 		}
 	}
 	for name := range c.sources {
+		c.clearProblem(ctx, "catalog."+name+".address") // так помечали трекер без адреса до списка «Трекеры»
 		if !c.configured(name) {
-			// Адрес не введён (этап 11a): трекер выключен — это не сбой, «не отвечает» снимается.
-			c.setProblem(ctx, "catalog."+name+".address", "Укажите адрес "+title(name)+" в настройках")
+			// Адрес не введён: трекера нет в списке — это выбор человека, не сбой и не проблема (программа
+			// трекеров не называет — docs/data-packs-and-updates.md, раздел 3).
 			c.clearProblem(ctx, "catalog."+name)
 			continue
 		}
-		c.clearProblem(ctx, "catalog."+name+".address")
 		if err := trackerErr[name]; err != nil {
 			c.setProblem(ctx, "catalog."+name, err.Error())
 		} else if touched {

@@ -375,11 +375,11 @@ func TestTrackerAddressFields(t *testing.T) {
 		t.Fatalf("стереть адрес: %+v, %v", off.t1Address, err)
 	}
 	cases := map[string]string{
-		`{"t1":{"address":"абв"}}`:             "Адрес t1",
-		`{"t2":{"address":"ftp://x.org"}}`: "Адрес t2",
-		`{"t2":{"apiAddress":"мусор"}}`:    "Адрес API t2",
-		`{"t2":{"feedAddress":"http://"}}`: "Адрес ленты t2",
-		`{"t1":{"downloadAddress":"a b.c"}}`:   "Адрес .torrent t1",
+		`{"t1":{"address":"абв"}}`:             "Трекеры",
+		`{"t2":{"address":"ftp://x.org"}}`: "Трекеры",
+		`{"t2":{"apiAddress":"мусор"}}`:    "Адрес API трекера",
+		`{"t2":{"feedAddress":"http://"}}`: "Адрес ленты трекера",
+		`{"t1":{"downloadAddress":"a b.c"}}`:   "Адрес .torrent трекера",
 	}
 	for js, want := range cases {
 		m, err := n.With(patch(t, js))
