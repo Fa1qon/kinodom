@@ -27,6 +27,7 @@ func commands() []command {
 		{"torrent", "проверить движок вживую: kinodom torrent info <magnet> — метаинфо от пиров", cmdTorrent},
 		{"catalog", "каталог вживую на отдельной папке: kinodom catalog refresh --home …", cmdCatalog},
 		{"data-release", "файлы релиза баз с подписью: kinodom data-release recs=путь:схема", cmdDataRelease},
+		{"trackers-pack", "зашифровать профили трекеров: kinodom trackers-pack профили.json trackers.pack", cmdTrackersPack},
 		{"version", "показать версию", cmdVersion},
 	}
 	return append(base, osCommands()...)
