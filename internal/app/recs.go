@@ -188,6 +188,7 @@ func (a *App) initUpdates(o Options) {
 	a.Updates = updates.New(updates.Options{
 		Client:  &http.Client{Transport: netx.NewTransport(a.proxy), Timeout: 30 * time.Minute},
 		Dir:     filepath.Join(a.Paths.Data, "updates"),
+		API:     os.Getenv("KINODOM_UPDATES_API"), // проверка самообновления на своём «GitHub»; "" — настоящий
 		Store:   a.DB,
 		Version: a.version,
 		Log:     a.Log,

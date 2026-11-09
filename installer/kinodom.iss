@@ -216,6 +216,12 @@ begin
         end;
         Sleep(1000);
       end;
+      { Тихое обновление: окна подавлены, «Повторить» ответилось бы само — бесконечный круг; старая версия цела. }
+      if not StopOK and WizardSilent then
+      begin
+        Result := 'Установка отменена: старую версию Kinodom не удалось закрыть.';
+        Exit;
+      end;
       if not StopOK then
         if MsgBox('Kinodom ещё использует старую версию программы. Установщик попробует закрыть её ещё раз.' + #13#10 + #13#10 + 'Если открыто окно Kinodom, просто закройте его и нажмите «Повторить».', mbError, MB_RETRYCANCEL) <> IDRETRY then
         begin
