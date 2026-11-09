@@ -286,16 +286,18 @@ type pending struct {
 	kinopoisk bool
 }
 
-// recognizePending — поиск на Кинопоиске для новых единиц и тех, что ждали квоту; only > 0 — только
-// эта единица (правка из пульта, хвост Х10).
+// recognizePending — поиск в каталоге пакета и на Кинопоиске для новых единиц и тех, что ждали квоту;
+// only > 0 — только эта единица (правка из пульта, хвост Х10). Кинопоиска нет или он на паузе — только
+// каталог, остальные единицы ждут.
 func (l *Library) recognizePending(ctx context.Context, tus []TorrentUnit, only int64) error {
-	if l.o.KP == nil {
-		return nil
-	}
+	kp := l.o.KP
 	l.mu.Lock()
-	paused := l.now().Before(l.kpPause)
+	if l.now().Before(l.kpPause) {
+		kp = nil
+	}
 	l.mu.Unlock()
-	if paused {
+	cat := l.catalog(ctx)
+	if kp == nil && cat == nil {
 		return nil
 	}
 	rows, err := l.d.R.QueryContext(ctx, `SELECT u.id, u.source, u.key, u.name, COALESCE(c.layout, ''), COALESCE(c.kinopoisk, 1)
@@ -337,9 +339,12 @@ func (l *Library) recognizePending(ctx context.Context, tus []TorrentUnit, only 
 			}
 		}
 		alt = slices.DeleteFunc(alt, func(s string) bool { return strings.TrimSpace(s) == "" })
-		res, err := recognize(ctx, l.o.KP, parsed, alt, p.layout, p.source == "folder")
+		res, err := recognize(ctx, kp, cat, parsed, alt, p.layout, p.source == "folder")
 		if err != nil {
 			return err
+		}
+		if res.State == "" { // в каталоге нет, Кинопоиск недоступен — ждёт
+			continue
 		}
 		if res.State == StateRetry { // сбой на этой единице — она позже, остальные идут дальше
 			if _, err := l.d.W.ExecContext(ctx, `UPDATE lib_units SET attempts = attempts + 1,
@@ -354,11 +359,14 @@ func (l *Library) recognizePending(ctx context.Context, tus []TorrentUnit, only 
 			WHERE id = ? AND state IN ('new', 'wait')`, res.KP, res.State, res.State, p.id); err != nil {
 			return err
 		}
-		if res.State == StateWait { // квота, ключ — пауза для всех
+		if res.State == StateWait { // квота, ключ — пауза для всех; дальше только каталог
 			l.mu.Lock()
 			l.kpPause = l.now().Add(kpPauseAfter)
 			l.mu.Unlock()
-			return nil
+			kp = nil
+			if cat == nil {
+				return nil
+			}
 		}
 	}
 	return nil
@@ -442,10 +450,11 @@ func (l *Library) refreshCards(ctx context.Context, tus []TorrentUnit, only int,
 	return err
 }
 
-// fetchDetails — описание и постер с Кинопоиска для найденных карточек без данных, вид — и для
-// карточек скачанного (Х11); only > 0 — только этот номер. Сбой — повтор с паузой (Х9).
+// fetchDetails — описание и постер для найденных карточек без данных, вид — и для карточек скачанного
+// (Х11): из каталога пакета, нет там — с Кинопоиска; only > 0 — только этот номер. Сбой — повтор с паузой (Х9).
 func (l *Library) fetchDetails(ctx context.Context, only int) error {
-	if l.o.KP == nil {
+	cat := l.catalog(ctx)
+	if l.o.KP == nil && cat == nil {
 		return nil
 	}
 	rows, err := l.d.R.QueryContext(ctx, `SELECT DISTINCT kp_id FROM lib_units WHERE kp_id > 0 AND (? = 0 OR kp_id = ?)
@@ -465,30 +474,35 @@ func (l *Library) fetchDetails(ctx context.Context, only int) error {
 	rows.Close()
 	for _, id := range ids {
 		now := l.now()
-		l.mu.Lock()
-		paused := now.Before(l.kpPause)
-		l.mu.Unlock()
-		if paused {
-			return nil
+		var d meta.FilmDetails
+		ok := false
+		if cat != nil {
+			d, ok = cat.src.Details(ctx, id)
 		}
-		if !l.due("details", id, now) {
-			continue
-		}
-		d, err := l.o.KP.Details(ctx, id)
-		switch {
-		case ctx.Err() != nil:
-			return ctx.Err()
-		case kpPaused(err):
+		if !ok {
 			l.mu.Lock()
-			l.kpPause = l.now().Add(kpPauseAfter)
+			paused := now.Before(l.kpPause)
 			l.mu.Unlock()
-			return nil
-		case err != nil:
-			l.log.Warn("медиатека: фильм Кинопоиска не загрузился — повтор позже", "kp", id, "err", err)
-			l.failed("details", id, now)
-			continue
+			if l.o.KP == nil || paused || !l.due("details", id, now) {
+				continue
+			}
+			var err error
+			d, err = l.o.KP.Details(ctx, id)
+			switch {
+			case ctx.Err() != nil:
+				return ctx.Err()
+			case kpPaused(err):
+				l.mu.Lock()
+				l.kpPause = l.now().Add(kpPauseAfter)
+				l.mu.Unlock()
+				continue
+			case err != nil:
+				l.log.Warn("медиатека: фильм Кинопоиска не загрузился — повтор позже", "kp", id, "err", err)
+				l.failed("details", id, now)
+				continue
+			}
+			l.succeeded("details", id)
 		}
-		l.succeeded("details", id)
 		key := ""
 		if d.PosterURL != "" && l.o.Posters != nil {
 			if k, err := l.o.Posters.Fetch(ctx, d.PosterURL, meta.Direct); err == nil {

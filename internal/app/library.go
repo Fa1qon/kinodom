@@ -4,10 +4,12 @@ import (
 	"context"
 	"errors"
 	"net/http"
+	"strings"
 
 	"kinodom/internal/history"
 	"kinodom/internal/library"
 	"kinodom/internal/meta"
+	"kinodom/internal/recs"
 	"kinodom/internal/torrents"
 )
 
@@ -29,6 +31,15 @@ func (a *App) initLibrary(ctx context.Context) {
 			}
 			// Движок ещё не поднялся (первый обход при запуске) — папки раздач по реестру (ревью 14В).
 			return torrents.NewRegistry(a.DB).Folders(ctx, a.Settings.Current().DownloadsDir)
+		},
+		Catalog: func() library.Catalog { // каталог пакета рекомендаций: опознание без Кинопоиска
+			if a.Recs == nil {
+				return nil
+			}
+			if m := a.Recs.Model(); m != nil {
+				return recsCatalog{m}
+			}
+			return nil
 		},
 		Log: a.Log.With("module", "library")}
 	if a.Images != nil {
@@ -81,4 +92,36 @@ func (d libraryDownloads) TorrentUnits(ctx context.Context) ([]library.TorrentUn
 		out = append(out, u)
 	}
 	return out, nil
+}
+
+// recsCatalog — каталог пакета рекомендаций для медиатеки; новый пакет — другое значение, индекс заново.
+type recsCatalog struct{ m *recs.Model }
+
+func (c recsCatalog) EachTitle(ctx context.Context, fn func(meta.Film)) error {
+	return c.m.Titles(ctx, func(f recs.Film) {
+		fn(meta.Film{ID: f.KP, NameRu: f.Title, NameOrig: f.TitleOrig, Year: f.Year, Type: kpType(f.Kind)})
+	})
+}
+
+func (c recsCatalog) Details(ctx context.Context, id int) (meta.FilmDetails, bool) {
+	f, ok := c.m.Film(ctx, id)
+	if !ok || f.Description == "" || f.Year == 0 {
+		return meta.FilmDetails{}, false
+	}
+	d := meta.FilmDetails{Film: meta.Film{ID: f.KP, NameRu: f.Title, NameOrig: f.TitleOrig, Year: f.Year, Type: kpType(f.Kind),
+		Rating: f.RatingKP, RatingIMDb: f.RatingIMDb}, Description: f.Description, PosterURL: f.Poster, Genres: []string{}}
+	for _, g := range strings.Split(f.Genres, ",") {
+		if g = strings.TrimSpace(g); g != "" {
+			d.Genres = append(d.Genres, g)
+		}
+	}
+	return d, true
+}
+
+// kpType — вид фильма пакета типом Кинопоиска.
+func kpType(kind string) string {
+	if kind == "series" {
+		return "TV_SERIES"
+	}
+	return "FILM"
 }

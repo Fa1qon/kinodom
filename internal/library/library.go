@@ -82,8 +82,10 @@ type History interface {
 }
 
 type Options struct {
-	DB           *store.DB
-	KP           KP // nil — без Кинопоиска
+	DB *store.DB
+	KP KP // nil — без Кинопоиска
+	// Catalog — каталог пакета рекомендаций: опознание и карточки без Кинопоиска; nil или вернул nil — без него.
+	Catalog      func() Catalog
 	Ratings      Ratings
 	Posters      Posters
 	KPPoster     func(id int) string // постер Кинопоиска по номеру — повтор, когда постер карточки не скачался (Х9)
@@ -124,6 +126,7 @@ type Library struct {
 	problems map[int64]string // папка категории → not_found, no_access, no_write
 	noWrite  map[int64]bool   // папки, где «Удалить» упёрлось в права (ревью 14В): no_write, пока удаление не пройдёт
 	kpPause  time.Time        // квота Кинопоиска кончилась — распознавание не раньше
+	catIdx   *catIndex        // названия каталога пакета (строится при первом опознании)
 	retries  map[string]retry // «details:<номер>», «poster:<номер>» → повтор после сбоя (Х9)
 	recWake  chan struct{}    // разбудить цикл распознавания (после обхода)
 

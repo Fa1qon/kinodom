@@ -111,7 +111,7 @@ func TestRecognize(t *testing.T) {
 			nil, Parsed{Title: "Holop"}, []string{"Холоп 3"}, LayoutFilms, false, Result{8, StateFound}},
 	} {
 		kp := &fakeKP{search: c.search, errs: c.errs}
-		got, err := recognize(context.Background(), kp, c.p, c.alt, c.layout, c.checkType)
+		got, err := recognize(context.Background(), kp, nil, c.p, c.alt, c.layout, c.checkType)
 		if err != nil || got != c.want {
 			t.Errorf("%s: %+v (%v), нужно %+v; запросы %q", c.name, got, err, c.want, kp.calls)
 		}
@@ -125,7 +125,7 @@ func TestRecognizeCanceled(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 	kp := &fakeKP{errs: map[string]error{"*": context.Canceled}}
-	if _, err := recognize(ctx, kp, Parsed{Title: "x"}, nil, LayoutFilms, true); err == nil {
+	if _, err := recognize(ctx, kp, nil, Parsed{Title: "x"}, nil, LayoutFilms, true); err == nil {
 		t.Errorf("отмена должна вернуться ошибкой")
 	}
 }
@@ -148,7 +148,7 @@ func TestRecognizeLateSeason(t *testing.T) {
 		{"фильм — ±1", send, Parsed{Title: "Send Help", Year: 2026}, LayoutFilms, Result{0, StateUnrecognized}},
 	} {
 		kp := &fakeKP{search: map[string][]meta.Film{c.p.Title: {c.f}}, web: true}
-		got, err := recognize(context.Background(), kp, c.p, nil, c.layout, true)
+		got, err := recognize(context.Background(), kp, nil, c.p, nil, c.layout, true)
 		if err != nil || got != c.want {
 			t.Errorf("%s: %+v (%v), нужно %+v", c.name, got, err, c.want)
 		}

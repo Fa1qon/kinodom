@@ -59,7 +59,7 @@ func TestTrackersByProfile(t *testing.T) {
 		t.Fatalf("после перезапуска: %+v", got)
 	}
 	for js, want := range map[string]string{
-		`{"trackers":["unknown.example"]}`:                 "не поддерживается",
+		`{"trackers":["unknown.example"]}`:                "не поддерживается",
 		`{"trackers":["forum.example","mirror.example"]}`: "уже в списке",
 		`{"trackers":["ftp://forum.example"]}`:            "http",
 	} {

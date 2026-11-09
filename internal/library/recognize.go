@@ -40,8 +40,10 @@ var (
 // recognize — номер Кинопоиска единицы (спека, раздел 5.4): метка [kp…]; иначе поиск по названию и
 // другим названиям (alt — у скачанного русское и оригинальное из названия раздачи), для латиницы — и
 // по вариантам транслита; привязка — только при одном точном совпадении. checkType — у папок
-// категорий: тип фильма должен подходить устройству. Ошибка — только отмена ctx.
-func recognize(ctx context.Context, kp KP, p Parsed, alt []string, layout Layout, checkType bool) (Result, error) {
+// категорий: тип фильма должен подходить устройству. Сначала — каталог пакета (cat, без сети): в нём не
+// все фильмы, поэтому только при известном годе; не нашёлся — Кинопоиск. kp == nil (нет ключа, пауза) —
+// пустое состояние: единица ждёт как есть. Ошибка — только отмена ctx.
+func recognize(ctx context.Context, kp KP, cat *catIndex, p Parsed, alt []string, layout Layout, checkType bool) (Result, error) {
 	if p.KP > 0 {
 		return Result{KP: p.KP, State: StateFound}, nil
 	}
@@ -54,6 +56,14 @@ func recognize(ctx context.Context, kp KP, p Parsed, alt []string, layout Layout
 				queries = append(queries, v)
 			}
 		}
+	}
+	if cat != nil && p.Year > 0 {
+		if f, n := pick(cat.lookup(targets), targets, p.Year, layout, checkType); n == 1 {
+			return Result{KP: f.ID, State: StateFound}, nil
+		}
+	}
+	if kp == nil {
+		return Result{}, nil
 	}
 	troubled := false
 	for _, q := range queries {

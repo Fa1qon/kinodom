@@ -327,6 +327,23 @@ func (m *Model) FillFilms(ctx context.Context, genres []string, kind string, yea
 	return out, rows.Err()
 }
 
+// Titles — номер, вид, названия и год всех фильмов пакета (опознание медиатеки по названию и году).
+func (m *Model) Titles(ctx context.Context, fn func(f Film)) error {
+	rows, err := m.db.QueryContext(ctx, `SELECT kp_id, kind, title_ru, title_orig, year FROM films WHERE year > 0`)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var f Film
+		if err := rows.Scan(&f.KP, &f.Kind, &f.Title, &f.TitleOrig, &f.Year); err != nil {
+			return err
+		}
+		fn(f)
+	}
+	return rows.Err()
+}
+
 // Search — фильмы пакета по названию («что-то как „Тьма“»): точное совпадение, начало, вхождение.
 func (m *Model) Search(ctx context.Context, q string, limit int) ([]Film, error) {
 	q = strings.TrimSpace(q)
